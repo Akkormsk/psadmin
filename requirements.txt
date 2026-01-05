@@ -1,6 +1,7 @@
 asgiref==3.11.0
 Django==4.2.27
-psycopg2-binary==2.9.11
+psycopg==3.2.13
+psycopg-binary==3.2.13
 sqlparse==0.5.5
 typing_extensions==4.15.0
 tzdata==2025.3
