@@ -139,6 +139,7 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
+WHITENOISE_USE_FINDERS = True
 
 
 # Default primary key field type
