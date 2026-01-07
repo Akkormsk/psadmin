@@ -2,42 +2,40 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <title>PS Admin</title>
-  <link rel="stylesheet" href="{% static 'core/index.css' %}">
+    <meta charset="utf-8">
+    <title>PS Admin</title>
+    <link rel="stylesheet" href="{% static 'core/index.css' %}">
 </head>
 <body>
-  <div class="wrap">
+<div class="wrap">
     <div class="container">
-      <h1>Панель управления</h1>
+        <h1>Панель управления</h1>
 
-      <div class="grid">
-        <a class="card" href="/calculator/">
-          <div class="card-title">Калькулятор</div>
-          <div class="card-desc">
-            Расчёт себестоимости и сохранение просчётов
-          </div>
-        </a>
+        <div class="grid">
+            <a class="card" href="/calculator/">
+                <div class="card-title">Калькулятор</div>
+                <div class="card-desc">Расчёт себестоимости и сохранение просчётов</div>
+            </a>
 
-        <a class="card" href="/cash/">
-          <div class="card-title">Касса</div>
-          <div class="card-desc">
-            Учёт доходов и расходов
-          </div>
-        </a>
+            <a class="card" href="/cash/">
+                <div class="card-title">Касса</div>
+                <div class="card-desc">Учёт доходов и расходов</div>
+            </a>
 
-        <a class="card" href="/payroll/">
-          <div class="card-title">Зарплата</div>
-          <div class="card-desc">
-            KPI и расчёт выплат менеджеров
-          </div>
-        </a>
-      </div>
+            <a class="card" href="/payroll/">
+                <div class="card-title">Зарплата</div>
+                <div class="card-desc">KPI и расчёт выплат менеджеров</div>
+            </a>
+        </div>
 
-      <div class="footer">
-        <a href="/admin/">Перейти в админку</a>
-      </div>
+        <div class="footer">
+            {% if request.user.is_superuser %}
+            <a href="/admin/">Админка</a> ·
+            {% endif %}
+            <a href="/admin/logout/">Выйти</a>
+        </div>
+
     </div>
-  </div>
+</div>
 </body>
 </html>
