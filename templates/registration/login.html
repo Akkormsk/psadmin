@@ -1,0 +1,52 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Вход</title>
+  <link rel="stylesheet" href="{% static 'core/index.css' %}">
+</head>
+<body>
+  <div class="wrap">
+    <div class="container">
+      <h1>Вход</h1>
+
+      <div class="grid" style="grid-template-columns: 1fr; max-width: 520px; margin: 0 auto;">
+        <div class="card" style="height: auto; padding: 28px; align-items: stretch;">
+          <form method="post" style="display: grid; gap: 14px;">
+            {% csrf_token %}
+
+            <label style="display: grid; gap: 6px;">
+              <div style="font-weight: 600;">Логин</div>
+              <input type="text" name="username" autofocus required
+                     style="padding: 12px 14px; border-radius: 12px; border: 1px solid #d7dbe7; font-size: 16px;">
+            </label>
+
+            <label style="display: grid; gap: 6px;">
+              <div style="font-weight: 600;">Пароль</div>
+              <input type="password" name="password" required
+                     style="padding: 12px 14px; border-radius: 12px; border: 1px solid #d7dbe7; font-size: 16px;">
+            </label>
+
+            {% if form.errors %}
+              <div style="color: #b91c1c; font-weight: 600;">
+                Неверный логин или пароль
+              </div>
+            {% endif %}
+
+            <button type="submit"
+                    style="padding: 12px 14px; border-radius: 14px; border: 0; font-size: 16px; font-weight: 700; cursor: pointer;">
+              Войти
+            </button>
+          </form>
+
+<!--          <div style="margin-top: 16px; text-align: center;">-->
+<!--            <a href="/" style="color:#2563eb; text-decoration:none;">← На главную</a>-->
+<!--          </div>-->
+        </div>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
