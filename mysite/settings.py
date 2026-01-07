@@ -28,11 +28,11 @@ DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
 ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
-    "akkormsk-psadmin-1c55.twc1.net",
+    "akkormsk-psadmin-852a.twc1.net",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://akkormsk-psadmin-1c55.twc1.net",
+    "https://akkormsk-psadmin-852a.twc1.net",
 ]
 
 # Application definition
