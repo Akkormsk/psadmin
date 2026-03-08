@@ -1,5 +1,6 @@
 from django.urls import path, include
 from django.contrib import admin
+
 # from mysite.adminsite import admin_site  # <-- наш сайт админки
 
 urlpatterns = [

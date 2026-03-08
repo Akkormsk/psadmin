@@ -1,11 +1,11 @@
 from django.urls import path
-from django.http import HttpResponse
-from django.contrib.auth.decorators import login_required
 
-@login_required
-def home(request):
-    return HttpResponse("Зарплата — в разработке")
+from . import views
+
+app_name = "payroll"
 
 urlpatterns = [
-    path("", home, name="payroll_home"),
+    path("", views.orderrecord_list, name="index"),
+    path("orders/", views.orderrecord_list, name="orderrecord_list"),
+    path("orders/create/", views.orderrecord_create, name="orderrecord_create"),
 ]

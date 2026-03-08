@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Мои заказы{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Мои заказы</h1>
+
+    <div class="page-actions">
+        <a href="/" class="button-secondary">На главную</a>
+        <button type="button" class="button-success" id="open-orderrecord-modal">
+            Создать запись
+        </button>
+    </div>
+
+    <div class="panel">
+        {% if records %}
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Номер заказа</th>
+                        <th>Валовая прибыль</th>
+                        <th>Источник</th>
+                        <th>Создан</th>
+                        <th>Обновлён</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in records %}
+                        <tr>
+                            <td>{{ record.order_number }}</td>
+                            <td>{{ record.gross_profit }}</td>
+                            <td>{{ record.get_source_display }}</td>
+                            <td>{{ record.created_at }}</td>
+                            <td>{{ record.updated_at }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>Записей пока нет.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal-overlay" id="orderrecord-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>Создать запись</h2>
+            <button type="button" class="modal-close" id="close-orderrecord-modal">&times;</button>
+        </div>
+
+        {% include "payroll/_orderrecord_form.html" %}
+    </div>
+</div>
+
+<script>
+    (function () {
+        const modal = document.getElementById("orderrecord-modal");
+        const openBtn = document.getElementById("open-orderrecord-modal");
+        const closeBtn = document.getElementById("close-orderrecord-modal");
+        const shouldOpen = {{ open_modal|yesno:"true,false" }};
+
+        function openModal() {
+            modal.classList.add("is-open");
+        }
+
+        function closeModal() {
+            modal.classList.remove("is-open");
+        }
+
+        openBtn.addEventListener("click", openModal);
+        closeBtn.addEventListener("click", closeModal);
+
+        modal.addEventListener("click", function (event) {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+
+        if (shouldOpen) {
+            openModal();
+        }
+    })();
+</script>
+{% endblock %}

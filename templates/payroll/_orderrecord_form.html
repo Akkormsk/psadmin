@@ -1,0 +1,17 @@
+<form method="post" action="{% url 'payroll:orderrecord_create' %}">
+    {% csrf_token %}
+
+    <div class="form-group">
+        <label for="{{ form.order_number.id_for_label }}">Номер заказа</label>
+        {{ form.order_number }}
+        {{ form.order_number.errors }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ form.gross_profit.id_for_label }}">Валовая прибыль</label>
+        {{ form.gross_profit }}
+        {{ form.gross_profit.errors }}
+    </div>
+
+    <button type="submit" class="button-success">Сохранить</button>
+</form>

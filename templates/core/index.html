@@ -1,16 +1,13 @@
-{% load static %}
-<!doctype html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PS Admin</title>
-    <link rel="stylesheet" href="{% static 'core/index.css' %}">
-</head>
-<body>
+{% extends "base.html" %}
+
+{% block title %}PSADMIN{% endblock %}
+
+{% block topbar %}{% endblock %}
+
+{% block content %}
 <div class="wrap">
     <div class="container">
-        <h1>Панель управления</h1>
+        <h1>PSADMIN</h1>
 
         <div class="grid">
             <a class="card" href="/calculator/">
@@ -31,12 +28,10 @@
 
         <div class="footer">
             {% if request.user.is_superuser %}
-            <a href="/admin/">Админка</a> ·
+                <a href="/admin/">Админка</a> ·
             {% endif %}
             <a href="/logout/">Выйти</a>
         </div>
-
     </div>
 </div>
-</body>
-</html>
+{% endblock %}
