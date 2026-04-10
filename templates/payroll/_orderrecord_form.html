@@ -13,5 +13,11 @@
         {{ form.gross_profit.errors }}
     </div>
 
+    <div class="form-group">
+        <label for="{{ form.accounting_period.id_for_label }}">Учетный период</label>
+        {{ form.accounting_period }}
+        {{ form.accounting_period.errors }}
+    </div>
+
     <button type="submit" class="button-success">Сохранить</button>
 </form>

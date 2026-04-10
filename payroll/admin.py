@@ -8,12 +8,13 @@ class OrderRecordAdmin(admin.ModelAdmin):
     list_display = (
         "order_number",
         "gross_profit",
+        "accounting_period",
         "manager",
         "created_by",
         "source",
         "created_at",
         "updated_at",
     )
-    list_filter = ("source", "created_at", "updated_at", "manager")
+    list_filter = ("source", "accounting_period", "created_at", "updated_at", "manager")
     search_fields = ("order_number", "manager__username", "created_by__username")
     readonly_fields = ("created_at", "updated_at")

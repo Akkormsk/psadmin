@@ -20,6 +20,7 @@
                     <tr>
                         <th>Номер заказа</th>
                         <th>Валовая прибыль</th>
+                        <th>Учетный период</th>
                         <th>Источник</th>
                         <th>Создан</th>
                         <th>Обновлён</th>
@@ -30,6 +31,7 @@
                         <tr>
                             <td>{{ record.order_number }}</td>
                             <td>{{ record.gross_profit }}</td>
+                            <td>{{ record.accounting_period }}</td>
                             <td>{{ record.get_source_display }}</td>
                             <td>{{ record.created_at }}</td>
                             <td>{{ record.updated_at }}</td>
