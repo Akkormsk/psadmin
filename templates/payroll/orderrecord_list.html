@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load humanize %}
 
 {% block title %}Мои заказы{% endblock %}
 
@@ -21,8 +22,6 @@
                         <th>Номер заказа</th>
                         <th>Валовая прибыль</th>
                         <th>Учетный период</th>
-                        <th>Источник</th>
-                        <th>Создан</th>
                         <th>Обновлён</th>
                     </tr>
                 </thead>
@@ -30,11 +29,12 @@
                     {% for record in records %}
                         <tr>
                             <td>{{ record.order_number }}</td>
-                            <td>{{ record.gross_profit }}</td>
-                            <td>{{ record.accounting_period }}</td>
-                            <td>{{ record.get_source_display }}</td>
-                            <td>{{ record.created_at }}</td>
-                            <td>{{ record.updated_at }}</td>
+                            <td>
+                                {{ record.gross_profit|floatformat:2|intcomma }}
+                                <span class="money-suffix">руб.</span>
+                            </td>
+                            <td>{{ record.accounting_period_ru }}</td>
+                            <td>{{ record.updated_at|date:"d.m.Y H:i" }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>

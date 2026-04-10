@@ -8,8 +8,11 @@
       "request": "launch",
       "python": "${workspaceFolder}/venv/Scripts/python.exe",
       "program": "${workspaceFolder}/manage.py",
-      "args": ["runserver"],
+      "args": ["runserver", "8000", "--noreload"],
       "django": true,
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "mysite.settings"
+      },
       "console": "integratedTerminal"
     }
   ]

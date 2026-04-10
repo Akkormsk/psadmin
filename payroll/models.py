@@ -51,3 +51,32 @@ class OrderRecord(models.Model):
 
     def __str__(self):
         return f"Order {self.order_number} - {self.manager.username} - {self.gross_profit}"
+
+    @property
+    def accounting_period_ru(self) -> str:
+        # "YYYY-MM" -> "Апрель 2026"
+        try:
+            year_s, month_s = (self.accounting_period or "").split("-")
+            year = int(year_s)
+            month = int(month_s)
+        except Exception:
+            return self.accounting_period
+
+        month_names = [
+            "Январь",
+            "Февраль",
+            "Март",
+            "Апрель",
+            "Май",
+            "Июнь",
+            "Июль",
+            "Август",
+            "Сентябрь",
+            "Октябрь",
+            "Ноябрь",
+            "Декабрь",
+        ]
+        if 1 <= month <= 12:
+            return f"{month_names[month - 1]} {year}"
+
+        return self.accounting_period

@@ -115,6 +115,10 @@ h1 {
   font-weight: 600;
 }
 
+.money-suffix {
+  color: #6b7280;
+}
+
 /* ---------- buttons ---------- */
 
 .button-secondary,
@@ -166,6 +170,15 @@ h1 {
   border-radius: 10px;
   border: 1px solid #ddd;
   box-sizing: border-box;
+}
+
+.form-group select {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  box-sizing: border-box;
+  background: #fff;
 }
 
 
