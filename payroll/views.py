@@ -60,3 +60,19 @@ def orderrecord_create(request):
             "open_modal": True,
         },
     )
+
+@login_required
+def orderrecord_delete(request, pk):
+    if request.method != "POST":
+        return redirect("payroll:orderrecord_list")
+
+    record = OrderRecord.objects.filter(
+        pk=pk,
+        manager=request.user
+    ).first()
+
+    if record:
+        record.delete()
+        # messages.success(request, "Запись удалена")
+
+    return redirect("payroll:orderrecord_list")
