@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load humanize %}
 
 {% block title %}Мои заказы{% endblock %}
 
@@ -15,32 +16,45 @@
 
     <div class="panel">
         {% if records %}
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>Номер заказа</th>
-                        <th>Валовая прибыль</th>
-                        <th>Учетный период</th>
-                        <th>Источник</th>
-                        <th>Создан</th>
-                        <th>Обновлён</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for record in records %}
-                        <tr>
-                            <td>{{ record.order_number }}</td>
-                            <td>{{ record.gross_profit }}</td>
-                            <td>{{ record.accounting_period }}</td>
-                            <td>{{ record.get_source_display }}</td>
-                            <td>{{ record.created_at }}</td>
-                            <td>{{ record.updated_at }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Номер заказа</th>
+                <th>Валовая прибыль</th>
+                <th>Учетный период</th>
+                <th>Обновлён</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for record in records %}
+            <tr class="table-row">
+                <td>{{ record.order_number }}</td>
+                <td>
+                    {{ record.gross_profit|floatformat:2|intcomma }}
+                    <span class="money-suffix">руб.</span>
+                </td>
+                <td>{{ record.accounting_period_ru }}</td>
+                <td>{{ record.updated_at|date:"d.m.Y H:i" }}</td>
+                <td class="row-actions">
+                    <form method="post"
+                          action="{% url 'payroll:orderrecord_delete' record.pk %}"
+                          onsubmit="return confirm('Удалить запись заказа №{{ record.order_number }}?')">
+
+                        {% csrf_token %}
+
+                        <button type="submit" class="delete-btn">
+                            ×
+                        </button>
+
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
         {% else %}
-            <p>Записей пока нет.</p>
+        <p>Записей пока нет.</p>
         {% endif %}
     </div>
 </div>
@@ -84,5 +98,8 @@
             openModal();
         }
     })();
+
+
+
 </script>
 {% endblock %}
