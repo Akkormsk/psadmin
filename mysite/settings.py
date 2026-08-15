@@ -29,6 +29,7 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
     "akkormsk-psadmin-852a.twc1.net",
+    "psadmin-production.up.railway.app",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -61,7 +62,6 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
-
 
 ROOT_URLCONF = 'mysite.urls'
 
@@ -147,8 +147,6 @@ STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 WHITENOISE_USE_FINDERS = True
 
-
-
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
@@ -174,4 +172,3 @@ LOGGING = {
         },
     },
 }
-
