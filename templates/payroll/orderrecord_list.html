@@ -5,16 +5,50 @@
 
 {% block content %}
 <div class="container">
-    <h1>Мои заказы</h1>
+    <a href="/" class="back-link">← На главную</a>
+    <h1>{% if is_admin_view %}Все заказы{% else %}Мои заказы{% endif %}</h1>
 
-    <div class="page-actions">
-        <a href="/" class="button-secondary">На главную</a>
-        <button type="button" class="button-success" id="open-orderrecord-modal">
-            Создать запись
-        </button>
-    </div>
+    {% if is_admin_view %}
+    <form method="get" class="panel filters-panel">
+        <div class="filters-grid">
+            <div class="form-group">
+                <label for="manager">Менеджер</label>
+                <select id="manager" name="manager">
+                    <option value="">Все менеджеры</option>
+                    {% for manager in managers %}
+                    <option value="{{ manager.pk }}" {% if selected_manager == manager.pk|stringformat:"s" %}selected{% endif %}>
+                        {{ manager.get_full_name|default:manager.username }}{% if manager.get_full_name %}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="period">Учётный период</label>
+                <select id="period" name="period">
+                    <option value="">Все периоды</option>
+                    {% for period in periods %}
+                    <option value="{{ period.value }}" {% if selected_period == period.value %}selected{% endif %}>{{ period.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <button type="submit" class="button-success">Применить</button>
+            <a href="{% url 'payroll:orderrecord_list' %}" class="button-secondary">Сбросить</a>
+        </div>
+        <p class="total-profit">
+            Валовая прибыль по выборке: <strong>{{ total_gross_profit|floatformat:2|intcomma }} руб.</strong>
+        </p>
+    </form>
+    {% endif %}
 
     <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">Заказы</h2>
+            <button type="button" class="button-success" id="open-orderrecord-modal">
+                Создать запись
+            </button>
+        </div>
         {% if records %}
         <table class="table">
             <thead>
@@ -22,6 +56,9 @@
                 <th>Номер заказа</th>
                 <th>Валовая прибыль</th>
                 <th>Учетный период</th>
+                {% if is_admin_view %}
+                <th>Менеджер</th>
+                {% endif %}
                 <th>Обновлён</th>
                 <th></th>
             </tr>
@@ -35,6 +72,9 @@
                     <span class="money-suffix">руб.</span>
                 </td>
                 <td>{{ record.accounting_period_ru }}</td>
+                {% if is_admin_view %}
+                <td>{{ record.manager.get_full_name|default:record.manager.username }}</td>
+                {% endif %}
                 <td>{{ record.updated_at|date:"d.m.Y H:i" }}</td>
                 <td class="row-actions">
                     <form method="post"

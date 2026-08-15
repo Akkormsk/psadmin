@@ -30,7 +30,10 @@
             {% if request.user.is_superuser %}
                 <a href="/admin/">Админка</a> ·
             {% endif %}
-            <a href="/logout/">Выйти</a>
+            <form method="post" action="{% url 'logout' %}" class="logout-form">
+                {% csrf_token %}
+                <button type="submit" class="logout-link">Выйти</button>
+            </form>
         </div>
     </div>
 </div>
