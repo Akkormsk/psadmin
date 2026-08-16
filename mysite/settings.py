@@ -34,6 +34,7 @@ ALLOWED_HOSTS = [
 
 CSRF_TRUSTED_ORIGINS = [
     "https://akkormsk-psadmin-852a.twc1.net",
+    "https://psadmin-production.up.railway.app",
 ]
 
 # Application definition
