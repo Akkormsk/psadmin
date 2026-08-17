@@ -210,7 +210,8 @@ h1 {
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
   width: 100%;
   padding: 10px;
   border-radius: 10px;
@@ -384,6 +385,46 @@ h1 {
 .settings-grid--four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .settings-subtitle { margin: 24px 0 14px; font-size: 18px; }
 
+/* ---------- cash ---------- */
+
+.cash-date-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cash-date-controls input {
+  min-height: 40px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.cash-ledgers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.cash-ledger .panel-header { align-items: flex-start; }
+.cash-balance { margin: 0 0 16px; color: #374151; }
+.cash-balance--opening { padding: 10px 12px; background: #f8fafc; border-radius: 10px; }
+.cash-totals { margin: 18px 0 0; }
+.cash-totals > div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid #eee; }
+.cash-totals dt,
+.cash-totals dd { margin: 0; }
+.cash-totals__closing { font-weight: 700; }
+.cash-row-actions { white-space: nowrap; text-align: right; }
+.cash-row-actions form { display: inline; }
+.cash-action-link { border: 0; background: transparent; color: #4b5563; cursor: pointer; padding: 3px 5px; font: inherit; font-size: 13px; text-decoration: underline; }
+.cash-action-link--danger { color: #b91c1c; }
+.form-panel { max-width: 680px; margin: 0 auto; }
+.form-error { margin: 6px 0 0; color: #b91c1c; font-size: 14px; }
+
 @media (max-width: 900px) {
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
   .card { min-height: 180px; }
@@ -410,4 +451,10 @@ h1 {
   .finance-table { min-width: 1040px; }
   .settings-grid--two,
   .settings-grid--four { grid-template-columns: 1fr; }
+  .cash-ledgers { grid-template-columns: 1fr; gap: 16px; margin-top: 16px; }
+  .cash-ledger .panel-header { align-items: stretch; }
+  .cash-date-controls { align-items: stretch; }
+  .cash-date-controls input { width: 100%; font-size: 16px; }
+  .cash-table { min-width: 610px; }
+  .cash-audit-table { min-width: 760px; }
 }

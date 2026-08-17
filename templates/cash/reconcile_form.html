@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Сверка остатков · Касса{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}" class="back-link">← Касса</a>
+  <h1>Сверка остатков</h1>
+  <section class="panel form-panel">
+    <p class="settings-description">Сверка задаёт проверенный остаток на утро выбранной даты. Все последующие дни будут считаться от этой точки.</p>
+    <form method="post">{% csrf_token %}
+      {% for field in form %}
+      <div class="form-group">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% for error in field.errors %}<p class="form-error">{{ error }}</p>{% endfor %}
+      </div>
+      {% endfor %}
+      <div class="table-actions">
+        <a class="button-secondary" href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}">Отмена</a>
+        <button class="button-success" type="submit">Сохранить сверку</button>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

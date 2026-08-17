@@ -1,0 +1,30 @@
+{% load humanize %}
+<div class="cash-balance cash-balance--opening">Входящий остаток: <strong>{{ balance.opening|floatformat:2|intcomma }} ₽</strong></div>
+{% if transactions %}
+<div class="table-wrapper">
+  <table class="table cash-table">
+    <thead><tr><th>Тип</th><th>Сумма</th><th>Основание / № заказа</th><th>Внёс</th><th></th></tr></thead>
+    <tbody>
+      {% for transaction in transactions %}
+      <tr class="table-row">
+        <td>{{ transaction.get_direction_display }}</td>
+        <td>{{ transaction.amount|floatformat:2|intcomma }} ₽</td>
+        <td>{{ transaction.reason }}</td>
+        <td>{{ transaction.created_by.get_full_name|default:transaction.created_by.username }}</td>
+        <td class="cash-row-actions">
+          <a href="{% url 'transaction_update' transaction.pk %}" class="cash-action-link">Изменить</a>
+          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="cash-action-link cash-action-link--danger">Удалить</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="settings-description">Операций за этот день нет.</p>
+{% endif %}
+<dl class="cash-totals">
+  <div><dt>Приход</dt><dd>{{ balance.income|floatformat:2|intcomma }} ₽</dd></div>
+  <div><dt>Расход</dt><dd>{{ balance.expense|floatformat:2|intcomma }} ₽</dd></div>
+  <div class="cash-totals__closing"><dt>Исходящий остаток</dt><dd>{{ balance.closing|floatformat:2|intcomma }} ₽</dd></div>
+</dl>

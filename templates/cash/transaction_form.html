@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} · Касса{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}" class="back-link">← Касса</a>
+  <h1>{{ title }}</h1>
+  <section class="panel form-panel">
+    <form method="post">{% csrf_token %}
+      {% for field in form %}
+      <div class="form-group">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% for error in field.errors %}<p class="form-error">{{ error }}</p>{% endfor %}
+      </div>
+      {% endfor %}
+      <div class="table-actions">
+        <a class="button-secondary" href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}">Отмена</a>
+        <button class="button-success" type="submit">Сохранить</button>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}История изменений · Касса{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'cash_home' %}" class="back-link">← Касса</a>
+  <h1>История изменений кассы</h1>
+  <section class="panel">
+    {% if events %}
+    <div class="table-wrapper"><table class="table cash-audit-table">
+      <thead><tr><th>Когда</th><th>Пользователь</th><th>Событие</th><th>Что изменилось</th></tr></thead>
+      <tbody>{% for event in events %}<tr><td>{{ event.occurred_at|date:"d.m.Y H:i" }}</td><td>{{ event.actor.get_full_name|default:event.actor.username }}</td><td>{{ event.get_action_display }}</td><td>{{ event.message }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="settings-description">Изменений пока нет.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
