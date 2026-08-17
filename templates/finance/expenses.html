@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'finance:calculation' %}?period={{ period.code }}" class="back-link">← Финансы</a>
+  <h1>Постоянные расходы</h1>
+  <form method="post" class="content-stack">
+    {% csrf_token %}
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">Расходы</h2><button class="button-success" type="submit">Сохранить расходы</button></div>
+      <p class="settings-description">Сохранённые суммы подставляются в открытые периоды. Закрытые периоды не меняются.</p>
+      <table class="table expense-table">
+        <tr><th>Статья</th><th>Сумма, ₽</th><th></th></tr>
+        {% for expense in expenses %}
+        <tr class="table-row"><td><input type="text" name="name_{{ expense.pk }}" value="{{ expense.name }}"></td><td><input type="number" min="0" step="0.01" name="amount_{{ expense.pk }}" value="{{ expense.amount }}"></td><td class="row-actions"><button class="delete-btn" type="submit" name="delete_expense" value="{{ expense.pk }}" onclick="return confirm('Удалить постоянный расход «{{ expense.name }}»?')">×</button></td></tr>
+        {% endfor %}
+        <tr><td><input type="text" name="new_name" placeholder="Новый расход"></td><td><input type="number" min="0" step="0.01" name="new_amount" placeholder="0,00"></td><td></td></tr>
+      </table>
+    </section>
+  </form>
+</div>
+{% endblock %}

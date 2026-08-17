@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Настройки менеджеров{% endblock %}
+{% block content %}
+<div class="container">
+  <a href="{% url 'finance:dashboard' %}" class="back-link">← Финансы</a>
+  <h1>Настройки менеджеров</h1>
+  <form method="post" id="manager-settings-form" class="content-stack">{% csrf_token %}
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Ставки и KPI</h2>
+        <button type="submit" class="button-success">Сохранить настройки</button>
+      </div>
+      <p class="settings-description">Ставки и проценты сохраняются для будущих расчётов. Закрытые месяцы не меняются.</p>
+    </section>
+    {% for manager, settings, rates in managers %}
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">{{ manager.get_full_name|default:manager.username }}</h2></div>
+      <div class="settings-grid settings-grid--two">
+        <div class="form-group"><label>Ставка смены</label><input type="number" name="shift_rate_{{ manager.pk }}" value="{{ settings.shift_rate }}" min="0" step="0.01"></div>
+        <div class="form-group"><label>Отпускная смена</label><input type="number" name="leave_rate_{{ manager.pk }}" value="{{ settings.leave_shift_rate }}" min="0" step="0.01"></div>
+      </div>
+      <h3 class="settings-subtitle">KPI, %</h3>
+      <div class="settings-grid settings-grid--four">{% for rate in rates %}<div class="form-group"><label>От {{ rate.tier.threshold|floatformat:0 }} ₽</label><input type="number" name="kpi_{{ manager.pk }}_{{ rate.tier.pk }}" value="{{ rate.percent }}" min="0" max="100" step="0.01"></div>{% endfor %}</div>
+    </section>
+    {% empty %}<section class="panel"><p>Менеджеров пока нет.</p></section>{% endfor %}
+  </form>
+</div>
+{% endblock %}

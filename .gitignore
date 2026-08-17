@@ -3,4 +3,9 @@ venv/
 __pycache__/
 *.pyc
 db.sqlite3
+psadmin-local-export-*.json
+.env
+.codex/
+runserver*.log
+staticfiles/
 .idea/

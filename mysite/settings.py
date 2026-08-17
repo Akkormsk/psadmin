@@ -25,7 +25,7 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-insecure-key")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
 
-ALLOWED_HOSTS = [
+DEFAULT_ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
     "akkormsk-psadmin-852a.twc1.net",
@@ -33,11 +33,29 @@ ALLOWED_HOSTS = [
     "admin.psodin.ru",
 ]
 
-CSRF_TRUSTED_ORIGINS = [
+DEFAULT_CSRF_TRUSTED_ORIGINS = [
     "https://akkormsk-psadmin-852a.twc1.net",
     "https://psadmin-production.up.railway.app",
     "https://admin.psodin.ru",
 ]
+
+
+def env_list(name, default):
+    value = os.getenv(name)
+    return [item.strip() for item in value.split(",") if item.strip()] if value else default
+
+
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS)
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", DEFAULT_CSRF_TRUSTED_ORIGINS)
+
+# Railway terminates HTTPS before the Django container.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_HTTPS_COOKIES = os.getenv("DJANGO_SECURE_COOKIES", "0") == "1"
+SECURE_SSL_REDIRECT = USE_HTTPS_COOKIES
+SESSION_COOKIE_SECURE = USE_HTTPS_COOKIES
+CSRF_COOKIE_SECURE = USE_HTTPS_COOKIES
+SECURE_HSTS_SECONDS = int(os.getenv("DJANGO_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
 
 # Application definition
 

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="/" class="back-link">← На главную</a>
+  <h1>{{ title }}</h1>
+  <section class="panel placeholder-panel">
+    <p>{{ message }}</p>
+    <a href="/" class="button-secondary">На главную</a>
+  </section>
+</div>
+{% endblock %}
