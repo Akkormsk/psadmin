@@ -11,10 +11,11 @@
     <div class="content-stack">
     {% if is_admin_view %}
     <form method="get" class="panel">
-        <div class="filters-grid">
-            <div class="form-group">
-                <label for="manager">Менеджер</label>
-                <select id="manager" name="manager">
+        <div class="panel-header panel-header--toolbar">
+            <h2 class="panel-title">Фильтры</h2>
+            <div class="toolbar-controls">
+                <label class="toolbar-control" for="manager">Менеджер
+                <select id="manager" name="manager" onchange="this.form.submit()">
                     <option value="">Все менеджеры</option>
                     {% for manager in managers %}
                     <option value="{{ manager.pk }}" {% if selected_manager == manager.pk|stringformat:"s" %}selected{% endif %}>
@@ -22,20 +23,19 @@
                     </option>
                     {% endfor %}
                 </select>
-            </div>
-
-            <div class="form-group">
-                <label for="period">Учётный период</label>
-                <select id="period" name="period">
+                </label>
+                <label class="toolbar-control" for="period">Учётный период
+                <select id="period" name="period" onchange="this.form.submit()">
                     <option value="">Все периоды</option>
                     {% for period in periods %}
                     <option value="{{ period.value }}" {% if selected_period == period.value %}selected{% endif %}>{{ period.label }}</option>
                     {% endfor %}
                 </select>
+                </label>
             </div>
-
-            <button type="submit" class="button-success">Применить</button>
-            <a href="{% url 'payroll:orderrecord_list' %}" class="button-secondary">Сбросить</a>
+            <div class="panel-actions">
+                <a href="{% url 'payroll:orderrecord_list' %}" class="button-secondary">Сбросить</a>
+            </div>
         </div>
         <p class="total-profit">
             Валовая прибыль по выборке: <strong>{{ total_gross_profit|floatformat:2|intcomma }} руб.</strong>

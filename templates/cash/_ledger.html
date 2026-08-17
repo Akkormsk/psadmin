@@ -1,30 +1,62 @@
 {% load humanize %}
-<div class="cash-balance cash-balance--opening">Входящий остаток: <strong>{{ balance.opening|floatformat:2|intcomma }} ₽</strong></div>
-{% if transactions %}
-<div class="table-wrapper">
-  <table class="table cash-table">
-    <thead><tr><th>Тип</th><th>Сумма</th><th>Основание / № заказа</th><th>Внёс</th><th></th></tr></thead>
-    <tbody>
-      {% for transaction in transactions %}
-      <tr class="table-row">
-        <td>{{ transaction.get_direction_display }}</td>
-        <td>{{ transaction.amount|floatformat:2|intcomma }} ₽</td>
-        <td>{{ transaction.reason }}</td>
-        <td>{{ transaction.created_by.get_full_name|default:transaction.created_by.username }}</td>
-        <td class="cash-row-actions">
-          <a href="{% url 'transaction_update' transaction.pk %}" class="cash-action-link">Изменить</a>
-          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="cash-action-link cash-action-link--danger">Удалить</button></form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="cash-balance cash-balance--opening">Входящий остаток: <strong class="cash-money">{{ balance.opening|floatformat:2|intcomma }} ₽</strong></div>
+
+<div class="cash-flow-grid">
+  <section class="cash-flow cash-flow--income">
+    <h3 class="cash-flow__title">Приход</h3>
+    {% for transaction in income_transactions %}
+      <article class="cash-operation">
+        <div class="cash-operation__main">
+          <strong class="cash-money">{{ transaction.amount|floatformat:2|intcomma }} ₽</strong>
+          <span>{{ transaction.reason }}</span>
+          <small>{{ transaction.created_by.get_full_name|default:transaction.created_by.username }}</small>
+        </div>
+        <div class="cash-operation__actions">
+          <button type="button" class="cash-icon-button js-cash-modal-open" data-modal-id="cash-edit-modal-{{ transaction.pk }}" title="Изменить" aria-label="Изменить операцию">✎</button>
+          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="cash-icon-button cash-icon-button--danger" title="Удалить" aria-label="Удалить операцию">×</button></form>
+        </div>
+      </article>
+    {% empty %}
+      <p class="cash-flow__empty">Нет операций</p>
+    {% endfor %}
+  </section>
+
+  <section class="cash-flow cash-flow--expense">
+    <h3 class="cash-flow__title">Расход</h3>
+    {% for transaction in expense_transactions %}
+      <article class="cash-operation">
+        <div class="cash-operation__main">
+          <strong class="cash-money">{{ transaction.amount|floatformat:2|intcomma }} ₽</strong>
+          <span>{{ transaction.reason }}</span>
+          <small>{{ transaction.created_by.get_full_name|default:transaction.created_by.username }}</small>
+        </div>
+        <div class="cash-operation__actions">
+          <button type="button" class="cash-icon-button js-cash-modal-open" data-modal-id="cash-edit-modal-{{ transaction.pk }}" title="Изменить" aria-label="Изменить операцию">✎</button>
+          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="cash-icon-button cash-icon-button--danger" title="Удалить" aria-label="Удалить операцию">×</button></form>
+        </div>
+      </article>
+    {% empty %}
+      <p class="cash-flow__empty">Нет операций</p>
+    {% endfor %}
+  </section>
 </div>
-{% else %}
-<p class="settings-description">Операций за этот день нет.</p>
-{% endif %}
+
+{% for transaction in transactions %}
+  <div class="modal-overlay cash-edit-modal" id="cash-edit-modal-{{ transaction.pk }}" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header"><h2>Изменить операцию</h2><button type="button" class="modal-close js-cash-modal-close" aria-label="Закрыть">&times;</button></div>
+      <form method="post" action="{% url 'transaction_update' transaction.pk %}">{% csrf_token %}
+        {% for field in transaction.edit_form %}
+          <div class="form-group"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}</div>
+        {% endfor %}
+        <div class="table-actions"><button type="button" class="button-secondary js-cash-modal-close">Отмена</button><button type="submit" class="button-success">Сохранить</button></div>
+      </form>
+    </div>
+  </div>
+{% endfor %}
+
 <dl class="cash-totals">
-  <div><dt>Приход</dt><dd>{{ balance.income|floatformat:2|intcomma }} ₽</dd></div>
-  <div><dt>Расход</dt><dd>{{ balance.expense|floatformat:2|intcomma }} ₽</dd></div>
-  <div class="cash-totals__closing"><dt>Исходящий остаток</dt><dd>{{ balance.closing|floatformat:2|intcomma }} ₽</dd></div>
+  <div><dt>Приход</dt><dd class="cash-money">{{ balance.income|floatformat:2|intcomma }} ₽</dd></div>
+  <div><dt>Расход</dt><dd class="cash-money">{{ balance.expense|floatformat:2|intcomma }} ₽</dd></div>
+  <div class="cash-totals__closing"><dt>Исходящий остаток</dt><dd class="cash-money">{{ balance.closing|floatformat:2|intcomma }} ₽</dd></div>
 </dl>

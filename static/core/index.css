@@ -16,12 +16,12 @@ body {
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
-  padding: 32px 20px;
+  padding: 20px;
 }
 
 h1 {
   text-align: center;
-  margin-bottom: 28px;
+  margin: 8px 0 20px;
 }
 
 /* ---------- главная ---------- */
@@ -139,6 +139,40 @@ h1 {
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
+}
+
+.panel-header--toolbar {
+  margin-bottom: 0;
+}
+
+.panel-header--toolbar .cash-date-controls,
+.panel-header--toolbar .compact-period-control,
+.panel-header--toolbar .toolbar-controls {
+  margin-left: auto;
+}
+
+.toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.toolbar-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.toolbar-control select {
+  width: 210px;
+  min-height: 40px;
+  padding: 8px 36px 8px 12px;
+  box-sizing: border-box;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
 }
 
 /* ---------- table ---------- */
@@ -306,6 +340,28 @@ h1 {
   margin-bottom: 0;
 }
 
+/* Компактный выбор периода: заголовок и действие сверху, поле — одной строкой ниже. */
+.compact-period-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.compact-period-control label {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.compact-period-control select {
+  width: min(360px, 100%);
+  min-height: 40px;
+  padding: 8px 36px 8px 12px;
+  box-sizing: border-box;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+}
+
 .total-profit { margin: 18px 0 0; }
 
 .placeholder-panel {
@@ -413,6 +469,23 @@ h1 {
 .cash-ledger .panel-header { align-items: flex-start; }
 .cash-balance { margin: 0 0 16px; color: #374151; }
 .cash-balance--opening { padding: 10px 12px; background: #f8fafc; border-radius: 10px; }
+.cash-money { white-space: nowrap; }
+.cash-flow-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.cash-flow { min-width: 0; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+.cash-flow__title { margin: 0; padding: 10px 12px; font-size: 16px; }
+.cash-flow--income .cash-flow__title { background: #edfdf3; color: #166534; }
+.cash-flow--expense .cash-flow__title { background: #fff1f2; color: #b91c1c; }
+.cash-operation { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 10px 12px; border-top: 1px solid #edf0f2; }
+.cash-operation__main { min-width: 0; display: grid; gap: 3px; font-size: 14px; }
+.cash-operation__main strong { font-size: 15px; }
+.cash-operation__main span { overflow-wrap: anywhere; }
+.cash-operation__main small { color: #6b7280; }
+.cash-operation__actions { display: flex; flex: 0 0 auto; gap: 2px; }
+.cash-operation__actions form { display: inline; }
+.cash-icon-button { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #4b5563; font-size: 17px; line-height: 1; cursor: pointer; }
+.cash-icon-button:hover { background: #f3f4f6; }
+.cash-icon-button--danger { color: #b91c1c; }
+.cash-flow__empty { margin: 0; padding: 12px; color: #9ca3af; font-size: 14px; }
 .cash-totals { margin: 18px 0 0; }
 .cash-totals > div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid #eee; }
 .cash-totals dt,
@@ -422,6 +495,7 @@ h1 {
 .cash-row-actions form { display: inline; }
 .cash-action-link { border: 0; background: transparent; color: #4b5563; cursor: pointer; padding: 3px 5px; font: inherit; font-size: 13px; text-decoration: underline; }
 .cash-action-link--danger { color: #b91c1c; }
+.cash-edit-modal .modal { max-width: 520px; }
 .form-panel { max-width: 680px; margin: 0 auto; }
 .form-error { margin: 6px 0 0; color: #b91c1c; font-size: 14px; }
 
@@ -440,6 +514,12 @@ h1 {
   .footer { margin-top: 18px; }
   .panel { padding: 18px; }
   .panel-header { align-items: stretch; flex-direction: column; }
+  .panel-header--toolbar .cash-date-controls,
+  .panel-header--toolbar .compact-period-control,
+  .panel-header--toolbar .toolbar-controls { margin-left: 0; }
+  .toolbar-controls { align-items: stretch; flex-direction: column; }
+  .toolbar-control { align-items: stretch; flex-direction: column; gap: 6px; }
+  .toolbar-control select { width: 100%; font-size: 16px; }
   .panel-actions .button-secondary,
   .panel-actions .button-success { flex: 1; }
   .panel-header > .button-secondary,
@@ -455,6 +535,12 @@ h1 {
   .cash-ledger .panel-header { align-items: stretch; }
   .cash-date-controls { align-items: stretch; }
   .cash-date-controls input { width: 100%; font-size: 16px; }
-  .cash-table { min-width: 610px; }
+  .compact-period-control { align-items: stretch; flex-direction: column; gap: 6px; }
+  .compact-period-control select { width: 100%; font-size: 16px; }
+  .cash-flow-grid { gap: 10px; }
+  .cash-flow__title { padding: 9px 10px; font-size: 15px; }
+  .cash-operation { padding: 9px 10px; }
+  .cash-operation__main { font-size: 13px; }
+  .cash-operation__main strong { font-size: 14px; }
   .cash-audit-table { min-width: 760px; }
 }

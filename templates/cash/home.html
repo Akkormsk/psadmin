@@ -10,39 +10,70 @@
 
   <div class="content-stack">
     <section class="panel">
-      <div class="panel-header">
+      <div class="panel-header panel-header--toolbar">
         <h2 class="panel-title">Операционный день</h2>
-        {% if request.user.is_superuser %}
+        <form method="get" class="cash-date-controls">
+          <a class="button-secondary" href="?date={{ today|date:'Y-m-d' }}">Сегодня</a>
+          <label for="cash-date">Дата</label>
+          <input id="cash-date" type="date" name="date" value="{{ selected_date|date:'Y-m-d' }}" onchange="this.form.submit()">
+        </form>
         <div class="panel-actions">
           <a class="button-secondary" href="{% url 'audit_log' %}">История изменений</a>
+          {% if request.user.is_superuser %}
           <a class="button-secondary" href="{% url 'reconcile' %}?date={{ selected_date|date:'Y-m-d' }}">Сверить остатки</a>
+          {% endif %}
         </div>
-        {% endif %}
       </div>
-      <form method="get" class="cash-date-controls">
-        <a class="button-secondary" href="?date={{ today|date:'Y-m-d' }}">Сегодня</a>
-        <label for="cash-date">Дата</label>
-        <input id="cash-date" type="date" name="date" value="{{ selected_date|date:'Y-m-d' }}" onchange="this.form.submit()">
-      </form>
     </section>
 
     <div class="cash-ledgers">
       <section class="panel cash-ledger">
         <div class="panel-header">
           <h2 class="panel-title">Наличные</h2>
-          <a class="button-success" href="{% url 'transaction_create' %}?date={{ selected_date|date:'Y-m-d' }}&account=cash">Добавить операцию</a>
+          <button type="button" class="button-success js-cash-modal-open" data-modal-id="cash-create-modal">Добавить операцию</button>
         </div>
-        {% include "cash/_ledger.html" with transactions=cash_transactions balance=cash_balance %}
+        {% include "cash/_ledger.html" with transactions=cash_transactions income_transactions=cash_income_transactions expense_transactions=cash_expense_transactions balance=cash_balance %}
       </section>
 
       <section class="panel cash-ledger">
         <div class="panel-header">
           <h2 class="panel-title">Карта</h2>
-          <a class="button-success" href="{% url 'transaction_create' %}?date={{ selected_date|date:'Y-m-d' }}&account=card">Добавить операцию</a>
+          <button type="button" class="button-success js-cash-modal-open" data-modal-id="card-create-modal">Добавить операцию</button>
         </div>
-        {% include "cash/_ledger.html" with transactions=card_transactions balance=card_balance %}
+        {% include "cash/_ledger.html" with transactions=card_transactions income_transactions=card_income_transactions expense_transactions=card_expense_transactions balance=card_balance %}
       </section>
     </div>
   </div>
 </div>
+<div class="modal-overlay cash-edit-modal" id="cash-create-modal" aria-hidden="true">
+  <div class="modal">
+    <div class="modal-header"><h2>Новая операция · наличные</h2><button type="button" class="modal-close js-cash-modal-close" aria-label="Закрыть">&times;</button></div>
+    <form method="post" action="{% url 'transaction_create' %}?date={{ selected_date|date:'Y-m-d' }}&account=cash">{% csrf_token %}
+      {% for field in cash_create_form %}<div class="form-group"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}</div>{% endfor %}
+      <div class="table-actions"><button type="button" class="button-secondary js-cash-modal-close">Отмена</button><button type="submit" class="button-success">Добавить</button></div>
+    </form>
+  </div>
+</div>
+<div class="modal-overlay cash-edit-modal" id="card-create-modal" aria-hidden="true">
+  <div class="modal">
+    <div class="modal-header"><h2>Новая операция · карта</h2><button type="button" class="modal-close js-cash-modal-close" aria-label="Закрыть">&times;</button></div>
+    <form method="post" action="{% url 'transaction_create' %}?date={{ selected_date|date:'Y-m-d' }}&account=card">{% csrf_token %}
+      {% for field in card_create_form %}<div class="form-group"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}</div>{% endfor %}
+      <div class="table-actions"><button type="button" class="button-secondary js-cash-modal-close">Отмена</button><button type="submit" class="button-success">Добавить</button></div>
+    </form>
+  </div>
+</div>
+<script>
+  (function () {
+    document.querySelectorAll('.js-cash-modal-open').forEach(function (button) {
+      button.addEventListener('click', function () { document.getElementById(button.dataset.modalId).classList.add('is-open'); });
+    });
+    document.querySelectorAll('.cash-edit-modal').forEach(function (modal) {
+      modal.querySelectorAll('.js-cash-modal-close').forEach(function (button) {
+        button.addEventListener('click', function () { modal.classList.remove('is-open'); });
+      });
+      modal.addEventListener('click', function (event) { if (event.target === modal) modal.classList.remove('is-open'); });
+    });
+  })();
+</script>
 {% endblock %}

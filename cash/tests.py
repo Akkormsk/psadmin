@@ -71,6 +71,17 @@ class CashBalanceTests(TestCase):
         self.assertEqual(CashTransaction.objects.count(), 1)
         self.assertEqual(CashAuditLog.objects.filter(action=CashAuditLog.ACTION_CREATED).count(), 1)
 
+    def test_modal_create_form_uses_prefixed_fields(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("transaction_create") + "?date=2026-08-17&account=card",
+            data={"create-card-operation_date": "2026-08-17", "create-card-account": "card", "create-card-direction": "income", "create-card-amount": "500", "create-card-reason": "Оплата"},
+        )
+
+        self.assertRedirects(response, "/cash/?date=2026-08-17")
+        self.assertEqual(CashTransaction.objects.get().account, CashTransaction.ACCOUNT_CARD)
+
     def test_cash_home_renders_both_accounts_for_logged_in_user(self):
         self.client.force_login(self.user)
 
@@ -79,6 +90,12 @@ class CashBalanceTests(TestCase):
         self.assertContains(response, "Наличные")
         self.assertContains(response, "Карта")
         self.assertContains(response, "403.00")
+
+    def test_any_logged_in_user_can_view_history_but_not_reconcile(self):
+        self.client.force_login(self.user)
+
+        self.assertEqual(self.client.get(reverse("audit_log")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("reconcile")).status_code, 302)
 
     def test_admin_can_replace_reconciliation_for_same_date(self):
         admin = get_user_model().objects.create_superuser(username="cash-admin", password="test-password")

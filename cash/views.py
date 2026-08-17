@@ -37,13 +37,23 @@ def _write_audit(actor, action, message, transaction=None):
 @login_required
 def home(request):
     selected_date = _selected_date(request)
+    cash_transactions = list(CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CASH).select_related("created_by"))
+    card_transactions = list(CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CARD).select_related("created_by"))
+    for transaction in cash_transactions + card_transactions:
+        transaction.edit_form = CashTransactionForm(instance=transaction, prefix=f"edit-{transaction.pk}")
     context = {
         "selected_date": selected_date,
-        "cash_transactions": CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CASH).select_related("created_by"),
-        "card_transactions": CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CARD).select_related("created_by"),
+        "cash_transactions": cash_transactions,
+        "card_transactions": card_transactions,
+        "cash_income_transactions": [item for item in cash_transactions if item.direction == CashTransaction.DIRECTION_INCOME],
+        "cash_expense_transactions": [item for item in cash_transactions if item.direction == CashTransaction.DIRECTION_EXPENSE],
+        "card_income_transactions": [item for item in card_transactions if item.direction == CashTransaction.DIRECTION_INCOME],
+        "card_expense_transactions": [item for item in card_transactions if item.direction == CashTransaction.DIRECTION_EXPENSE],
         "cash_balance": balance_for_date(selected_date, CashTransaction.ACCOUNT_CASH),
         "card_balance": balance_for_date(selected_date, CashTransaction.ACCOUNT_CARD),
         "today": timezone.localdate(),
+        "cash_create_form": CashTransactionForm(initial={"operation_date": selected_date, "account": CashTransaction.ACCOUNT_CASH}, prefix="create-cash"),
+        "card_create_form": CashTransactionForm(initial={"operation_date": selected_date, "account": CashTransaction.ACCOUNT_CARD}, prefix="create-card"),
     }
     return render(request, "cash/home.html", context)
 
@@ -51,7 +61,9 @@ def home(request):
 @login_required
 def transaction_create(request):
     selected_date = _selected_date(request)
-    form = CashTransactionForm(request.POST or None, initial={"operation_date": selected_date, "account": request.GET.get("account", CashTransaction.ACCOUNT_CASH)})
+    account = request.GET.get("account", CashTransaction.ACCOUNT_CASH)
+    prefix = f"create-{account}" if request.method == "POST" and f"create-{account}-operation_date" in request.POST else None
+    form = CashTransactionForm(request.POST or None, initial={"operation_date": selected_date, "account": account}, prefix=prefix)
     if request.method == "POST" and form.is_valid():
         transaction = form.save(commit=False)
         transaction.created_by = request.user
@@ -66,7 +78,7 @@ def transaction_create(request):
 def transaction_update(request, pk):
     transaction = get_object_or_404(CashTransaction, pk=pk)
     before = _snapshot(transaction)
-    form = CashTransactionForm(request.POST or None, instance=transaction)
+    form = CashTransactionForm(request.POST or None, instance=transaction, prefix=f"edit-{pk}")
     if request.method == "POST" and form.is_valid():
         transaction = form.save()
         after = _snapshot(transaction)
@@ -114,6 +126,5 @@ def reconcile(request):
 
 
 @login_required
-@user_passes_test(lambda user: user.is_superuser)
 def audit_log(request):
     return render(request, "cash/audit_log.html", {"events": CashAuditLog.objects.select_related("actor")[:200]})

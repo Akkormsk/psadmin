@@ -8,20 +8,18 @@
 
   <div class="content-stack">
     <div class="panel">
-      <div class="panel-header">
+      <div class="panel-header panel-header--toolbar">
         <h2 class="panel-title">Период</h2>
-        <a class="button-secondary" href="{% url 'finance:manager_settings' %}">Настройки менеджеров</a>
-      </div>
-      <form method="get" class="filters-grid">
-        <div class="form-group">
+        <form method="get" class="compact-period-control">
           <label for="period">Учётный период</label>
           <select id="period" name="period" onchange="this.form.submit()">
             {% for value, label in period_options %}
             <option value="{{ value }}" {% if value == period.code %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
-        </div>
-      </form>
+        </form>
+        <a class="button-secondary" href="{% url 'finance:manager_settings' %}">Настройки менеджеров</a>
+      </div>
     </div>
 
   <div class="panel">
