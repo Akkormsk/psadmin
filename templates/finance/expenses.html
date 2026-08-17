@@ -10,6 +10,7 @@
     <section class="panel">
       <div class="panel-header"><h2 class="panel-title">Расходы</h2><button class="button-success" type="submit">Сохранить расходы</button></div>
       <p class="settings-description">Сохранённые суммы подставляются в открытые периоды. Закрытые периоды не меняются.</p>
+      <div class="table-wrapper">
       <table class="table expense-table">
         <tr><th>Статья</th><th>Сумма, ₽</th><th></th></tr>
         {% for expense in expenses %}
@@ -17,6 +18,7 @@
         {% endfor %}
         <tr><td><input type="text" name="new_name" placeholder="Новый расход"></td><td><input type="number" min="0" step="0.01" name="new_amount" placeholder="0,00"></td><td></td></tr>
       </table>
+      </div>
     </section>
   </form>
 </div>

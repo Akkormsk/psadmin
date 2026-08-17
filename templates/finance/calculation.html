@@ -68,6 +68,7 @@
 
   <div class="panel">
     <div class="panel-header"><h2 class="panel-title">Прибыль компании</h2><a class="button-secondary" href="{% url 'finance:expenses' %}?period={{ period.code }}">Редактировать расходы</a></div>
+    <div class="table-wrapper">
     <table class="table">
       <tr><th>Показатель</th><th>Сумма</th></tr>
       <tr><td>Валовая прибыль по заказам</td><td>{{ order_total|floatformat:2|intcomma }} ₽</td></tr>
@@ -75,6 +76,7 @@
       <tr><td>Постоянные расходы</td><td>− {{ expense_total|floatformat:2|intcomma }} ₽</td></tr>
       <tr><th>Прибыль после расходов</th><th>{{ company_profit|floatformat:2|intcomma }} ₽</th></tr>
     </table>
+    </div>
   </div>
 </div>
 </div>

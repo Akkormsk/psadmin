@@ -325,7 +325,14 @@ h1 {
 
 /* ---------- finance: same panels, only layout helpers ---------- */
 
-.table-wrapper { width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
 .finance-table {
   width: 100%;
   min-width: 0;
@@ -398,6 +405,9 @@ h1 {
   .panel-header > .button-success { width: 100%; }
   .form-group input,
   .form-group select { font-size: 16px; }
+  /* Таблицы сохраняют настольную читаемость и прокручиваются внутри карточки. */
+  .table-wrapper > .table:not(.finance-table) { min-width: 640px; }
+  .finance-table { min-width: 1040px; }
   .settings-grid--two,
   .settings-grid--four { grid-template-columns: 1fr; }
 }
