@@ -17,12 +17,19 @@
 
             <a class="card" href="/cash/">
                 <div class="card-title">Касса</div>
-                <div class="card-desc">Учёт доходов и расходов</div>
+                <div class="card-desc">Учёт наличных в офисе</div>
             </a>
 
+            {% if request.user.is_superuser %}
+            <a class="card" href="/finance/">
+                <div class="card-title">Финансы</div>
+                <div class="card-desc">Зарплаты, расходы и прибыль компании</div>
+            </a>
+            {% endif %}
+
             <a class="card" href="/payroll/">
-                <div class="card-title">Зарплата</div>
-                <div class="card-desc">KPI и расчёт выплат менеджеров</div>
+                <div class="card-title">Заказы</div>
+                <div class="card-desc">Учёт закрытых заказов и валовой прибыли</div>
             </a>
         </div>
 

@@ -14,7 +14,7 @@ body {
 
 .container {
   width: 100%;
-  max-width: 1100px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 32px 20px;
 }
@@ -28,7 +28,7 @@ h1 {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
 }
 
@@ -81,9 +81,7 @@ h1 {
   text-decoration: underline;
 }
 
-.logout-form {
-  display: inline;
-}
+.logout-form { display: inline; }
 
 .logout-link {
   appearance: none;
@@ -136,6 +134,13 @@ h1 {
   font-size: 20px;
 }
 
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 /* ---------- table ---------- */
 
 .table {
@@ -150,13 +155,8 @@ h1 {
   text-align: left;
 }
 
-.table th {
-  font-weight: 600;
-}
-
-.money-suffix {
-  color: #6b7280;
-}
+.table th { font-weight: 600; }
+.money-suffix { color: #6b7280; }
 
 /* ---------- buttons ---------- */
 
@@ -196,19 +196,12 @@ h1 {
 }
 
 .button-secondary:hover,
-.button-success:hover {
-  transform: translateY(-2px);
-}
-
-.button-success:hover {
-  box-shadow: 0 5px 14px rgba(0,0,0,0.19);
-}
+.button-success:hover { transform: translateY(-2px); }
+.button-success:hover { box-shadow: 0 5px 14px rgba(0,0,0,0.19); }
 
 /* ---------- form ---------- */
 
-.form-group {
-  margin-bottom: 18px;
-}
+.form-group { margin-bottom: 18px; }
 
 .form-group label {
   display: block;
@@ -216,14 +209,7 @@ h1 {
   font-weight: 500;
 }
 
-.form-group input {
-  width: 100%;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid #ddd;
-  box-sizing: border-box;
-}
-
+.form-group input,
 .form-group select {
   width: 100%;
   padding: 10px;
@@ -233,68 +219,9 @@ h1 {
   background: #fff;
 }
 
+.messages { margin: 0; padding-left: 20px; }
 
-
-
-/* ---------- messages ---------- */
-
-.messages {
-  margin: 0;
-  padding-left: 20px;
-}
-
-/* ---------- responsive ---------- */
-
-@media (max-width: 900px) {
-  .grid {
-    grid-template-columns: 1fr;
-  }
-
-  .card {
-    min-height: 180px;
-  }
-}
-
-@media (max-width: 768px) {
-  .container {
-    padding: 16px;
-  }
-
-  .grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .card {
-    padding: 18px;
-    border-radius: 16px;
-  }
-
-  h1 {
-    font-size: 22px;
-  }
-
-  .card-title {
-    font-size: 18px;
-  }
-
-  .card-desc {
-    font-size: 14px;
-  }
-
-  .footer {
-    margin-top: 18px;
-  }
-
-  .panel {
-    padding: 18px;
-  }
-
-  .panel-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
+/* ---------- table and modal ---------- */
 
 .modal-overlay {
   position: fixed;
@@ -307,9 +234,7 @@ h1 {
   z-index: 1000;
 }
 
-.modal-overlay.is-open {
-  display: flex;
-}
+.modal-overlay.is-open { display: flex; }
 
 .modal {
   max-width: 420px;
@@ -327,10 +252,7 @@ h1 {
   margin-bottom: 20px;
 }
 
-.modal-header h2 {
-  margin: 0;
-  font-size: 22px;
-}
+.modal-header h2 { margin: 0; font-size: 22px; }
 
 .modal-close {
   background: transparent;
@@ -343,25 +265,10 @@ h1 {
   color: #555;
 }
 
-.modal-close:hover {
-  transform: none;
-  box-shadow: none;
-  color: #111;
-}
-
-.table-row {
-  position: relative;
-  transition: background 0.12s ease;
-}
-
-.table-row:hover {
-  background: #f9fafb;
-}
-
-.row-actions {
-  width: 40px;
-  text-align: right;
-}
+.modal-close:hover { transform: none; box-shadow: none; color: #111; }
+.table-row { position: relative; transition: background 0.12s ease; }
+.table-row:hover { background: #f9fafb; }
+.row-actions { width: 40px; text-align: right; }
 
 .delete-btn {
   opacity: 0;
@@ -373,21 +280,22 @@ h1 {
   transition: opacity 0.15s ease, color 0.15s ease;
 }
 
-.table-row:hover .delete-btn {
-  opacity: 1;
+.table-row:hover .delete-btn { opacity: 1; }
+.delete-btn:hover { color: #374151; }
+
+/* ---------- фильтры ---------- */
+
+.content-stack {
+  display: block;
 }
 
-.delete-btn:hover {
-  color: #374151;
-}
-
-.filters-panel {
-  margin-bottom: 20px;
+.content-stack > .panel + .panel {
+  margin-top: 24px;
 }
 
 .filters-grid {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: end;
   flex-wrap: wrap;
 }
@@ -397,6 +305,99 @@ h1 {
   margin-bottom: 0;
 }
 
-.total-profit {
-  margin: 18px 0 0;
+.total-profit { margin: 18px 0 0; }
+
+.placeholder-panel {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  text-align: center;
+}
+
+.placeholder-panel p {
+  margin: 0;
+  color: #4b5563;
+  font-size: 17px;
+}
+
+/* ---------- finance: same panels, only layout helpers ---------- */
+
+.table-wrapper { width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.finance-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.finance-table th,
+.finance-table td { padding: 8px 6px; }
+.finance-table__employee { width: 12%; }
+.finance-table__shifts { width: 11%; }
+.finance-table__salary,
+.finance-table__profit,
+.finance-table__total,
+.finance-table__advance,
+.finance-table__balance { width: 9%; }
+.finance-table__salary { width: 9%; }
+.finance-table__profit { width: 10%; }
+.finance-table__bonus { width: 10%; }
+.finance-table__design { width: 12%; }
+.finance-table__deductions { width: 9%; }
+.finance-table__total { width: 10%; }
+.finance-table__advance { width: 9%; }
+.finance-table__balance { width: 8%; }
+.finance-table input { width: 100%; min-width: 0; padding: 7px 6px; }
+.finance-table input.finance-table__amount-input { width: 76px; }
+.finance-table input.finance-table__deduction-input { width: 72px; }
+.finance-table__suffix { display: block; margin-top: 3px; white-space: nowrap; }
+.finance-table__shifts-cell { white-space: nowrap; }
+.finance-table__shifts-cell label { display: inline-flex; align-items: center; gap: 3px; font-weight: 600; }
+.finance-table__shifts-cell label + label { margin-left: 6px; }
+.finance-table input.finance-table__shift-input { width: 44px; padding: 7px 3px; }
+.finance-table__bonus-value strong,
+.finance-table__total-value strong { font-weight: 700; }
+.finance-table__bonus-value span { white-space: nowrap; }
+.finance-money,
+.finance-table__total-value { white-space: nowrap; }
+
+.table-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.settings-description { margin: 0; color: #6b7280; }
+.settings-grid { display: grid; gap: 16px; }
+.settings-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.settings-grid--four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.settings-subtitle { margin: 24px 0 14px; font-size: 18px; }
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  .card { min-height: 180px; }
+}
+
+@media (max-width: 768px) {
+  .container { padding: 16px; }
+  .grid { grid-template-columns: 1fr; gap: 16px; }
+  .card { padding: 18px; border-radius: 16px; }
+  h1 { font-size: 22px; }
+  .card-title { font-size: 18px; }
+  .card-desc { font-size: 14px; }
+  .footer { margin-top: 18px; }
+  .panel { padding: 18px; }
+  .panel-header { align-items: stretch; flex-direction: column; }
+  .panel-actions .button-secondary,
+  .panel-actions .button-success { flex: 1; }
+  .panel-header > .button-secondary,
+  .panel-header > .button-success { width: 100%; }
+  .form-group input,
+  .form-group select { font-size: 16px; }
+  .settings-grid--two,
+  .settings-grid--four { grid-template-columns: 1fr; }
 }

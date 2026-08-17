@@ -10,5 +10,6 @@ urlpatterns = [
     path("calculator/", include("calculator.urls")),
     path("cash/", include("cash.urls")),
     path("payroll/", include("payroll.urls")),
+    path("finance/", include("finance.urls")),
     path("", include("django.contrib.auth.urls")),  # login/logout
 ]

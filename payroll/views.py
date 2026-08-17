@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.db.models import Sum
 from django.shortcuts import redirect, render
+from django.utils import timezone
 
 from .forms import OrderRecordCreateForm
 from .models import OrderRecord
@@ -12,7 +13,7 @@ from .models import OrderRecord
 def orderrecord_list(request, form=None, open_modal=False):
     is_admin_view = request.user.is_superuser
     selected_manager = ""
-    selected_period = ""
+    selected_period = timezone.localdate().strftime("%Y-%m")
     managers = []
     periods = []
 
@@ -34,7 +35,7 @@ def orderrecord_list(request, form=None, open_modal=False):
         ]
 
         selected_manager = request.GET.get("manager", "")
-        selected_period = request.GET.get("period", "")
+        selected_period = request.GET.get("period", selected_period)
 
         if selected_manager.isdigit():
             records = records.filter(manager_id=int(selected_manager))
@@ -50,7 +51,7 @@ def orderrecord_list(request, form=None, open_modal=False):
         total_gross_profit = records.aggregate(total=Sum("gross_profit"))["total"] or 0
     else:
         records = (
-            OrderRecord.objects.filter(manager=request.user)
+            OrderRecord.objects.filter(manager=request.user, accounting_period=selected_period)
             .select_related("manager", "created_by")
             .order_by("-created_at")
         )

@@ -8,8 +8,9 @@
     <a href="/" class="back-link">← На главную</a>
     <h1>{% if is_admin_view %}Все заказы{% else %}Мои заказы{% endif %}</h1>
 
+    <div class="content-stack">
     {% if is_admin_view %}
-    <form method="get" class="panel filters-panel">
+    <form method="get" class="panel">
         <div class="filters-grid">
             <div class="form-group">
                 <label for="manager">Менеджер</label>
@@ -96,6 +97,7 @@
         {% else %}
         <p>Записей пока нет.</p>
         {% endif %}
+    </div>
     </div>
 </div>
 

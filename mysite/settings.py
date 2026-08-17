@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "calculator",
     "cash",
     "payroll",
+    "finance",
 ]
 
 MIDDLEWARE = [
