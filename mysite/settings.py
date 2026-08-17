@@ -30,6 +30,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "akkormsk-psadmin-852a.twc1.net",
     "psadmin-production.up.railway.app",
+    "admin.psodin.ru",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
