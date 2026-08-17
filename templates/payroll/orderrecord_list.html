@@ -41,6 +41,20 @@
             Валовая прибыль по выборке: <strong>{{ total_gross_profit|floatformat:2|intcomma }} руб.</strong>
         </p>
     </form>
+    {% else %}
+    <form method="get" class="panel">
+        <div class="panel-header panel-header--toolbar">
+            <h2 class="panel-title">Период</h2>
+            <div class="compact-period-control">
+                <label for="period">Учётный период</label>
+                <select id="period" name="period" onchange="this.form.submit()">
+                    {% for period in periods %}
+                    <option value="{{ period.value }}" {% if selected_period == period.value %}selected{% endif %}>{{ period.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </form>
     {% endif %}
 
     <div class="panel">

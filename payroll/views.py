@@ -50,11 +50,24 @@ def orderrecord_list(request, form=None, open_modal=False):
         records = records.order_by("-created_at")
         total_gross_profit = records.aggregate(total=Sum("gross_profit"))["total"] or 0
     else:
-        records = (
-            OrderRecord.objects.filter(manager=request.user, accounting_period=selected_period)
-            .select_related("manager", "created_by")
-            .order_by("-created_at")
+        manager_records = OrderRecord.objects.filter(manager=request.user)
+        period_values = list(
+            manager_records.order_by()
+            .values_list("accounting_period", flat=True)
+            .distinct()
+            .order_by("-accounting_period")
         )
+        selected_period = request.GET.get("period", selected_period)
+        if selected_period not in period_values:
+            selected_period = period_values[0] if period_values else selected_period
+        periods = [
+            {
+                "value": period,
+                "label": OrderRecord(accounting_period=period).accounting_period_ru,
+            }
+            for period in period_values
+        ]
+        records = manager_records.filter(accounting_period=selected_period).select_related("manager", "created_by").order_by("-created_at")
         total_gross_profit = None
 
     if form is None:
