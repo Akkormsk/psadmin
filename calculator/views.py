@@ -3,7 +3,9 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from .models import CalculatorSettings, Estimate, EstimateLine, PriceItem
 from .services import calculate_sheet_estimate
@@ -76,3 +78,14 @@ def home(request, pk=None):
     items = [{"id": item.pk, "category": item.category, "name": item.name, "unit_name": item.unit_name, "unit_price": str(item.effective_unit_price)} for item in PriceItem.objects.filter(is_active=True).select_related("base_item")]
     estimates = Estimate.objects.filter(owner=request.user) if not request.user.is_superuser else Estimate.objects.select_related("owner")
     return render(request, "calculator/sheet.html", {"settings": settings, "items_json": json.dumps(items, ensure_ascii=False), "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "estimate": estimate, "estimates": estimates[:20]})
+
+
+@login_required
+@require_POST
+def delete_estimate(request, pk):
+    estimate = _estimate_for_user(request, pk)
+    if estimate is None:
+        raise Http404
+    estimate.delete()
+    messages.success(request, "Сохранённый расчёт удалён.")
+    return redirect("calculator_home")
