@@ -512,7 +512,7 @@ h1 {
 .calc-line input, .calc-line select { min-height: 38px; box-sizing: border-box; padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 8px; }
 .calc-money-input, .calc-quantity-input { display:grid; gap:4px; color:#6b7280; font-size:12px; }
 .calc-money-input input, .calc-quantity-input input { width:100%; }
-.calc-line > strong { display:grid; min-height:38px; grid-template-rows:38px auto; align-items:start; gap:4px; white-space:nowrap; }
+.calc-line > strong { display:grid; min-height:38px; grid-template-rows:38px auto; align-items:center; gap:4px; white-space:nowrap; }
 .calc-line > strong::after { content:'Сумма'; color:#6b7280; font-size:12px; font-weight:400; }
 .calc-line .delete-btn { opacity:1; color:#b91c1c; align-self:start; }
 .calculator-parameters { display:flex; gap:16px; padding:16px; background:#f7fafc; border-radius:12px; }
