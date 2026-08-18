@@ -121,6 +121,8 @@ h1 {
   box-shadow: 0 10px 30px rgba(0,0,0,0.06);
 }
 
+.panel--separated { margin-top: 24px; }
+
 .panel-header {
   display: flex;
   align-items: center;
