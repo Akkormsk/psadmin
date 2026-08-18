@@ -507,6 +507,9 @@ h1 {
 .calc-lines { display: grid; gap: 8px; margin-bottom: 10px; }
 .calc-line { display: grid; grid-template-columns: minmax(220px, 1fr) 130px 100px 100px 120px 28px; gap: 8px; align-items: center; }
 .calc-line input, .calc-line select { min-height: 38px; box-sizing: border-box; padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 8px; }
+.calc-money-input, .calc-quantity-input { position:relative; display:block; }
+.calc-money-input input, .calc-quantity-input input { width:100%; padding-right:34px; }
+.calc-money-input span, .calc-quantity-input span { position:absolute; right:9px; top:11px; color:#6b7280; font-size:12px; pointer-events:none; }
 .calculator-parameters { display:flex; gap:16px; padding:16px; background:#f7fafc; border-radius:12px; }
 .calculator-parameters label, .calculator-save label { display:grid; gap:6px; font-weight:600; }
 .calculator-parameters input, .calculator-save input { min-height:40px; box-sizing:border-box; padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; background:#edf8ea; }
