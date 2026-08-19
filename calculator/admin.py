@@ -5,7 +5,8 @@ from .models import CalculatorSettings, Estimate, EstimateLine, PriceItem
 
 @admin.register(PriceItem)
 class PriceItemAdmin(admin.ModelAdmin):
-    list_display = ("name", "category", "unit_name", "unit_price", "base_item", "price_multiplier", "is_active")
+    list_display = ("name", "category", "sort_order", "unit_name", "unit_price", "base_item", "price_multiplier", "is_active")
+    list_editable = ("sort_order",)
     list_filter = ("category", "is_active")
     search_fields = ("name",)
 

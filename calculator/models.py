@@ -19,9 +19,9 @@ class PriceItem(models.Model):
         (CATEGORY_XEROX, "Печать · Xerox"),
         (CATEGORY_POSTPRESS, "Постпечатная обработка"),
         (CATEGORY_EMBOSSING, "Тиснение"),
-        (CATEGORY_WIDE_PAPER, "Широкоформатная печать · Бумага"),
-        (CATEGORY_WIDE_PRINT, "Широкоформатная печать · Печать"),
-        (CATEGORY_WIDE_POSTPRESS, "Широкоформатная печать · Постпечатка"),
+        (CATEGORY_WIDE_PAPER, "Плоттер Canon · Бумага"),
+        (CATEGORY_WIDE_PRINT, "Плоттер Canon · Печать"),
+        (CATEGORY_WIDE_POSTPRESS, "Плоттер Canon · Постпечатка"),
     ]
 
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
@@ -30,10 +30,11 @@ class PriceItem(models.Model):
     unit_price = models.DecimalField(max_digits=12, decimal_places=4)
     base_item = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="dependent_items")
     price_multiplier = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal("1.0000"))
+    sort_order = models.PositiveIntegerField("Порядок", default=0)
     is_active = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ["category", "name"]
+        ordering = ["category", "sort_order", "pk"]
         verbose_name = "Позиция калькулятора"
         verbose_name_plural = "Справочник калькулятора"
 
@@ -66,7 +67,7 @@ class CalculatorSettings(models.Model):
 class Estimate(models.Model):
     TYPE_SHEET = "sheet"
     TYPE_WIDE = "wide"
-    TYPE_CHOICES = [(TYPE_SHEET, "Листовая печать"), (TYPE_WIDE, "Широкоформатная печать")]
+    TYPE_CHOICES = [(TYPE_SHEET, "Листовая печать"), (TYPE_WIDE, "Плоттер Canon")]
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimates")
     calculator_type = models.CharField("Калькулятор", max_length=20, choices=TYPE_CHOICES, default=TYPE_SHEET)

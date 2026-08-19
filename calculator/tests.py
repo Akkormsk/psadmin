@@ -58,3 +58,13 @@ class SheetCalculatorTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(Estimate.objects.get().calculator_type, Estimate.TYPE_WIDE)
+
+    def test_canon_catalog_uses_manual_other_option_and_explicit_order(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("calculator_home"), {"calculator": Estimate.TYPE_WIDE})
+
+        self.assertContains(response, "Плоттер Canon")
+        self.assertFalse(PriceItem.objects.filter(category=PriceItem.CATEGORY_WIDE_PAPER, name="Другое").exists())
+        ordered = list(PriceItem.objects.filter(category=PriceItem.CATEGORY_WIDE_PAPER).values_list("sort_order", flat=True))
+        self.assertEqual(ordered, sorted(ordered))
