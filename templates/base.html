@@ -59,6 +59,113 @@
         });
       })();
     </script>
+    <script>
+      (function () {
+        function enhanceSelect(select) {
+          if (select.multiple || select.size > 1 || select.dataset.customized === "true") return;
+          select.dataset.customized = "true";
+
+          const wrapper = document.createElement("div");
+          wrapper.className = "custom-select";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "custom-select__button";
+          button.setAttribute("aria-haspopup", "listbox");
+          button.setAttribute("aria-expanded", "false");
+          const menu = document.createElement("ul");
+          menu.className = "custom-select__menu";
+          menu.setAttribute("role", "listbox");
+
+          select.parentNode.insertBefore(wrapper, select);
+          wrapper.append(select, button, menu);
+
+          function rebuild() {
+            menu.innerHTML = "";
+            Array.from(select.options).forEach(function (option, index) {
+              const item = document.createElement("li");
+              item.className = "custom-select__option";
+              item.textContent = option.textContent;
+              item.dataset.index = index;
+              item.setAttribute("role", "option");
+              if (option.disabled) item.classList.add("is-disabled");
+              item.addEventListener("click", function () {
+                if (option.disabled) return;
+                select.selectedIndex = index;
+                select.dispatchEvent(new Event("input", { bubbles: true }));
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+                sync();
+                close();
+              });
+              menu.append(item);
+            });
+            sync();
+          }
+
+          function sync() {
+            const selected = select.options[select.selectedIndex];
+            button.textContent = selected ? selected.textContent : "Выберите";
+            menu.querySelectorAll(".custom-select__option").forEach(function (item, index) {
+              const active = index === select.selectedIndex;
+              item.classList.toggle("is-selected", active);
+              item.setAttribute("aria-selected", active ? "true" : "false");
+            });
+          }
+          function close() {
+            wrapper.classList.remove("is-open");
+            button.setAttribute("aria-expanded", "false");
+          }
+          function open() {
+            document.querySelectorAll(".custom-select.is-open").forEach(function (other) {
+              if (other !== wrapper) other.classList.remove("is-open");
+            });
+            wrapper.classList.add("is-open");
+            button.setAttribute("aria-expanded", "true");
+          }
+
+          button.addEventListener("click", function () {
+            wrapper.classList.contains("is-open") ? close() : open();
+          });
+          button.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") { close(); return; }
+            if (!["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) return;
+            event.preventDefault();
+            if (!wrapper.classList.contains("is-open")) { open(); return; }
+            if (event.key === "Enter" || event.key === " ") { close(); return; }
+            const direction = event.key === "ArrowDown" ? 1 : -1;
+            let index = select.selectedIndex;
+            do { index = Math.max(0, Math.min(select.options.length - 1, index + direction)); }
+            while (select.options[index] && select.options[index].disabled);
+            select.selectedIndex = index;
+            sync();
+            select.dispatchEvent(new Event("input", { bubbles: true }));
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+          select.addEventListener("change", sync);
+          rebuild();
+        }
+
+        function enhanceAll(root) {
+          if (root.matches && root.matches("select")) enhanceSelect(root);
+          if (root.querySelectorAll) root.querySelectorAll("select").forEach(enhanceSelect);
+        }
+        enhanceAll(document);
+        new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType === 1) enhanceAll(node);
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+        document.addEventListener("click", function (event) {
+          if (!event.target.closest(".custom-select")) {
+            document.querySelectorAll(".custom-select.is-open").forEach(function (select) {
+              select.classList.remove("is-open");
+              select.querySelector(".custom-select__button").setAttribute("aria-expanded", "false");
+            });
+          }
+        });
+      })();
+    </script>
 </body>
 </html>
 
