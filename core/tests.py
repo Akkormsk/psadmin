@@ -65,6 +65,12 @@ class AccountTests(TestCase):
         Image.new("RGB", (640, 320), "#4f46e5").save(output, "PNG")
         return SimpleUploadedFile("avatar.png", output.getvalue(), content_type="image/png")
 
+    @staticmethod
+    def background_file():
+        output = BytesIO()
+        Image.new("RGB", (3200, 1800), "#0f766e").save(output, "JPEG")
+        return SimpleUploadedFile("background.jpg", output.getvalue(), content_type="image/jpeg")
+
     def test_user_can_upload_optimized_avatar(self):
         response = self.client.post(
             reverse("account"),
@@ -96,6 +102,24 @@ class AccountTests(TestCase):
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("new-secure-password-456"))
         self.assertEqual(self.client.get(reverse("account")).status_code, 200)
+
+    def test_user_can_upload_optimized_background_and_restore_default(self):
+        response = self.client.post(reverse("account"), {"action": "background", "background": self.background_file()})
+
+        self.assertRedirects(response, reverse("account"))
+        profile = Profile.objects.get(user=self.user)
+        self.assertTrue(profile.has_background)
+        background_response = self.client.get(reverse("account_background"))
+        self.assertEqual(background_response.status_code, 200)
+        self.assertEqual(background_response["Content-Type"], "image/webp")
+        with Image.open(BytesIO(background_response.content)) as image:
+            self.assertLessEqual(max(image.size), 2560)
+
+        response = self.client.post(reverse("account"), {"action": "remove_background"})
+        self.assertRedirects(response, reverse("account"))
+        profile.refresh_from_db()
+        self.assertFalse(profile.has_background)
+        self.assertEqual(self.client.get(reverse("account_background")).status_code, 404)
 
     def test_topbar_uses_full_name_and_links_to_account(self):
         response = self.client.get(reverse("index"))

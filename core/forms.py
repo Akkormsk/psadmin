@@ -12,6 +12,16 @@ class AvatarUploadForm(forms.Form):
         return avatar
 
 
+class BackgroundUploadForm(forms.Form):
+    background = forms.ImageField(label="Новый фон")
+
+    def clean_background(self):
+        background = self.cleaned_data["background"]
+        if background.size > 15 * 1024 * 1024:
+            raise forms.ValidationError("Размер изображения не должен превышать 15 МБ.")
+        return background
+
+
 class AccountPasswordChangeForm(PasswordChangeForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

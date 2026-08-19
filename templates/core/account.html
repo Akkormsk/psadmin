@@ -32,6 +32,19 @@
         <button type="submit" class="button-success">Изменить пароль</button>
       </form>
     </section>
+
+    <section class="panel account-background-card">
+      <div class="panel-header"><h2 class="panel-title">Фон</h2></div>
+      <div class="account-background-preview"{% if profile.has_background %} style="background-image:linear-gradient(rgba(248,249,250,.70),rgba(248,249,250,.70)),url('{% url 'account_background' %}?v={{ profile.background_updated_at|date:'U' }}')"{% endif %}></div>
+      <p class="settings-description">Изображение автоматически уменьшается и подгоняется под любой экран.</p>
+      <form method="post" enctype="multipart/form-data" class="account-form account-background-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="background">
+        <div class="form-group"><label for="{{ background_form.background.id_for_label }}">{{ background_form.background.label }}</label>{{ background_form.background }}{{ background_form.background.errors }}</div>
+        <button type="submit" class="button-success">Сохранить фон</button>
+      </form>
+      {% if profile.has_background %}<form method="post">{% csrf_token %}<button type="submit" name="action" value="remove_background" class="button-secondary">Вернуть общий фон</button></form>{% endif %}
+    </section>
   </div>
 </div>
 {% endblock %}

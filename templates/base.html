@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'core/index.css' %}">
+    {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
 <body{% if request.user.is_authenticated %} class="has-account-bar"{% endif %}>
     {% block topbar %}

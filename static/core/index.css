@@ -741,6 +741,18 @@ h1 {
 .account-form .button-success { width: 100%; }
 .account-profile-card > form:last-child { width: 100%; }
 .account-profile-card > form:last-child .button-secondary { width: 100%; }
+.account-background-card { grid-column: 1 / -1; }
+.account-background-preview {
+  min-height: 180px;
+  margin-bottom: 14px;
+  border-radius: 14px;
+  background-image: linear-gradient(var(--app-background-overlay), var(--app-background-overlay)), var(--app-background-image);
+  background-position: center;
+  background-size: cover;
+}
+.account-background-form { display: flex; align-items: end; gap: 14px; margin-top: 16px; }
+.account-background-form .form-group { flex: 1; margin: 0; }
+.account-background-form .button-success { width: auto; }
 
 /* ---------- cash ---------- */
 
@@ -882,6 +894,8 @@ h1 {
   .account-grid { grid-template-columns: 1fr; gap: 16px; }
   .account-avatar--large { display: none; }
   .account-profile-card { align-items: stretch; text-align: left; }
+  .account-background-preview { min-height: 120px; }
+  .account-background-form { align-items: stretch; flex-direction: column; }
   .hover-actions .mobile-actions-toggle { display: inline-block; }
   .hover-actions .hover-action { display: none; }
   .hover-actions.is-open .mobile-actions-toggle { display: none; }
