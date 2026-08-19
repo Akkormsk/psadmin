@@ -1,6 +1,6 @@
 :root {
   --app-background-image: url("background.webp");
-  --app-background-overlay: rgba(248, 249, 250, 0.80);
+  --app-background-overlay: rgba(248, 249, 250, 0.70);
 }
 
 body {
