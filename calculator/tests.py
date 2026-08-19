@@ -68,3 +68,21 @@ class SheetCalculatorTests(TestCase):
         self.assertFalse(PriceItem.objects.filter(category=PriceItem.CATEGORY_WIDE_PAPER, name="Другое").exists())
         ordered = list(PriceItem.objects.filter(category=PriceItem.CATEGORY_WIDE_PAPER).values_list("sort_order", flat=True))
         self.assertEqual(ordered, sorted(ordered))
+
+    def test_saved_estimates_are_filtered_by_current_calculator(self):
+        sheet = Estimate.objects.create(owner=self.user, name="Листовой", calculator_type=Estimate.TYPE_SHEET)
+        wide = Estimate.objects.create(owner=self.user, name="Canon", calculator_type=Estimate.TYPE_WIDE)
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("calculator_home"), {"calculator": Estimate.TYPE_WIDE})
+
+        self.assertContains(response, wide.name)
+        self.assertNotContains(response, sheet.name)
+
+    def test_switch_link_from_saved_estimate_points_to_calculator_home(self):
+        estimate = Estimate.objects.create(owner=self.user, name="Сохранённый", calculator_type=Estimate.TYPE_SHEET)
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("calculator_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, "window.location.href='/calculator/?calculator='+this.value")

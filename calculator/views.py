@@ -83,7 +83,8 @@ def home(request, pk=None):
     if estimate:
         initial_lines = [{"category": line.category, "item_id": line.price_item_id, "name": line.name_snapshot, "unit_price": str(line.unit_price_snapshot), "quantity": str(line.quantity), "custom": line.is_custom} for line in estimate.lines.select_related("price_item")]
     items = [{"id": item.pk, "category": item.category, "name": item.name, "unit_name": item.unit_name, "unit_price": str(item.effective_unit_price)} for item in PriceItem.objects.filter(is_active=True).select_related("base_item")]
-    estimates = Estimate.objects.filter(owner=request.user).select_related("owner", "owner__profile").defer("owner__profile__avatar_data") if not request.user.is_superuser else Estimate.objects.select_related("owner", "owner__profile").defer("owner__profile__avatar_data")
+    estimates = Estimate.objects.filter(owner=request.user) if not request.user.is_superuser else Estimate.objects.all()
+    estimates = estimates.filter(calculator_type=calculator_type).select_related("owner", "owner__profile").defer("owner__profile__avatar_data")
     return render(request, "calculator/sheet.html", {"settings": settings, "calculator_type": calculator_type, "items_json": json.dumps(items, ensure_ascii=False), "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "estimate": estimate, "estimates": estimates[:20]})
 
 
