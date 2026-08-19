@@ -48,6 +48,20 @@ class PriceItem(models.Model):
         return self.unit_price
 
 
+class SheetPriceItem(PriceItem):
+    class Meta:
+        proxy = True
+        verbose_name = "Цена листовой печати"
+        verbose_name_plural = "Листовая печать — цены"
+
+
+class CanonPriceItem(PriceItem):
+    class Meta:
+        proxy = True
+        verbose_name = "Цена плоттера Canon"
+        verbose_name_plural = "Плоттер Canon — цены"
+
+
 class CalculatorSettings(models.Model):
     hourly_rate = models.DecimalField("Цена часа", max_digits=12, decimal_places=2, default=Decimal("550.00"))
     material_coefficient = models.DecimalField("Коэффициент материала", max_digits=7, decimal_places=3, default=Decimal("2.000"))

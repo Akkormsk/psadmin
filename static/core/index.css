@@ -15,11 +15,12 @@ body {
 body::before {
   content: "";
   position: fixed;
-  inset: 0;
+  top: -5lvh;
+  left: 0;
   z-index: -1;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: 110vh;
+  height: 110lvh;
   background-color: #f5f6f8;
   background-image:
     linear-gradient(var(--app-background-overlay), var(--app-background-overlay)),

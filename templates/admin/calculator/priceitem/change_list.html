@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+{% block extrahead %}
+{{ block.super }}
+<style>
+#result_list tbody tr.is-dragging{opacity:.45}#result_list td.field-drag_handle{width:28px;color:#94a3b8;font-size:20px;cursor:grab;user-select:none}#result_list td.field-drag_handle:active{cursor:grabbing}
+</style>
+<script>
+document.addEventListener("DOMContentLoaded",function(){const body=document.querySelector("#result_list tbody");if(!body)return;let dragged=null;const category=row=>row.querySelector("td.field-category")?.textContent.trim()||"";const rowId=row=>Number(row.querySelector("input.action-select")?.value)||null;body.querySelectorAll("tr").forEach(function(row){const handle=row.querySelector("td.field-drag_handle");if(!handle)return;handle.title="Перетащить внутри категории";handle.addEventListener("mousedown",()=>row.draggable=true);row.addEventListener("dragstart",()=>{dragged=row;row.classList.add("is-dragging")});row.addEventListener("dragend",()=>{row.draggable=false;row.classList.remove("is-dragging");dragged=null});row.addEventListener("dragover",function(event){if(!dragged||category(dragged)!==category(row))return;event.preventDefault();const before=event.clientY<row.getBoundingClientRect().top+row.offsetHeight/2;body.insertBefore(dragged,before?row:row.nextSibling)});row.addEventListener("drop",function(event){if(!dragged||category(dragged)!==category(row))return;event.preventDefault();const current=category(row),ids=Array.from(body.querySelectorAll("tr")).filter(item=>category(item)===current).map(rowId).filter(Boolean);const token=document.querySelector("[name=csrfmiddlewaretoken]")?.value;fetch("reorder/",{method:"POST",headers:{"Content-Type":"application/json","X-CSRFToken":token},body:JSON.stringify({ids})}).then(response=>{if(!response.ok)window.location.reload()})})})});
+</script>
+{% endblock %}
