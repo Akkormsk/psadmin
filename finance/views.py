@@ -171,7 +171,13 @@ def calculation(request):
             manager_payroll += base + line.kpi_bonus - line.deductions
     order_total = OrderRecord.objects.filter(accounting_period=code).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
     expense_total = period.expenses.aggregate(total=Sum("amount"))["total"] or Decimal("0")
-    period_codes = sorted(set(OrderRecord.objects.values_list("accounting_period", flat=True)) | {code}, reverse=True)
+    current_period = timezone.localdate().strftime("%Y-%m")
+    period_codes = sorted(
+        set(OrderRecord.objects.values_list("accounting_period", flat=True))
+        | set(FinancialPeriod.objects.values_list("code", flat=True))
+        | {code, current_period},
+        reverse=True,
+    )
     month_names = ("Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь")
     period_options = [(value, f"{month_names[int(value[5:]) - 1]} {value[:4]}") for value in period_codes]
     for line in lines:
