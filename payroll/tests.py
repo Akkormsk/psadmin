@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -39,6 +41,8 @@ class OrderRecordAccessTests(TestCase):
 
         self.assertContains(response, self.manager_record.order_number)
         self.assertNotContains(response, self.other_record.order_number)
+        self.assertContains(response, "Валовая прибыль по выборке")
+        self.assertEqual(response.context["total_gross_profit"], Decimal("150000.00"))
 
     def test_admin_sees_all_records_and_can_filter_by_manager_and_period(self):
         self.client.force_login(self.admin)

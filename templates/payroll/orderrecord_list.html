@@ -54,6 +54,9 @@
                 </select>
             </div>
         </div>
+        <p class="total-profit">
+            Валовая прибыль по выборке: <strong>{{ total_gross_profit|floatformat:2|intcomma }} руб.</strong>
+        </p>
     </form>
     {% endif %}
 

@@ -69,10 +69,11 @@ def orderrecord_list(request, form=None, open_modal=False, edit_form=None, open_
             }
             for period in period_values
         ]
-        records = list(manager_records.filter(accounting_period=selected_period).select_related("manager", "manager__profile", "created_by", "created_by__profile").defer(
+        selected_records = manager_records.filter(accounting_period=selected_period)
+        total_gross_profit = selected_records.aggregate(total=Sum("gross_profit"))["total"] or 0
+        records = list(selected_records.select_related("manager", "manager__profile", "created_by", "created_by__profile").defer(
             "manager__profile__avatar_data", "created_by__profile__avatar_data"
         ).order_by("-created_at"))
-        total_gross_profit = None
 
     if form is None:
         form = OrderRecordCreateForm(user=request.user)
