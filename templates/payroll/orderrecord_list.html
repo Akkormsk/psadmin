@@ -14,12 +14,12 @@
         <div class="panel-header panel-header--toolbar">
             <h2 class="panel-title">Фильтры</h2>
             <div class="toolbar-controls">
-                <label class="toolbar-control" for="manager">Менеджер
+                <label class="toolbar-control" for="manager">Ответственный
                 <select id="manager" name="manager" onchange="this.form.submit()">
-                    <option value="">Все менеджеры</option>
+                    <option value="">Все сотрудники</option>
                     {% for manager in managers %}
                     <option value="{{ manager.pk }}" {% if selected_manager == manager.pk|stringformat:"s" %}selected{% endif %}>
-                        {{ manager.get_full_name|default:manager.username }}{% if manager.get_full_name %}{% endif %}
+                        {{ manager.get_full_name|default:"Имя не указано" }}
                     </option>
                     {% endfor %}
                 </select>
@@ -73,7 +73,7 @@
                 <th>Валовая прибыль</th>
                 <th>Учетный период</th>
                 {% if is_admin_view %}
-                <th>Менеджер</th>
+                <th>Ответственный</th>
                 {% endif %}
                 <th>Обновлён</th>
                 <th></th>
@@ -82,28 +82,30 @@
             <tbody>
             {% for record in records %}
             <tr class="table-row">
-                <td>{{ record.order_number }}</td>
+                <td>{{ record.order_number }}{% if record.record_type == 'design' %}<span class="record-type-badge">Макет</span>{% endif %}</td>
                 <td>
                     {{ record.gross_profit|floatformat:2|intcomma }}
                     <span class="money-suffix">руб.</span>
                 </td>
                 <td>{{ record.accounting_period_ru }}</td>
                 {% if is_admin_view %}
-                <td>{{ record.manager.get_full_name|default:record.manager.username }}</td>
+                <td><span class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=record.manager %}<span>{{ record.manager.get_full_name|default:"Имя не указано" }}</span></span></td>
                 {% endif %}
                 <td>{{ record.updated_at|date:"d.m.Y H:i" }}</td>
-                <td class="row-actions">
+                <td class="row-actions order-row-actions"><div class="hover-actions">
+                    <button type="button" class="mobile-actions-toggle" aria-label="Действия">⋯</button>
+                    <button type="button" class="hover-action js-order-edit-open" data-modal-id="order-edit-modal-{{ record.pk }}" title="Изменить" aria-label="Изменить запись">✎</button>
                     <form method="post"
                           action="{% url 'payroll:orderrecord_delete' record.pk %}"
                           onsubmit="return confirm('Удалить запись заказа №{{ record.order_number }}?')">
 
                         {% csrf_token %}
 
-                        <button type="submit" class="delete-btn">
+                        <button type="submit" class="hover-action" title="Удалить" aria-label="Удалить запись">
                             ×
                         </button>
 
-                    </form>
+                    </form></div>
                 </td>
             </tr>
             {% endfor %}
@@ -127,6 +129,31 @@
         {% include "payroll/_orderrecord_form.html" %}
     </div>
 </div>
+
+{% for record in records %}
+<div class="modal-overlay order-edit-modal" id="order-edit-modal-{{ record.pk }}" aria-hidden="true">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>Изменить запись</h2>
+            <button type="button" class="modal-close js-order-edit-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form method="post" action="{% url 'payroll:orderrecord_update' record.pk %}">
+            {% csrf_token %}
+            {% for field in record.edit_form %}
+            <div class="form-group{% if field.name == 'record_type' %} form-group--record-type{% endif %}">
+                {% if field.name == 'record_type' %}<span class="form-label">{{ field.label }}</span>{% else %}<label for="{{ field.id_for_label }}">{{ field.label }}</label>{% endif %}
+                {{ field }}
+                {{ field.errors }}
+            </div>
+            {% endfor %}
+            <div class="table-actions">
+                <button type="button" class="button-secondary js-order-edit-close">Отмена</button>
+                <button type="submit" class="button-success">Сохранить</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
 
 <script>
     (function () {
@@ -155,6 +182,25 @@
         if (shouldOpen) {
             openModal();
         }
+
+        document.querySelectorAll(".js-order-edit-open").forEach(function (button) {
+            button.addEventListener("click", function () {
+                document.getElementById(button.dataset.modalId).classList.add("is-open");
+            });
+        });
+
+        document.querySelectorAll(".order-edit-modal").forEach(function (editModal) {
+            editModal.querySelectorAll(".js-order-edit-close").forEach(function (button) {
+                button.addEventListener("click", function () { editModal.classList.remove("is-open"); });
+            });
+            editModal.addEventListener("click", function (event) {
+                if (event.target === editModal) editModal.classList.remove("is-open");
+            });
+        });
+
+        {% if open_edit_id %}
+        document.getElementById("order-edit-modal-{{ open_edit_id }}").classList.add("is-open");
+        {% endif %}
     })();
 
 

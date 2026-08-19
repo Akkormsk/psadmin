@@ -24,10 +24,15 @@ def _manager_data():
         tier, _ = KpiTier.objects.get_or_create(threshold=threshold)
         tiers.append(tier)
 
-    managers = get_user_model().objects.filter(is_superuser=False).order_by("last_name", "first_name", "username")
+    users = get_user_model().objects.filter(is_superuser=False, is_active=True)
+    for user in users:
+        ManagerSettings.objects.get_or_create(user=user)
+    employee_settings = ManagerSettings.objects.filter(user__is_superuser=False, user__is_active=True).select_related("user").order_by(
+        "sort_order", "user__first_name", "user__last_name", "user_id"
+    )
     result = []
-    for manager in managers:
-        settings, _ = ManagerSettings.objects.get_or_create(user=manager)
+    for settings in employee_settings:
+        manager = settings.user
         rates = {}
         for tier in tiers:
             rate, _ = ManagerKpiRate.objects.get_or_create(manager=manager, tier=tier)
@@ -37,7 +42,6 @@ def _manager_data():
 
 
 @login_required
-@user_passes_test(lambda user: user.is_superuser)
 def dashboard(request):
     current_period = timezone.localdate().strftime("%Y-%m")
     return redirect(f"/finance/calculation/?period={current_period}")
@@ -45,12 +49,15 @@ def dashboard(request):
 
 def _refresh_period(period):
     for line in period.payroll_lines.filter(kind=PayrollLine.MANAGER).select_related("manager"):
-        profit = OrderRecord.objects.filter(manager=line.manager, accounting_period=period.code).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
+        records = OrderRecord.objects.filter(manager=line.manager, accounting_period=period.code)
+        profit = records.filter(record_type=OrderRecord.RECORD_ORDER).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
+        design_total = records.filter(record_type=OrderRecord.RECORD_DESIGN).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
         rate = ManagerKpiRate.objects.filter(manager=line.manager, tier__threshold__lte=profit).order_by("-tier__threshold").first()
         line.order_profit = profit
         line.kpi_percent = rate.percent if rate else Decimal("0")
         line.kpi_bonus = profit * line.kpi_percent / Decimal("100")
-        line.save(update_fields=("order_profit", "kpi_percent", "kpi_bonus"))
+        line.design_amount = design_total
+        line.save(update_fields=("order_profit", "kpi_percent", "kpi_bonus", "design_amount"))
 
 
 def _sync_open_manager_lines(period, managers):
@@ -63,15 +70,17 @@ def _sync_open_manager_lines(period, managers):
             manager=manager,
             defaults={
                 "kind": PayrollLine.MANAGER,
-                "name": manager.get_full_name() or manager.username,
+                "name": manager.get_full_name().strip() or "Имя не указано",
                 "shift_rate": settings.shift_rate,
                 "leave_shift_rate": settings.leave_shift_rate,
+                "design_percent": settings.design_percent,
             },
         )
-        line.name = manager.get_full_name() or manager.username
+        line.name = manager.get_full_name().strip() or "Имя не указано"
         line.shift_rate = settings.shift_rate
         line.leave_shift_rate = settings.leave_shift_rate
-        line.save(update_fields=("name", "shift_rate", "leave_shift_rate"))
+        line.design_percent = settings.design_percent
+        line.save(update_fields=("name", "shift_rate", "leave_shift_rate", "design_percent"))
 
 
 def _sync_open_printer_line(period):
@@ -125,29 +134,34 @@ def _sync_open_period_expenses(period, refresh_values=False):
 
 
 @login_required
-@user_passes_test(lambda user: user.is_superuser)
 def calculation(request):
+    is_admin_view = request.user.is_superuser
     code = request.GET.get("period") or request.POST.get("period") or timezone.localdate().strftime("%Y-%m")
     period, _ = FinancialPeriod.objects.get_or_create(code=code)
     tiers, managers = _manager_data()
     _sync_open_manager_lines(period, managers)
     if not period.is_closed:
         _sync_open_printer_line(period)
-        PayrollLine.objects.get_or_create(period=period, manager=None, kind=PayrollLine.DESIGNER, defaults={"name": "Дизайнер"})
     _sync_open_period_expenses(period)
-    if request.method == "POST" and request.POST.get("action") == "reopen":
+    if request.method == "POST" and request.POST.get("action") == "reopen" and is_admin_view:
         period.is_closed = False
         period.save(update_fields=("is_closed",))
         return redirect(f"{request.path}?period={code}")
     if request.method == "POST" and not period.is_closed:
-        for line in period.payroll_lines.all():
-            for field in ("work_shifts", "leave_shifts", "fixed_salary", "design_amount", "design_percent", "deductions", "advance"):
+        editable_lines = period.payroll_lines.all() if is_admin_view else period.payroll_lines.filter(manager=request.user)
+        editable_fields = (
+            ("work_shifts", "leave_shifts", "fixed_salary", "deductions", "advance")
+            if is_admin_view
+            else ("work_shifts", "leave_shifts")
+        )
+        for line in editable_lines:
+            for field in editable_fields:
                 value = request.POST.get(f"{field}_{line.pk}")
                 if value is not None:
                     setattr(line, field, value or 0)
             line.save()
         _refresh_period(period)
-        if request.POST.get("action") == "close":
+        if request.POST.get("action") == "close" and is_admin_view:
             period.is_closed = True
             period.save(update_fields=("is_closed",))
         return redirect(f"{request.path}?period={code}")
@@ -155,20 +169,23 @@ def calculation(request):
     lines = period.payroll_lines.order_by(
         Case(
             When(kind=PayrollLine.MANAGER, then=Value(0)),
-            When(kind=PayrollLine.DESIGNER, then=Value(1)),
-            When(kind=PayrollLine.PRINTER, then=Value(2)),
+            When(kind=PayrollLine.PRINTER, then=Value(1)),
             output_field=IntegerField(),
         ),
-        "name",
+        "manager__managersettings__sort_order",
+        "manager_id",
     )
+    if not is_admin_view:
+        lines = lines.filter(manager=request.user)
     manager_payroll = Decimal("0")
     for line in lines:
         base = _base_salary(line, period)
         fixed_salary = Decimal("0") if line.kind == PayrollLine.PRINTER else line.fixed_salary
-        line.total = base + fixed_salary + line.kpi_bonus + line.design_amount * line.design_percent / Decimal("100") - line.deductions
+        line.design_pay = line.design_amount * line.design_percent / Decimal("100")
+        line.total = base + fixed_salary + line.kpi_bonus + line.design_pay - line.deductions
         line.balance = line.total - line.advance
         if line.kind == PayrollLine.MANAGER:
-            manager_payroll += base + line.kpi_bonus - line.deductions
+            manager_payroll += base + line.kpi_bonus + line.design_pay - line.deductions
     order_total = OrderRecord.objects.filter(accounting_period=code).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
     expense_total = period.expenses.aggregate(total=Sum("amount"))["total"] or Decimal("0")
     current_period = timezone.localdate().strftime("%Y-%m")
@@ -182,7 +199,7 @@ def calculation(request):
     period_options = [(value, f"{month_names[int(value[5:]) - 1]} {value[:4]}") for value in period_codes]
     for line in lines:
         line.base_salary = _base_salary(line, period)
-    return render(request, "finance/calculation.html", {"period": period, "lines": lines, "period_options": period_options, "order_total": order_total, "manager_payroll": manager_payroll, "expense_total": expense_total, "company_profit": order_total - manager_payroll - expense_total})
+    return render(request, "finance/calculation.html", {"period": period, "lines": lines, "period_options": period_options, "order_total": order_total, "manager_payroll": manager_payroll, "expense_total": expense_total, "company_profit": order_total - manager_payroll - expense_total, "is_admin_view": is_admin_view})
 
 
 @login_required
@@ -219,9 +236,14 @@ def expenses(request):
 def manager_settings(request):
     tiers, managers = _manager_data()
     if request.method == "POST":
+        submitted_order = [value for value in request.POST.get("employee_order", "").split(",") if value.isdigit()]
+        order_by_id = {int(manager_id): position for position, manager_id in enumerate(submitted_order)}
         for manager, settings, rates in managers:
             settings.shift_rate = request.POST.get(f"shift_rate_{manager.pk}") or 0
             settings.leave_shift_rate = request.POST.get(f"leave_rate_{manager.pk}") or 0
+            settings.design_percent = request.POST.get(f"design_percent_{manager.pk}") or 90
+            if manager.pk in order_by_id:
+                settings.sort_order = order_by_id[manager.pk]
             settings.save()
             for tier, rate in zip(tiers, rates):
                 rate.percent = request.POST.get(f"kpi_{manager.pk}_{tier.pk}") or 0

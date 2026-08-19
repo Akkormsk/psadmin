@@ -37,8 +37,8 @@ def _write_audit(actor, action, message, transaction=None):
 @login_required
 def home(request):
     selected_date = _selected_date(request)
-    cash_transactions = list(CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CASH).select_related("created_by"))
-    card_transactions = list(CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CARD).select_related("created_by"))
+    cash_transactions = list(CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CASH).select_related("created_by", "created_by__profile").defer("created_by__profile__avatar_data"))
+    card_transactions = list(CashTransaction.objects.filter(operation_date=selected_date, account=CashTransaction.ACCOUNT_CARD).select_related("created_by", "created_by__profile").defer("created_by__profile__avatar_data"))
     for transaction in cash_transactions + card_transactions:
         transaction.edit_form = CashTransactionForm(instance=transaction, prefix=f"edit-{transaction.pk}")
     context = {
@@ -127,4 +127,4 @@ def reconcile(request):
 
 @login_required
 def audit_log(request):
-    return render(request, "cash/audit_log.html", {"events": CashAuditLog.objects.select_related("actor")[:200]})
+    return render(request, "cash/audit_log.html", {"events": CashAuditLog.objects.select_related("actor", "actor__profile").defer("actor__profile__avatar_data")[:200]})

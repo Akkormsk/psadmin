@@ -2,10 +2,8 @@
 
 {% block title %}PSADMIN{% endblock %}
 
-{% block topbar %}{% endblock %}
-
 {% block content %}
-<div class="wrap">
+<div class="wrap app-home">
     <div class="container">
         <h1>PSADMIN</h1>
 
@@ -20,12 +18,10 @@
                 <div class="card-desc">Учёт наличных в офисе</div>
             </a>
 
-            {% if request.user.is_superuser %}
             <a class="card" href="/finance/">
                 <div class="card-title">Финансы</div>
-                <div class="card-desc">Зарплаты, расходы и прибыль компании</div>
+                <div class="card-desc">{% if request.user.is_superuser %}Зарплаты, расходы и прибыль компании{% else %}Моя зарплата за текущий период{% endif %}</div>
             </a>
-            {% endif %}
 
             <a class="card" href="/payroll/">
                 <div class="card-title">Заказы</div>
@@ -33,15 +29,10 @@
             </a>
         </div>
 
-        <div class="footer">
-            {% if request.user.is_superuser %}
-                <a href="/admin/">Админка</a> ·
-            {% endif %}
-            <form method="post" action="{% url 'logout' %}" class="logout-form">
-                {% csrf_token %}
-                <button type="submit" class="logout-link">Выйти</button>
-            </form>
-        </div>
+        {% if request.user.is_superuser %}
+        <div class="footer"><a href="/admin/">Админка</a></div>
+        {% endif %}
+
     </div>
 </div>
 {% endblock %}

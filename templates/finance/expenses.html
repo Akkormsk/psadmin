@@ -14,7 +14,7 @@
       <table class="table expense-table">
         <tr><th>Статья</th><th>Сумма, ₽</th><th></th></tr>
         {% for expense in expenses %}
-        <tr class="table-row"><td><input type="text" name="name_{{ expense.pk }}" value="{{ expense.name }}"></td><td><input type="number" min="0" step="0.01" name="amount_{{ expense.pk }}" value="{{ expense.amount }}"></td><td class="row-actions"><button class="delete-btn" type="submit" name="delete_expense" value="{{ expense.pk }}" onclick="return confirm('Удалить постоянный расход «{{ expense.name }}»?')">×</button></td></tr>
+        <tr class="table-row"><td><input type="text" name="name_{{ expense.pk }}" value="{{ expense.name }}"></td><td><input type="number" min="0" step="0.01" name="amount_{{ expense.pk }}" value="{{ expense.amount }}"></td><td class="row-actions"><button class="hover-action" type="submit" name="delete_expense" value="{{ expense.pk }}" title="Удалить" aria-label="Удалить расход" onclick="return confirm('Удалить постоянный расход «{{ expense.name }}»?')">×</button></td></tr>
         {% endfor %}
         <tr><td><input type="text" name="new_name" placeholder="Новый расход"></td><td><input type="number" min="0" step="0.01" name="new_amount" placeholder="0,00"></td><td></td></tr>
       </table>

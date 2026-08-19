@@ -18,7 +18,7 @@
             {% endfor %}
           </select>
         </form>
-        <a class="button-secondary" href="{% url 'finance:manager_settings' %}">Настройки менеджеров</a>
+        {% if is_admin_view %}<a class="button-secondary" href="{% url 'finance:manager_settings' %}">Настройки сотрудников</a>{% endif %}
       </div>
     </div>
 
@@ -27,13 +27,15 @@
       {% csrf_token %}
       <input type="hidden" name="period" value="{{ period.code }}">
       <div class="panel-header">
-        <h2 class="panel-title">Зарплаты{% if period.is_closed %} · Закрыт{% endif %}</h2>
+        <h2 class="panel-title">{% if is_admin_view %}Зарплаты{% else %}Моя зарплата{% endif %}{% if period.is_closed %} · Закрыт{% endif %}</h2>
         <div class="panel-actions">
-          {% if not period.is_closed %}
+          {% if is_admin_view and not period.is_closed %}
           <button class="button-secondary" name="action" value="save">Сохранить</button>
           <button class="button-success" name="action" value="close">Закрыть период</button>
-          {% else %}
+          {% elif is_admin_view %}
           <button class="button-secondary" name="action" value="reopen">Редактировать период</button>
+          {% elif not period.is_closed %}
+          <button class="button-success" name="action" value="save">Сохранить дни</button>
           {% endif %}
         </div>
       </div>
@@ -47,16 +49,16 @@
           <tr><th>Сотрудник</th><th title="Рабочие смены">Р</th><th title="Отпускные смены">О</th><th>Оклад</th><th>Прибыль<br>заказов</th><th>Бонус</th><th>Макеты</th><th>Вычеты</th><th>Итого ЗП</th><th>Аванс</th><th>Доплата</th></tr>
           {% for line in lines %}
           <tr>
-            <td>{{ line.name }}</td>
+            <td>{% if line.manager %}{{ line.manager.get_full_name|default:"Имя не указано" }}{% else %}{{ line.name }}{% endif %}</td>
             <td class="finance-table__shift-cell">{% if line.kind != 'printer' %}<input class="finance-table__shift-input" aria-label="Рабочие смены: {{ line.name }}" type="number" inputmode="numeric" min="0" max="31" step="1" name="work_shifts_{{ line.pk }}" value="{{ line.work_shifts }}" {% if period.is_closed %}disabled{% endif %}>{% endif %}</td>
             <td class="finance-table__shift-cell"><input class="finance-table__shift-input" aria-label="Отпускные смены: {{ line.name }}" type="number" inputmode="numeric" min="0" max="31" step="1" name="leave_shifts_{{ line.pk }}" value="{{ line.leave_shifts }}" {% if period.is_closed %}disabled{% endif %}></td>
             <td class="finance-money">{{ line.base_salary|floatformat:2|intcomma }} р.</td>
             <td class="finance-money">{{ line.order_profit|floatformat:2|intcomma }} р.</td>
             <td class="finance-table__bonus-value"><strong>{{ line.kpi_bonus|floatformat:2|intcomma }} р.</strong> <span>({{ line.kpi_percent }}%)</span></td>
-            <td><input class="finance-table__amount-input" type="number" min="0" step="0.01" name="design_amount_{{ line.pk }}" value="{{ line.design_amount }}" {% if period.is_closed %}disabled{% endif %}></td>
-            <td><input class="finance-table__deduction-input" type="number" min="0" step="0.01" name="deductions_{{ line.pk }}" value="{{ line.deductions }}" {% if period.is_closed %}disabled{% endif %}></td>
+            <td class="finance-money">{{ line.design_pay|floatformat:2|intcomma }} р.</td>
+            <td>{% if is_admin_view %}<input class="finance-table__deduction-input" type="number" min="0" step="0.01" name="deductions_{{ line.pk }}" value="{{ line.deductions }}" {% if period.is_closed %}disabled{% endif %}>{% else %}<span class="finance-money">{{ line.deductions|floatformat:2|intcomma }} р.</span>{% endif %}</td>
             <td class="finance-table__total-value"><strong>{{ line.total|floatformat:2|intcomma }} р.</strong></td>
-            <td><input class="finance-table__amount-input" type="number" min="0" step="0.01" name="advance_{{ line.pk }}" value="{{ line.advance }}" {% if period.is_closed %}disabled{% endif %}></td>
+            <td>{% if is_admin_view %}<input class="finance-table__amount-input" type="number" min="0" step="0.01" name="advance_{{ line.pk }}" value="{{ line.advance }}" {% if period.is_closed %}disabled{% endif %}>{% else %}<span class="finance-money">{{ line.advance|floatformat:2|intcomma }} р.</span>{% endif %}</td>
             <td class="finance-money">{{ line.balance|floatformat:2|intcomma }} р.</td>
           </tr>
           {% endfor %}
@@ -65,18 +67,18 @@
     </form>
   </div>
 
-  <div class="panel">
+  {% if is_admin_view %}<div class="panel">
     <div class="panel-header"><h2 class="panel-title">Прибыль компании</h2><a class="button-secondary" href="{% url 'finance:expenses' %}?period={{ period.code }}">Редактировать расходы</a></div>
     <div class="table-wrapper">
     <table class="table">
       <tr><th>Показатель</th><th>Сумма</th></tr>
-      <tr><td>Валовая прибыль по заказам</td><td>{{ order_total|floatformat:2|intcomma }} ₽</td></tr>
-      <tr><td>Зарплаты менеджеров</td><td>− {{ manager_payroll|floatformat:2|intcomma }} ₽</td></tr>
+      <tr><td>Прибыль по заказам и макетам</td><td>{{ order_total|floatformat:2|intcomma }} ₽</td></tr>
+      <tr><td>Зарплаты сотрудников</td><td>− {{ manager_payroll|floatformat:2|intcomma }} ₽</td></tr>
       <tr><td>Постоянные расходы</td><td>− {{ expense_total|floatformat:2|intcomma }} ₽</td></tr>
       <tr><th>Прибыль после расходов</th><th>{{ company_profit|floatformat:2|intcomma }} ₽</th></tr>
     </table>
     </div>
-  </div>
+  </div>{% endif %}
 </div>
 </div>
 {% endblock %}

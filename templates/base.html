@@ -7,18 +7,58 @@
     <title>{% block title %}PSADMIN{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'core/index.css' %}">
 </head>
-<body>
+<body{% if request.user.is_authenticated %} class="has-account-bar"{% endif %}>
+    {% block topbar %}
+    {% if request.user.is_authenticated %}
+    <nav class="account-bar" aria-label="Аккаунт">
+        <a href="{% url 'account' %}" class="account-bar__profile">
+            <span class="account-bar__name account-bar__name--desktop">{% if request.user.first_name or request.user.last_name %}{{ request.user.last_name }} {{ request.user.first_name }}{% else %}Аккаунт{% endif %}</span>
+            <span class="account-bar__name account-bar__name--mobile">Аккаунт</span>
+            <span class="account-avatar">
+                {% if request.user.profile.has_avatar %}<img src="{% url 'account_avatar' %}" alt="">{% else %}<span>{% if request.user.first_name or request.user.last_name %}{{ request.user.first_name|slice:":1" }}{{ request.user.last_name|slice:":1" }}{% else %}?{% endif %}</span>{% endif %}
+            </span>
+        </a>
+        <form method="post" action="{% url 'logout' %}" class="logout-form">{% csrf_token %}<button type="submit" class="logout-link">Выйти</button></form>
+    </nav>
+    {% endif %}
+    {% endblock %}
     {% if messages %}
-    <div class="container">
-        <ul class="messages">
-            {% for message in messages %}
-                <li>{{ message }}</li>
-            {% endfor %}
-        </ul>
+    <div class="toast-stack" aria-live="polite" aria-atomic="true">
+        {% for message in messages %}
+        <div class="toast{% if message.tags %} toast--{{ message.tags }}{% endif %}" role="status">{{ message }}</div>
+        {% endfor %}
     </div>
     {% endif %}
 
     {% block content %}{% endblock %}
+    {% if messages %}
+    <script>
+      document.querySelectorAll(".toast").forEach(function (toast, index) {
+        toast.addEventListener("click", function () { toast.classList.add("is-hiding"); });
+        window.setTimeout(function () { toast.classList.add("is-hiding"); }, 3200 + index * 250);
+        toast.addEventListener("transitionend", function () { if (toast.classList.contains("is-hiding")) toast.remove(); });
+      });
+    </script>
+    {% endif %}
+    <script>
+      (function () {
+        document.querySelectorAll(".mobile-actions-toggle").forEach(function (button) {
+          button.addEventListener("click", function (event) {
+            event.stopPropagation();
+            const group = button.closest(".hover-actions");
+            document.querySelectorAll(".hover-actions.is-open").forEach(function (openGroup) {
+              if (openGroup !== group) openGroup.classList.remove("is-open");
+            });
+            group.classList.toggle("is-open");
+          });
+        });
+        document.addEventListener("click", function (event) {
+          if (!event.target.closest(".hover-actions")) {
+            document.querySelectorAll(".hover-actions.is-open").forEach(function (group) { group.classList.remove("is-open"); });
+          }
+        });
+      })();
+    </script>
 </body>
 </html>
 

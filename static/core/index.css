@@ -5,11 +5,72 @@ body {
   color: #111;
 }
 
+.has-account-bar { padding-top: 0; }
+.has-account-bar .wrap { min-height: 100vh; }
+.account-bar {
+  position: absolute;
+  top: 20px;
+  right: max(20px, calc((100vw - 1440px) / 2 + 20px));
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+}
+.account-bar a,
+.account-bar .logout-link { color: #4b5563; text-decoration: none; }
+.account-bar a:hover,
+.account-bar .logout-link:hover { color: #111827; }
+.account-bar__profile { display: inline-flex; align-items: center; gap: 7px; }
+.account-avatar {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.account-bar__name--mobile { display: none; }
+.user-name-with-avatar { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.user-mini-avatar {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #6b7280;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.user-mini-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
 .wrap {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.app-home {
+  align-items: flex-start;
 }
 
 .container {
@@ -22,7 +83,9 @@ body {
 
 h1 {
   text-align: center;
-  margin: 8px 0 20px;
+  min-height: 40px;
+  margin: 0 0 24px;
+  line-height: 40px;
 }
 
 /* ---------- главная ---------- */
@@ -111,6 +174,17 @@ h1 {
 .back-link:hover {
   color: #111827;
   text-decoration: underline;
+}
+
+@media (min-width: 769px) {
+  .container > .back-link {
+    position: absolute;
+    top: 20px;
+    left: max(20px, calc((100vw - 1440px) / 2 + 20px));
+    min-height: 40px;
+    margin: 0;
+    align-items: center;
+  }
 }
 
 /* ---------- panel ---------- */
@@ -258,7 +332,60 @@ h1 {
   background: #fff;
 }
 
-.messages { margin: 0; padding-left: 20px; }
+.form-label { display: block; margin-bottom: 7px; font-weight: 600; }
+.form-group--record-type > div { display: flex; gap: 8px; }
+.form-group--record-type > div > div { flex: 1; }
+.form-group--record-type label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.form-group--record-type input { width: auto; margin: 0 7px 0 0; }
+.record-type-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.toast-stack {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 2000;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 36px));
+  pointer-events: none;
+}
+.toast {
+  padding: 12px 15px;
+  border: 1px solid #d1d5db;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.97);
+  color: #374151;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.toast--success { border-left: 4px solid #16a34a; }
+.toast--warning { border-left: 4px solid #d97706; }
+.toast--error { border-left: 4px solid #dc2626; }
+.toast.is-hiding { opacity: 0; transform: translateY(-8px); pointer-events: none; }
 
 /* ---------- table and modal ---------- */
 
@@ -308,19 +435,48 @@ h1 {
 .table-row { position: relative; transition: background 0.12s ease; }
 .table-row:hover { background: #f9fafb; }
 .row-actions { width: 40px; text-align: right; }
+.order-row-actions { width: 58px; white-space: nowrap; }
+.order-row-actions form { display: inline; }
 
-.delete-btn {
-  opacity: 0;
+.hover-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.hover-actions form { display: inline-flex; }
+.hover-action {
+  width: 26px;
+  height: 26px;
+  padding: 0;
   background: transparent;
-  border: none;
+  border: 0;
+  border-radius: 7px;
   color: #9ca3af;
-  font-size: 16px;
+  font-size: 17px;
+  line-height: 1;
   cursor: pointer;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
-
-.table-row:hover .delete-btn { opacity: 1; }
-.delete-btn:hover { color: #374151; }
+.table-row:hover .hover-action,
+.table-row:focus-within .hover-action,
+.cash-operation:hover .hover-action,
+.cash-operation:focus-within .hover-action,
+.saved-estimate:hover .hover-action,
+.saved-estimate:focus-within .hover-action,
+.calc-line:hover .hover-action,
+.calc-line:focus-within .hover-action,
+.hover-action:focus-visible { opacity: 1; pointer-events: auto; }
+.hover-action:hover { color: #4b5563; background: #f3f4f6; }
+.mobile-actions-toggle {
+  display: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #6b7280;
+  font-size: 20px;
+  line-height: 1;
+}
 
 /* ---------- фильтры ---------- */
 
@@ -441,8 +597,37 @@ h1 {
 .settings-description { margin: 0; color: #6b7280; }
 .settings-grid { display: grid; gap: 16px; }
 .settings-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.settings-grid--three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .settings-grid--four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .settings-subtitle { margin: 24px 0 14px; font-size: 18px; }
+#employee-settings-list { display: grid; gap: 24px; margin-top: 24px; }
+.settings-employee-card { transition: opacity 0.15s ease, transform 0.15s ease; }
+.settings-employee-card.is-dragging { opacity: 0.5; }
+.settings-employee-heading { display: flex; align-items: center; gap: 10px; }
+.settings-drag-handle {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 22px;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+.settings-drag-handle:hover { color: #4b5563; background: #f3f4f6; }
+.settings-drag-handle:active { cursor: grabbing; }
+
+.account-page { max-width: 940px; }
+.account-grid { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 24px; }
+.account-profile-card { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
+.account-avatar--large { width: 92px; height: 92px; font-size: 25px; }
+.account-form { width: 100%; }
+.account-form .button-success { width: 100%; }
+.account-profile-card > form:last-child { width: 100%; }
+.account-profile-card > form:last-child .button-secondary { width: 100%; }
 
 /* ---------- cash ---------- */
 
@@ -483,11 +668,8 @@ h1 {
 .cash-operation__main strong { font-size: 15px; }
 .cash-operation__main span { overflow-wrap: anywhere; }
 .cash-operation__main small { color: #6b7280; }
-.cash-operation__actions { display: flex; flex: 0 0 auto; gap: 2px; }
+.cash-operation__actions { flex: 0 0 auto; }
 .cash-operation__actions form { display: inline; }
-.cash-icon-button { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #4b5563; font-size: 17px; line-height: 1; cursor: pointer; }
-.cash-icon-button:hover { background: #f3f4f6; }
-.cash-icon-button--danger { color: #b91c1c; }
 .cash-flow__empty { margin: 0; padding: 12px; color: #9ca3af; font-size: 14px; }
 .cash-totals { margin: 18px 0 0; }
 .cash-totals > div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid #eee; }
@@ -512,7 +694,7 @@ h1 {
 .calc-money-input input, .calc-quantity-input input { width:100%; }
 .calc-line > strong { display:grid; min-height:38px; grid-template-rows:38px auto; align-items:center; gap:4px; white-space:nowrap; }
 .calc-line > strong::after { content:'Сумма'; color:#6b7280; font-size:12px; font-weight:400; }
-.calc-line .delete-btn { opacity:1; color:#b91c1c; align-self:start; }
+.calc-line .hover-action { align-self:start; }
 .calculator-parameters { display:flex; gap:16px; padding:16px; background:#f7fafc; border-radius:12px; }
 .calculator-parameters label, .calculator-save label { display:grid; gap:6px; font-weight:600; }
 .calculator-parameters input, .calculator-save input { min-height:40px; box-sizing:border-box; padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; background:#edf8ea; }
@@ -530,8 +712,6 @@ h1 {
 .saved-estimate { display:flex; align-items:center; gap:12px; border-top:1px solid #eee; }
 .saved-estimate__main { display:flex; flex:1; justify-content:space-between; align-items:center; gap:16px; color:#374151; text-decoration:none; padding:10px 0; min-width:0; }
 .saved-estimate__main span { color:#6b7280; font-size:14px; }
-.saved-estimate__delete { border:0; background:transparent; color:#b91c1c; font-size:22px; line-height:1; padding:8px; cursor:pointer; }
-.saved-estimate__delete:hover { color:#7f1d1d; }
 
 @media (max-width: 900px) {
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
@@ -539,10 +719,18 @@ h1 {
 }
 
 @media (max-width: 768px) {
-  .container { padding: 16px; }
+  .has-account-bar { padding-top: 0; }
+  .has-account-bar .wrap { min-height: 100vh; }
+  .account-bar { top: 12px; right: 16px; gap: 10px; min-height: 30px; padding: 0; font-size: 12px; }
+  .account-bar .account-avatar { display: none; }
+  .account-bar__name--desktop { display: none; }
+  .account-bar__name--mobile { display: inline; }
+  .container { padding: 12px 16px 16px; }
+  .container > .back-link { min-height: 30px; margin: 0 0 12px; align-items: center; }
+  .app-home .container { padding-top: 54px; }
   .grid { grid-template-columns: 1fr; gap: 16px; }
   .card { padding: 18px; border-radius: 16px; }
-  h1 { font-size: 22px; }
+  h1 { min-height: 30px; margin-bottom: 20px; font-size: 22px; line-height: 30px; }
   .card-title { font-size: 18px; }
   .card-desc { font-size: 14px; }
   .footer { margin-top: 18px; }
@@ -564,7 +752,15 @@ h1 {
   .table-wrapper > .table:not(.finance-table) { min-width: 640px; }
   .finance-table { width: 1040px; min-width: 1040px; }
   .settings-grid--two,
+  .settings-grid--three,
   .settings-grid--four { grid-template-columns: 1fr; }
+  .account-grid { grid-template-columns: 1fr; gap: 16px; }
+  .account-avatar--large { display: none; }
+  .account-profile-card { align-items: stretch; text-align: left; }
+  .hover-actions .mobile-actions-toggle { display: inline-block; }
+  .hover-actions .hover-action { display: none; }
+  .hover-actions.is-open .mobile-actions-toggle { display: none; }
+  .hover-actions.is-open .hover-action { display: inline-block; opacity: 1; pointer-events: auto; }
   .cash-ledgers { grid-template-columns: 1fr; gap: 16px; margin-top: 16px; }
   .cash-ledger .panel-header { align-items: stretch; }
   .cash-date-controls { align-items: stretch; }
@@ -583,7 +779,7 @@ h1 {
   .calc-line .calc-money-input { grid-column: 1 / 3; }
   .calc-line .calc-quantity-input { grid-column: 3 / 4; }
   .calc-line > strong { grid-column: 4 / 5; }
-  .calc-line .delete-btn { grid-column: 5; }
+  .calc-line .hover-action { grid-column: 5; }
   .calculator-parameters, .calculator-save { align-items:stretch; flex-direction:column; }
   .summary-head { display:none; }
   .summary-row { grid-template-columns:1fr 1fr; gap:6px 12px; border-radius:10px; margin-bottom:8px; background:#f8fafc; }
@@ -591,4 +787,12 @@ h1 {
   .summary-row span:nth-child(3)::before { content:'Маржа: '; color:#6b7280; }
   .summary-row span:nth-child(4)::before { content:'За ед.: '; color:#6b7280; }
   .summary-row--standard { background:#eaf5ee; }
+}
+
+@media (hover: none) {
+  .hover-action { opacity: 1; pointer-events: auto; }
+  .hover-actions .mobile-actions-toggle { display: inline-block; }
+  .hover-actions .hover-action { display: none; }
+  .hover-actions.is-open .mobile-actions-toggle { display: none; }
+  .hover-actions.is-open .hover-action { display: inline-block; }
 }

@@ -9,11 +9,12 @@
         <div class="cash-operation__main">
           <strong class="cash-money">{{ transaction.amount|floatformat:2|intcomma }} ₽</strong>
           <span>{{ transaction.reason }}</span>
-          <small>{{ transaction.created_by.get_full_name|default:transaction.created_by.username }}</small>
+          <small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=transaction.created_by %}<span>{{ transaction.created_by.get_full_name|default:"Имя не указано" }}</span></small>
         </div>
-        <div class="cash-operation__actions">
-          <button type="button" class="cash-icon-button js-cash-modal-open" data-modal-id="cash-edit-modal-{{ transaction.pk }}" title="Изменить" aria-label="Изменить операцию">✎</button>
-          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="cash-icon-button cash-icon-button--danger" title="Удалить" aria-label="Удалить операцию">×</button></form>
+        <div class="cash-operation__actions hover-actions">
+          <button type="button" class="mobile-actions-toggle" aria-label="Действия">⋯</button>
+          <button type="button" class="hover-action js-cash-modal-open" data-modal-id="cash-edit-modal-{{ transaction.pk }}" title="Изменить" aria-label="Изменить операцию">✎</button>
+          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить" aria-label="Удалить операцию">×</button></form>
         </div>
       </article>
     {% empty %}
@@ -28,11 +29,12 @@
         <div class="cash-operation__main">
           <strong class="cash-money">{{ transaction.amount|floatformat:2|intcomma }} ₽</strong>
           <span>{{ transaction.reason }}</span>
-          <small>{{ transaction.created_by.get_full_name|default:transaction.created_by.username }}</small>
+          <small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=transaction.created_by %}<span>{{ transaction.created_by.get_full_name|default:"Имя не указано" }}</span></small>
         </div>
-        <div class="cash-operation__actions">
-          <button type="button" class="cash-icon-button js-cash-modal-open" data-modal-id="cash-edit-modal-{{ transaction.pk }}" title="Изменить" aria-label="Изменить операцию">✎</button>
-          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="cash-icon-button cash-icon-button--danger" title="Удалить" aria-label="Удалить операцию">×</button></form>
+        <div class="cash-operation__actions hover-actions">
+          <button type="button" class="mobile-actions-toggle" aria-label="Действия">⋯</button>
+          <button type="button" class="hover-action js-cash-modal-open" data-modal-id="cash-edit-modal-{{ transaction.pk }}" title="Изменить" aria-label="Изменить операцию">✎</button>
+          <form method="post" action="{% url 'transaction_delete' transaction.pk %}" onsubmit="return confirm('Удалить эту операцию?')">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить" aria-label="Удалить операцию">×</button></form>
         </div>
       </article>
     {% empty %}

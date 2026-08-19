@@ -6,9 +6,11 @@ class ManagerSettings(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     shift_rate = models.DecimalField("Ставка смены", max_digits=10, decimal_places=2, default=0)
     leave_shift_rate = models.DecimalField("Ставка отпускной смены", max_digits=10, decimal_places=2, default=0)
+    design_percent = models.DecimalField("Отчисление за макеты, %", max_digits=5, decimal_places=2, default=90)
+    sort_order = models.PositiveIntegerField("Порядок", default=0, db_index=True)
 
     def __str__(self):
-        return self.user.get_full_name() or self.user.username
+        return self.user.get_full_name().strip() or "Имя не указано"
 
 
 class KpiTier(models.Model):
@@ -70,8 +72,7 @@ class PeriodExpense(models.Model):
 class PayrollLine(models.Model):
     MANAGER = "manager"
     PRINTER = "printer"
-    DESIGNER = "designer"
-    KIND_CHOICES = ((MANAGER, "Менеджер"), (PRINTER, "Печатник"), (DESIGNER, "Дизайнер"))
+    KIND_CHOICES = ((MANAGER, "Сотрудник"), (PRINTER, "Печатник"))
 
     period = models.ForeignKey(FinancialPeriod, on_delete=models.CASCADE, related_name="payroll_lines")
     kind = models.CharField(max_length=16, choices=KIND_CHOICES)

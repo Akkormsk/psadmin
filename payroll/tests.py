@@ -12,10 +12,10 @@ class OrderRecordAccessTests(TestCase):
             username="admin", password="password"
         )
         self.manager = user_model.objects.create_user(
-            username="manager", password="password"
+            username="manager", first_name="Ирина", last_name="Иванова", password="password"
         )
         self.other_manager = user_model.objects.create_user(
-            username="other-manager", password="password"
+            username="other-manager", first_name="Ольга", last_name="Королева", password="password"
         )
         self.manager_record = OrderRecord.objects.create(
             order_number="1001",
@@ -50,7 +50,7 @@ class OrderRecordAccessTests(TestCase):
 
         self.assertContains(response, self.manager_record.order_number)
         self.assertNotContains(response, self.other_record.order_number)
-        self.assertContains(response, self.manager.username)
+        self.assertContains(response, "Ирина Иванова")
         self.assertContains(response, "Валовая прибыль по выборке")
 
     def test_admin_can_delete_any_record(self):
@@ -62,5 +62,79 @@ class OrderRecordAccessTests(TestCase):
 
         self.assertRedirects(response, reverse("payroll:orderrecord_list"))
         self.assertFalse(OrderRecord.objects.filter(pk=self.manager_record.pk).exists())
+
+    def test_manager_can_create_design_record_and_sees_badge(self):
+        self.client.force_login(self.manager)
+
+        response = self.client.post(
+            reverse("payroll:orderrecord_create"),
+            {
+                "record_type": OrderRecord.RECORD_DESIGN,
+                "order_number": "1003",
+                "gross_profit": "12000",
+                "accounting_period": "2026-08",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        record = OrderRecord.objects.get(order_number="1003")
+        self.assertEqual(record.record_type, OrderRecord.RECORD_DESIGN)
+        self.assertContains(response, "Макет")
+
+    def test_manager_can_edit_own_record(self):
+        self.client.force_login(self.manager)
+
+        response = self.client.post(
+            reverse("payroll:orderrecord_update", args=[self.manager_record.pk]),
+            {
+                f"edit-{self.manager_record.pk}-record_type": OrderRecord.RECORD_DESIGN,
+                f"edit-{self.manager_record.pk}-order_number": "2001",
+                f"edit-{self.manager_record.pk}-gross_profit": "18000",
+                f"edit-{self.manager_record.pk}-accounting_period": "2026-08",
+            },
+        )
+
+        self.assertRedirects(response, reverse("payroll:orderrecord_list"))
+        self.manager_record.refresh_from_db()
+        self.assertEqual(self.manager_record.manager, self.manager)
+        self.assertEqual(self.manager_record.record_type, OrderRecord.RECORD_DESIGN)
+        self.assertEqual(self.manager_record.order_number, "2001")
+        self.assertEqual(self.manager_record.gross_profit, 18000)
+
+    def test_manager_cannot_edit_another_managers_record(self):
+        self.client.force_login(self.manager)
+
+        response = self.client.post(
+            reverse("payroll:orderrecord_update", args=[self.other_record.pk]),
+            {
+                f"edit-{self.other_record.pk}-record_type": OrderRecord.RECORD_DESIGN,
+                f"edit-{self.other_record.pk}-order_number": "9999",
+                f"edit-{self.other_record.pk}-gross_profit": "1",
+                f"edit-{self.other_record.pk}-accounting_period": "2026-08",
+            },
+        )
+
+        self.assertRedirects(response, reverse("payroll:orderrecord_list"))
+        self.other_record.refresh_from_db()
+        self.assertEqual(self.other_record.order_number, "1002")
+
+    def test_admin_can_reassign_record_to_another_manager(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("payroll:orderrecord_update", args=[self.manager_record.pk]),
+            {
+                f"edit-{self.manager_record.pk}-record_type": OrderRecord.RECORD_ORDER,
+                f"edit-{self.manager_record.pk}-order_number": self.manager_record.order_number,
+                f"edit-{self.manager_record.pk}-gross_profit": self.manager_record.gross_profit,
+                f"edit-{self.manager_record.pk}-accounting_period": self.manager_record.accounting_period,
+                f"edit-{self.manager_record.pk}-manager": self.other_manager.pk,
+            },
+        )
+
+        self.assertRedirects(response, reverse("payroll:orderrecord_list"))
+        self.manager_record.refresh_from_db()
+        self.assertEqual(self.manager_record.manager, self.other_manager)
 
 # Create your tests here.

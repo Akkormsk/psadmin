@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Мой аккаунт{% endblock %}
+{% block content %}
+<div class="container account-page">
+  <a href="/" class="back-link">← На главную</a>
+  <h1>Мой аккаунт</h1>
+  <div class="account-grid">
+    <section class="panel account-profile-card">
+      <div class="account-avatar account-avatar--large">
+        {% if profile.has_avatar %}<img src="{% url 'account_avatar' %}" alt="">{% else %}<span>{{ initials }}</span>{% endif %}
+      </div>
+      <h2 class="panel-title">{{ request.user.get_full_name|default:"Имя не указано" }}</h2>
+      <form method="post" enctype="multipart/form-data" class="account-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="avatar">
+        <div class="form-group"><label for="{{ avatar_form.avatar.id_for_label }}">{{ avatar_form.avatar.label }}</label>{{ avatar_form.avatar }}{{ avatar_form.avatar.errors }}</div>
+        <button type="submit" class="button-success">Сохранить аватар</button>
+      </form>
+      {% if profile.has_avatar %}
+      <form method="post">{% csrf_token %}<button type="submit" name="action" value="remove_avatar" class="button-secondary">Удалить аватар</button></form>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">Изменить пароль</h2></div>
+      <form method="post" class="account-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="password">
+        {% for field in password_form %}
+        <div class="form-group"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>
+        {% endfor %}
+        <button type="submit" class="button-success">Изменить пароль</button>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}

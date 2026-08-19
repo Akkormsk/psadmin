@@ -10,7 +10,7 @@ from .models import OrderRecord
 
 
 @login_required
-def orderrecord_list(request, form=None, open_modal=False):
+def orderrecord_list(request, form=None, open_modal=False, edit_form=None, open_edit_id=None):
     is_admin_view = request.user.is_superuser
     selected_manager = ""
     selected_period = timezone.localdate().strftime("%Y-%m")
@@ -18,8 +18,10 @@ def orderrecord_list(request, form=None, open_modal=False):
     periods = []
 
     if is_admin_view:
-        records = OrderRecord.objects.select_related("manager", "created_by").all()
-        managers = get_user_model().objects.filter(is_active=True).order_by("username")
+        records = OrderRecord.objects.select_related("manager", "manager__profile", "created_by", "created_by__profile").defer(
+            "manager__profile__avatar_data", "created_by__profile__avatar_data"
+        )
+        managers = get_user_model().objects.filter(is_active=True, is_superuser=False).order_by("first_name", "last_name", "pk")
         period_values = list(
             OrderRecord.objects.order_by()
             .values_list("accounting_period", flat=True)
@@ -47,8 +49,8 @@ def orderrecord_list(request, form=None, open_modal=False):
         else:
             selected_period = ""
 
-        records = records.order_by("-created_at")
         total_gross_profit = records.aggregate(total=Sum("gross_profit"))["total"] or 0
+        records = list(records.order_by("-created_at"))
     else:
         manager_records = OrderRecord.objects.filter(manager=request.user)
         period_values = list(
@@ -67,11 +69,19 @@ def orderrecord_list(request, form=None, open_modal=False):
             }
             for period in period_values
         ]
-        records = manager_records.filter(accounting_period=selected_period).select_related("manager", "created_by").order_by("-created_at")
+        records = list(manager_records.filter(accounting_period=selected_period).select_related("manager", "manager__profile", "created_by", "created_by__profile").defer(
+            "manager__profile__avatar_data", "created_by__profile__avatar_data"
+        ).order_by("-created_at"))
         total_gross_profit = None
 
     if form is None:
-        form = OrderRecordCreateForm()
+        form = OrderRecordCreateForm(user=request.user)
+    for record in records:
+        record.edit_form = (
+            edit_form
+            if edit_form is not None and record.pk == open_edit_id
+            else OrderRecordCreateForm(instance=record, user=request.user, prefix=f"edit-{record.pk}")
+        )
 
     return render(
         request,
@@ -86,6 +96,7 @@ def orderrecord_list(request, form=None, open_modal=False):
             "selected_manager": selected_manager,
             "selected_period": selected_period,
             "total_gross_profit": total_gross_profit,
+            "open_edit_id": open_edit_id,
         },
     )
 
@@ -95,11 +106,11 @@ def orderrecord_create(request):
     if request.method != "POST":
         return redirect("payroll:orderrecord_list")
 
-    form = OrderRecordCreateForm(request.POST)
+    form = OrderRecordCreateForm(request.POST, user=request.user)
 
     if form.is_valid():
         record = form.save(commit=False)
-        record.manager = request.user
+        record.manager = form.cleaned_data.get("manager") if request.user.is_superuser else request.user
         record.created_by = request.user
         record.source = OrderRecord.SOURCE_MANUAL
         record.save()
@@ -117,6 +128,32 @@ def orderrecord_create(request):
         return redirect("payroll:orderrecord_list")
 
     return orderrecord_list(request, form=form, open_modal=True)
+
+
+@login_required
+def orderrecord_update(request, pk):
+    records = OrderRecord.objects.all()
+    if not request.user.is_superuser:
+        records = records.filter(manager=request.user)
+    record = records.filter(pk=pk).first()
+    if record is None or request.method != "POST":
+        return redirect("payroll:orderrecord_list")
+
+    form = OrderRecordCreateForm(
+        request.POST,
+        instance=record,
+        user=request.user,
+        prefix=f"edit-{record.pk}",
+    )
+    if form.is_valid():
+        record = form.save(commit=False)
+        if request.user.is_superuser:
+            record.manager = form.cleaned_data["manager"]
+        record.save()
+        messages.success(request, "Запись сохранена.")
+        return redirect("payroll:orderrecord_list")
+
+    return orderrecord_list(request, edit_form=form, open_edit_id=record.pk)
 
 @login_required
 def orderrecord_delete(request, pk):

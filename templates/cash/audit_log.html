@@ -10,7 +10,7 @@
     {% if events %}
     <div class="table-wrapper"><table class="table cash-audit-table">
       <thead><tr><th>Когда</th><th>Пользователь</th><th>Событие</th><th>Что изменилось</th></tr></thead>
-      <tbody>{% for event in events %}<tr><td>{{ event.occurred_at|date:"d.m.Y H:i" }}</td><td>{{ event.actor.get_full_name|default:event.actor.username }}</td><td>{{ event.get_action_display }}</td><td>{{ event.message }}</td></tr>{% endfor %}</tbody>
+      <tbody>{% for event in events %}<tr><td>{{ event.occurred_at|date:"d.m.Y H:i" }}</td><td><span class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=event.actor %}<span>{{ event.actor.get_full_name|default:"Имя не указано" }}</span></span></td><td>{{ event.get_action_display }}</td><td>{{ event.message }}</td></tr>{% endfor %}</tbody>
     </table></div>
     {% else %}<p class="settings-description">Изменений пока нет.</p>{% endif %}
   </section>

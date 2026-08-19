@@ -1,6 +1,12 @@
+from io import BytesIO
+
+from PIL import Image
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
+
+from .models import Profile
 
 
 class LogoutTests(TestCase):
@@ -29,5 +35,73 @@ class UserAdminTests(TestCase):
         self.assertContains(response, 'name="first_name"')
         self.assertContains(response, 'name="password1"')
         self.assertContains(response, 'name="password2"')
+
+    def test_profile_admin_includes_avatar_controls(self):
+        admin = get_user_model().objects.create_superuser(
+            username="profile-admin", password="password"
+        )
+        self.client.force_login(admin)
+        profile = Profile.objects.get(user=admin)
+
+        response = self.client.get(reverse("admin:core_profile_change", args=[profile.pk]))
+
+        self.assertContains(response, 'name="avatar_upload"')
+        self.assertContains(response, 'name="remove_avatar"')
+
+
+class AccountTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="account-user",
+            first_name="Ольга",
+            last_name="Королева",
+            password="old-password-123",
+        )
+        self.client.force_login(self.user)
+
+    @staticmethod
+    def avatar_file():
+        output = BytesIO()
+        Image.new("RGB", (640, 320), "#4f46e5").save(output, "PNG")
+        return SimpleUploadedFile("avatar.png", output.getvalue(), content_type="image/png")
+
+    def test_user_can_upload_optimized_avatar(self):
+        response = self.client.post(
+            reverse("account"),
+            {"action": "avatar", "avatar": self.avatar_file()},
+        )
+
+        self.assertRedirects(response, reverse("account"))
+        profile = Profile.objects.get(user=self.user)
+        self.assertTrue(profile.avatar_data)
+        self.assertEqual(profile.avatar_content_type, "image/webp")
+        avatar_response = self.client.get(reverse("account_avatar"))
+        self.assertEqual(avatar_response.status_code, 200)
+        self.assertEqual(avatar_response["Content-Type"], "image/webp")
+        with Image.open(BytesIO(avatar_response.content)) as image:
+            self.assertEqual(image.size, (256, 256))
+
+    def test_user_can_change_password_without_being_logged_out(self):
+        response = self.client.post(
+            reverse("account"),
+            {
+                "action": "password",
+                "old_password": "old-password-123",
+                "new_password1": "new-secure-password-456",
+                "new_password2": "new-secure-password-456",
+            },
+        )
+
+        self.assertRedirects(response, reverse("account"))
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("new-secure-password-456"))
+        self.assertEqual(self.client.get(reverse("account")).status_code, 200)
+
+    def test_topbar_uses_full_name_and_links_to_account(self):
+        response = self.client.get(reverse("index"))
+
+        self.assertContains(response, "Королева Ольга")
+        self.assertContains(response, reverse("account"))
+        self.assertNotContains(response, "account-user")
 
 # Create your tests here.

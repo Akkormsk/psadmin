@@ -10,6 +10,13 @@ def current_accounting_period() -> str:
 
 
 class OrderRecord(models.Model):
+    RECORD_ORDER = "order"
+    RECORD_DESIGN = "design"
+    RECORD_TYPE_CHOICES = [
+        (RECORD_ORDER, "Заказ"),
+        (RECORD_DESIGN, "Макет"),
+    ]
+
     SOURCE_MANUAL = "manual"
     SOURCE_CRM_API = "crm_api"
     SOURCE_IMPORT = "import"
@@ -22,6 +29,13 @@ class OrderRecord(models.Model):
 
     order_number = models.CharField(max_length=100)
     gross_profit = models.DecimalField(max_digits=12, decimal_places=2)
+    record_type = models.CharField(
+        "Тип записи",
+        max_length=10,
+        choices=RECORD_TYPE_CHOICES,
+        default=RECORD_ORDER,
+        db_index=True,
+    )
     # Stores accounting period as "YYYY-MM" (e.g. "2026-04") for KPI calculations.
     accounting_period = models.CharField(
         max_length=7,
@@ -50,7 +64,8 @@ class OrderRecord(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Order {self.order_number} - {self.manager.username} - {self.gross_profit}"
+        responsible = self.manager.get_full_name().strip() or "Имя не указано"
+        return f"{self.order_number} — {responsible} — {self.gross_profit}"
 
     @property
     def accounting_period_ru(self) -> str:
