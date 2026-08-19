@@ -1,7 +1,19 @@
+:root {
+  --app-background-image: url("background.webp");
+  --app-background-overlay: rgba(248, 249, 250, 0.92);
+}
+
 body {
   margin: 0;
   font-family: Arial, sans-serif;
-  background: #f5f6f8;
+  background-color: #f5f6f8;
+  background-image:
+    linear-gradient(var(--app-background-overlay), var(--app-background-overlay)),
+    var(--app-background-image);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   color: #111;
 }
 
@@ -818,6 +830,7 @@ h1 {
 }
 
 @media (max-width: 768px) {
+  body { background-attachment: scroll; }
   .has-account-bar { padding-top: 0; }
   .has-account-bar .wrap { min-height: 100vh; }
   .account-bar { top: 12px; right: 16px; gap: 10px; min-height: 30px; padding: 0; font-size: 12px; }
