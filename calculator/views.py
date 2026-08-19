@@ -26,8 +26,14 @@ def _estimate_for_user(request, pk):
 def home(request, pk=None):
     estimate = _estimate_for_user(request, pk) if pk else None
     settings = _settings()
+    calculator_type = estimate.calculator_type if estimate else request.GET.get("calculator", Estimate.TYPE_SHEET)
+    if calculator_type not in {Estimate.TYPE_SHEET, Estimate.TYPE_WIDE}:
+        calculator_type = Estimate.TYPE_SHEET
     if request.method == "POST":
         try:
+            calculator_type = request.POST.get("calculator_type", Estimate.TYPE_SHEET)
+            if calculator_type not in {Estimate.TYPE_SHEET, Estimate.TYPE_WIDE}:
+                raise ValueError
             raw_lines = json.loads(request.POST.get("lines_json", "[]"))
             product_quantity = max(1, int(request.POST.get("product_quantity", 1)))
             work_hours = Decimal(request.POST.get("work_hours", "0"))
@@ -58,10 +64,11 @@ def home(request, pk=None):
             else:
                 estimate = estimate or Estimate(owner=request.user)
                 estimate.name = request.POST.get("name", "").strip() or "Новый расчёт"
+                estimate.calculator_type = calculator_type
                 estimate.product_quantity = product_quantity
                 estimate.work_hours = work_hours
                 estimate.settings_snapshot = {"hourly_rate": str(settings.hourly_rate), "material_coefficient": str(settings.material_coefficient), "time_coefficient": str(settings.time_coefficient)}
-                summary = calculate_sheet_estimate(lines, product_quantity, work_hours, settings)
+                summary = calculate_sheet_estimate(lines, product_quantity, work_hours, settings, calculator_type)
                 estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
                 estimate.save()
                 estimate.lines.all().delete()
@@ -77,7 +84,7 @@ def home(request, pk=None):
         initial_lines = [{"category": line.category, "item_id": line.price_item_id, "name": line.name_snapshot, "unit_price": str(line.unit_price_snapshot), "quantity": str(line.quantity), "custom": line.is_custom} for line in estimate.lines.select_related("price_item")]
     items = [{"id": item.pk, "category": item.category, "name": item.name, "unit_name": item.unit_name, "unit_price": str(item.effective_unit_price)} for item in PriceItem.objects.filter(is_active=True).select_related("base_item")]
     estimates = Estimate.objects.filter(owner=request.user).select_related("owner", "owner__profile").defer("owner__profile__avatar_data") if not request.user.is_superuser else Estimate.objects.select_related("owner", "owner__profile").defer("owner__profile__avatar_data")
-    return render(request, "calculator/sheet.html", {"settings": settings, "items_json": json.dumps(items, ensure_ascii=False), "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "estimate": estimate, "estimates": estimates[:20]})
+    return render(request, "calculator/sheet.html", {"settings": settings, "calculator_type": calculator_type, "items_json": json.dumps(items, ensure_ascii=False), "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "estimate": estimate, "estimates": estimates[:20]})
 
 
 @login_required

@@ -10,12 +10,18 @@ class PriceItem(models.Model):
     CATEGORY_XEROX = "xerox"
     CATEGORY_POSTPRESS = "postpress"
     CATEGORY_EMBOSSING = "embossing"
+    CATEGORY_WIDE_PAPER = "wide_paper"
+    CATEGORY_WIDE_PRINT = "wide_print"
+    CATEGORY_WIDE_POSTPRESS = "wide_postpress"
     CATEGORY_CHOICES = [
         (CATEGORY_PAPER, "Бумага"),
         (CATEGORY_KONICA, "Печать · Konica"),
         (CATEGORY_XEROX, "Печать · Xerox"),
         (CATEGORY_POSTPRESS, "Постпечатная обработка"),
         (CATEGORY_EMBOSSING, "Тиснение"),
+        (CATEGORY_WIDE_PAPER, "Широкоформатная печать · Бумага"),
+        (CATEGORY_WIDE_PRINT, "Широкоформатная печать · Печать"),
+        (CATEGORY_WIDE_POSTPRESS, "Широкоформатная печать · Постпечатка"),
     ]
 
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
@@ -58,7 +64,12 @@ class CalculatorSettings(models.Model):
 
 
 class Estimate(models.Model):
+    TYPE_SHEET = "sheet"
+    TYPE_WIDE = "wide"
+    TYPE_CHOICES = [(TYPE_SHEET, "Листовая печать"), (TYPE_WIDE, "Широкоформатная печать")]
+
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimates")
+    calculator_type = models.CharField("Калькулятор", max_length=20, choices=TYPE_CHOICES, default=TYPE_SHEET)
     name = models.CharField(max_length=200, default="Новый расчёт")
     product_quantity = models.PositiveIntegerField("Тираж конечного изделия", default=1)
     work_hours = models.DecimalField("Рабочие часы", max_digits=8, decimal_places=1, default=Decimal("0.0"))

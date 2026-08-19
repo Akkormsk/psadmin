@@ -26,7 +26,7 @@ class EstimateLineInline(admin.TabularInline):
 
 @admin.register(Estimate)
 class EstimateAdmin(admin.ModelAdmin):
-    list_display = ("name", "owner", "product_quantity", "work_hours", "updated_at")
-    list_filter = ("owner",)
+    list_display = ("name", "calculator_type", "owner", "product_quantity", "work_hours", "updated_at")
+    list_filter = ("calculator_type", "owner")
     search_fields = ("name",)
     inlines = (EstimateLineInline,)
