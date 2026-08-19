@@ -40,15 +40,16 @@
       <div class="table-wrapper">
         <table class="table finance-table">
           <colgroup>
-            <col class="finance-table__employee"><col class="finance-table__shifts">
+            <col class="finance-table__employee"><col class="finance-table__shift"><col class="finance-table__shift">
             <col class="finance-table__salary"><col class="finance-table__profit"><col class="finance-table__bonus">
             <col class="finance-table__design"><col class="finance-table__deductions"><col class="finance-table__total"><col class="finance-table__advance"><col class="finance-table__balance">
           </colgroup>
-          <tr><th>Сотрудник</th><th>Смены</th><th>Оклад</th><th>Прибыль<br>заказов</th><th>Бонус</th><th>Макеты</th><th>Вычеты</th><th>Итого ЗП</th><th>Аванс</th><th>Доплата</th></tr>
+          <tr><th>Сотрудник</th><th title="Рабочие смены">Р</th><th title="Отпускные смены">О</th><th>Оклад</th><th>Прибыль<br>заказов</th><th>Бонус</th><th>Макеты</th><th>Вычеты</th><th>Итого ЗП</th><th>Аванс</th><th>Доплата</th></tr>
           {% for line in lines %}
           <tr>
             <td>{{ line.name }}</td>
-            <td class="finance-table__shifts-cell">{% if line.kind == 'printer' %}<label>Отп.<input class="finance-table__shift-input" type="number" min="0" max="31" step="1" name="leave_shifts_{{ line.pk }}" value="{{ line.leave_shifts }}" {% if period.is_closed %}disabled{% endif %}></label>{% else %}<label>Р<input class="finance-table__shift-input" type="number" min="0" step="1" name="work_shifts_{{ line.pk }}" value="{{ line.work_shifts }}" {% if period.is_closed %}disabled{% endif %}></label><label>О<input class="finance-table__shift-input" type="number" min="0" step="1" name="leave_shifts_{{ line.pk }}" value="{{ line.leave_shifts }}" {% if period.is_closed %}disabled{% endif %}></label>{% endif %}</td>
+            <td class="finance-table__shift-cell">{% if line.kind != 'printer' %}<input class="finance-table__shift-input" aria-label="Рабочие смены: {{ line.name }}" type="number" inputmode="numeric" min="0" max="31" step="1" name="work_shifts_{{ line.pk }}" value="{{ line.work_shifts }}" {% if period.is_closed %}disabled{% endif %}>{% endif %}</td>
+            <td class="finance-table__shift-cell"><input class="finance-table__shift-input" aria-label="Отпускные смены: {{ line.name }}" type="number" inputmode="numeric" min="0" max="31" step="1" name="leave_shifts_{{ line.pk }}" value="{{ line.leave_shifts }}" {% if period.is_closed %}disabled{% endif %}></td>
             <td class="finance-money">{{ line.base_salary|floatformat:2|intcomma }} р.</td>
             <td class="finance-money">{{ line.order_profit|floatformat:2|intcomma }} р.</td>
             <td class="finance-table__bonus-value"><strong>{{ line.kpi_bonus|floatformat:2|intcomma }} р.</strong> <span>({{ line.kpi_percent }}%)</span></td>

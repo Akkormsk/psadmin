@@ -405,7 +405,7 @@ h1 {
 .finance-table th,
 .finance-table td { padding: 8px 6px; }
 .finance-table__employee { width: 12%; }
-.finance-table__shifts { width: 11%; }
+.finance-table__shift { width: 5.5%; }
 .finance-table__salary,
 .finance-table__profit,
 .finance-table__total,
@@ -423,10 +423,8 @@ h1 {
 .finance-table input.finance-table__amount-input { width: 76px; }
 .finance-table input.finance-table__deduction-input { width: 72px; }
 .finance-table__suffix { display: block; margin-top: 3px; white-space: nowrap; }
-.finance-table__shifts-cell { white-space: nowrap; }
-.finance-table__shifts-cell label { display: inline-flex; align-items: center; gap: 3px; font-weight: 600; }
-.finance-table__shifts-cell label + label { margin-left: 6px; }
-.finance-table input.finance-table__shift-input { width: 44px; padding: 7px 3px; }
+.finance-table__shift-cell { text-align: center; white-space: nowrap; }
+.finance-table input.finance-table__shift-input { width: 34px; padding: 6px 2px; text-align: center; }
 .finance-table__bonus-value strong,
 .finance-table__total-value strong { font-weight: 700; }
 .finance-table__bonus-value span { white-space: nowrap; }
