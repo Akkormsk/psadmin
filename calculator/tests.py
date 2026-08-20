@@ -93,6 +93,9 @@ class SheetCalculatorTests(TestCase):
         second = PriceItem.objects.create(category="paper", name="Вторая", unit_price="2", sort_order=20)
         self.client.force_login(admin)
 
+        list_response = self.client.get(reverse("admin:calculator_sheetpriceitem_changelist"))
+        self.assertContains(list_response, '<td class="field-drag_handle">', html=False)
+
         response = self.client.post(
             reverse("admin:calculator_sheetpriceitem_reorder"),
             data=json.dumps({"ids": [second.pk, first.pk]}),

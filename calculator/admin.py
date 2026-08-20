@@ -12,6 +12,7 @@ from .models import CalculatorSettings, CanonPriceItem, Estimate, EstimateLine, 
 class PriceItemAdminBase(admin.ModelAdmin):
     change_list_template = "admin/calculator/priceitem/change_list.html"
     list_display = ("drag_handle", "name", "category", "unit_price", "is_active", "unit_name")
+    list_display_links = ("name",)
     list_editable = ("unit_price", "is_active")
     list_filter = ("category", "is_active")
     search_fields = ("name",)

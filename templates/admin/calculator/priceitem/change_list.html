@@ -2,7 +2,7 @@
 {% block extrahead %}
 {{ block.super }}
 <style>
-#result_list tbody tr.is-dragging{opacity:.45}#result_list td.field-drag_handle{width:28px;color:#94a3b8;font-size:20px;cursor:grab;user-select:none}#result_list td.field-drag_handle:active{cursor:grabbing}
+#result_list tbody tr.is-dragging{opacity:.45}#result_list .field-drag_handle{width:28px;color:#94a3b8;font-size:20px;cursor:grab;user-select:none}#result_list .field-drag_handle:active{cursor:grabbing}
 </style>
 <script>
 document.addEventListener("DOMContentLoaded",function(){
@@ -14,7 +14,7 @@ document.addEventListener("DOMContentLoaded",function(){
   const rows=()=>Array.from(body.querySelectorAll("tr"));
 
   rows().forEach(function(row){
-    const handle=row.querySelector("td.field-drag_handle");
+    const handle=row.querySelector(".field-drag_handle");
     if(!handle)return;
     row.draggable=true;
     handle.title="Перетащить внутри категории";
