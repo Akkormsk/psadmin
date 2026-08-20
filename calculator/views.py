@@ -64,6 +64,7 @@ def home(request, pk=None):
             else:
                 estimate = estimate or Estimate(owner=request.user)
                 estimate.name = request.POST.get("name", "").strip() or "Новый расчёт"
+                estimate.comment = request.POST.get("comment", "").strip()[:300]
                 estimate.calculator_type = calculator_type
                 estimate.product_quantity = product_quantity
                 estimate.work_hours = work_hours

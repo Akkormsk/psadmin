@@ -17,9 +17,11 @@ class SheetCalculatorTests(TestCase):
     def test_manager_can_open_and_save_estimate(self):
         self.client.force_login(self.user)
         self.assertContains(self.client.get(reverse("calculator_home")), "Листовая печать")
-        response = self.client.post(reverse("calculator_home"), {"name": "Визитки", "product_quantity": 100, "work_hours": "1.5", "lines_json": json.dumps([{"category": "paper", "item_id": self.item.pk, "quantity": 25, "custom": False}])})
+        response = self.client.post(reverse("calculator_home"), {"name": "Визитки", "comment": "Матовая бумага", "product_quantity": 100, "work_hours": "1.5", "lines_json": json.dumps([{"category": "paper", "item_id": self.item.pk, "quantity": 25, "custom": False}])})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(Estimate.objects.get().lines.count(), 1)
+        self.assertEqual(Estimate.objects.get().comment, "Матовая бумага")
+        self.assertContains(self.client.get(reverse("calculator_home")), "Матовая бумага")
 
     def test_manager_can_delete_own_estimate(self):
         estimate = Estimate.objects.create(owner=self.user, name="Удалить")
@@ -86,6 +88,25 @@ class SheetCalculatorTests(TestCase):
         response = self.client.get(reverse("calculator_estimate", args=[estimate.pk]))
 
         self.assertContains(response, "window.location.href='/calculator/?calculator='+this.value")
+        self.assertContains(response, "Начать новый расчёт? Несохранённые изменения будут потеряны.")
+
+    def test_new_calculation_does_not_replace_existing_estimate(self):
+        first = Estimate.objects.create(owner=self.user, name="Первый", calculator_type=Estimate.TYPE_SHEET)
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("calculator_home"), {
+            "calculator_type": Estimate.TYPE_SHEET,
+            "name": "Второй",
+            "comment": "Новая версия",
+            "product_quantity": 1,
+            "work_hours": "0",
+            "lines_json": "[]",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Estimate.objects.filter(owner=self.user).count(), 2)
+        first.refresh_from_db()
+        self.assertEqual(first.name, "Первый")
 
     def test_admin_can_reorder_price_items_inside_category(self):
         admin = get_user_model().objects.create_superuser(username="price-admin", password="password")

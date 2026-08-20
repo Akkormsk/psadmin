@@ -86,6 +86,7 @@ class Estimate(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimates")
     calculator_type = models.CharField("Калькулятор", max_length=20, choices=TYPE_CHOICES, default=TYPE_SHEET)
     name = models.CharField(max_length=200, default="Новый расчёт")
+    comment = models.CharField("Комментарий", max_length=300, blank=True)
     product_quantity = models.PositiveIntegerField("Тираж конечного изделия", default=1)
     work_hours = models.DecimalField("Рабочие часы", max_digits=8, decimal_places=1, default=Decimal("0.0"))
     settings_snapshot = models.JSONField(default=dict, blank=True)
