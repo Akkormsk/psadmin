@@ -86,3 +86,20 @@ class SheetCalculatorTests(TestCase):
         response = self.client.get(reverse("calculator_estimate", args=[estimate.pk]))
 
         self.assertContains(response, "window.location.href='/calculator/?calculator='+this.value")
+
+    def test_admin_can_reorder_price_items_inside_category(self):
+        admin = get_user_model().objects.create_superuser(username="price-admin", password="password")
+        first = PriceItem.objects.create(category="paper", name="Первая", unit_price="1", sort_order=10)
+        second = PriceItem.objects.create(category="paper", name="Вторая", unit_price="2", sort_order=20)
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("admin:calculator_sheetpriceitem_reorder"),
+            data=json.dumps({"ids": [second.pk, first.pk]}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertLess(second.sort_order, first.sort_order)

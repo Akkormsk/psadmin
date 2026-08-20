@@ -5,6 +5,53 @@
 #result_list tbody tr.is-dragging{opacity:.45}#result_list td.field-drag_handle{width:28px;color:#94a3b8;font-size:20px;cursor:grab;user-select:none}#result_list td.field-drag_handle:active{cursor:grabbing}
 </style>
 <script>
-document.addEventListener("DOMContentLoaded",function(){const body=document.querySelector("#result_list tbody");if(!body)return;let dragged=null;const category=row=>row.querySelector("td.field-category")?.textContent.trim()||"";const rowId=row=>Number(row.querySelector("input.action-select")?.value)||null;body.querySelectorAll("tr").forEach(function(row){const handle=row.querySelector("td.field-drag_handle");if(!handle)return;handle.title="Перетащить внутри категории";handle.addEventListener("mousedown",()=>row.draggable=true);row.addEventListener("dragstart",()=>{dragged=row;row.classList.add("is-dragging")});row.addEventListener("dragend",()=>{row.draggable=false;row.classList.remove("is-dragging");dragged=null});row.addEventListener("dragover",function(event){if(!dragged||category(dragged)!==category(row))return;event.preventDefault();const before=event.clientY<row.getBoundingClientRect().top+row.offsetHeight/2;body.insertBefore(dragged,before?row:row.nextSibling)});row.addEventListener("drop",function(event){if(!dragged||category(dragged)!==category(row))return;event.preventDefault();const current=category(row),ids=Array.from(body.querySelectorAll("tr")).filter(item=>category(item)===current).map(rowId).filter(Boolean);const token=document.querySelector("[name=csrfmiddlewaretoken]")?.value;fetch("reorder/",{method:"POST",headers:{"Content-Type":"application/json","X-CSRFToken":token},body:JSON.stringify({ids})}).then(response=>{if(!response.ok)window.location.reload()})})})});
+document.addEventListener("DOMContentLoaded",function(){
+  const body=document.querySelector("#result_list tbody");
+  if(!body)return;
+  let dragged=null,armed=null;
+  const category=row=>row?.querySelector("td.field-category")?.textContent.trim()||"";
+  const rowId=row=>Number(row.querySelector("input.action-select")?.value)||null;
+  const rows=()=>Array.from(body.querySelectorAll("tr"));
+
+  rows().forEach(function(row){
+    const handle=row.querySelector("td.field-drag_handle");
+    if(!handle)return;
+    row.draggable=true;
+    handle.title="Перетащить внутри категории";
+    handle.addEventListener("mousedown",()=>armed=row);
+    row.addEventListener("dragstart",function(event){
+      if(armed!==row){event.preventDefault();return;}
+      dragged=row;
+      event.dataTransfer.effectAllowed="move";
+      event.dataTransfer.setData("text/plain",String(rowId(row)));
+      row.classList.add("is-dragging");
+    });
+    row.addEventListener("dragend",function(){
+      row.classList.remove("is-dragging");
+      dragged=null;
+      armed=null;
+    });
+  });
+  document.addEventListener("mouseup",()=>{if(!dragged)armed=null});
+
+  body.addEventListener("dragover",function(event){
+    const target=event.target.closest("tr");
+    if(!dragged||!target||category(dragged)!==category(target))return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect="move";
+    const before=event.clientY<target.getBoundingClientRect().top+target.offsetHeight/2;
+    if(target!==dragged)body.insertBefore(dragged,before?target:target.nextSibling);
+  });
+  body.addEventListener("drop",function(event){
+    const target=event.target.closest("tr");
+    if(!dragged||!target||category(dragged)!==category(target))return;
+    event.preventDefault();
+    const current=category(dragged);
+    const ids=rows().filter(item=>category(item)===current).map(rowId).filter(Boolean);
+    const token=document.querySelector("[name=csrfmiddlewaretoken]")?.value;
+    fetch("reorder/",{method:"POST",headers:{"Content-Type":"application/json","X-CSRFToken":token},body:JSON.stringify({ids})})
+      .then(response=>{if(!response.ok)window.location.reload()});
+  });
+});
 </script>
 {% endblock %}
