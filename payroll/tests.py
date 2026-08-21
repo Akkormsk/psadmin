@@ -86,6 +86,33 @@ class OrderRecordAccessTests(TestCase):
         self.assertEqual(record.record_type, OrderRecord.RECORD_DESIGN)
         self.assertContains(response, "Макет")
 
+    def test_design_accepts_text_instead_of_order_number(self):
+        self.client.force_login(self.manager)
+
+        response = self.client.post(reverse("payroll:orderrecord_create"), {
+            "record_type": OrderRecord.RECORD_DESIGN,
+            "order_number": "Макет вывески у входа",
+            "gross_profit": "12000",
+            "accounting_period": "2026-08",
+        })
+
+        self.assertRedirects(response, reverse("payroll:orderrecord_list"))
+        self.assertTrue(OrderRecord.objects.filter(order_number="Макет вывески у входа").exists())
+
+    def test_order_rejects_text_in_order_number(self):
+        self.client.force_login(self.manager)
+
+        response = self.client.post(reverse("payroll:orderrecord_create"), {
+            "record_type": OrderRecord.RECORD_ORDER,
+            "order_number": "Заказ без номера",
+            "gross_profit": "12000",
+            "accounting_period": "2026-08",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Номер заказа должен содержать только цифры")
+        self.assertFalse(OrderRecord.objects.filter(order_number="Заказ без номера").exists())
+
     def test_manager_can_edit_own_record(self):
         self.client.force_login(self.manager)
 

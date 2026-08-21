@@ -15,7 +15,7 @@ class OrderRecordCreateForm(forms.ModelForm):
     class Meta:
         model = OrderRecord
         fields = ["record_type", "order_number", "gross_profit", "accounting_period"]
-        labels = {"gross_profit": "Сумма"}
+        labels = {"order_number": "Номер заказа", "gross_profit": "Сумма"}
         widgets = {
             "record_type": forms.RadioSelect,
             "order_number": forms.TextInput(
@@ -39,14 +39,26 @@ class OrderRecordCreateForm(forms.ModelForm):
                 ),
                 initial=self.instance.manager_id if self.instance and self.instance.pk else None,
             )
+        record_type = (
+            self.data.get(self.add_prefix("record_type"))
+            if self.is_bound
+            else getattr(self.instance, "record_type", OrderRecord.RECORD_ORDER)
+        )
+        if record_type == OrderRecord.RECORD_DESIGN:
+            self.fields["order_number"].widget.attrs.update({"inputmode": "text", "placeholder": "Например: макет вывески"})
+        else:
+            self.fields["order_number"].widget.attrs.update({"inputmode": "numeric", "placeholder": "Только цифры"})
 
-    def clean_order_number(self):
-        order_number = self.cleaned_data["order_number"]
-
-        if not order_number.isdigit():
-            raise forms.ValidationError("Номер заказа должен содержать только цифры")
-
-        return order_number
+    def clean(self):
+        cleaned_data = super().clean()
+        order_number = (cleaned_data.get("order_number") or "").strip()
+        record_type = cleaned_data.get("record_type")
+        if record_type == OrderRecord.RECORD_ORDER and order_number and not order_number.isascii():
+            self.add_error("order_number", "Номер заказа должен содержать только цифры")
+        elif record_type == OrderRecord.RECORD_ORDER and order_number and not order_number.isdigit():
+            self.add_error("order_number", "Номер заказа должен содержать только цифры")
+        cleaned_data["order_number"] = order_number
+        return cleaned_data
 
     @staticmethod
     def _current_year() -> int:

@@ -72,7 +72,7 @@
         <table class="table">
             <thead>
             <tr>
-                <th>Номер заказа</th>
+                <th>Номер заказа / макет</th>
                 <th>Валовая прибыль</th>
                 <th>Учетный период</th>
                 {% if is_admin_view %}
@@ -100,7 +100,7 @@
                     <button type="button" class="hover-action js-order-edit-open" data-modal-id="order-edit-modal-{{ record.pk }}" title="Изменить" aria-label="Изменить запись">✎</button>
                     <form method="post"
                           action="{% url 'payroll:orderrecord_delete' record.pk %}"
-                          onsubmit="return confirm('Удалить запись заказа №{{ record.order_number }}?')">
+                          onsubmit="return confirm('Удалить запись «{{ record.order_number|escapejs }}»?')">
 
                         {% csrf_token %}
 
@@ -144,7 +144,7 @@
             {% csrf_token %}
             {% for field in record.edit_form %}
             <div class="form-group{% if field.name == 'record_type' %} form-group--record-type{% endif %}">
-                {% if field.name == 'record_type' %}<span class="form-label">{{ field.label }}</span>{% else %}<label for="{{ field.id_for_label }}">{{ field.label }}</label>{% endif %}
+                {% if field.name == 'record_type' %}<span class="form-label">{{ field.label }}</span>{% else %}<label for="{{ field.id_for_label }}"{% if field.name == 'order_number' %} class="order-reference-label"{% endif %}>{{ field.label }}</label>{% endif %}
                 {{ field }}
                 {{ field.errors }}
             </div>
@@ -185,6 +185,23 @@
         if (shouldOpen) {
             openModal();
         }
+
+        function syncOrderReference(form) {
+            const selectedType = form.querySelector('input[name$="record_type"]:checked');
+            const reference = form.querySelector('input[name$="order_number"]');
+            if (!selectedType || !reference) return;
+            const isDesign = selectedType.value === "design";
+            const label = form.querySelector('label[for="' + reference.id + '"]');
+            if (label) label.textContent = isDesign ? "Название макета" : "Номер заказа";
+            reference.inputMode = isDesign ? "text" : "numeric";
+            reference.placeholder = isDesign ? "Например: макет вывески" : "Только цифры";
+        }
+        document.querySelectorAll('#orderrecord-modal form, .order-edit-modal form').forEach(function (form) {
+            syncOrderReference(form);
+            form.querySelectorAll('input[name$="record_type"]').forEach(function (radio) {
+                radio.addEventListener("change", function () { syncOrderReference(form); });
+            });
+        });
 
         document.querySelectorAll(".js-order-edit-open").forEach(function (button) {
             button.addEventListener("click", function () {
