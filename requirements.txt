@@ -7,3 +7,4 @@ tzdata==2025.3
 whitenoise==6.6.0
 gunicorn==21.2.0
 Pillow==11.3.0
+openpyxl==3.1.5
