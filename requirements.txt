@@ -8,3 +8,8 @@ whitenoise==6.6.0
 gunicorn==21.2.0
 Pillow==11.3.0
 openpyxl==3.1.5
+python-docx==1.2.0
+pypdf==6.0.0
+pypdfium2==5.12.1
+xlrd==2.0.2
+python-dotenv==1.1.1

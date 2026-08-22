@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -11,7 +12,7 @@ from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
 from .models import TenderEstimate, TenderLine, TenderSettings
-from .services import calculate_tender
+from .services import TenderAIError, calculate_tender, recognize_tender_items
 
 
 def _estimate_for_user(request, pk):
@@ -47,6 +48,24 @@ def import_preview(request):
         return JsonResponse({"sheets": workbook.sheetnames, "sheet": sheet.title, "rows": rows, "truncated": (sheet.max_row or 0) > max_rows})
     except Exception:
         return JsonResponse({"error": "Не удалось прочитать файл. Проверьте, что это корректный .xlsx."}, status=400)
+
+
+@login_required
+@require_POST
+def ai_import_preview(request):
+    upload = request.FILES.get("file")
+    if upload is None:
+        return JsonResponse({"error": "Выберите документ."}, status=400)
+    if upload.size > 10 * 1024 * 1024:
+        return JsonResponse({"error": "Файл больше 10 МБ."}, status=400)
+    if Path(upload.name).suffix.lower() not in {".xlsx", ".xls", ".docx", ".pdf"}:
+        return JsonResponse({"error": "Поддерживаются .xlsx, .xls, .docx и текстовые .pdf."}, status=400)
+    try:
+        return JsonResponse(recognize_tender_items(upload))
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception:
+        return JsonResponse({"error": "Не удалось прочитать документ. Проверьте файл и попробуйте ещё раз."}, status=400)
 
 
 @login_required

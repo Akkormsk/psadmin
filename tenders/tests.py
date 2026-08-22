@@ -1,14 +1,16 @@
 import json
 from io import BytesIO
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from docx import Document
 from openpyxl import Workbook
 
 from .models import TenderEstimate, TenderSettings
-from .services import calculate_tender
+from .services import calculate_tender, extract_tender_source
 
 
 class TenderTests(TestCase):
@@ -97,3 +99,53 @@ class TenderTests(TestCase):
     def test_excel_preview_requires_login(self):
         response = self.client.post(reverse("tender_import_preview"))
         self.assertEqual(response.status_code, 302)
+
+    def test_docx_tables_are_extracted_without_saving_file(self):
+        document = Document()
+        table = document.add_table(rows=2, cols=3)
+        table.rows[0].cells[0].text = "Наименование"
+        table.rows[0].cells[1].text = "Количество"
+        table.rows[0].cells[2].text = "Цена"
+        table.rows[1].cells[0].text = "Блокнот"
+        table.rows[1].cells[1].text = "20"
+        table.rows[1].cells[2].text = "150"
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "nmck.docx"
+
+        text, truncated = extract_tender_source(content)
+
+        self.assertIn("Блокнот | 20 | 150", text)
+        self.assertFalse(truncated)
+
+    @patch("tenders.views.recognize_tender_items")
+    def test_ai_preview_returns_editable_items(self, recognize):
+        recognize.return_value = {"items": [{"name": "Блокнот", "quantity": "20", "nmck_unit": "150.00", "nmck_total": "3000.00", "total_from_source": True, "total_matches": True, "confidence": 0.9}], "warnings": [], "usage": {}}
+        content = BytesIO(b"placeholder")
+        content.name = "nmck.pdf"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_ai_import_preview"), {"file": content}, format="multipart")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"][0]["name"], "Блокнот")
+        recognize.assert_called_once()
+
+    def test_ai_preview_rejects_unsupported_file(self):
+        content = BytesIO(b"text")
+        content.name = "nmck.txt"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_ai_import_preview"), {"file": content}, format="multipart")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_scanned_pdf_is_detected_for_ocr_fallback(self):
+        content = BytesIO(b"%PDF-1.4")
+        content.name = "scan.pdf"
+        with patch("tenders.services.PdfReader") as reader:
+            reader.return_value.pages = [type("Page", (), {"extract_text": lambda self: ""})()]
+            text, truncated = extract_tender_source(content)
+        self.assertEqual(text, "")
+        self.assertFalse(truncated)
