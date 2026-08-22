@@ -1,0 +1,15 @@
+from decimal import Decimal
+
+from django.conf import settings
+from django.db import migrations, models
+import django.db.models.deletion
+
+
+class Migration(migrations.Migration):
+    initial = True
+    dependencies = [migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
+    operations = [
+        migrations.CreateModel(name="TenderSettings", fields=[("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")), ("vat_rate", models.DecimalField(decimal_places=2, default=Decimal("5.00"), max_digits=5, verbose_name="НДС, %"))], options={"verbose_name": "Настройки тендеров", "verbose_name_plural": "Настройки тендеров"}),
+        migrations.CreateModel(name="TenderEstimate", fields=[("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")), ("tender_number", models.CharField(max_length=100, verbose_name="Номер тендера")), ("name", models.CharField(max_length=300, verbose_name="Название / комментарий")), ("reduction_percent", models.DecimalField(decimal_places=2, default=Decimal("30.00"), max_digits=5, verbose_name="Снижение цены, %")), ("russia_delivery", models.DecimalField(decimal_places=2, default=Decimal("0.00"), max_digits=14, verbose_name="Доставка по РФ")), ("vat_rate_snapshot", models.DecimalField(decimal_places=2, default=Decimal("5.00"), max_digits=5, verbose_name="НДС, %")), ("summary_snapshot", models.JSONField(blank=True, default=dict)), ("created_at", models.DateTimeField(auto_now_add=True)), ("updated_at", models.DateTimeField(auto_now=True)), ("owner", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="tender_estimates", to=settings.AUTH_USER_MODEL, verbose_name="Ответственный"))], options={"verbose_name": "Просчёт тендера", "verbose_name_plural": "Просчёты тендеров", "ordering": ["-updated_at"]}),
+        migrations.CreateModel(name="TenderLine", fields=[("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")), ("name", models.CharField(max_length=500, verbose_name="Наименование")), ("quantity", models.DecimalField(decimal_places=2, max_digits=14, verbose_name="Количество")), ("nmck_unit", models.DecimalField(decimal_places=2, max_digits=14, verbose_name="НМЦК за единицу")), ("material_unit", models.DecimalField(decimal_places=2, default=Decimal("0.00"), max_digits=14, verbose_name="Материал")), ("application_unit", models.DecimalField(decimal_places=2, default=Decimal("0.00"), max_digits=14, verbose_name="Нанесение")), ("logistics_unit", models.DecimalField(decimal_places=2, default=Decimal("0.00"), max_digits=14, verbose_name="Логистика")), ("product_url", models.URLField(blank=True, max_length=1000, verbose_name="Ссылка")), ("comment", models.CharField(blank=True, max_length=500, verbose_name="Комментарий")), ("sort_order", models.PositiveIntegerField(default=0)), ("estimate", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="lines", to="tenders.tenderestimate"))], options={"verbose_name": "Товар", "verbose_name_plural": "Товары", "ordering": ["sort_order", "pk"]}),
+    ]
