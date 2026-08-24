@@ -26,6 +26,7 @@ class PriceItem(models.Model):
 
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
     name = models.CharField(max_length=200)
+    aliases = models.TextField("Синонимы для ИИ", blank=True, help_text="Через запятую: горячее тиснение, тиснение фольгой")
     unit_name = models.CharField(max_length=40, default="ед.")
     unit_price = models.DecimalField(max_digits=12, decimal_places=4)
     base_item = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="dependent_items")
@@ -46,6 +47,32 @@ class PriceItem(models.Model):
         if self.base_item_id:
             return self.base_item.effective_unit_price * self.price_multiplier
         return self.unit_price
+
+    @property
+    def search_terms(self):
+        return [self.name, *[value.strip() for value in self.aliases.split(",") if value.strip()]]
+
+
+class ProductionRule(models.Model):
+    CALC_DIRECT = "direct"
+    CALC_LINEAR = "linear"
+    CALC_CHOICES = [
+        (CALC_DIRECT, "Обычная единица каталога"),
+        (CALC_LINEAR, "Расход по длине из упаковки / бобины"),
+    ]
+
+    price_item = models.OneToOneField(PriceItem, on_delete=models.CASCADE, related_name="production_rule", verbose_name="Позиция калькулятора")
+    calculation_kind = models.CharField("Способ расчёта", max_length=20, choices=CALC_CHOICES, default=CALC_DIRECT)
+    package_quantity = models.DecimalField("Количество в упаковке", max_digits=12, decimal_places=3, default=Decimal("1.000"), help_text="Например, длина намотки в метрах")
+    waste_percent = models.DecimalField("Технологический отход, %", max_digits=6, decimal_places=2, default=Decimal("0.00"))
+    note = models.CharField("Технологическое примечание", max_length=500, blank=True)
+
+    class Meta:
+        verbose_name = "Правило производственного расчёта"
+        verbose_name_plural = "Правила производственного расчёта"
+
+    def __str__(self):
+        return f"{self.price_item}: {self.get_calculation_kind_display()}"
 
 
 class SheetPriceItem(PriceItem):

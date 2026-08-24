@@ -6,7 +6,7 @@ from django.http import JsonResponse
 from django.urls import path
 
 from .forms import CanonPriceItemAdminForm, SheetPriceItemAdminForm
-from .models import CalculatorSettings, CanonPriceItem, Estimate, EstimateLine, PriceItem, SheetPriceItem
+from .models import CalculatorSettings, CanonPriceItem, Estimate, EstimateLine, PriceItem, ProductionRule, SheetPriceItem
 
 
 class PriceItemAdminBase(admin.ModelAdmin):
@@ -82,3 +82,10 @@ class EstimateAdmin(admin.ModelAdmin):
     list_filter = ("calculator_type", "owner")
     search_fields = ("name",)
     inlines = (EstimateLineInline,)
+
+
+@admin.register(ProductionRule)
+class ProductionRuleAdmin(admin.ModelAdmin):
+    list_display = ("price_item", "calculation_kind", "package_quantity", "waste_percent")
+    list_filter = ("calculation_kind",)
+    search_fields = ("price_item__name", "price_item__aliases", "note")

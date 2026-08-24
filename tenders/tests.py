@@ -9,8 +9,9 @@ from django.urls import reverse
 from docx import Document
 from openpyxl import Workbook
 
-from .models import TenderEstimate, TenderSettings
-from .services import calculate_tender, extract_tender_source
+from calculator.models import PriceItem
+from .models import ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderSettings
+from .services import _json_from_model, _paper_candidates, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -29,12 +30,16 @@ class TenderTests(TestCase):
 
     def test_user_can_save_and_open_own_estimate(self):
         self.client.force_login(self.user)
-        response = self.client.post(reverse("tender_home"), {"tender_number": "123", "name": "Тест", "reduction_percent": "30", "russia_delivery": "100", "lines_json": json.dumps(self.payload)})
+        payload = [{**self.payload[0], "requirements": {"requirements": [{"label": "Материал", "value": "пластик"}], "questions": []}}]
+        analysis = {"technical": {"name": "ТЗ.pdf", "matched": 1, "questions": 0}}
+        response = self.client.post(reverse("tender_home"), {"tender_number": "123", "name": "Тест", "reduction_percent": "30", "russia_delivery": "100", "lines_json": json.dumps(payload), "document_analysis_json": json.dumps(analysis)})
         self.assertEqual(response.status_code, 302)
         estimate = TenderEstimate.objects.get()
         self.assertEqual(estimate.owner, self.user)
         self.assertEqual(estimate.lines.count(), 1)
         self.assertEqual(estimate.vat_rate_snapshot, Decimal("5.00"))
+        self.assertEqual(estimate.document_analysis["technical"]["matched"], 1)
+        self.assertEqual(estimate.lines.get().requirements["requirements"][0]["value"], "пластик")
 
     def test_user_cannot_see_another_users_estimate(self):
         estimate = TenderEstimate.objects.create(owner=self.other, tender_number="777", name="Чужой")
@@ -119,6 +124,65 @@ class TenderTests(TestCase):
         self.assertIn("Блокнот | 20 | 150", text)
         self.assertFalse(truncated)
 
+    def test_nested_docx_tables_include_technical_values(self):
+        document = Document()
+        outer = document.add_table(rows=1, cols=3)
+        outer.cell(0, 0).text = "Папка «Благодарность»"
+        nested = outer.cell(0, 1).add_table(rows=2, cols=2)
+        nested.cell(0, 0).text = "Материал"
+        nested.cell(0, 1).text = "Дизайнерский картон"
+        nested.cell(1, 0).text = "Плотность"
+        nested.cell(1, 1).text = "не менее 290 г/м²"
+        outer.cell(0, 2).text = "1000"
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "tz.docx"
+
+        text, truncated = extract_tender_source(content)
+
+        self.assertIn("Дизайнерский картон", text)
+        self.assertIn("не менее 290 г/м²", text)
+        self.assertFalse(truncated)
+
+    def test_model_json_accepts_explanatory_wrapper_and_control_characters(self):
+        result = _json_from_model('Ответ модели:\n```json\n{"items":[{"name":"строка\tс табуляцией"}]}\n```')
+
+        self.assertEqual(result["items"][0]["name"], "строка\tс табуляцией")
+
+    @patch("tenders.views.analyze_tender_requirements")
+    def test_second_smart_upload_can_be_forced_to_technical_document(self, analyze):
+        analyze.return_value = {"document_summary": "ТЗ", "global_requirements": [], "items": [], "warnings": [], "scan_ocr": False, "usage": {}}
+        content = BytesIO(b"placeholder")
+        content.name = "requirements.docx"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_document_preview"), {
+            "file": content,
+            "lines_json": json.dumps(self.payload),
+            "document_role": "technical",
+        }, format="multipart")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["document_type"], "technical")
+        self.assertIn("technical", response.json())
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_requirements_match_is_recovered_when_model_omits_confidence(self, gateway):
+        gateway.return_value = ({"document_summary": "Папки", "global_requirements": [], "items": [{"line_index": None, "source_name": "Папка Благодарность 18.12.19.190", "quantity": 1000, "requirements": [{"label": "Материал", "value": "картон"}], "missing": [], "questions": []}], "warnings": []}, {})
+        document = Document()
+        document.add_paragraph("Папка Благодарность, 1000 штук, материал картон")
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "tz.docx"
+
+        result = analyze_tender_requirements(content, [{"name": "Папка «Благодарность»", "quantity": "1000"}])
+
+        self.assertEqual(result["items"][0]["line_index"], 0)
+        self.assertEqual(result["items"][0]["match_status"], "matched")
+        self.assertGreater(result["items"][0]["confidence"], .8)
+
     @patch("tenders.views.recognize_tender_items")
     def test_ai_preview_returns_editable_items(self, recognize):
         recognize.return_value = {"items": [{"name": "Блокнот", "quantity": "20", "nmck_unit": "150.00", "nmck_total": "3000.00", "total_from_source": True, "total_matches": True, "confidence": 0.9}], "warnings": [], "usage": {}}
@@ -141,6 +205,18 @@ class TenderTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    @patch("tenders.views.analyze_tender_requirements")
+    def test_legacy_doc_is_accepted_for_requirements(self, analyze):
+        analyze.return_value = {"document_summary": "ТЗ", "global_requirements": [], "items": [], "warnings": [], "scan_ocr": False, "usage": {}}
+        content = BytesIO(b"legacy-doc-placeholder")
+        content.name = "tz.doc"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_requirements_preview"), {"file": content, "lines_json": "[]"}, format="multipart")
+
+        self.assertEqual(response.status_code, 200)
+        analyze.assert_called_once()
+
     def test_scanned_pdf_is_detected_for_ocr_fallback(self):
         content = BytesIO(b"%PDF-1.4")
         content.name = "scan.pdf"
@@ -149,3 +225,282 @@ class TenderTests(TestCase):
             text, truncated = extract_tender_source(content)
         self.assertEqual(text, "")
         self.assertFalse(truncated)
+
+    @patch("tenders.views.analyze_tender_requirements")
+    def test_technical_document_preview_uses_current_lines(self, analyze):
+        analyze.return_value = {"document_summary": "Печать буклетов", "global_requirements": [], "items": [{"line_index": 0, "source_name": "Буклет", "requirements": [], "missing": [], "questions": [], "confidence": .9}], "warnings": [], "scan_ocr": False, "usage": {}}
+        content = BytesIO(b"placeholder")
+        content.name = "tz.pdf"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_requirements_preview"), {"file": content, "lines_json": json.dumps(self.payload)}, format="multipart")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"][0]["line_index"], 0)
+        analyze.assert_called_once()
+        self.assertEqual(analyze.call_args.args[1][0]["name"], "Ручка")
+
+    def test_a5_imposition_uses_parent_sheet_and_rotation(self):
+        self.assertEqual(calculate_sheet_imposition(148, 210, 210, 297, 0), {"ups": 2, "rotation": True})
+        self.assertEqual(calculate_sheet_imposition(148, 210, 320, 450, 0)["ups"], 4)
+        self.assertEqual(calculate_sheet_imposition(148, 210, 320, 450, 3)["ups"], 4)
+
+    def test_unknown_exact_sra3_paper_stays_a_priced_question(self):
+        a4 = PriceItem.objects.create(category="paper", name="Обычная A4 80", unit_price=Decimal("0.8"))
+        a3 = PriceItem.objects.create(category="paper", name="Maestro Special A3 80", unit_price=Decimal("1.7"))
+        sra3 = PriceItem.objects.create(category="paper", name="Немел SRA3 120г", unit_price=Decimal("3"))
+        candidates = _paper_candidates({"finished_width_mm": 148, "finished_height_mm": 210, "units_per_product": 60, "material_query": "офсетная бумага", "grammage_gsm": 80, "bleed_mm": 0}, 300, [a4, a3, sra3])
+
+        exact_sra3 = next(value for value in candidates if value["format"] == "SRA3" and value["grammage_gsm"] == 80)
+        self.assertTrue(exact_sra3["price_missing"])
+        self.assertEqual(exact_sra3["ups"], 4)
+        self.assertEqual(exact_sra3["sheets"], 4635)
+
+    @patch("tenders.views.build_training_hypothesis")
+    def test_production_route_preview_uses_current_position(self, analyze):
+        analyze.return_value = {"stage": "training_dialogue", "product_type": "digital_sheet", "confidence": .4, "route": {"name": "Под ключ", "steps": ["Изготовление"]}, "costs": [], "totals": {}}
+        self.client.force_login(self.user)
+
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+
+        response = self.client.post(reverse("tender_production_route_preview"), {"line_json": json.dumps({"name": "Блокнот А5", "quantity": 300, "requirements": {}})})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["product_type"], "digital_sheet")
+        self.assertTrue(response.json()["session_id"])
+        analyze.assert_called_once()
+        self.assertEqual(analyze.call_args.args[0]["name"], "Блокнот А5")
+
+    def test_manager_cannot_start_ai_calculation(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_production_route_preview"), {"line_json": json.dumps({"name": "Блокнот А5", "quantity": 300, "requirements": {}})})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_page_exposes_ai_only_for_admin(self):
+        self.client.force_login(self.user)
+        manager_page = self.client.get(reverse("tender_home"))
+        self.assertContains(manager_page, "aiEnabled=false")
+
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        admin_page = self.client.get(reverse("tender_home"))
+        self.assertContains(admin_page, "aiEnabled=true")
+
+    @patch("tenders.views.build_training_hypothesis")
+    def test_admin_feedback_creates_structured_turn_and_updates_session(self, build):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user,
+            position_name="Папка",
+            requirements={"requirements": []},
+            current_hypothesis={"route": {"name": "Старый маршрут"}},
+        )
+        build.return_value = {
+            "stage": "training_dialogue",
+            "product_type": "binding_special",
+            "route": {"name": "Подрядчик под ключ", "steps": ["Изготовление под ключ"]},
+            "costs": [{"category": "application", "name": "Изготовление", "amount_total": "10000.00"}],
+            "totals": {"application_unit": "100.00", "cost_total": "10000.00"},
+            "understood_changes": ["Выбран подрядчик под ключ"],
+        }
+        self.client.force_login(self.user)
+        payload = {"session_id": session.pk, "line": {"name": "Папка", "quantity": 100, "requirements": {}}, "feedback": "Считать у подрядчика под ключ"}
+
+        response = self.client.post(reverse("tender_revise_production_hypothesis"), {"payload": json.dumps(payload)})
+
+        self.assertEqual(response.status_code, 200)
+        session.refresh_from_db()
+        self.assertEqual(session.current_hypothesis["route"]["name"], "Подрядчик под ключ")
+        turn = ProductionTrainingTurn.objects.get(session=session)
+        self.assertEqual(turn.feedback, "Считать у подрядчика под ключ")
+        self.assertEqual(turn.understood_changes, ["Выбран подрядчик под ключ"])
+
+    def test_confirmed_dialogue_becomes_training_example(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user,
+            position_name="Папка",
+            requirements={"requirements": [{"label": "Нанесение", "value": "Тиснение"}]},
+            current_hypothesis={
+                "product_type": "binding_special",
+                "facts": ["Тиснение"],
+                "route": {"name": "Под ключ", "reason": "Специализированное изделие", "steps": ["Изготовление под ключ"]},
+                "costs": [{"category": "application", "name": "Изготовление", "amount_total": "10000.00"}],
+                "totals": {"cost_total": "10000.00"},
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_confirm_production_type"), {"payload": json.dumps({"session_id": session.pk})})
+
+        self.assertEqual(response.status_code, 200)
+        session.refresh_from_db()
+        self.assertTrue(session.is_confirmed)
+        self.assertEqual(session.confirmed_example.routes[0]["name"], "Под ключ")
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_untrained_classification_cannot_claim_high_confidence(self, gateway):
+        gateway.return_value = ({"suggested_type": "digital_sheet", "confidence": .95, "reason": "Малый тираж", "features": ["100 штук"], "alternatives": [], "matched_example_ids": [], "questions": []}, {})
+
+        result = classify_production_type({"name": "Открытка", "quantity": 100, "requirements": {}})
+
+        self.assertEqual(result["stage"], "production_classification")
+        self.assertLessEqual(result["confidence"], .45)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_classification_drops_question_already_answered_by_tz(self, gateway):
+        gateway.return_value = ({
+            "suggested_type": "binding_specialized",
+            "confidence": .45,
+            "reason": "Папка с декоративной отделкой",
+            "features": ["3D конгрев герба", "горячее тиснение надписи"],
+            "alternatives": [],
+            "matched_example_ids": [],
+            "routes": [],
+            "questions": [{
+                "question": "Требуется ли офсетная печать или возможно цифровая печать для нанесения текста и герба?",
+                "missing_fact": "способ нанесения",
+                "why_it_changes_route": "выбор технологии",
+            }],
+        }, {})
+        line = {
+            "name": "Папка «Благодарность»",
+            "quantity": 1000,
+            "requirements": {"requirements": [
+                {"label": "Нанесение герба", "value": "Полнообъемный 3D конгрев с золотой металлизацией"},
+                {"label": "Надпись", "value": "Горячее тиснение фольгой цвет золото"},
+            ]},
+        }
+
+        result = classify_production_type(line)
+
+        self.assertEqual(result["questions"], [])
+
+    def test_only_admin_can_confirm_training_example(self):
+        production_type = ProductionType.objects.get(code="digital_sheet")
+        payload = {"line": {"name": "Открытка", "requirements": {"requirements": []}}, "production_type": production_type.code, "features": ["тираж 100"], "routes": [{"name": "Под ключ", "processes": [{"role": "production", "name": "Цифровая листовая печать"}]}]}
+        self.client.force_login(self.user)
+        denied = self.client.post(reverse("tender_confirm_production_type"), {"payload": json.dumps(payload)})
+        self.assertEqual(denied.status_code, 403)
+
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        saved = self.client.post(reverse("tender_confirm_production_type"), {"payload": json.dumps(payload)})
+        self.assertEqual(saved.status_code, 200)
+        example = ProductionTrainingExample.objects.get(position_name="Открытка", production_type=production_type)
+        self.assertEqual(example.routes[0]["processes"][0]["name"], "Цифровая листовая печать")
+
+    def test_multiline_nmck_xlsx_is_parsed_locally_with_final_totals(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Обоснование начальной (максимальной) цены контракта"])
+        sheet.append(["№", "Наименование услуги", "", "Количество закупаемых позиций", "", "", "", "Цена Исполнителя", "", "", "", "", "", "Средняя арифметическая цена", "", "", "Начальная (максимальная) цена"])
+        sheet.append([None, None, None, None, None, None, None, "Исполнитель 1"])
+        sheet.append([None] * 13 + ["Средняя цена за единицу"] + [None, None, "НМЦК позиции"])
+        sheet.append([1, "Услуги по изготовлению и поставке подарочной продукции (футболка подарочная № 1)", None, 20, None, None, None, 4900, 3950, 4800, None, None, None, 3870.67, None, None, 77413.40])
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        stream.name = "Обоснование НМЦК.xlsx"
+
+        self.assertEqual(detect_tender_document_type(stream), "nmck")
+        result = recognize_tender_items(stream)
+
+        self.assertTrue(result["local_parse"])
+        self.assertEqual(result["items"][0]["name"], "футболка подарочная № 1")
+        self.assertEqual(result["items"][0]["nmck_unit"], "3870.67")
+        self.assertEqual(result["items"][0]["nmck_total"], "77413.40")
+
+    def test_nmck_xlsx_accepts_volume_and_abbreviated_quantity_headers(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "МинЦена"
+        sheet.cell(3, 4, "Обоснование начальной (максимальной) цены Контракта.")
+        sheet.cell(8, 1, "Начальная (максимальная) цена контракта")
+        sheet.cell(8, 13, "Минимальная цена выбранная Заказчиком за единицу товара *")
+        sheet.cell(8, 14, "Сумма начальной (максимальной) цены контракта")
+        sheet.cell(9, 2, "Наименование товара, работ, услуг")
+        sheet.cell(9, 3, "Объем")
+        sheet.cell(10, 3, "Ед.изм.")
+        sheet.cell(10, 4, "Кол-во")
+        sheet.cell(11, 2, "Карта клиента")
+        sheet.cell(11, 4, 2000)
+        sheet.cell(11, 8, 24.45)
+        sheet.cell(11, 13, 18.90)
+        sheet.cell(11, 14, 37800)
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        stream.name = "Обоснование НМЦК.xlsx"
+
+        self.assertEqual(detect_tender_document_type(stream), "nmck")
+        result = recognize_tender_items(stream)
+
+        self.assertTrue(result["local_parse"])
+        self.assertEqual(result["items"][0]["quantity"], "2000")
+        self.assertEqual(result["items"][0]["nmck_unit"], "18.90")
+        self.assertEqual(result["items"][0]["nmck_total"], "37800.00")
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_known_embossing_and_spring_are_recovered_from_catalog(self, gateway):
+        setup = PriceItem.objects.create(category="embossing", name="Приладка (количество клише)", aliases="горячее тиснение", unit_name="клише", unit_price="1000")
+        hits = PriceItem.objects.create(category="embossing", name="Ударов", aliases="тиснение фольгой", unit_name="удар", unit_price="4")
+        spring = PriceItem.objects.create(category="postpress", name="Пружина в бобине, 30см", aliases="металлическая пружина", unit_price="3")
+        gateway.return_value = ({"selected_source": "psodin_sheet", "calculator": "sheet", "route": "internal", "confidence": .9, "reason": "Нужна проверка", "components": [{"name": "Блок", "source": "internal", "kind": "sheet", "finished_width_mm": 148, "finished_height_mm": 210, "units_per_product": 60, "material_query": "офсетная бумага", "grammage_gsm": 80, "operation_item_ids": []}], "questions": [], "warnings": []}, {})
+
+        result = analyze_production_route({"name": "Блокнот на металлической пружине с горячим тиснением", "quantity": 300, "requirements": {}})
+
+        embossing = [value for value in result["cost_options"] if value["group"] == "embossing"]
+        spring_options = [value for value in result["cost_options"] if value["group"] == "spring"]
+        self.assertTrue({setup.pk, hits.pk}.issubset({value["catalog_item_id"] for value in embossing}))
+        self.assertEqual(spring_options[0]["catalog_item_id"], spring.pk)
+        self.assertIn("2 шт. с 30 см", spring_options[0]["calculation"])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_outsourced_component_is_not_sent_to_internal_calculator(self, gateway):
+        PriceItem.objects.create(category="postpress", name="Пружина в бобине, 30см", aliases="пружина", unit_price="3")
+        gateway.return_value = ({"selected_source": "supplier_price", "route": "outsourcing", "confidence": .9, "reason": "Закупаем готовое", "components": [{"name": "Готовый товар", "source": "outsourcing", "source_reason": "Нет технологии", "kind": "material", "operation_item_ids": []}], "questions": [], "warnings": []}, {})
+
+        result = analyze_production_route({"name": "Готовый сувенир на пружине", "quantity": 100, "requirements": {}})
+
+        self.assertEqual(result["route"], "outsourcing")
+        self.assertEqual(result["cost_options"], [])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_manager_answers_are_used_and_canon_is_a_supported_calculator(self, gateway):
+        gateway.return_value = ({"selected_source": "psodin_canon", "calculator": "canon", "route": "internal", "confidence": .9, "reason": "Широкоформатная печать", "components": [], "questions": [], "warnings": []}, {})
+
+        result = analyze_production_route({"name": "Постер A1", "quantity": 2, "manager_answers": {"Материал?": "Plain paper 80g"}, "requirements": {}})
+
+        self.assertEqual(result["calculator"], "canon")
+        self.assertIn("Plain paper 80g", gateway.call_args.args[0])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_supplier_source_cannot_accidentally_use_print_shop_catalog(self, gateway):
+        PriceItem.objects.create(category="embossing", name="Приладка", aliases="тиснение", unit_price="1000")
+        gateway.return_value = ({
+            "selected_source": "supplier_price",
+            "calculator": "sheet",
+            "route": "internal",
+            "confidence": .9,
+            "reason": "Нужен специализированный поставщик",
+            "components": [{"name": "Пакет", "source": "internal", "kind": "sheet", "operation_item_ids": []}],
+            "questions": [],
+            "warnings": [],
+        }, {})
+
+        result = analyze_production_route({"name": "Подарочный пакет А3 с тиснением", "quantity": 100, "requirements": {}})
+
+        self.assertEqual(result["selected_source"], "supplier_price")
+        self.assertEqual(result["calculator"], "none")
+        self.assertEqual(result["cost_options"], [])
