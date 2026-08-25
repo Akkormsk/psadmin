@@ -2,13 +2,18 @@ import json
 import os
 import re
 import base64
+import ipaddress
 import math
+import socket
 import struct
+from concurrent.futures import ThreadPoolExecutor
+from html.parser import HTMLParser
 from difflib import SequenceMatcher
 from io import BytesIO
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from docx import Document
@@ -17,6 +22,7 @@ from pypdf import PdfReader
 import pypdfium2 as pdfium
 import xlrd
 import olefile
+from PIL import Image
 
 
 MONEY = Decimal("0.01")
@@ -27,6 +33,25 @@ AI_SCAN_MAX_SIDE = 1800
 
 class TenderAIError(Exception):
     pass
+
+
+class _VisibleTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "noscript", "svg"}:
+            self.hidden += 1
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "noscript", "svg"} and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden and data.strip():
+            self.parts.append(data.strip())
 
 
 def _cell_text(value):
@@ -62,6 +87,63 @@ def _compact_item_name(value):
     if len(source) > 140:
         source = source[:140].rsplit(" ", 1)[0].rstrip(" ,.;:-")
     return source[:500]
+
+
+def _strip_shared_item_boilerplate(items):
+    """Remove a repeated document-level prefix without guessing product semantics."""
+    names = [_compact_item_name(item.get("name")) for item in items]
+    if len(names) < 2:
+        return names
+    prefixes = {}
+    for name in names:
+        match = re.match(r"^(.{3,120}?)\s*[:;—–-]\s+(.{2,})$", name)
+        if not match:
+            continue
+        key = re.sub(r"\s+", " ", match.group(1).lower().replace("ё", "е")).strip()
+        prefixes.setdefault(key, []).append(match.group(1))
+    threshold = max(2, math.ceil(len(names) * .7))
+    shared = next((values[0] for values in prefixes.values() if len(values) >= threshold), "")
+    if not shared:
+        return names
+    pattern = re.compile(rf"^{re.escape(shared)}\s*[:;—–-]\s+", flags=re.IGNORECASE)
+    return [pattern.sub("", name, count=1).strip() or name for name in names]
+
+
+def _shorten_structured_item_names(items):
+    """Use one small AI call for semantic names; keep a deterministic fallback."""
+    fallback = _strip_shared_item_boilerplate(items)
+    for item, name in zip(items, fallback):
+        item["name"] = name[:500]
+    if not os.getenv("TIMEWEB_AI_API_KEY", "").strip() or not items:
+        return items, {"prompt_tokens": 0, "completion_tokens": 0}, None
+    payload = [{"index": index, "name": item["name"]} for index, item in enumerate(items)]
+    schema = '{"items":[{"index":0,"name":"Короткое рабочее название"}]}'
+    prompt = f"""Сократи рабочие наименования товарных позиций из одного документа НМЦК.
+Рассматривай список целиком: удаляй одинаковые канцелярские вводные, описание закупочной услуги и повторяющиеся слова, которые не помогают отличить позиции.
+Обязательно сохраняй вид продукции (карта, лифлет, блокнот, футболка и т. п.), собственное название, номер варианта и характеристики, отличающие одну позицию от другой.
+Не обобщай разные товары, не добавляй сведения и не меняй порядок. Желательная длина — до 80 символов.
+Верни каждый исходный index ровно один раз. Только JSON: {schema}
+
+ПОЗИЦИИ:
+{json.dumps(payload, ensure_ascii=False)}"""
+    try:
+        result, usage = _ai_gateway_json(prompt, max_tokens=min(2200, 300 + len(items) * 80))
+        received = {}
+        for value in result.get("items", []) if isinstance(result.get("items"), list) else []:
+            try:
+                index = int(value.get("index"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            name = _compact_item_name(value.get("name")) if isinstance(value, dict) else ""
+            if 0 <= index < len(items) and name:
+                received[index] = name
+        if len(received) != len(items):
+            return items, usage, "Часть названий сокращена локально: модель вернула неполный список."
+        for index, item in enumerate(items):
+            item["name"] = received[index][:500]
+        return items, usage, None
+    except TenderAIError:
+        return items, {"prompt_tokens": 0, "completion_tokens": 0}, "Названия сокращены локально: AI Gateway был недоступен."
 
 
 def _decimal_text(value):
@@ -239,16 +321,19 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
     if not api_key:
         raise TenderAIError("AI Gateway ещё не настроен.")
     user_content = prompt
-    if scan_ocr:
+    if scan_ocr or image_data_urls:
         user_content = [{"type": "text", "text": prompt}]
-        user_content.extend({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}", "detail": "high"}} for image in _scan_pdf_images(upload))
+        if scan_ocr:
+            user_content.extend({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}", "detail": "high"}} for image in _scan_pdf_images(upload))
+        if image_data_urls:
+            user_content.extend({"type": "image_url", "image_url": {"url": image, "detail": "high"}} for image in image_data_urls)
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     for attempt in range(2):
         messages = [
@@ -285,11 +370,94 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000):
             raise
 
 
+def _validate_public_url(value):
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise TenderAIError("Укажите корректную публичную ссылку http или https.")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))}
+    except OSError as exc:
+        raise TenderAIError("Не удалось найти сайт по указанной ссылке.") from exc
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise TenderAIError("Локальные и служебные адреса нельзя использовать как источник.")
+    return value
+
+
+def _fetch_public_page(value):
+    value = _validate_public_url(value)
+    request = Request(value, headers={"User-Agent": "PSAdmin tender calculator/1.0", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
+    try:
+        with urlopen(request, timeout=15) as response:
+            final_url = _validate_public_url(response.geturl())
+            content_type = response.headers.get_content_type()
+            raw = response.read(1_500_001)
+            charset = response.headers.get_content_charset() or "utf-8"
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise TenderAIError("Не удалось прочитать страницу поставщика. Можно приложить PDF или скриншот.") from exc
+    if len(raw) > 1_500_000:
+        raise TenderAIError("Страница поставщика слишком большая. Приложите нужный фрагмент или прайс.")
+    if content_type not in {"text/html", "text/plain", "application/xhtml+xml"}:
+        raise TenderAIError("По ссылке нет читаемой страницы. Приложите PDF или скриншот.")
+    text = raw.decode(charset, errors="replace")
+    if content_type != "text/plain":
+        parser = _VisibleTextParser()
+        parser.feed(text)
+        text = "\n".join(parser.parts)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not text:
+        raise TenderAIError("На странице не найден читаемый прайс. Приложите скриншот.")
+    return text[:20_000], final_url
+
+
+def _image_data_url(upload):
+    upload.seek(0)
+    try:
+        image = Image.open(upload).convert("RGB")
+    except Exception as exc:
+        raise TenderAIError("Не удалось прочитать изображение источника.") from exc
+    image.thumbnail((1800, 1800))
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=88, optimize=True)
+    upload.seek(0)
+    return f"data:image/jpeg;base64,{base64.b64encode(output.getvalue()).decode('ascii')}"
+
+
+def extract_calculation_source(source_text="", source_url="", upload=None):
+    parts, source_type, resolved_url = [], "text", source_url
+    if source_text.strip():
+        parts.append(source_text.strip()[:12_000])
+    if source_url.strip():
+        page_text, resolved_url = _fetch_public_page(source_url.strip())
+        parts.append(f"СТРАНИЦА ПОСТАВЩИКА:\n{page_text}")
+        source_type = "link"
+    if upload is not None:
+        suffix = Path(upload.name).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+            prompt = "Прочитай скриншот прайса или страницы поставщика. Извлеки название поставщика, товар/услугу, цену, единицу цены, тиражные условия, дату и существенные примечания. Не выдумывай. Верни JSON: {\"text\":\"подробно извлечённые данные\"}"
+            result, _ = _ai_gateway_json(prompt, max_tokens=1600, image_data_urls=[_image_data_url(upload)])
+            parts.append(_cell_text(result.get("text"))[:12_000])
+            source_type = "image"
+        elif suffix in {".pdf", ".doc", ".docx", ".xlsx", ".xls"}:
+            extracted, _ = extract_tender_source(upload)
+            parts.append(extracted[:12_000])
+            source_type = "document"
+        else:
+            raise TenderAIError("Источник можно приложить как PDF, Word, Excel, PNG или JPG.")
+    content = "\n\n".join(value for value in parts if value).strip()
+    if not content:
+        raise TenderAIError("Добавьте ссылку, текст или файл источника.")
+    return {"content": content[:20_000], "source_type": source_type, "url": resolved_url[:1000]}
+
+
 def recognize_tender_items(upload):
     if Path(upload.name).suffix.lower() == ".xlsx":
         structured = _recognize_structured_nmck_xlsx(upload)
         if structured:
-            return {"items": structured, "warnings": [], "scan_ocr": False, "usage": {"prompt_tokens": 0, "completion_tokens": 0}, "local_parse": True}
+            structured, usage, warning = _shorten_structured_item_names(structured)
+            return {"items": structured, "warnings": [warning] if warning else [], "scan_ocr": False, "usage": usage, "local_parse": True}
     source, truncated = extract_tender_source(upload)
     scan_ocr = Path(upload.name).suffix.lower() == ".pdf" and not source
     schema = '{"items":[{"name":"товар","quantity":1,"nmck_unit":100,"nmck_total":1000,"confidence":0.95}],"warnings":[]}'
@@ -524,7 +692,10 @@ def _resolve_line_match(raw_index, source_name, quantity, current_lines, used_in
         model_index = None
     if model_index is not None and 0 <= model_index < len(current_lines) and model_index not in used_indexes:
         score = _match_score(source_name, quantity, current_lines[model_index])
-        return model_index, max(score, 0.72), "Совпадение по названию и позиции"
+        # In batched documents the model may return an index local to its
+        # fragment. Trust it only when the actual name/quantity also agree.
+        if score >= .58:
+            return model_index, max(score, 0.72), "Совпадение по названию и позиции"
     candidates = [
         (_match_score(source_name, quantity, line), index)
         for index, line in enumerate(current_lines)
@@ -538,6 +709,29 @@ def _resolve_line_match(raw_index, source_name, quantity, current_lines, used_in
     return None, score, "Нужно проверить соответствие вручную"
 
 
+def _technical_source_chunks(source, max_chars=5200):
+    """Split a large extracted table by product rows, retaining shared context."""
+    if len(source) <= max_chars:
+        return [source]
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    product_lines = [line for line in lines if re.match(r"^\d{1,3}\s*[.|)]?\s*\|", line)]
+    if len(product_lines) < 4:
+        return [source]
+    shared_lines = [line for line in lines if line not in product_lines]
+    shared = "\n".join(shared_lines)[:1800].strip()
+    chunks, current = [], []
+    for line in product_lines:
+        candidate = "\n".join(([shared] if shared else []) + current + [line])
+        if current and len(candidate) > max_chars:
+            chunks.append("\n".join(([shared] if shared else []) + current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        chunks.append("\n".join(([shared] if shared else []) + current))
+    return chunks or [source]
+
+
 def analyze_tender_requirements(upload, current_lines):
     source, truncated = extract_tender_source(upload)
     scan_ocr = Path(upload.name).suffix.lower() == ".pdf" and not source
@@ -546,9 +740,11 @@ def analyze_tender_requirements(upload, current_lines):
         for index, line in enumerate(current_lines[:100]) if isinstance(line, dict) and _cell_text(line.get("name"))
     ]
     schema = '{"document_summary":"кратко","global_requirements":[{"label":"Срок","value":"10 дней","source":"стр. 2"}],"items":[{"line_index":0,"source_name":"товар из ТЗ","quantity":10,"requirements":[{"label":"Материал","value":"пластик","source":"таблица 1"}],"missing":["реально отсутствующий параметр"],"questions":["один важный вопрос"],"confidence":0.9}],"warnings":[]}'
-    prompt = f"""Проанализируй ООЗ или техническое задание для будущего расчёта заказа.
+    def build_prompt(source_part):
+        return f"""Проанализируй ООЗ или техническое задание для будущего расчёта заказа.
 Извлеки требования к каждой товарной позиции: вид продукции, размеры, материал, цвет, плотность, печать или нанесение, постобработку, упаковку, сроки, доставку и другие влияющие на себестоимость характеристики.
 Сопоставь требования с уже имеющимися строками по названию, смыслу и количеству. line_index должен быть индексом подходящей строки, а confidence — уверенностью именно в этом сопоставлении от 0 до 1. Всегда возвращай source_name, quantity и confidence. Если подходящей строки нет, верни null и сохрани исходное название и количество, чтобы позицию можно было создать.
+Возвращай только позиции, которые действительно присутствуют в переданном фрагменте ДОКУМЕНТА. Не копируй остальные ТЕКУЩИЕ СТРОКИ и не создавай для них элементы без требований.
 Не рассчитывай цены и себестоимость. Не выдумывай отсутствующие сведения.
 Сначала внимательно прочитай все вложенные таблицы характеристик. Не превращай найденные требования в вопросы.
 В missing перечисли только параметры, которых действительно нет во всём документе и без которых нельзя выбрать технологию или посчитать себестоимость. В questions — не более 4 коротких вопросов менеджеру только по этим критическим пробелам. Если данных достаточно для предварительного расчёта, верни пустые массивы.
@@ -560,8 +756,29 @@ def analyze_tender_requirements(upload, current_lines):
 {json.dumps(compact_lines, ensure_ascii=False)}
 
 ДОКУМЕНТ:
-{source or 'Перед тобой страницы сканированного документа в исходном порядке.'}"""
-    result, usage = _ai_gateway_json(prompt, upload=upload, scan_ocr=scan_ocr, max_tokens=7000)
+{source_part or 'Перед тобой страницы сканированного документа в исходном порядке.'}"""
+
+    source_chunks = [source] if scan_ocr else _technical_source_chunks(source)
+    prompts = [build_prompt(value) for value in source_chunks]
+    if len(prompts) == 1:
+        responses = [_ai_gateway_json(prompts[0], upload=upload, scan_ocr=scan_ocr, max_tokens=7000)]
+    else:
+        # The work is network-bound. Small parallel requests stay within the
+        # hosting request timeout and use little additional application RAM.
+        with ThreadPoolExecutor(max_workers=min(3, len(prompts))) as executor:
+            responses = list(executor.map(lambda value: _ai_gateway_json(value, max_tokens=4200), prompts))
+    result = {"items": [], "global_requirements": [], "warnings": []}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    summaries = []
+    for partial, partial_usage in responses:
+        if _cell_text(partial.get("document_summary")):
+            summaries.append(_cell_text(partial.get("document_summary")))
+        result["items"].extend(partial.get("items", []) if isinstance(partial.get("items"), list) else [])
+        result["global_requirements"].extend(partial.get("global_requirements", []) if isinstance(partial.get("global_requirements"), list) else [])
+        result["warnings"].extend(partial.get("warnings", []) if isinstance(partial.get("warnings"), list) else [])
+        usage["prompt_tokens"] += partial_usage.get("prompt_tokens", 0) or 0
+        usage["completion_tokens"] += partial_usage.get("completion_tokens", 0) or 0
+    result["document_summary"] = summaries[0] if summaries else ""
     items = []
     used_indexes = set()
     for raw in result.get("items", []):
@@ -569,6 +786,14 @@ def analyze_tender_requirements(upload, current_lines):
             continue
         source_name = _cell_text(raw.get("source_name"))[:500]
         quantity = _cell_text(raw.get("quantity"))[:50]
+        requirements = _requirement_list(raw.get("requirements"))
+        missing = _short_text_list(raw.get("missing"))
+        questions = _short_text_list(raw.get("questions"), limit=4)
+        # Batched models sometimes echo context lines that were not present in
+        # the current document fragment. An empty echo must not reserve a match
+        # or appear as a new technical position.
+        if not requirements and not missing and not questions:
+            continue
         line_index, fallback_confidence, match_reason = _resolve_line_match(raw.get("line_index"), source_name, quantity, current_lines, used_indexes)
         try:
             model_confidence = max(0, min(1, float(raw.get("confidence"))))
@@ -577,9 +802,6 @@ def analyze_tender_requirements(upload, current_lines):
         confidence = max(model_confidence, fallback_confidence) if line_index is not None else fallback_confidence
         if line_index is not None:
             used_indexes.add(line_index)
-        requirements = _requirement_list(raw.get("requirements"))
-        missing = _short_text_list(raw.get("missing"))
-        questions = _short_text_list(raw.get("questions"), limit=4)
         if source_name or requirements or line_index is not None:
             items.append({"line_index": line_index, "source_name": source_name, "quantity": quantity, "requirements": requirements, "missing": missing, "questions": questions, "confidence": confidence, "match_status": "matched" if line_index is not None else "unmatched", "match_reason": match_reason})
     if not items and not result.get("global_requirements"):
@@ -589,9 +811,16 @@ def analyze_tender_requirements(upload, current_lines):
         warnings.append("Документ был слишком большим: обработана основная часть содержимого.")
     if scan_ocr:
         warnings.insert(0, "ТЗ распознано по изображению. Проверьте извлечённые требования.")
+    global_requirements = []
+    seen_global = set()
+    for requirement in _requirement_list(result.get("global_requirements")):
+        key = (requirement["label"].lower(), requirement["value"].lower())
+        if key not in seen_global:
+            seen_global.add(key)
+            global_requirements.append(requirement)
     return {
         "document_summary": _cell_text(result.get("document_summary"))[:1000],
-        "global_requirements": _requirement_list(result.get("global_requirements")),
+        "global_requirements": global_requirements,
         "items": items,
         "warnings": warnings,
         "scan_ocr": scan_ocr,
@@ -890,13 +1119,108 @@ def _training_examples_for_line(line, limit=12):
     return [value for score, value in ranked[:limit] if score >= .12]
 
 
+def _canonical_process_name(value):
+    text = _cell_text(value)
+    lowered = text.lower().replace("ё", "е")
+    rules = [
+        (("закуп", "материал"), "Закупка материала"),
+        (("постав", "материал"), "Закупка материала"),
+        (("постав", "бумаг"), "Закупка материала"),
+        (("закуп", "бумаг"), "Закупка материала"),
+        (("готов", "издел"), "Закупка готового изделия"),
+        (("готов", "бланк"), "Закупка готового изделия"),
+        (("универсаль", "типограф"), "Универсальная типография"),
+        (("цифров", "типограф"), "Цифровая типография"),
+        (("офсет", "типограф"), "Офсетная типография"),
+        (("нанесен",), "Нанесение"),
+    ]
+    for markers, name in rules:
+        if all(marker in lowered for marker in markers):
+            return name
+    return text[:80] or "Процесс не определён"
+
+
+def _normalize_route_processes(route):
+    raw_processes = route.get("processes") if isinstance(route.get("processes"), list) else []
+    if not raw_processes:
+        raw_processes = [{"name": value, "details": []} for value in _short_text_list(route.get("steps"), limit=6)]
+    processes = []
+    for value in raw_processes[:6]:
+        if isinstance(value, dict):
+            name = _canonical_process_name(value.get("name"))
+            details = _short_text_list(value.get("details"), limit=8)
+        else:
+            name, details = _canonical_process_name(value), []
+        if not processes or processes[-1]["name"].lower() != name.lower():
+            processes.append({"name": name, "details": details})
+        else:
+            processes[-1]["details"].extend(item for item in details if item not in processes[-1]["details"])
+    return processes or [{"name": "Маршрут пока не определён", "details": []}]
+
+
+def _decimal_input(inputs, key, default=None):
+    try:
+        value = Decimal(str(inputs.get(key, default)).replace(",", "."))
+    except (InvalidOperation, TypeError, ValueError, AttributeError):
+        return None
+    return value
+
+
+def _evaluate_cost_recipe(recipe, quantity):
+    if not isinstance(recipe, dict):
+        return None, []
+    method = recipe.get("method")
+    inputs = recipe.get("inputs") if isinstance(recipe.get("inputs"), dict) else {}
+    if method == "sheet_yield":
+        unit_price = _decimal_input(inputs, "unit_price")
+        units_per_sheet = _decimal_input(inputs, "units_per_sheet")
+        waste_percent = _decimal_input(inputs, "waste_percent", 0)
+        if unit_price is None or units_per_sheet is None or units_per_sheet <= 0 or waste_percent is None:
+            return None, []
+        sheets_exact = quantity / units_per_sheet * (Decimal("1") + waste_percent / Decimal("100"))
+        sheets = sheets_exact.to_integral_value(rounding=ROUND_CEILING)
+        total = _money(sheets * unit_price)
+        return total, [
+            f"Тираж: {_decimal_text(quantity)} шт.; выход: {_decimal_text(units_per_sheet)} шт. с исходного листа",
+            f"С учётом отходов {_decimal_text(waste_percent)}%: {_decimal_text(sheets_exact)} → {sheets} листов",
+            f"{sheets} листов × {_money(unit_price)} ₽ = {total} ₽",
+        ]
+    if method == "unit_rate":
+        unit_rate = _decimal_input(inputs, "unit_rate")
+        if unit_rate is None:
+            return None, []
+        total = _money(quantity * unit_rate)
+        return total, [f"{_decimal_text(quantity)} шт. × {_money(unit_rate)} ₽/шт. = {total} ₽"]
+    if method == "fixed":
+        fixed_amount = _decimal_input(inputs, "fixed_amount")
+        if fixed_amount is None:
+            return None, []
+        total = _money(fixed_amount)
+        return total, [f"Фиксированная стоимость на тираж: {total} ₽"]
+    if method == "history_scaled":
+        base_total = _decimal_input(inputs, "base_total")
+        base_quantity = _decimal_input(inputs, "base_quantity")
+        if base_total is None or base_quantity is None or base_quantity <= 0:
+            return None, []
+        unit_rate = base_total / base_quantity
+        total = _money(unit_rate * quantity)
+        return total, [
+            f"Исходный кейс: {_money(base_total)} ₽ за {_decimal_text(base_quantity)} шт. = {_money(unit_rate)} ₽/шт.",
+            f"Текущий тираж: {_decimal_text(quantity)} шт. × {_money(unit_rate)} ₽/шт. = {total} ₽",
+        ]
+    return None, []
+
+
 def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
     valid_types = {value.code for value in production_types}
     product_type = raw.get("product_type") if raw.get("product_type") in valid_types else "other"
     route = raw.get("route") if isinstance(raw.get("route"), dict) else {}
-    steps = _short_text_list(route.get("steps"), limit=6)
-    if not steps:
-        steps = ["Маршрут пока не определён"]
+    processes = _normalize_route_processes(route)
+    process_names = [value["name"] for value in processes]
+    try:
+        quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
+    except (InvalidOperation, TypeError, ValueError):
+        quantity = Decimal("1")
     costs = []
     totals = {"material": Decimal("0"), "application": Decimal("0"), "logistics": Decimal("0")}
     for item in raw.get("costs", [])[:12] if isinstance(raw.get("costs"), list) else []:
@@ -904,26 +1228,38 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
             continue
         category = item.get("category") if item.get("category") in totals else "application"
         name = _cell_text(item.get("name"))[:200]
+        recipe = item.get("recipe") if isinstance(item.get("recipe"), dict) else {}
+        calculated_amount, calculated_steps = _evaluate_cost_recipe(recipe, quantity)
         try:
             amount = max(Decimal("0"), Decimal(str(item.get("amount_total", 0)).replace(",", ".")))
         except (InvalidOperation, TypeError, ValueError):
             amount = Decimal("0")
-        if not name or amount <= 0:
+        if not name or (amount <= 0 and calculated_amount is None):
             continue
-        amount = _money(amount)
+        amount = calculated_amount if calculated_amount is not None else _money(amount)
         totals[category] += amount
+        source_type = item.get("source_type") if item.get("source_type") in {"calculator", "catalog", "supplier", "history", "manager"} else "manager"
+        source = _cell_text(item.get("source"))[:300]
+        manual_unit = _decimal_input(line, {"material": "material_unit", "application": "application_unit", "logistics": "logistics_unit"}[category], 0) or Decimal("0")
+        if "тз" in source.lower().replace("ё", "е") and manual_unit > 0 and abs(amount - _money(manual_unit * quantity)) <= Decimal("0.02"):
+            source = "Введено администратором в расчёте"
+            source_type = "manager"
+        raw_steps = _short_text_list(item.get("calculation_steps"), limit=12)
         costs.append({
             "category": category,
             "name": name,
             "amount_total": str(amount),
-            "source": _cell_text(item.get("source"))[:300],
-            "basis": _cell_text(item.get("basis"))[:300],
+            "process_name": _canonical_process_name(item.get("process_name") or process_names[min(len(costs), len(process_names) - 1)]),
+            "source": source,
+            "source_type": source_type,
+            "source_url": _cell_text(item.get("source_url"))[:1000],
+            "source_date": _cell_text(item.get("source_date"))[:50],
+            "basis": _cell_text(item.get("basis"))[:700],
+            "adaptation": _cell_text(item.get("adaptation"))[:700],
+            "calculation_steps": calculated_steps or raw_steps,
+            "recipe": recipe,
             "confirmed": bool(item.get("confirmed")),
         })
-    try:
-        quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
-    except (InvalidOperation, TypeError, ValueError):
-        quantity = Decimal("1")
     total = sum(totals.values(), Decimal("0"))
     confidence = raw.get("confidence", 0)
     try:
@@ -939,9 +1275,10 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
         "confidence": confidence,
         "facts": _short_text_list(raw.get("facts"), limit=10),
         "route": {
-            "name": _cell_text(route.get("name"))[:200] or "Предлагаемый маршрут",
+            "name": " → ".join(process_names),
             "reason": _cell_text(route.get("reason"))[:700],
-            "steps": steps,
+            "steps": process_names,
+            "processes": processes,
         },
         "costs": costs,
         "totals": {
@@ -970,9 +1307,13 @@ def build_training_hypothesis(line, current=None, feedback=""):
         "features": value.features,
         "approved_route": value.routes[0] if value.routes else {},
     } for value in examples]
-    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"name":"один маршрут","reason":"почему","steps":["крупный самостоятельно заказываемый блок"]},"costs":[{"category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"источник цены","basis":"формула или основание","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
+    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5}},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
+Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 Не выдумывай цены. В costs добавляй только цену, явно указанную в подтверждённых примерах, текущей гипотезе или обратной связи администратора. amount_total — сумма статьи на весь тираж. Если цены нет, оставь её вопросом, а не нулевой выдуманной статьёй.
+Для каждой статьи costs дай проверяемый след расчёта. В source укажи конкретный источник, в basis — итоговую формулу, а в calculation_steps — максимально подробную арифметику по шагам: исходную единицу и цену, раскладку/выход, требуемое количество с отходами, операции, скидки и итог. В adaptation объясни, как цена источника приведена к текущему тиражу, формату и характеристикам. Для калькулятора перечисли материалы и операции отдельно. Для истории или поставщика укажи исходный кейс/товар и все коэффициенты пересчёта. Не придумывай отсутствующие детали: если подробного основания нет, прямо напиши это в adaptation и задай вопрос администратору.
+Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. amount_total должен соответствовать recipe.
+Значения material_unit, application_unit и logistics_unit в ПОЗИЦИИ — ручные поля текущего расчёта, а не факты из ТЗ. Если используешь их, source_type=manager и source="Введено администратором". Нельзя писать «дано в ТЗ», если цена не находится внутри requirements с явным source.
 Подтверждённые примеры важнее общих предположений. matched_example_ids указывай только для действительно похожих примеров. Без подтверждённого близкого примера confidence не выше 0.55.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Верни только JSON: {schema}
@@ -991,7 +1332,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
 
 ПОДТВЕРЖДЁННЫЕ ПРИМЕРЫ:
 {json.dumps(example_payload, ensure_ascii=False)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=2200)
+    result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     valid_ids = {value.pk for value in examples}
     matched_ids = []
     for value in result.get("matched_example_ids", []) if isinstance(result.get("matched_example_ids"), list) else []:

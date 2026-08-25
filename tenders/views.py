@@ -11,8 +11,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
-from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderLine, TenderSettings
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, recognize_tender_items
+from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, recognize_tender_items
 
 
 def _estimate_for_user(request, pk):
@@ -198,6 +198,79 @@ def revise_production_hypothesis(request):
 
 @login_required
 @require_POST
+def add_calculation_source(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Добавлять источники расчёта может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
+        line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
+        hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+        costs = hypothesis.get("costs") if isinstance(hypothesis.get("costs"), list) else []
+        cost_index = int(payload.get("cost_index"))
+        if cost_index < 0 or cost_index >= len(costs) or not str(line.get("name", "")).strip():
+            raise ValueError
+        existing = None
+        if payload.get("source_id"):
+            existing = TenderKnowledgeSource.objects.get(pk=payload["source_id"], is_active=True)
+    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist, TenderKnowledgeSource.DoesNotExist):
+        return JsonResponse({"error": "Не удалось определить статью расчёта или источник."}, status=400)
+
+    upload = request.FILES.get("file")
+    if upload is not None and upload.size > 10 * 1024 * 1024:
+        return JsonResponse({"error": "Файл источника больше 10 МБ."}, status=400)
+    try:
+        if existing:
+            extracted = {"content": existing.content_summary, "source_type": existing.source_type, "url": existing.url}
+            source = existing
+        else:
+            extracted = extract_calculation_source(
+                source_text=str(payload.get("source_text", "")),
+                source_url=str(payload.get("source_url", "")),
+                upload=upload,
+            )
+            title = str(payload.get("title", "")).strip() or str(payload.get("supplier_name", "")).strip() or costs[cost_index].get("name") or "Источник расчёта"
+            source = TenderKnowledgeSource.objects.create(
+                title=title[:300],
+                supplier_name=str(payload.get("supplier_name", "")).strip()[:200],
+                source_type=extracted["source_type"],
+                url=extracted["url"],
+                content_summary=extracted["content"],
+                structured_data={"cost_name": costs[cost_index].get("name", "")},
+                created_by=request.user,
+            )
+        target = costs[cost_index]
+        feedback = (
+            f"Для статьи «{target.get('name', 'расход')}» добавлен проверяемый источник «{source}». "
+            "Пересчитай эту статью по данным источника, не копируй итог из похожего заказа. "
+            "Сохрани универсальный процесс, подробную формулу, все промежуточные действия и способ адаптации к текущему тиражу. "
+            f"ДАННЫЕ ИСТОЧНИКА:\n{extracted['content'][:12000]}"
+        )
+        updated = build_training_hypothesis(line, current=hypothesis, feedback=feedback)
+        updated["session_id"] = session.pk
+        updated_costs = updated.get("costs") if isinstance(updated.get("costs"), list) else []
+        matching = next((item for item in updated_costs if str(item.get("name", "")).casefold() == str(target.get("name", "")).casefold()), None)
+        if matching is None and cost_index < len(updated_costs):
+            matching = updated_costs[cost_index]
+        if matching is not None:
+            matching.update({
+                "source": str(source), "source_id": source.pk, "source_type": source.source_type,
+                "source_url": source.url, "source_date": source.updated_at.date().isoformat(),
+            })
+        session.current_hypothesis = updated
+        session.save(update_fields=["current_hypothesis", "updated_at"])
+        ProductionTrainingTurn.objects.create(
+            session=session, feedback=feedback, understood_changes=updated.get("understood_changes", []), hypothesis=updated,
+        )
+        return JsonResponse(updated)
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception:
+        return JsonResponse({"error": "Не удалось прочитать источник или пересчитать статью."}, status=400)
+
+
+@login_required
+@require_POST
 def confirm_production_type(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Добавлять учебные примеры может только администратор."}, status=403)
@@ -222,6 +295,7 @@ def confirm_production_type(request):
                     "name": str(route.get("name", ""))[:200],
                     "reason": str(route.get("reason", ""))[:700],
                     "steps": route.get("steps", [])[:6],
+                    "processes": route.get("processes", [])[:6],
                     "costs": hypothesis.get("costs", [])[:12],
                     "totals": hypothesis.get("totals", {}),
                 }],
@@ -355,7 +429,10 @@ def home(request, pk=None):
     initial_analysis = posted_analysis if posted_analysis is not None else (estimate.document_analysis if estimate else {})
     estimates = TenderEstimate.objects.all() if request.user.is_superuser else TenderEstimate.objects.filter(owner=request.user)
     users = get_user_model().objects.filter(is_active=True).order_by("last_name", "first_name", "username") if request.user.is_superuser else None
-    return render(request, "tenders/home.html", {"estimate": estimate, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "vat_rate": settings.vat_rate, "users": users})
+    knowledge_sources = []
+    if request.user.is_superuser:
+        knowledge_sources = list(TenderKnowledgeSource.objects.filter(is_active=True).values("id", "title", "supplier_name", "source_type", "url")[:100])
+    return render(request, "tenders/home.html", {"estimate": estimate, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "users": users})
 
 
 @login_required

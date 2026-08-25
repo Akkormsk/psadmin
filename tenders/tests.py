@@ -10,8 +10,8 @@ from docx import Document
 from openpyxl import Workbook
 
 from calculator.models import PriceItem
-from .models import ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderSettings
-from .services import _json_from_model, _paper_candidates, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
+from .models import ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
+from .services import _evaluate_cost_recipe, _json_from_model, _normalize_training_hypothesis, _paper_candidates, _resolve_line_match, _shorten_structured_item_names, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -400,6 +400,7 @@ class TenderTests(TestCase):
         example = ProductionTrainingExample.objects.get(position_name="Открытка", production_type=production_type)
         self.assertEqual(example.routes[0]["processes"][0]["name"], "Цифровая листовая печать")
 
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": ""})
     def test_multiline_nmck_xlsx_is_parsed_locally_with_final_totals(self):
         workbook = Workbook()
         sheet = workbook.active
@@ -421,6 +422,7 @@ class TenderTests(TestCase):
         self.assertEqual(result["items"][0]["nmck_unit"], "3870.67")
         self.assertEqual(result["items"][0]["nmck_total"], "77413.40")
 
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": ""})
     def test_nmck_xlsx_accepts_volume_and_abbreviated_quantity_headers(self):
         workbook = Workbook()
         sheet = workbook.active
@@ -450,6 +452,159 @@ class TenderTests(TestCase):
         self.assertEqual(result["items"][0]["quantity"], "2000")
         self.assertEqual(result["items"][0]["nmck_unit"], "18.90")
         self.assertEqual(result["items"][0]["nmck_total"], "37800.00")
+
+    def test_repeated_document_prefix_is_removed_from_item_names(self):
+        items = [
+            {"name": "полиграфической продукции: Карта «Саранск-Мордовия»"},
+            {"name": "полиграфической продукции: Лифлет «Мордовия заповедная»"},
+            {"name": "полиграфической продукции: Блокнот № 1"},
+        ]
+
+        names = _strip_shared_item_boilerplate(items)
+
+        self.assertEqual(names, ["Карта «Саранск-Мордовия»", "Лифлет «Мордовия заповедная»", "Блокнот № 1"])
+
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": "test-key"})
+    @patch("tenders.services._ai_gateway_json")
+    def test_smart_excel_uses_one_ai_call_to_normalize_all_names(self, gateway):
+        gateway.return_value = ({"items": [
+            {"index": 0, "name": "Карта «Саранск-Мордовия»"},
+            {"index": 1, "name": "Лифлет «Мордовия заповедная»"},
+        ]}, {"prompt_tokens": 80, "completion_tokens": 30})
+        items = [
+            {"name": "полиграфической продукции: Карта «Саранск-Мордовия»"},
+            {"name": "полиграфической продукции: Лифлет «Мордовия заповедная»"},
+        ]
+
+        normalized, usage, warning = _shorten_structured_item_names(items)
+
+        self.assertEqual([value["name"] for value in normalized], ["Карта «Саранск-Мордовия»", "Лифлет «Мордовия заповедная»"])
+        self.assertEqual(usage["prompt_tokens"], 80)
+        self.assertIsNone(warning)
+        gateway.assert_called_once()
+
+    def test_large_technical_table_is_split_only_between_product_rows(self):
+        header = "ОПИСАНИЕ ОБЪЕКТА ЗАКУПКИ\n№ | Наименование | Характеристики"
+        rows = [f"{index} | Товар {index} | " + ("характеристика " * 70) for index in range(1, 13)]
+
+        chunks = _technical_source_chunks("\n".join([header, *rows]), max_chars=2400)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all("ОПИСАНИЕ ОБЪЕКТА ЗАКУПКИ" in value for value in chunks))
+        combined = "\n".join(chunks)
+        self.assertTrue(all(f"{index} | Товар {index} |" in combined for index in range(1, 13)))
+
+    @patch("tenders.services.extract_tender_source")
+    @patch("tenders.services._ai_gateway_json")
+    def test_empty_context_echoes_do_not_occupy_technical_matches(self, gateway, extract):
+        extract.return_value = ("Описание объекта закупки", False)
+        gateway.return_value = ({
+            "items": [
+                {"line_index": 0, "source_name": "Первый товар", "quantity": 10, "requirements": [], "missing": [], "questions": [], "confidence": .9},
+                {"line_index": 1, "source_name": "Второй товар", "quantity": 20, "requirements": [{"label": "Материал", "value": "Бумага", "source": "таблица 1"}], "missing": [], "questions": [], "confidence": .9},
+            ],
+            "global_requirements": [], "warnings": [], "document_summary": "",
+        }, {"prompt_tokens": 20, "completion_tokens": 20})
+        lines = [{"name": "Первый товар", "quantity": 10}, {"name": "Второй товар", "quantity": 20}]
+
+        result = analyze_tender_requirements(type("Upload", (), {"name": "test.docx"})(), lines)
+
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["items"][0]["line_index"], 1)
+
+    def test_local_batch_index_does_not_override_a_better_name_match(self):
+        lines = [
+            {"name": "Лифлет Мордовия", "quantity": 3000},
+            {"name": "Стикерпак", "quantity": 500},
+        ]
+
+        index, confidence, _ = _resolve_line_match(0, "Стикерпак", 500, lines, set())
+
+        self.assertEqual(index, 1)
+        self.assertGreaterEqual(confidence, .66)
+
+    def test_training_cost_keeps_detailed_calculation_trace(self):
+        production_type = ProductionType.objects.create(code="trace-test", name="Тест")
+        raw = {
+            "product_type": production_type.code,
+            "route": {"name": "Под ключ", "steps": ["Изготовление"]},
+            "costs": [{
+                "category": "material", "name": "Majestic SRA3", "amount_total": 9500,
+                "source": "Калькулятор PSODIN", "source_type": "calculator", "source_date": "25.08.2026",
+                "basis": "25 листов × 380 ₽", "calculation_steps": ["4 изделия с листа", "100 / 4 = 25 листов"],
+                "adaptation": "Рассчитано для тиража 100 шт.", "confirmed": True,
+            }],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 100}, [production_type], [1])
+        cost = result["costs"][0]
+
+        self.assertEqual(cost["calculation_steps"], ["4 изделия с листа", "100 / 4 = 25 листов"])
+        self.assertEqual(cost["adaptation"], "Рассчитано для тиража 100 шт.")
+        self.assertEqual(cost["source_type"], "calculator")
+
+    def test_recipe_recalculates_current_quantity_instead_of_copying_history_total(self):
+        total, steps = _evaluate_cost_recipe({"method": "sheet_yield", "inputs": {"unit_price": 380, "units_per_sheet": 4, "waste_percent": 5}}, Decimal("1000"))
+
+        self.assertEqual(total, Decimal("99940.00"))
+        self.assertIn("263 листов", " ".join(steps))
+
+    def test_route_name_contains_only_universal_processes(self):
+        production_type = ProductionType.objects.create(code="route-test", name="Тест маршрута")
+        raw = {
+            "product_type": production_type.code,
+            "route": {"reason": "Тираж и отделка", "processes": [
+                {"name": "Поставка дизайнерской бумаги Majestic для папки", "details": ["Majestic"]},
+                {"name": "Изготовление папок с резкой, биговкой и тиснением в универсальной типографии", "details": ["резка", "биговка"]},
+            ]},
+            "costs": [],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 100}, [production_type], [1])
+
+        self.assertEqual(result["route"]["name"], "Закупка материала → Универсальная типография")
+        self.assertEqual(result["route"]["processes"][1]["details"], ["резка", "биговка"])
+
+    def test_manual_logistics_is_not_labelled_as_tz_source(self):
+        production_type = ProductionType.objects.create(code="source-test", name="Тест источника")
+        raw = {
+            "product_type": production_type.code,
+            "route": {"steps": ["Универсальная типография"]},
+            "costs": [{"category": "logistics", "name": "Логистика", "amount_total": 3000, "source": "Дано в ТЗ", "source_type": "supplier"}],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 1000, "logistics_unit": 3}, [production_type], [1])
+
+        self.assertEqual(result["costs"][0]["source"], "Введено администратором в расчёте")
+        self.assertEqual(result["costs"][0]["source_type"], "manager")
+
+    def test_private_url_cannot_be_used_as_calculation_source(self):
+        with self.assertRaisesMessage(Exception, "Локальные и служебные адреса"):
+            _validate_public_url("http://127.0.0.1/price")
+
+    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.views.extract_calculation_source")
+    def test_admin_can_attach_source_to_specific_cost(self, extract, rebuild):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        production_type = ProductionType.objects.get(code="digital_sheet")
+        current = {"stage": "training_dialogue", "product_type": production_type.code, "route": {"name": "Закупка материала", "steps": ["Закупка материала"]}, "costs": [{"name": "Бумага", "amount_total": "1000"}], "totals": {}}
+        session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Папка", requirements={}, current_hypothesis=current)
+        extract.return_value = {"content": "Majestic SRA3 — 380 руб./лист", "source_type": "link", "url": "https://supplier.example/price"}
+        rebuilt = {**current, "costs": [{"name": "Бумага", "amount_total": "9500", "calculation_steps": ["25 листов × 380 ₽"]}], "understood_changes": ["Цена бумаги пересчитана"]}
+        rebuild.return_value = rebuilt
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_add_calculation_source"), {
+            "payload": json.dumps({"session_id": session.pk, "line": {"name": "Папка", "quantity": 100}, "cost_index": 0, "supplier_name": "Дубль В", "source_url": "https://supplier.example/price"})
+        })
+
+        self.assertEqual(response.status_code, 200)
+        source = TenderKnowledgeSource.objects.get()
+        self.assertEqual(source.supplier_name, "Дубль В")
+        self.assertEqual(response.json()["costs"][0]["source_id"], source.pk)
+        self.assertIn("Majestic SRA3", rebuild.call_args.kwargs["feedback"])
 
     @patch("tenders.services._ai_gateway_json")
     def test_known_embossing_and_spring_are_recovered_from_catalog(self, gateway):

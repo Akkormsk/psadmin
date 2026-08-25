@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderLine, TenderSettings
+from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 
 
 class TenderLineInline(admin.TabularInline):
@@ -60,3 +60,11 @@ class ProductionTrainingSessionAdmin(admin.ModelAdmin):
     search_fields = ("position_name",)
     readonly_fields = ("requirements", "current_hypothesis", "confirmed_example", "created_at", "updated_at")
     inlines = (ProductionTrainingTurnInline,)
+
+
+@admin.register(TenderKnowledgeSource)
+class TenderKnowledgeSourceAdmin(admin.ModelAdmin):
+    list_display = ("title", "supplier_name", "source_type", "updated_at", "is_active")
+    list_filter = ("source_type", "is_active", "created_by")
+    search_fields = ("title", "supplier_name", "url", "content_summary")
+    list_editable = ("is_active",)

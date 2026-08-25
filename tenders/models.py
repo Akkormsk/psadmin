@@ -110,6 +110,35 @@ class ProductionTrainingTurn(models.Model):
         return f"{self.session.position_name} · {self.pk}"
 
 
+class TenderKnowledgeSource(models.Model):
+    SOURCE_CHOICES = [
+        ("link", "Ссылка"),
+        ("document", "Документ"),
+        ("image", "Изображение"),
+        ("text", "Текст"),
+        ("catalog", "Каталог / API"),
+    ]
+
+    title = models.CharField("Источник", max_length=300)
+    supplier_name = models.CharField("Поставщик", max_length=200, blank=True)
+    source_type = models.CharField("Тип", max_length=20, choices=SOURCE_CHOICES)
+    url = models.URLField("Ссылка", max_length=1000, blank=True)
+    content_summary = models.TextField("Извлечённые данные", blank=True)
+    structured_data = models.JSONField("Структурированные данные", default=dict, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="tender_knowledge_sources")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField("Активен", default=True)
+
+    class Meta:
+        ordering = ["supplier_name", "title", "-updated_at"]
+        verbose_name = "Источник расчёта"
+        verbose_name_plural = "Источники расчётов"
+
+    def __str__(self):
+        return f"{self.supplier_name + ' · ' if self.supplier_name else ''}{self.title}"
+
+
 class TenderEstimate(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
     tender_number = models.CharField("Номер тендера", max_length=100)
