@@ -383,6 +383,7 @@ def home(request, pk=None):
             if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
                 raise ValueError
             lines = []
+            calculation_complete = True
             for row in raw_lines:
                 line = {
                     "name": str(row.get("name", "")).strip(),
@@ -396,11 +397,14 @@ def home(request, pk=None):
                     "requirements": row.get("requirements") if isinstance(row.get("requirements"), dict) else {},
                 }
                 has_expense = any(line[key] > 0 for key in ("material_unit", "application_unit", "logistics_unit"))
-                if not line["name"] or line["quantity"] <= 0 or line["nmck_unit"] <= 0 or not has_expense or min(line["material_unit"], line["application_unit"], line["logistics_unit"]) < 0:
+                if min(line["quantity"], line["nmck_unit"], line["material_unit"], line["application_unit"], line["logistics_unit"]) < 0:
                     raise ValueError
+                if not line["name"] or line["quantity"] <= 0 or line["nmck_unit"] <= 0 or not has_expense:
+                    calculation_complete = False
                 lines.append(line)
             if not lines:
-                raise ValueError
+                lines.append({"name": "", "quantity": Decimal("0"), "nmck_unit": Decimal("0"), "material_unit": Decimal("0"), "application_unit": Decimal("0"), "logistics_unit": Decimal("0"), "product_url": "", "comment": "", "requirements": {}})
+                calculation_complete = False
         except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
             messages.error(request, "Проверьте реквизиты тендера и товарные позиции.")
         else:
@@ -414,11 +418,12 @@ def home(request, pk=None):
             estimate.russia_delivery = russia_delivery
             estimate.vat_rate_snapshot = settings.vat_rate
             estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
+            estimate.summary_snapshot["is_incomplete"] = not calculation_complete
             estimate.document_analysis = posted_analysis or {}
             estimate.save()
             estimate.lines.all().delete()
             TenderLine.objects.bulk_create([TenderLine(estimate=estimate, sort_order=index, **line) for index, line in enumerate(lines)])
-            messages.success(request, "Просчёт тендера сохранён.")
+            messages.success(request, "Черновик просчёта сохранён." if not calculation_complete else "Просчёт тендера сохранён.")
             return redirect("tender_estimate", pk=estimate.pk)
 
     initial_lines = []

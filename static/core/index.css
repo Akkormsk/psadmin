@@ -910,6 +910,7 @@ h1 {
 .tender-summary__primary strong { color:#166534; font-size:18px; }
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:#6b7280; }
+.saved-estimate__draft { display:inline-grid; width:16px; height:16px; margin-left:5px; place-items:center; border-radius:50%; background:#fff2cf; color:#9a6500; font-size:10px; font-style:normal; vertical-align:1px; }
 
 /* Compact two-row tender item. Editable cells are white; calculated cells are tinted. */
 .tender-line { padding:5px 6px; }

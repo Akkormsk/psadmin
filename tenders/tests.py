@@ -38,6 +38,7 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.owner, self.user)
         self.assertEqual(estimate.lines.count(), 1)
         self.assertEqual(estimate.vat_rate_snapshot, Decimal("5.00"))
+        self.assertFalse(estimate.summary_snapshot["is_incomplete"])
         self.assertEqual(estimate.document_analysis["technical"]["matched"], 1)
         self.assertEqual(estimate.lines.get().requirements["requirements"][0]["value"], "пластик")
 
@@ -72,15 +73,30 @@ class TenderTests(TestCase):
         self.assertEqual(saved.application_unit, Decimal("0.00"))
         self.assertEqual(saved.logistics_unit, Decimal("0.00"))
 
-    def test_invalid_post_keeps_entered_tender_and_lines(self):
+    def test_incomplete_lines_are_saved_as_draft_and_reopened(self):
         invalid = {**self.payload[0], "material_unit": "", "application_unit": "", "logistics_unit": ""}
         self.client.force_login(self.user)
         response = self.client.post(reverse("tender_home"), {"tender_number": "ABC-999", "name": "Не терять", "reduction_percent": "30", "russia_delivery": "", "lines_json": json.dumps([invalid])})
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "ABC-999")
-        self.assertContains(response, "Не терять")
-        self.assertContains(response, "Ручка")
-        self.assertFalse(TenderEstimate.objects.exists())
+        self.assertEqual(response.status_code, 302)
+        estimate = TenderEstimate.objects.get()
+        self.assertTrue(estimate.summary_snapshot["is_incomplete"])
+        self.assertEqual(estimate.lines.get().name, "Ручка")
+        reopened = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
+        self.assertContains(reopened, "Ручка")
+        self.assertContains(reopened, "Расчёт не завершён")
+
+    def test_partially_filled_line_values_are_preserved_in_draft(self):
+        partial = {"name": "", "quantity": "50", "nmck_unit": "", "material_unit": "12.50", "application_unit": "", "logistics_unit": "", "product_url": "", "comment": "Уточнить товар", "requirements": {}}
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_home"), {"tender_number": "DRAFT-1", "name": "Черновик", "reduction_percent": "30", "russia_delivery": "", "lines_json": json.dumps([partial])})
+
+        self.assertEqual(response.status_code, 302)
+        line = TenderEstimate.objects.get().lines.get()
+        self.assertEqual(line.name, "")
+        self.assertEqual(line.quantity, Decimal("50"))
+        self.assertEqual(line.material_unit, Decimal("12.50"))
+        self.assertEqual(line.comment, "Уточнить товар")
 
     def test_excel_preview_returns_sheets_and_rows(self):
         workbook = Workbook()
