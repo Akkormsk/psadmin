@@ -751,8 +751,18 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         source = TenderKnowledgeSource.objects.get()
         self.assertEqual(source.supplier_name, "Дубль В")
+        self.assertFalse(source.is_active)
         self.assertEqual(response.json()["costs"][0]["source_id"], source.pk)
+        self.assertTrue(response.json()["sources"][0]["is_pending"])
         self.assertIn("Majestic SRA3", rebuild.call_args.kwargs["feedback"])
+
+        confirm_response = self.client.post(reverse("tender_confirm_production_type"), {
+            "payload": json.dumps({"session_id": session.pk, "line": {"name": "Папка", "quantity": 100}}),
+        })
+
+        self.assertEqual(confirm_response.status_code, 200)
+        source.refresh_from_db()
+        self.assertTrue(source.is_active)
 
     @patch("tenders.views.build_training_hypothesis")
     @patch("tenders.views.extract_calculation_source")
@@ -796,6 +806,7 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         source = TenderKnowledgeSource.objects.get()
         self.assertEqual(source.structured_data["scope"], "position")
+        self.assertFalse(source.is_active)
         self.assertEqual(response.json()["sources"][0]["supplier_name"], "Берег")
         feedback = rebuild.call_args.kwargs["feedback"]
         self.assertIn("Рассмотри закупку бумаги отдельным маршрутом", feedback)

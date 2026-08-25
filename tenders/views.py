@@ -246,6 +246,7 @@ def add_calculation_source(request):
                     "cost_name": target_name,
                 },
                 created_by=request.user,
+                is_active=False,
             )
         target = costs[cost_index] if cost_index is not None else None
         administrator_feedback = str(payload.get("feedback", "")).strip()[:6000]
@@ -276,6 +277,7 @@ def add_calculation_source(request):
             "url": source.url,
             "scope": "cost" if target is not None else "position",
             "cost_name": target.get("name", "") if target is not None else "",
+            "is_pending": not source.is_active,
         }
         updated["sources"] = [value for value in attached_sources if value.get("id") != source.pk] + [source_card]
         updated_costs = updated.get("costs") if isinstance(updated.get("costs"), list) else []
@@ -317,6 +319,10 @@ def confirm_production_type(request):
             if not name or not hypothesis.get("route"):
                 raise ValueError
             route = hypothesis["route"]
+            attached_source_ids = [
+                value.get("id") for value in hypothesis.get("sources", [])
+                if isinstance(value, dict) and value.get("id")
+            ]
             example = ProductionTrainingExample.objects.create(
                 production_type=production_type,
                 position_name=name[:500],
@@ -333,6 +339,10 @@ def confirm_production_type(request):
                 note=str(payload.get("note", ""))[:500],
                 created_by=request.user,
             )
+            if attached_source_ids:
+                TenderKnowledgeSource.objects.filter(
+                    pk__in=attached_source_ids, created_by=request.user, is_active=False,
+                ).update(is_active=True)
             session.is_confirmed = True
             session.confirmed_example = example
             session.save(update_fields=["is_confirmed", "confirmed_example", "updated_at"])
