@@ -1128,6 +1128,32 @@ def _training_examples_for_line(line, limit=12):
     return [value for score, value in ranked[:limit] if score >= .12]
 
 
+def _knowledge_sources_for_line(line, limit=4):
+    from .models import TenderKnowledgeSource
+
+    source_text = json.dumps(line, ensure_ascii=False).lower().replace("ё", "е")
+    ignored = {"который", "изделие", "позиция", "количество", "требования", "материал", "печать", "цвет", "размер"}
+    tokens = {value for value in re.findall(r"[a-zа-я0-9]{4,}", source_text) if value not in ignored}
+    ranked = []
+    for source in TenderKnowledgeSource.objects.filter(is_active=True)[:100]:
+        title = f"{source.supplier_name} {source.title}".lower().replace("ё", "е")
+        content = source.content_summary.lower().replace("ё", "е")
+        title_hits = sum(1 for value in tokens if value in title)
+        content_hits = sum(1 for value in tokens if value in content)
+        score = title_hits * 3 + content_hits
+        if score:
+            ranked.append((score, source.updated_at, source))
+    ranked.sort(key=lambda value: (value[0], value[1]), reverse=True)
+    return [{
+        "id": source.pk,
+        "supplier": source.supplier_name,
+        "title": source.title,
+        "type": source.source_type,
+        "url": source.url,
+        "data": source.content_summary[:1600],
+    } for _, _, source in ranked[:limit]]
+
+
 def _canonical_process_name(value):
     text = _cell_text(value)
     lowered = text.lower().replace("ё", "е")
@@ -1330,6 +1356,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
 
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
+    knowledge_sources = _knowledge_sources_for_line(line)
     example_payload = [{
         "id": value.pk,
         "position": value.position_name,
@@ -1346,6 +1373,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
 Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. amount_total должен соответствовать recipe.
 Значения material_unit, application_unit и logistics_unit в ПОЗИЦИИ — ручные поля текущего расчёта, а не факты из ТЗ. Если используешь их, source_type=manager и source="Введено администратором". Нельзя писать «дано в ТЗ», если цена не находится внутри requirements с явным source.
 Подтверждённые примеры важнее общих предположений. matched_example_ids указывай только для действительно похожих примеров. Без подтверждённого близкого примера confidence не выше 0.55.
+ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Верни только JSON: {schema}
 
@@ -1362,7 +1390,10 @@ def build_training_hypothesis(line, current=None, feedback=""):
 {json.dumps([{"code": value.code, "name": value.name, "description": value.description} for value in production_types], ensure_ascii=False)}
 
 ПОДТВЕРЖДЁННЫЕ ПРИМЕРЫ:
-{json.dumps(example_payload, ensure_ascii=False)}"""
+{json.dumps(example_payload, ensure_ascii=False)}
+
+ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ:
+{json.dumps(knowledge_sources, ensure_ascii=False)}"""
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     valid_ids = {value.pk for value in examples}
     matched_ids = []
@@ -1374,6 +1405,8 @@ def build_training_hypothesis(line, current=None, feedback=""):
         if value in valid_ids:
             matched_ids.append(value)
     hypothesis = _normalize_training_hypothesis(result, line, production_types, matched_ids)
+    if isinstance(current, dict) and isinstance(current.get("sources"), list):
+        hypothesis["sources"] = current["sources"][:20]
     hypothesis["usage"] = {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}
     hypothesis["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     return hypothesis

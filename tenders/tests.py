@@ -11,7 +11,7 @@ from openpyxl import Workbook
 
 from calculator.models import PriceItem
 from .models import ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .services import _evaluate_cost_recipe, _json_from_model, _normalize_training_hypothesis, _paper_candidates, _resolve_line_match, _shorten_structured_item_names, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
+from .services import _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _resolve_line_match, _shorten_structured_item_names, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -698,6 +698,74 @@ class TenderTests(TestCase):
         self.assertEqual(source.supplier_name, "Дубль В")
         self.assertEqual(response.json()["costs"][0]["source_id"], source.pk)
         self.assertIn("Majestic SRA3", rebuild.call_args.kwargs["feedback"])
+
+    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.views.extract_calculation_source")
+    def test_admin_can_attach_source_before_any_cost_exists(self, extract, rebuild):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        production_type = ProductionType.objects.get(code="digital_sheet")
+        current = {
+            "stage": "training_dialogue",
+            "product_type": production_type.code,
+            "route": {"name": "Цифровая типография под ключ", "steps": ["Цифровая типография под ключ"]},
+            "costs": [],
+            "totals": {},
+        }
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Визитки", requirements={}, current_hypothesis=current,
+        )
+        extract.return_value = {
+            "content": "Sirio Pearl SRA3 — 380 руб./лист",
+            "source_type": "image",
+            "url": "https://bereg.example/paper",
+        }
+        rebuild.return_value = {
+            **current,
+            "costs": [{"name": "Бумага Sirio Pearl", "amount_total": "9500"}],
+            "understood_changes": ["Добавлен раздельный маршрут"],
+        }
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_add_calculation_source"), {
+            "payload": json.dumps({
+                "session_id": session.pk,
+                "line": {"name": "Визитки с выборочным УФ-лаком", "quantity": 700},
+                "supplier_name": "Берег",
+                "source_url": "https://bereg.example/paper",
+                "feedback": "Рассмотри закупку бумаги отдельным маршрутом.",
+            })
+        })
+
+        self.assertEqual(response.status_code, 200)
+        source = TenderKnowledgeSource.objects.get()
+        self.assertEqual(source.structured_data["scope"], "position")
+        self.assertEqual(response.json()["sources"][0]["supplier_name"], "Берег")
+        feedback = rebuild.call_args.kwargs["feedback"]
+        self.assertIn("Рассмотри закупку бумаги отдельным маршрутом", feedback)
+        self.assertIn("Sirio Pearl", feedback)
+        self.assertNotIn("cost_index", json.loads(response.wsgi_request.POST["payload"]))
+
+    def test_only_relevant_knowledge_sources_are_selected_for_future_calculations(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        TenderKnowledgeSource.objects.create(
+            title="Sirio Pearl и Majestic", supplier_name="Берег", source_type="link",
+            url="https://bereg.example/designer-paper", content_summary="Дизайнерская перламутровая бумага Sirio Pearl SRA3 300 г/м²",
+            created_by=self.user,
+        )
+        TenderKnowledgeSource.objects.create(
+            title="Хлопковая ткань", supplier_name="Текстиль", source_type="text",
+            content_summary="Ткань для пошива футболок", created_by=self.user,
+        )
+
+        sources = _knowledge_sources_for_line({
+            "name": "Визитки на Sirio Pearl",
+            "requirements": {"requirements": [{"label": "Бумага", "value": "перламутровая дизайнерская Sirio Pearl 300 г/м²"}]},
+        })
+
+        self.assertEqual([value["supplier"] for value in sources], ["Берег"])
 
     @patch("tenders.services._ai_gateway_json")
     def test_known_embossing_and_spring_are_recovered_from_catalog(self, gateway):

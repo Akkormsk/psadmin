@@ -207,8 +207,11 @@ def add_calculation_source(request):
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
         costs = hypothesis.get("costs") if isinstance(hypothesis.get("costs"), list) else []
-        cost_index = int(payload.get("cost_index"))
-        if cost_index < 0 or cost_index >= len(costs) or not str(line.get("name", "")).strip():
+        raw_cost_index = payload.get("cost_index")
+        cost_index = int(raw_cost_index) if raw_cost_index not in (None, "") else None
+        if not str(line.get("name", "")).strip():
+            raise ValueError
+        if cost_index is not None and (cost_index < 0 or cost_index >= len(costs)):
             raise ValueError
         existing = None
         if payload.get("source_id"):
@@ -229,34 +232,62 @@ def add_calculation_source(request):
                 source_url=str(payload.get("source_url", "")),
                 upload=upload,
             )
-            title = str(payload.get("title", "")).strip() or str(payload.get("supplier_name", "")).strip() or costs[cost_index].get("name") or "Источник расчёта"
+            target_name = costs[cost_index].get("name", "") if cost_index is not None else ""
+            title = str(payload.get("title", "")).strip() or str(payload.get("supplier_name", "")).strip() or target_name or f"Источник для {line.get('name')}"
             source = TenderKnowledgeSource.objects.create(
                 title=title[:300],
                 supplier_name=str(payload.get("supplier_name", "")).strip()[:200],
                 source_type=extracted["source_type"],
                 url=extracted["url"],
                 content_summary=extracted["content"],
-                structured_data={"cost_name": costs[cost_index].get("name", "")},
+                structured_data={
+                    "scope": "cost" if cost_index is not None else "position",
+                    "position_name": str(line.get("name", ""))[:300],
+                    "cost_name": target_name,
+                },
                 created_by=request.user,
             )
-        target = costs[cost_index]
+        target = costs[cost_index] if cost_index is not None else None
+        administrator_feedback = str(payload.get("feedback", "")).strip()[:6000]
+        if target is not None:
+            instruction = (
+                f"Для статьи «{target.get('name', 'расход')}» добавлен проверяемый источник «{source}». "
+                "Пересчитай эту статью по данным источника, не копируй итог из похожего заказа."
+            )
+        else:
+            instruction = (
+                f"К позиции добавлен проверяемый источник «{source}». Сам определи, к какому процессу, "
+                "материалу или статье цены он относится. Используй его только в подходящем маршруте; "
+                "наличие источника само по себе не подтверждает маршрут и не делает его оптимальным."
+            )
         feedback = (
-            f"Для статьи «{target.get('name', 'расход')}» добавлен проверяемый источник «{source}». "
-            "Пересчитай эту статью по данным источника, не копируй итог из похожего заказа. "
+            f"{administrator_feedback + chr(10) if administrator_feedback else ''}{instruction} "
             "Сохрани универсальный процесс, подробную формулу, все промежуточные действия и способ адаптации к текущему тиражу. "
             f"ДАННЫЕ ИСТОЧНИКА:\n{extracted['content'][:12000]}"
         )
         updated = build_training_hypothesis(line, current=hypothesis, feedback=feedback)
         updated["session_id"] = session.pk
+        attached_sources = hypothesis.get("sources") if isinstance(hypothesis.get("sources"), list) else []
+        source_card = {
+            "id": source.pk,
+            "title": source.title,
+            "supplier_name": source.supplier_name,
+            "source_type": source.source_type,
+            "url": source.url,
+            "scope": "cost" if target is not None else "position",
+            "cost_name": target.get("name", "") if target is not None else "",
+        }
+        updated["sources"] = [value for value in attached_sources if value.get("id") != source.pk] + [source_card]
         updated_costs = updated.get("costs") if isinstance(updated.get("costs"), list) else []
-        matching = next((item for item in updated_costs if str(item.get("name", "")).casefold() == str(target.get("name", "")).casefold()), None)
-        if matching is None and cost_index < len(updated_costs):
-            matching = updated_costs[cost_index]
-        if matching is not None:
-            matching.update({
-                "source": str(source), "source_id": source.pk, "source_type": source.source_type,
-                "source_url": source.url, "source_date": source.updated_at.date().isoformat(),
-            })
+        if target is not None:
+            matching = next((item for item in updated_costs if str(item.get("name", "")).casefold() == str(target.get("name", "")).casefold()), None)
+            if matching is None and cost_index < len(updated_costs):
+                matching = updated_costs[cost_index]
+            if matching is not None:
+                matching.update({
+                    "source": str(source), "source_id": source.pk, "source_type": source.source_type,
+                    "source_url": source.url, "source_date": source.updated_at.date().isoformat(),
+                })
         session.current_hypothesis = updated
         session.save(update_fields=["current_hypothesis", "updated_at"])
         ProductionTrainingTurn.objects.create(
