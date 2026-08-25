@@ -166,8 +166,9 @@ class TenderTests(TestCase):
 
         self.assertEqual(result["items"][0]["name"], "строка\tс табуляцией")
 
+    @patch("tenders.views.detect_tender_document_type", return_value="unknown")
     @patch("tenders.views.analyze_tender_requirements")
-    def test_second_smart_upload_can_be_forced_to_technical_document(self, analyze):
+    def test_second_smart_upload_can_be_forced_to_technical_document(self, analyze, detect):
         analyze.return_value = {"document_summary": "ТЗ", "global_requirements": [], "items": [], "warnings": [], "scan_ocr": False, "usage": {}}
         content = BytesIO(b"placeholder")
         content.name = "requirements.docx"
@@ -182,6 +183,40 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["document_type"], "technical")
         self.assertIn("technical", response.json())
+
+    @patch("tenders.views.recognize_tender_items")
+    @patch("tenders.views.detect_tender_document_type", return_value="technical")
+    def test_explicit_nmck_action_rejects_obvious_technical_document(self, detect, recognize):
+        content = BytesIO(b"placeholder")
+        content.name = "requirements.docx"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_document_preview"), {
+            "file": content,
+            "lines_json": "[]",
+            "document_role": "nmck",
+        }, format="multipart")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Загрузить ООЗ / ТЗ", response.json()["error"])
+        recognize.assert_not_called()
+
+    @patch("tenders.views.analyze_tender_requirements")
+    @patch("tenders.views.detect_tender_document_type", return_value="nmck")
+    def test_explicit_technical_action_rejects_obvious_nmck_document(self, detect, analyze):
+        content = BytesIO(b"placeholder")
+        content.name = "nmck.xlsx"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_document_preview"), {
+            "file": content,
+            "lines_json": "[]",
+            "document_role": "technical",
+        }, format="multipart")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Загрузить НМЦК", response.json()["error"])
+        analyze.assert_not_called()
 
     @patch("tenders.services._ai_gateway_json")
     def test_requirements_match_is_recovered_when_model_omits_confidence(self, gateway):

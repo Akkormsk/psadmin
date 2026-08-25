@@ -87,7 +87,12 @@ def document_preview(request):
         current_lines = []
     try:
         requested_role = request.POST.get("document_role", "auto")
-        role = requested_role if requested_role in {"nmck", "technical"} else detect_tender_document_type(upload)
+        detected_role = detect_tender_document_type(upload)
+        if requested_role == "nmck" and detected_role == "technical":
+            return JsonResponse({"error": "Этот файл похож на ООЗ или ТЗ. Нажмите «Загрузить ООЗ / ТЗ».", "document_type": detected_role}, status=422)
+        if requested_role == "technical" and detected_role == "nmck":
+            return JsonResponse({"error": "Этот файл похож на НМЦК. Нажмите «Загрузить НМЦК».", "document_type": detected_role}, status=422)
+        role = requested_role if requested_role in {"nmck", "technical"} else detected_role
         result = {"document_type": role, "file_name": upload.name}
         if role in {"nmck", "mixed"}:
             nmck = recognize_tender_items(upload)
