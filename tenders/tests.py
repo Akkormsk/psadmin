@@ -453,6 +453,50 @@ class TenderTests(TestCase):
         self.assertEqual(result["items"][0]["nmck_unit"], "18.90")
         self.assertEqual(result["items"][0]["nmck_total"], "37800.00")
 
+    @patch("tenders.services.extract_tender_source", return_value=("", False))
+    def test_structured_nmck_xlsx_is_detected_when_text_classification_fails(self, _extract):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.cell(8, 13, "Минимальная цена выбранная Заказчиком за единицу товара")
+        sheet.cell(8, 14, "Сумма начальной (максимальной) цены контракта")
+        sheet.cell(9, 2, "Наименование товара, работ, услуг")
+        sheet.cell(9, 4, "Кол-во")
+        sheet.cell(11, 2, "Карта клиента")
+        sheet.cell(11, 4, 2000)
+        sheet.cell(11, 13, 18.90)
+        sheet.cell(11, 14, 37800)
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        stream.name = "Обоснование НМЦК.xlsx"
+
+        self.assertEqual(detect_tender_document_type(stream), "nmck")
+
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": ""})
+    def test_smart_document_endpoint_imports_structured_nmck_xlsx(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.cell(3, 4, "Обоснование начальной (максимальной) цены Контракта")
+        sheet.cell(8, 13, "Минимальная цена выбранная Заказчиком за единицу товара")
+        sheet.cell(8, 14, "Сумма начальной (максимальной) цены контракта")
+        sheet.cell(9, 2, "Наименование товара, работ, услуг")
+        sheet.cell(9, 4, "Кол-во")
+        sheet.cell(11, 2, "Карта клиента")
+        sheet.cell(11, 4, 2000)
+        sheet.cell(11, 13, 18.90)
+        sheet.cell(11, 14, 37800)
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        stream.name = "Обоснование НМЦК.xlsx"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_document_preview"), {"file": stream, "lines_json": "[]"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["document_type"], "nmck")
+        self.assertEqual(response.json()["nmck"]["items"][0]["nmck_total"], "37800.00")
+
     def test_repeated_document_prefix_is_removed_from_item_names(self):
         items = [
             {"name": "полиграфической продукции: Карта «Саранск-Мордовия»"},

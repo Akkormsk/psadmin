@@ -636,6 +636,15 @@ def detect_tender_document_type(upload):
         return "nmck"
     if technical_score >= 1:
         return "technical"
+    # Text extraction can differ between Excel readers and operating systems.
+    # The structured parser is a stronger signal: it only succeeds when it
+    # finds item names, quantities, unit NMCK and final line totals.
+    if Path(upload.name).suffix.lower() == ".xlsx":
+        try:
+            if _recognize_structured_nmck_xlsx(upload):
+                return "nmck"
+        finally:
+            upload.seek(0)
     return "unknown"
 
 
