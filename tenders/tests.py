@@ -609,6 +609,39 @@ class TenderTests(TestCase):
         self.assertEqual(result["route"]["name"], "Закупка материала → Универсальная типография")
         self.assertEqual(result["route"]["processes"][1]["details"], ["резка", "биговка"])
 
+    def test_turnkey_manufacturing_is_not_labelled_as_material_purchase(self):
+        production_type = ProductionType.objects.create(code="turnkey-test", name="Тест под ключ")
+        raw = {
+            "product_type": production_type.code,
+            "route": {
+                "reason": "Заказать изготовление под ключ в цифровой типографии: бумага, печать 4+4, выборочный УФ-лак и резка.",
+                "processes": [{"name": "Закупка материала", "details": ["Типография предоставляет бумагу"]}],
+            },
+            "costs": [],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 700}, [production_type], [])
+
+        self.assertEqual(result["route"]["name"], "Цифровая типография под ключ")
+
+    def test_separate_material_purchase_remains_a_separate_route_process(self):
+        production_type = ProductionType.objects.create(code="split-route-test", name="Раздельный маршрут")
+        raw = {
+            "product_type": production_type.code,
+            "route": {
+                "reason": "Бумагу покупаем сами и передаём типографии.",
+                "processes": [
+                    {"name": "Закупка материала", "details": ["Бумага Majestic"]},
+                    {"name": "Цифровая типография под ключ", "details": ["Печать и отделка"]},
+                ],
+            },
+            "costs": [],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 700}, [production_type], [])
+
+        self.assertEqual(result["route"]["name"], "Закупка материала → Цифровая типография под ключ")
+
     def test_manual_logistics_is_not_labelled_as_tz_source(self):
         production_type = ProductionType.objects.create(code="source-test", name="Тест источника")
         raw = {

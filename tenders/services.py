@@ -1131,6 +1131,7 @@ def _training_examples_for_line(line, limit=12):
 def _canonical_process_name(value):
     text = _cell_text(value)
     lowered = text.lower().replace("ё", "е")
+    turnkey = "под ключ" in lowered
     rules = [
         (("закуп", "материал"), "Закупка материала"),
         (("постав", "материал"), "Закупка материала"),
@@ -1145,6 +1146,8 @@ def _canonical_process_name(value):
     ]
     for markers, name in rules:
         if all(marker in lowered for marker in markers):
+            if turnkey and name in {"Универсальная типография", "Цифровая типография", "Офсетная типография", "Нанесение"}:
+                return f"{name} под ключ"
             return name
     return text[:80] or "Процесс не определён"
 
@@ -1164,7 +1167,25 @@ def _normalize_route_processes(route):
             processes.append({"name": name, "details": details})
         else:
             processes[-1]["details"].extend(item for item in details if item not in processes[-1]["details"])
-    return processes or [{"name": "Маршрут пока не определён", "details": []}]
+    processes = processes or [{"name": "Маршрут пока не определён", "details": []}]
+    # A single turnkey contractor is a production process, not procurement.
+    # Correct this contradiction deterministically even if the model labelled
+    # the route as material purchase while describing full manufacturing.
+    if len(processes) == 1 and processes[0]["name"] == "Закупка материала":
+        evidence = " ".join([
+            _cell_text(route.get("reason")),
+            *processes[0].get("details", []),
+        ]).lower().replace("ё", "е")
+        if "под ключ" in evidence or ("изготов" in evidence and any(word in evidence for word in ("типограф", "производств", "подрядчик"))):
+            if "цифров" in evidence:
+                processes[0]["name"] = "Цифровая типография под ключ"
+            elif "офсет" in evidence:
+                processes[0]["name"] = "Офсетная типография под ключ"
+            elif "универсаль" in evidence or "типограф" in evidence:
+                processes[0]["name"] = "Универсальная типография под ключ"
+            else:
+                processes[0]["name"] = "Производство под ключ"
+    return processes
 
 
 def _decimal_input(inputs, key, default=None):
@@ -1319,6 +1340,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5}},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
+«Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
 Не выдумывай цены. В costs добавляй только цену, явно указанную в подтверждённых примерах, текущей гипотезе или обратной связи администратора. amount_total — сумма статьи на весь тираж. Если цены нет, оставь её вопросом, а не нулевой выдуманной статьёй.
 Для каждой статьи costs дай проверяемый след расчёта. В source укажи конкретный источник, в basis — итоговую формулу, а в calculation_steps — максимально подробную арифметику по шагам: исходную единицу и цену, раскладку/выход, требуемое количество с отходами, операции, скидки и итог. В adaptation объясни, как цена источника приведена к текущему тиражу, формату и характеристикам. Для калькулятора перечисли материалы и операции отдельно. Для истории или поставщика укажи исходный кейс/товар и все коэффициенты пересчёта. Не придумывай отсутствующие детали: если подробного основания нет, прямо напиши это в adaptation и задай вопрос администратору.
 Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. amount_total должен соответствовать recipe.
