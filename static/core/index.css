@@ -1129,6 +1129,12 @@ h1 {
 .training-source-form { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:6px; margin-top:5px; padding:6px; border:1px solid #dce4df; border-radius:7px; background:#f8fbf9; }
 .training-source-form.is-global { margin:0; padding:8px; }
 .training-source-form[hidden] { display:none; }
+.training-source-collection[hidden] { display:none; }
+.training-source-collection { display:grid; gap:6px; padding:8px; border:1px solid #dce4df; border-radius:8px; background:#f8fbf9; }
+.training-source-collection [data-general-source-list] { display:grid; gap:7px; }
+.training-source-form.is-global + .training-source-form.is-global { margin-top:0; }
+.training-source-form > header { display:flex; grid-column:1/-1; align-items:center; justify-content:space-between; gap:8px; color:#526071; font-size:9px; }
+.training-source-form > header button { min-width:24px; min-height:24px; padding:0; border:0; background:transparent; color:#87909b; font-size:15px; cursor:pointer; }
 .training-source-form .custom-select { width:100%; min-width:0; box-sizing:border-box; }
 .training-source-form .custom-select:not(.is-open) .custom-select__menu { display:none; }
 .training-source-form select, .training-source-form input, .training-source-form textarea { width:100%; min-width:0; min-height:28px; box-sizing:border-box; padding:4px 6px; border:1px solid #d4dce2; border-radius:6px; background:#fff; font:inherit; font-size:9px; }
@@ -1137,6 +1143,8 @@ h1 {
 .training-source-form input[type="file"]::file-selector-button { margin-right:7px; padding:4px 7px; border:1px solid #d4dce2; border-radius:5px; background:#fff; color:#344151; font:inherit; cursor:pointer; }
 .training-source-form > div { display:flex; align-items:center; gap:7px; }
 .training-source-form > div small { color:#78828e; font-size:8px; }
+.training-source-collection__actions { display:flex; align-items:center; gap:6px; }
+.training-source-collection__actions small { color:#78828e; font-size:8px; }
 .training-source-form button { min-height:27px; padding:4px 7px; font-size:8px; }
 .training-source-form > small { color:#7a4550; font-size:8px; }
 .training-attached-sources { display:flex; flex-wrap:wrap; align-items:center; gap:5px; color:#657080; font-size:9px; }

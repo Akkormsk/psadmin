@@ -848,6 +848,53 @@ class TenderTests(TestCase):
         self.assertIn("Sirio Pearl", feedback)
         self.assertNotIn("cost_index", json.loads(response.wsgi_request.POST["payload"]))
 
+    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.views.extract_calculation_source")
+    def test_admin_can_attach_multiple_sources_in_one_recalculation(self, extract, rebuild):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        production_type = ProductionType.objects.get(code="digital_sheet")
+        current = {
+            "stage": "training_dialogue",
+            "product_type": production_type.code,
+            "route": {"name": "Комбинированный маршрут", "steps": ["Изготовление шнурков", "Закупка вкладышей"]},
+            "costs": [],
+            "totals": {},
+        }
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Шнурок с вкладышем", requirements={}, current_hypothesis=current,
+        )
+        extract.side_effect = [
+            {"content": "Изготовление шнурков 500 шт. по 80 руб.", "source_type": "link", "url": "https://lanyard.example/"},
+            {"content": "Готовые вкладыши 500 шт. по 12 руб.", "source_type": "link", "url": "https://insert.example/"},
+        ]
+        rebuild.return_value = {**current, "sources": [], "understood_changes": ["Маршрут разделён на два процесса"]}
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_add_calculation_source"), {
+            "payload": json.dumps({
+                "session_id": session.pk,
+                "line": {"name": "Шнурок для телефона с вкладышем", "quantity": 500},
+                "feedback": "Шнурки изготавливаем на заказ, вкладыши закупаем готовыми.",
+                "sources": [
+                    {"supplier_name": "Шнурки", "title": "Изготовление шнурков", "source_url": "https://lanyard.example/"},
+                    {"supplier_name": "Вкладыши", "title": "Готовые вкладыши", "source_url": "https://insert.example/"},
+                ],
+            }),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(TenderKnowledgeSource.objects.count(), 2)
+        self.assertEqual(len(response.json()["sources"]), 2)
+        self.assertTrue(all(value["is_pending"] for value in response.json()["sources"]))
+        rebuild.assert_called_once()
+        feedback = rebuild.call_args.kwargs["feedback"]
+        self.assertIn("ИСТОЧНИК № 1", feedback)
+        self.assertIn("ИСТОЧНИК № 2", feedback)
+        self.assertIn("Шнурки изготавливаем на заказ", feedback)
+        self.assertIn("Готовые вкладыши", feedback)
+
     def test_only_relevant_knowledge_sources_are_selected_for_future_calculations(self):
         self.user.is_superuser = True
         self.user.save(update_fields=["is_superuser"])

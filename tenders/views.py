@@ -212,81 +212,100 @@ def add_calculation_source(request):
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
         costs = hypothesis.get("costs") if isinstance(hypothesis.get("costs"), list) else []
-        raw_cost_index = payload.get("cost_index")
-        cost_index = int(raw_cost_index) if raw_cost_index not in (None, "") else None
         if not str(line.get("name", "")).strip():
             raise ValueError
-        if cost_index is not None and (cost_index < 0 or cost_index >= len(costs)):
+        raw_sources = payload.get("sources") if isinstance(payload.get("sources"), list) else [payload]
+        if not raw_sources or len(raw_sources) > 6:
             raise ValueError
-        existing = None
-        if payload.get("source_id"):
-            existing = TenderKnowledgeSource.objects.get(pk=payload["source_id"], is_active=True)
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist, TenderKnowledgeSource.DoesNotExist):
         return JsonResponse({"error": "Не удалось определить статью расчёта или источник."}, status=400)
 
-    upload = request.FILES.get("file")
-    if upload is not None and upload.size > 10 * 1024 * 1024:
-        return JsonResponse({"error": "Файл источника больше 10 МБ."}, status=400)
     try:
-        if existing:
-            extracted = {"content": existing.content_summary, "source_type": existing.source_type, "url": existing.url}
-            source = existing
-        else:
-            extracted = extract_calculation_source(
-                source_text=str(payload.get("source_text", "")),
-                source_url=str(payload.get("source_url", "")),
-                upload=upload,
-            )
-            target_name = costs[cost_index].get("name", "") if cost_index is not None else ""
-            title = str(payload.get("title", "")).strip() or str(payload.get("supplier_name", "")).strip() or target_name or f"Источник для {line.get('name')}"
-            source = TenderKnowledgeSource.objects.create(
-                title=title[:300],
-                supplier_name=str(payload.get("supplier_name", "")).strip()[:200],
-                source_type=extracted["source_type"],
-                url=extracted["url"],
-                content_summary=extracted["content"],
-                structured_data={
-                    "scope": "cost" if cost_index is not None else "position",
-                    "position_name": str(line.get("name", ""))[:300],
-                    "cost_name": target_name,
-                },
-                created_by=request.user,
-                is_active=False,
-            )
-        target = costs[cost_index] if cost_index is not None else None
+        prepared_sources = []
+        batch_mode = isinstance(payload.get("sources"), list)
+        for source_index, raw_source in enumerate(raw_sources):
+            if not isinstance(raw_source, dict):
+                raise ValueError
+            raw_cost_index = raw_source.get("cost_index")
+            cost_index = int(raw_cost_index) if raw_cost_index not in (None, "") else None
+            if cost_index is not None and (cost_index < 0 or cost_index >= len(costs)):
+                raise ValueError
+            upload = request.FILES.get(f"file_{source_index}" if batch_mode else "file")
+            if upload is not None and upload.size > 10 * 1024 * 1024:
+                return JsonResponse({"error": f"Файл источника № {source_index + 1} больше 10 МБ."}, status=400)
+            existing = None
+            if raw_source.get("source_id"):
+                existing = TenderKnowledgeSource.objects.get(pk=raw_source["source_id"], is_active=True)
+            if existing:
+                extracted = {"content": existing.content_summary, "source_type": existing.source_type, "url": existing.url}
+                source = existing
+            else:
+                extracted = extract_calculation_source(
+                    source_text=str(raw_source.get("source_text", "")),
+                    source_url=str(raw_source.get("source_url", "")),
+                    upload=upload,
+                )
+                target_name = costs[cost_index].get("name", "") if cost_index is not None else ""
+                title = str(raw_source.get("title", "")).strip() or str(raw_source.get("supplier_name", "")).strip() or target_name or f"Источник для {line.get('name')}"
+                source = TenderKnowledgeSource.objects.create(
+                    title=title[:300],
+                    supplier_name=str(raw_source.get("supplier_name", "")).strip()[:200],
+                    source_type=extracted["source_type"],
+                    url=extracted["url"],
+                    content_summary=extracted["content"],
+                    structured_data={
+                        "scope": "cost" if cost_index is not None else "position",
+                        "position_name": str(line.get("name", ""))[:300],
+                        "cost_name": target_name,
+                    },
+                    created_by=request.user,
+                    is_active=False,
+                )
+            prepared_sources.append({
+                "source": source,
+                "extracted": extracted,
+                "cost_index": cost_index,
+                "target": costs[cost_index] if cost_index is not None else None,
+            })
+
         administrator_feedback = str(payload.get("feedback", "")).strip()[:6000]
-        if target is not None:
-            instruction = (
-                f"Для статьи «{target.get('name', 'расход')}» добавлен проверяемый источник «{source}». "
-                "Пересчитай эту статью по данным источника, не копируй итог из похожего заказа."
-            )
-        else:
-            instruction = (
-                f"К позиции добавлен проверяемый источник «{source}». Сам определи, к какому процессу, "
-                "материалу или статье цены он относится. Используй его только в подходящем маршруте; "
-                "наличие источника само по себе не подтверждает маршрут и не делает его оптимальным."
-            )
-        feedback = (
-            f"{administrator_feedback + chr(10) if administrator_feedback else ''}{instruction} "
-            "Сохрани универсальный процесс, подробную формулу, все промежуточные действия и способ адаптации к текущему тиражу. "
-            f"ДАННЫЕ ИСТОЧНИКА:\n{extracted['content'][:12000]}"
-        )
+        feedback_parts = [administrator_feedback] if administrator_feedback else []
+        for source_index, prepared in enumerate(prepared_sources, start=1):
+            source, target, extracted = prepared["source"], prepared["target"], prepared["extracted"]
+            if target is not None:
+                instruction = (
+                    f"Для статьи «{target.get('name', 'расход')}» добавлен проверяемый источник «{source}». "
+                    "Пересчитай эту статью по данным источника, не копируй итог из похожего заказа."
+                )
+            else:
+                instruction = (
+                    f"К позиции добавлен проверяемый источник «{source}». Сам определи, к какому процессу, "
+                    "материалу или статье цены он относится. Используй его только в подходящем маршруте; "
+                    "наличие источника само по себе не подтверждает маршрут и не делает его оптимальным."
+                )
+            feedback_parts.append(f"ИСТОЧНИК № {source_index}. {instruction}\nДАННЫЕ ИСТОЧНИКА:\n{extracted['content'][:12000]}")
+        feedback_parts.append("Сохрани универсальные процессы, подробные формулы, все промежуточные действия и способы адаптации к текущему тиражу. Не смешивай предложения разных поставщиков в одну цену.")
+        feedback = "\n\n".join(feedback_parts)
         updated = build_training_hypothesis(line, current=hypothesis, feedback=feedback)
         updated["session_id"] = session.pk
         attached_sources = hypothesis.get("sources") if isinstance(hypothesis.get("sources"), list) else []
-        source_card = {
-            "id": source.pk,
-            "title": source.title,
-            "supplier_name": source.supplier_name,
-            "source_type": source.source_type,
-            "url": source.url,
-            "scope": "cost" if target is not None else "position",
-            "cost_name": target.get("name", "") if target is not None else "",
-            "is_pending": not source.is_active,
-        }
-        updated["sources"] = [value for value in attached_sources if value.get("id") != source.pk] + [source_card]
+        new_source_ids = {prepared["source"].pk for prepared in prepared_sources}
+        source_cards = [{
+            "id": prepared["source"].pk,
+            "title": prepared["source"].title,
+            "supplier_name": prepared["source"].supplier_name,
+            "source_type": prepared["source"].source_type,
+            "url": prepared["source"].url,
+            "scope": "cost" if prepared["target"] is not None else "position",
+            "cost_name": prepared["target"].get("name", "") if prepared["target"] is not None else "",
+            "is_pending": not prepared["source"].is_active,
+        } for prepared in prepared_sources]
+        updated["sources"] = [value for value in attached_sources if value.get("id") not in new_source_ids] + source_cards
         updated_costs = updated.get("costs") if isinstance(updated.get("costs"), list) else []
-        if target is not None:
+        for prepared in prepared_sources:
+            source, target, cost_index = prepared["source"], prepared["target"], prepared["cost_index"]
+            if target is None:
+                continue
             matching = next((item for item in updated_costs if str(item.get("name", "")).casefold() == str(target.get("name", "")).casefold()), None)
             if matching is None and cost_index < len(updated_costs):
                 matching = updated_costs[cost_index]
