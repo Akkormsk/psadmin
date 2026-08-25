@@ -554,6 +554,61 @@ class TenderTests(TestCase):
         combined = "\n".join(chunks)
         self.assertTrue(all(f"{index} | Товар {index} |" in combined for index in range(1, 13)))
 
+    def test_large_technical_table_keeps_repeated_characteristics_of_product_together(self):
+        header = "ОПИСАНИЕ ОБЪЕКТА ЗАКУПКИ\n№ | Наименование | Параметр | Значение"
+        rows = [
+            *[f"1 | Шнурок | Параметр {index} | " + ("значение " * 12) for index in range(5)],
+            *[f"2 | 3D-стикер | Параметр {index} | " + ("значение " * 12) for index in range(5)],
+        ]
+
+        chunks = _technical_source_chunks("\n".join([header, *rows]), max_chars=700)
+
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(sum("1 | Шнурок |" in value for value in chunks), 1)
+        self.assertEqual(sum("2 | 3D-стикер |" in value for value in chunks), 1)
+        self.assertTrue(any(value.count("1 | Шнурок |") == 5 for value in chunks))
+        self.assertTrue(any(value.count("2 | 3D-стикер |") == 5 for value in chunks))
+
+    @patch("tenders.services._technical_source_chunks", return_value=["первая часть", "вторая часть"])
+    @patch("tenders.services.extract_tender_source", return_value=("длинный документ", False))
+    @patch("tenders.services._ai_gateway_json")
+    def test_partial_technical_answers_for_one_product_are_merged(self, gateway, extract, chunks):
+        usage = {"prompt_tokens": 20, "completion_tokens": 20}
+        gateway.side_effect = [
+            ({
+                "items": [{
+                    "line_index": 0, "source_name": "3D стикеры", "quantity": 5000,
+                    "requirements": [{"label": "Вид продукции", "value": "3D-стикер", "source": "таблица 1"}],
+                    "missing": ["Материал", "Размеры"],
+                    "questions": ["Какой материал используется?"], "confidence": .8,
+                }],
+                "global_requirements": [], "warnings": [], "document_summary": "",
+            }, usage),
+            ({
+                "items": [{
+                    "line_index": 0, "source_name": "3D стикеры", "quantity": 5000,
+                    "requirements": [
+                        {"label": "Материал", "value": "Полимерная смола", "source": "таблица 1"},
+                        {"label": "Ширина", "value": "50 мм", "source": "таблица 1"},
+                        {"label": "Высота", "value": "50 мм", "source": "таблица 1"},
+                    ],
+                    "missing": [], "questions": [], "confidence": .9,
+                }],
+                "global_requirements": [], "warnings": [], "document_summary": "",
+            }, usage),
+        ]
+
+        result = analyze_tender_requirements(
+            type("Upload", (), {"name": "test.docx"})(),
+            [{"name": "Изготовление 3D стикеров", "quantity": 5000}],
+        )
+
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["items"][0]["line_index"], 0)
+        self.assertEqual(len(result["items"][0]["requirements"]), 4)
+        self.assertEqual(result["items"][0]["missing"], [])
+        self.assertEqual(result["items"][0]["questions"], [])
+
     @patch("tenders.services.extract_tender_source")
     @patch("tenders.services._ai_gateway_json")
     def test_empty_context_echoes_do_not_occupy_technical_matches(self, gateway, extract):

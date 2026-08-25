@@ -719,7 +719,7 @@ def _resolve_line_match(raw_index, source_name, quantity, current_lines, used_in
 
 
 def _technical_source_chunks(source, max_chars=5200):
-    """Split a large extracted table by product rows, retaining shared context."""
+    """Split a large table without separating characteristics of one product."""
     if len(source) <= max_chars:
         return [source]
     lines = [line.strip() for line in source.splitlines() if line.strip()]
@@ -728,17 +728,116 @@ def _technical_source_chunks(source, max_chars=5200):
         return [source]
     shared_lines = [line for line in lines if line not in product_lines]
     shared = "\n".join(shared_lines)[:1800].strip()
-    chunks, current = [], []
+
+    # DOCX specifications commonly repeat the product number and name on every
+    # characteristic row. Splitting those physical rows independently gives
+    # the model only half a product and produces duplicate/contradictory items.
+    groups = []
     for line in product_lines:
-        candidate = "\n".join(([shared] if shared else []) + current + [line])
-        if current and len(candidate) > max_chars:
-            chunks.append("\n".join(([shared] if shared else []) + current))
-            current = [line]
+        columns = [value.strip() for value in line.split("|")]
+        row_number = re.sub(r"\D+", "", columns[0]) if columns else ""
+        product_name = _normalized_item_name(columns[1]) if len(columns) > 1 else ""
+        key = (row_number, product_name) if row_number or product_name else (line, "")
+        if groups and groups[-1][0] == key:
+            groups[-1][1].append(line)
         else:
-            current.append(line)
-    if current:
-        chunks.append("\n".join(([shared] if shared else []) + current))
+            groups.append((key, [line]))
+
+    chunks, current_groups = [], []
+    for _, group_lines in groups:
+        candidate_lines = [line for group in current_groups for line in group] + group_lines
+        candidate = "\n".join(([shared] if shared else []) + candidate_lines)
+        if current_groups and len(candidate) > max_chars:
+            current_lines = [line for group in current_groups for line in group]
+            chunks.append("\n".join(([shared] if shared else []) + current_lines))
+            current_groups = [group_lines]
+        else:
+            current_groups.append(group_lines)
+    if current_groups:
+        current_lines = [line for group in current_groups for line in group]
+        chunks.append("\n".join(([shared] if shared else []) + current_lines))
     return chunks or [source]
+
+
+def _gap_is_covered(gap, requirements):
+    """Return whether an extracted requirement already answers a model gap."""
+    normalized_gap = _normalized_item_name(gap)
+    if not normalized_gap:
+        return False
+    requirement_texts = [
+        _normalized_item_name(f"{value.get('label', '')} {value.get('value', '')}")
+        for value in requirements
+    ]
+    category_roots = (
+        ("материал", "сырь", "бумаг", "картон", "пластик", "ткан"),
+        ("размер", "ширин", "высот", "длин", "диаметр", "толщин", "формат"),
+        ("нанесен", "печат", "лак", "тиснен", "вышив", "гравир"),
+        ("упаков", "фасов"),
+        ("цвет", "красоч", "cmyk", "pantone"),
+        ("плотност", "грамм"),
+    )
+    for roots in category_roots:
+        if any(root in normalized_gap for root in roots):
+            return any(any(root in text for root in roots) for text in requirement_texts)
+    gap_tokens = {token for token in normalized_gap.split() if len(token) >= 5}
+    return any(gap_tokens & set(text.split()) for text in requirement_texts)
+
+
+def _merge_technical_items(raw_items):
+    """Coalesce partial model answers for the same source product."""
+    merged = []
+    positions = {}
+    for raw in raw_items if isinstance(raw_items, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        source_name = _cell_text(raw.get("source_name"))[:500]
+        quantity = _cell_text(raw.get("quantity"))[:50]
+        key = (_normalized_item_name(source_name), _normalized_item_name(quantity))
+        if not key[0]:
+            key = (f"line:{raw.get('line_index')}", key[1])
+        if key not in positions:
+            positions[key] = len(merged)
+            merged.append({
+                **raw,
+                "source_name": source_name,
+                "quantity": quantity,
+                "requirements": [],
+                "missing": [],
+                "questions": [],
+            })
+        target = merged[positions[key]]
+        if len(source_name) > len(_cell_text(target.get("source_name"))):
+            target["source_name"] = source_name
+        if not _cell_text(target.get("quantity")) and quantity:
+            target["quantity"] = quantity
+        try:
+            if float(raw.get("confidence") or 0) > float(target.get("confidence") or 0):
+                target["confidence"] = raw.get("confidence")
+        except (TypeError, ValueError):
+            pass
+
+        known_requirements = {
+            (_normalized_item_name(value.get("label")), _normalized_item_name(value.get("value")))
+            for value in target["requirements"] if isinstance(value, dict)
+        }
+        for requirement in _requirement_list(raw.get("requirements")):
+            requirement_key = (_normalized_item_name(requirement["label"]), _normalized_item_name(requirement["value"]))
+            if requirement_key not in known_requirements:
+                known_requirements.add(requirement_key)
+                target["requirements"].append(requirement)
+        for field, limit in (("missing", 12), ("questions", 4)):
+            known_values = {_normalized_item_name(value) for value in target[field]}
+            for value in _short_text_list(raw.get(field), limit=limit):
+                normalized = _normalized_item_name(value)
+                if normalized and normalized not in known_values:
+                    known_values.add(normalized)
+                    target[field].append(value)
+
+    for target in merged:
+        requirements = target.get("requirements", [])
+        target["missing"] = [value for value in target.get("missing", []) if not _gap_is_covered(value, requirements)]
+        target["questions"] = [value for value in target.get("questions", []) if not _gap_is_covered(value, requirements)][:4]
+    return merged
 
 
 def analyze_tender_requirements(upload, current_lines):
@@ -790,7 +889,7 @@ def analyze_tender_requirements(upload, current_lines):
     result["document_summary"] = summaries[0] if summaries else ""
     items = []
     used_indexes = set()
-    for raw in result.get("items", []):
+    for raw in _merge_technical_items(result.get("items", [])):
         if not isinstance(raw, dict):
             continue
         source_name = _cell_text(raw.get("source_name"))[:500]
