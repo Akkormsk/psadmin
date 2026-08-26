@@ -359,6 +359,7 @@ def confirm_production_type(request):
                     "processes": route.get("processes", [])[:6],
                     "costs": hypothesis.get("costs", [])[:12],
                     "totals": hypothesis.get("totals", {}),
+                    "psodin_calculation": hypothesis.get("psodin_calculation", {}),
                 }],
                 note=str(payload.get("note", ""))[:500],
                 created_by=request.user,

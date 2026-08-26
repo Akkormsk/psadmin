@@ -1366,6 +1366,113 @@ def _evaluate_cost_recipe(recipe, quantity):
     return None, []
 
 
+def _extract_productivity_per_hour(*values):
+    text = " ".join(json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value for value in values if value)
+    text = text.lower().replace("ё", "е")
+    patterns = (
+        r"(\d+(?:[.,]\d+)?)\s*(?:шт\.?|штук\w*|издел\w*|футбол\w*)\s*(?:/|в)\s*(?:1\s*)?час",
+        r"за\s*(?:1\s*)?час\D{0,20}(\d+(?:[.,]\d+)?)\s*(?:шт\.?|штук\w*|издел\w*|футбол\w*)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                value = Decimal(match.group(1).replace(",", "."))
+            except InvalidOperation:
+                continue
+            if value > 0:
+                return value
+    return None
+
+
+def _apply_psodin_calculation(hypothesis, raw, line, current=None, feedback="", confirmed=None):
+    """Replace model arithmetic with the existing PSODIN backend calculator."""
+    from calculator.models import CalculatorSettings
+    from calculator.services import calculate_sheet_estimate
+
+    raw_calculation = raw.get("psodin_calculation") if isinstance(raw.get("psodin_calculation"), dict) else {}
+    current_calculation = current.get("psodin_calculation") if isinstance(current, dict) and isinstance(current.get("psodin_calculation"), dict) else {}
+    confirmed_calculation = confirmed if isinstance(confirmed, dict) else {}
+    feedback_text = feedback.lower().replace("ё", "е")
+    authorized = any(marker in feedback_text for marker in ("psodin", "псодин", "печатный салон №1")) or bool(current_calculation.get("authorized")) or bool(confirmed_calculation.get("authorized"))
+    if not authorized:
+        return hypothesis
+
+    productivity = _decimal_input(raw_calculation, "productivity_per_hour")
+    if productivity is None or productivity <= 0:
+        productivity = _decimal_input(current_calculation, "productivity_per_hour")
+    if productivity is None or productivity <= 0:
+        productivity = _decimal_input(confirmed_calculation, "productivity_per_hour")
+    if productivity is None or productivity <= 0:
+        productivity = _extract_productivity_per_hour(feedback, current, raw)
+    questions = list(hypothesis.get("questions") or [])
+    questions = [value for value in questions if "psodin" not in str(value).lower() and "час" not in str(value).lower()]
+    if productivity is None or productivity <= 0:
+        questions.append("Сколько изделий в час PSODIN выполняет эту работу?")
+        hypothesis["questions"] = list(dict.fromkeys(questions))[:3]
+        hypothesis["psodin_calculation"] = {"authorized": True, "status": "missing_productivity", "calculator": "sheet"}
+        return hypothesis
+
+    try:
+        quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
+    except (InvalidOperation, TypeError, ValueError):
+        quantity = Decimal("1")
+    exact_hours = quantity / productivity
+    billed_hours = (exact_hours * Decimal("2")).to_integral_value(rounding=ROUND_CEILING) / Decimal("2")
+    settings = CalculatorSettings.objects.get_or_create(pk=1)[0]
+    calculated = calculate_sheet_estimate([], quantity, billed_hours, settings, "sheet")
+    tariff = raw_calculation.get("tariff") or current_calculation.get("tariff") or confirmed_calculation.get("tariff") or "partner"
+    if tariff not in {"standard", "regular", "partner", "urgent"}:
+        tariff = "partner"
+    tariff_labels = {"standard": "стандартный", "regular": "постоянник", "partner": "контрагент", "urgent": "без очереди"}
+    amount = _money(calculated[tariff])
+    process_name = _cell_text(raw_calculation.get("process_name"))[:80] or "Работа PSODIN"
+    existing_costs = hypothesis.get("costs") if isinstance(hypothesis.get("costs"), list) else []
+    costs = [item for item in existing_costs if "psodin" not in f"{item.get('name', '')} {item.get('process_name', '')} {item.get('source', '')}".lower()]
+    base_formula = f"{_decimal_text(billed_hours)} ч × {_money(settings.hourly_rate)} ₽/ч × {_decimal_text(settings.time_coefficient)}"
+    steps = [
+        f"Тираж {_decimal_text(quantity)} шт. ÷ {_decimal_text(productivity)} шт./ч = {_decimal_text(exact_hours)} ч",
+        f"Оплачиваемое время с шагом 0,5 ч: {_decimal_text(billed_hours)} ч",
+        f"Стандартная цена: {base_formula} = {_money(calculated['standard'])} ₽",
+    ]
+    if tariff == "regular":
+        multiplier = Decimal("1") - settings.regular_discount / Decimal("100")
+        steps.append(f"Скидка {settings.regular_discount}% к стоимости: {_money(calculated['standard'])} ₽ × {multiplier} = {amount} ₽")
+    elif tariff == "partner":
+        multiplier = Decimal("1") - settings.partner_discount / Decimal("100")
+        steps.append(f"Скидка {settings.partner_discount}% к стоимости: {_money(calculated['standard'])} ₽ × {multiplier} = {amount} ₽")
+    elif tariff == "urgent":
+        steps.append(f"Коэффициент срочности {settings.urgency_multiplier}: {_money(calculated['standard'])} ₽ × {settings.urgency_multiplier} = {amount} ₽")
+    costs.append({
+        "category": "application", "name": "Работа PSODIN", "amount_total": str(amount), "process_name": process_name,
+        "source": "Калькулятор PSODIN · Листовая печать", "source_type": "calculator", "source_url": "", "source_date": "",
+        "basis": f"{base_formula}; тариф «{tariff_labels[tariff]}»",
+        "adaptation": "Трудоёмкость получена из тиража и подтверждённой производительности; цена полностью рассчитана бэкендом.",
+        "calculation_steps": steps,
+        "recipe": {"method": "psodin_backend", "inputs": {"quantity": str(quantity), "productivity_per_hour": str(productivity), "billed_hours": str(billed_hours), "tariff": tariff}},
+        "confirmed": False,
+    })
+    totals = {"material": Decimal("0"), "application": Decimal("0"), "logistics": Decimal("0")}
+    for item in costs:
+        category = item.get("category") if item.get("category") in totals else "application"
+        try:
+            totals[category] += max(Decimal("0"), Decimal(str(item.get("amount_total", 0)).replace(",", ".")))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+    total = sum(totals.values(), Decimal("0"))
+    hypothesis["costs"] = costs
+    hypothesis["totals"] = {
+        "material_unit": str(_money(totals["material"] / quantity)), "application_unit": str(_money(totals["application"] / quantity)),
+        "logistics_unit": str(_money(totals["logistics"] / quantity)), "cost_unit": str(_money(total / quantity)), "cost_total": str(_money(total)),
+    }
+    hypothesis["questions"] = list(dict.fromkeys(questions))[:3]
+    hypothesis["psodin_calculation"] = {
+        "authorized": True, "status": "calculated", "calculator": "sheet", "scope": "labour_only", "process_name": process_name,
+        "productivity_per_hour": str(productivity), "exact_hours": str(exact_hours), "billed_hours": str(billed_hours), "tariff": tariff,
+    }
+    return hypothesis
+
+
 def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
     valid_types = {value.code for value in production_types}
     product_type = raw.get("product_type") if raw.get("product_type") in valid_types else "other"
@@ -1434,6 +1541,7 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
             "reason": _cell_text(route.get("reason"))[:700],
             "steps": process_names,
             "processes": processes,
+            "is_turnkey": len(processes) == 1 and "под ключ" in processes[0]["name"].lower().replace("ё", "е"),
         },
         "costs": costs,
         "totals": {
@@ -1464,6 +1572,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
         "approved_route": value.routes[0] if value.routes else {},
     } for value in examples]
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5}},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
+    schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
@@ -1474,6 +1583,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
 Подтверждённые примеры важнее общих предположений. matched_example_ids указывай только для действительно похожих примеров. Без подтверждённого близкого примера confidence не выше 0.55.
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
+Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
 Верни только JSON: {schema}
 
 ПОЗИЦИЯ:
@@ -1504,6 +1614,12 @@ def build_training_hypothesis(line, current=None, feedback=""):
         if value in valid_ids:
             matched_ids.append(value)
     hypothesis = _normalize_training_hypothesis(result, line, production_types, matched_ids)
+    confirmed_psodin = next((
+        route.get("psodin_calculation")
+        for example in examples if example.pk in matched_ids
+        for route in example.routes[:1] if isinstance(route, dict) and isinstance(route.get("psodin_calculation"), dict)
+    ), None)
+    hypothesis = _apply_psodin_calculation(hypothesis, result, line, current=current, feedback=feedback, confirmed=confirmed_psodin)
     if isinstance(current, dict) and isinstance(current.get("sources"), list):
         hypothesis["sources"] = current["sources"][:20]
     hypothesis["usage"] = {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}

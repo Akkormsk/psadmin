@@ -9,9 +9,9 @@ from django.urls import reverse
 from docx import Document
 from openpyxl import Workbook
 
-from calculator.models import PriceItem
+from calculator.models import CalculatorSettings, PriceItem
 from .models import ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .services import _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _resolve_line_match, _shorten_structured_item_names, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
+from .services import _apply_psodin_calculation, _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _resolve_line_match, _shorten_structured_item_names, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -387,6 +387,7 @@ class TenderTests(TestCase):
                 "route": {"name": "Под ключ", "reason": "Специализированное изделие", "steps": ["Изготовление под ключ"]},
                 "costs": [{"category": "application", "name": "Изготовление", "amount_total": "10000.00"}],
                 "totals": {"cost_total": "10000.00"},
+                "psodin_calculation": {"authorized": True, "productivity_per_hour": "10", "tariff": "partner"},
             },
         )
         self.client.force_login(self.user)
@@ -397,6 +398,7 @@ class TenderTests(TestCase):
         session.refresh_from_db()
         self.assertTrue(session.is_confirmed)
         self.assertEqual(session.confirmed_example.routes[0]["name"], "Под ключ")
+        self.assertEqual(session.confirmed_example.routes[0]["psodin_calculation"]["productivity_per_hour"], "10")
 
     @patch("tenders.services._ai_gateway_json")
     def test_untrained_classification_cannot_claim_high_confidence(self, gateway):
@@ -729,6 +731,7 @@ class TenderTests(TestCase):
         result = _normalize_training_hypothesis(raw, {"quantity": 700}, [production_type], [])
 
         self.assertEqual(result["route"]["name"], "Цифровая типография под ключ")
+        self.assertTrue(result["route"]["is_turnkey"])
 
     def test_separate_material_purchase_remains_a_separate_route_process(self):
         production_type = ProductionType.objects.create(code="split-route-test", name="Раздельный маршрут")
@@ -747,6 +750,47 @@ class TenderTests(TestCase):
         result = _normalize_training_hypothesis(raw, {"quantity": 700}, [production_type], [])
 
         self.assertEqual(result["route"]["name"], "Закупка материала → Цифровая типография под ключ")
+        self.assertFalse(result["route"]["is_turnkey"])
+
+    def test_psodin_work_is_calculated_by_existing_backend_calculator(self):
+        CalculatorSettings.objects.update_or_create(pk=1, defaults={
+            "hourly_rate": Decimal("1000"), "time_coefficient": Decimal("1.5"), "partner_discount": Decimal("15"),
+        })
+        hypothesis = {
+            "costs": [
+                {"category": "material", "name": "Готовая DTF-плёнка", "amount_total": "2000", "source_type": "supplier"},
+                {"category": "application", "name": "Выдуманная работа", "amount_total": "9999", "source": "Калькулятор PSODIN", "source_type": "calculator"},
+            ],
+            "questions": ["Уточнить часы PSODIN"],
+        }
+        raw = {"psodin_calculation": {"process_name": "Нанесение DTF в PSODIN", "productivity_per_hour": 10, "tariff": "partner"}}
+
+        result = _apply_psodin_calculation(hypothesis, raw, {"quantity": 50}, feedback="Работу делаем в PSODIN")
+
+        psodin_cost = next(item for item in result["costs"] if item["source_type"] == "calculator")
+        self.assertEqual(psodin_cost["amount_total"], "6375.00")
+        self.assertEqual(result["psodin_calculation"]["exact_hours"], "5")
+        self.assertEqual(result["psodin_calculation"]["billed_hours"], "5")
+        self.assertEqual(result["totals"]["cost_total"], "8375.00")
+        self.assertIn("Скидка 15.00% к стоимости", psodin_cost["calculation_steps"][-1])
+
+    def test_psodin_backend_requests_productivity_instead_of_inventing_price(self):
+        hypothesis = {"costs": [], "questions": []}
+
+        result = _apply_psodin_calculation(hypothesis, {"psodin_calculation": {"requested": True}}, {"quantity": 50}, feedback="Считаем работу в PSODIN")
+
+        self.assertEqual(result["psodin_calculation"]["status"], "missing_productivity")
+        self.assertEqual(result["costs"], [])
+        self.assertIn("Сколько изделий в час", result["questions"][0])
+
+    def test_confirmed_psodin_productivity_is_reused_without_new_feedback(self):
+        hypothesis = {"costs": [], "questions": []}
+        confirmed = {"authorized": True, "productivity_per_hour": "10", "tariff": "partner"}
+
+        result = _apply_psodin_calculation(hypothesis, {}, {"quantity": 50}, confirmed=confirmed)
+
+        self.assertEqual(result["psodin_calculation"]["status"], "calculated")
+        self.assertEqual(result["psodin_calculation"]["exact_hours"], "5")
 
     def test_manual_logistics_is_not_labelled_as_tz_source(self):
         production_type = ProductionType.objects.create(code="source-test", name="Тест источника")
