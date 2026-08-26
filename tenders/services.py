@@ -23,6 +23,7 @@ import pypdfium2 as pdfium
 import xlrd
 import olefile
 from PIL import Image
+from django.utils import timezone
 
 
 MONEY = Decimal("0.01")
@@ -1526,6 +1527,8 @@ def _evaluate_cost_recipe(recipe, quantity):
         return None, []
     method = recipe.get("method")
     inputs = recipe.get("inputs") if isinstance(recipe.get("inputs"), dict) else {}
+    total = None
+    steps = []
     if method == "sheet_yield":
         unit_price = _decimal_input(inputs, "unit_price")
         units_per_sheet = _decimal_input(inputs, "units_per_sheet")
@@ -1535,35 +1538,63 @@ def _evaluate_cost_recipe(recipe, quantity):
         sheets_exact = quantity / units_per_sheet * (Decimal("1") + waste_percent / Decimal("100"))
         sheets = sheets_exact.to_integral_value(rounding=ROUND_CEILING)
         total = _money(sheets * unit_price)
-        return total, [
+        steps = [
             f"Тираж: {_decimal_text(quantity)} шт.; выход: {_decimal_text(units_per_sheet)} шт. с исходного листа",
             f"С учётом отходов {_decimal_text(waste_percent)}%: {_decimal_text(sheets_exact)} → {sheets} листов",
             f"{sheets} листов × {_money(unit_price)} ₽ = {total} ₽",
         ]
-    if method == "unit_rate":
+    elif method == "unit_rate":
         unit_rate = _decimal_input(inputs, "unit_rate")
         if unit_rate is None:
             return None, []
         total = _money(quantity * unit_rate)
-        return total, [f"{_decimal_text(quantity)} шт. × {_money(unit_rate)} ₽/шт. = {total} ₽"]
-    if method == "fixed":
+        steps = [f"{_decimal_text(quantity)} шт. × {_money(unit_rate)} ₽/шт. = {total} ₽"]
+    elif method == "fixed":
         fixed_amount = _decimal_input(inputs, "fixed_amount")
         if fixed_amount is None:
             return None, []
         total = _money(fixed_amount)
-        return total, [f"Фиксированная стоимость на тираж: {total} ₽"]
-    if method == "history_scaled":
+        steps = [f"Фиксированная стоимость на тираж: {total} ₽"]
+    elif method == "history_scaled":
         base_total = _decimal_input(inputs, "base_total")
         base_quantity = _decimal_input(inputs, "base_quantity")
         if base_total is None or base_quantity is None or base_quantity <= 0:
             return None, []
         unit_rate = base_total / base_quantity
         total = _money(unit_rate * quantity)
-        return total, [
+        steps = [
             f"Исходный кейс: {_money(base_total)} ₽ за {_decimal_text(base_quantity)} шт. = {_money(unit_rate)} ₽/шт.",
             f"Текущий тираж: {_decimal_text(quantity)} шт. × {_money(unit_rate)} ₽/шт. = {total} ₽",
         ]
-    return None, []
+    if total is None:
+        return None, []
+
+    modifiers = recipe.get("modifiers") if isinstance(recipe.get("modifiers"), list) else []
+    for modifier in modifiers[:10]:
+        if not isinstance(modifier, dict):
+            return None, []
+        modifier_type = _cell_text(modifier.get("type")).lower()
+        value = _decimal_input(modifier, "value")
+        if value is None:
+            return None, []
+        before = total
+        if modifier_type == "discount_percent" and Decimal("0") <= value <= Decimal("100"):
+            multiplier = Decimal("1") - value / Decimal("100")
+            total = _money(before * multiplier)
+            steps.append(f"Скидка {_decimal_text(value)}%: {before} ₽ × {multiplier} = {total} ₽")
+        elif modifier_type == "markup_percent" and value >= 0:
+            multiplier = Decimal("1") + value / Decimal("100")
+            total = _money(before * multiplier)
+            steps.append(f"Наценка {_decimal_text(value)}%: {before} ₽ × {multiplier} = {total} ₽")
+        elif modifier_type == "add_fixed" and value >= 0:
+            total = _money(before + value)
+            steps.append(f"Дополнительный фиксированный расход: {before} ₽ + {_money(value)} ₽ = {total} ₽")
+        elif modifier_type == "subtract_fixed" and Decimal("0") <= value <= before:
+            total = _money(before - value)
+            steps.append(f"Фиксированная скидка: {before} ₽ − {_money(value)} ₽ = {total} ₽")
+        else:
+            return None, []
+    return total, steps
 
 
 def _extract_productivity_per_hour(*values):
@@ -1760,10 +1791,12 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
 
 def build_training_hypothesis(line, current=None, feedback=""):
     from .models import ProductionType
+    from .catalog import catalog_candidates_for_line
 
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
     knowledge_sources = _knowledge_sources_for_line(line)
+    catalog_candidates = catalog_candidates_for_line(line, limit=3)
     example_payload = [{
         "id": value.pk,
         "position": value.position_name,
@@ -1771,14 +1804,14 @@ def build_training_hypothesis(line, current=None, feedback=""):
         "features": value.features,
         "approved_route": value.routes[0] if value.routes else {},
     } for value in examples]
-    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5}},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
+    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
 Не выдумывай цены. В costs добавляй только цену, явно указанную в подтверждённых примерах, текущей гипотезе или обратной связи администратора. amount_total — сумма статьи на весь тираж. Если цены нет, оставь её вопросом, а не нулевой выдуманной статьёй.
 Для каждой статьи costs дай проверяемый след расчёта. В source укажи конкретный источник, в basis — итоговую формулу, а в calculation_steps — максимально подробную арифметику по шагам: исходную единицу и цену, раскладку/выход, требуемое количество с отходами, операции, скидки и итог. В adaptation объясни, как цена источника приведена к текущему тиражу, формату и характеристикам. Для калькулятора перечисли материалы и операции отдельно. Для истории или поставщика укажи исходный кейс/товар и все коэффициенты пересчёта. Не придумывай отсутствующие детали: если подробного основания нет, прямо напиши это в adaptation и задай вопрос администратору.
-Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. amount_total должен соответствовать recipe.
+Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. Скидки, наценки и фиксированные поправки передавай только в recipe.modifiers в порядке применения. Никогда не меняй amount_total самостоятельно из-за скидки: сервер пересчитает сумму и сам сформирует объяснение. amount_total должен соответствовать recipe.
 Значения material_unit, application_unit и logistics_unit в ПОЗИЦИИ — ручные поля текущего расчёта, а не факты из ТЗ. Если используешь их, source_type=manager и source="Введено администратором". Нельзя писать «дано в ТЗ», если цена не находится внутри requirements с явным source.
 Подтверждённые примеры важнее общих предположений. matched_example_ids указывай только для действительно похожих примеров. Без подтверждённого близкого примера confidence не выше 0.55.
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
@@ -1802,7 +1835,11 @@ def build_training_hypothesis(line, current=None, feedback=""):
 {json.dumps(example_payload, ensure_ascii=False)}
 
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ:
-{json.dumps(knowledge_sources, ensure_ascii=False)}"""
+{json.dumps(knowledge_sources, ensure_ascii=False)}
+
+КАНДИДАТЫ ИЗ КАТАЛОГА OASIS:
+{json.dumps(catalog_candidates, ensure_ascii=False)}
+Кандидаты уже проверены бэкендом. Не называй товар точным соответствием, если fit=partial, и не придумывай другие артикулы. Не добавляй цену кандидата в costs до явного выбора администратором."""
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     valid_ids = {value.pk for value in examples}
     matched_ids = []
@@ -1820,11 +1857,77 @@ def build_training_hypothesis(line, current=None, feedback=""):
         for route in example.routes[:1] if isinstance(route, dict) and isinstance(route.get("psodin_calculation"), dict)
     ), None)
     hypothesis = _apply_psodin_calculation(hypothesis, result, line, current=current, feedback=feedback, confirmed=confirmed_psodin)
+    hypothesis["catalog_candidates"] = catalog_candidates
+    if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
+        selected_id = current["catalog_selection"].get("id")
+        if any(value.get("id") == selected_id and value.get("fit") == "exact" for value in catalog_candidates):
+            hypothesis["catalog_selection"] = current["catalog_selection"]
     if isinstance(current, dict) and isinstance(current.get("sources"), list):
         hypothesis["sources"] = current["sources"][:20]
     hypothesis["usage"] = {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}
     hypothesis["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     return hypothesis
+
+
+def apply_catalog_candidate(hypothesis, line, product_id):
+    from .catalog import catalog_candidates_for_line
+    from .models import CatalogProduct, ProductionType
+
+    candidates = catalog_candidates_for_line(line, limit=10)
+    try:
+        candidate = next(value for value in candidates if value.get("id") == int(product_id))
+    except (StopIteration, TypeError, ValueError):
+        raise TenderAIError("Товар больше не входит в актуальную подборку. Обновите гипотезу.")
+    if candidate.get("fit") != "exact":
+        raise TenderAIError("Товар имеет расхождения с обязательными требованиями ТЗ и не может быть применён автоматически.")
+    try:
+        quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
+    except (InvalidOperation, TypeError, ValueError):
+        raise TenderAIError("Не удалось определить количество для товара Oasis.")
+    product = CatalogProduct.objects.filter(pk=candidate["id"], is_active=True, supplier__is_active=True).first()
+    if not product or product.effective_price is None:
+        raise TenderAIError("У товара Oasis больше нет актуальной цены.")
+    price = product.effective_price
+    raw = json.loads(json.dumps(hypothesis, ensure_ascii=False)) if isinstance(hypothesis, dict) else {}
+    costs = [
+        value for value in raw.get("costs", [])
+        if isinstance(value, dict) and not (value.get("category") == "material" and value.get("source_type") in {"catalog", "supplier", "history", "manager"})
+    ]
+    costs.insert(0, {
+        "category": "material",
+        "process_name": "Закупка готового изделия",
+        "name": product.full_name or product.name,
+        "amount_total": str(_money(price * quantity)),
+        "source": f"Oasis · арт. {product.article}",
+        "source_type": "catalog",
+        "source_url": product.product_url,
+        "source_date": product.synced_at.date().isoformat() if product.synced_at else "",
+        "basis": f"{_decimal_text(quantity)} шт. × {_money(price)} ₽/шт.",
+        "recipe": {"method": "unit_rate", "inputs": {"unit_rate": str(price)}},
+        "calculation_steps": [],
+        "adaptation": "Цена и свободный остаток получены из локального индекса Oasis; перед закупкой требуется повторная проверка актуальности.",
+        "confirmed": False,
+    })
+    raw["costs"] = costs
+    route = raw.get("route") if isinstance(raw.get("route"), dict) else {}
+    processes = route.get("processes") if isinstance(route.get("processes"), list) else []
+    processes = [value for value in processes if isinstance(value, dict) and _canonical_process_name(value.get("name")) not in {"Закупка материала", "Закупка готового изделия"}]
+    route["processes"] = [{"name": "Закупка готового изделия", "details": [f"Oasis, арт. {product.article}"]}, *processes]
+    route["reason"] = _cell_text(route.get("reason")) or "Готовое изделие найдено в каталоге поставщика и соответствует обязательным требованиям ТЗ."
+    raw["route"] = route
+    production_types = list(ProductionType.objects.filter(is_active=True))
+    normalized = _normalize_training_hypothesis(raw, line, production_types, raw.get("matched_example_ids", []))
+    normalized["catalog_candidates"] = candidates[:3]
+    normalized["catalog_selection"] = {
+        **candidate,
+        "price": str(price),
+        "cost_total": str(_money(price * quantity)),
+        "selected_at": timezone.now().isoformat(),
+    }
+    normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
+    if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list):
+        normalized["sources"] = hypothesis["sources"][:20]
+    return normalized
 
 
 def analyze_production_route(line):

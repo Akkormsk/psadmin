@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 
 
 class TenderLineInline(admin.TabularInline):
@@ -68,3 +68,40 @@ class TenderKnowledgeSourceAdmin(admin.ModelAdmin):
     list_filter = ("source_type", "is_active", "created_by")
     search_fields = ("title", "supplier_name", "url", "content_summary")
     list_editable = ("is_active",)
+
+
+@admin.register(CatalogSupplier)
+class CatalogSupplierAdmin(admin.ModelAdmin):
+    list_display = ("name", "code", "sync_status", "last_synced_at", "is_active")
+    list_filter = ("sync_status", "is_active")
+    readonly_fields = ("last_synced_at", "sync_status", "sync_message")
+
+
+@admin.register(CatalogCategory)
+class CatalogCategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "path", "supplier", "is_active")
+    list_filter = ("supplier", "is_active")
+    search_fields = ("name", "path", "external_id")
+
+
+@admin.register(CatalogProduct)
+class CatalogProductAdmin(admin.ModelAdmin):
+    list_display = ("article", "name", "brand", "effective_price", "total_stock", "supplier", "is_active")
+    list_filter = ("supplier", "is_active", "is_on_order", "brand")
+    search_fields = ("article", "article_base", "name", "full_name", "search_text")
+    readonly_fields = ("synced_at", "source_updated_at", "raw_data")
+
+
+@admin.register(CatalogSyncRun)
+class CatalogSyncRunAdmin(admin.ModelAdmin):
+    list_display = ("supplier", "status", "received_count", "created_count", "updated_count", "deactivated_count", "started_at", "finished_at")
+    list_filter = ("supplier", "status")
+    readonly_fields = ("supplier", "status", "started_at", "finished_at", "received_count", "created_count", "updated_count", "deactivated_count", "error")
+
+
+@admin.register(CatalogMatchDecision)
+class CatalogMatchDecisionAdmin(admin.ModelAdmin):
+    list_display = ("product", "decision", "created_by", "is_confirmed", "created_at")
+    list_filter = ("decision", "is_confirmed", "product__supplier", "created_by")
+    search_fields = ("product__article", "product__name", "session__position_name", "note")
+    readonly_fields = ("session", "product", "decision", "reason_codes", "requirement_signature", "created_by", "is_confirmed", "created_at")

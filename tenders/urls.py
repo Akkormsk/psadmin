@@ -11,6 +11,7 @@ urlpatterns = [
     path("import/requirements/", views.technical_requirements_preview, name="tender_requirements_preview"),
     path("production/route/", views.production_route_preview, name="tender_production_route_preview"),
     path("production/revise/", views.revise_production_hypothesis, name="tender_revise_production_hypothesis"),
+    path("production/catalog/select/", views.select_catalog_product, name="tender_select_catalog_product"),
     path("production/source/", views.add_calculation_source, name="tender_add_calculation_source"),
     path("production/confirm/", views.confirm_production_type, name="tender_confirm_production_type"),
     path("production/knowledge/", views.calculator_knowledge_proposal, name="tender_calculator_knowledge_proposal"),

@@ -11,8 +11,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
-from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
+from .models import CatalogMatchDecision, CatalogProduct, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
 
 
 SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
@@ -222,6 +222,48 @@ def revise_production_hypothesis(request):
 
 @login_required
 @require_POST
+def select_catalog_product(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Выбирать товары для обучения может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
+        line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
+        product_id = int(payload.get("product_id"))
+        if not str(line.get("name", "")).strip():
+            raise ValueError
+    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
+        return JsonResponse({"error": "Не удалось выбрать товар Oasis. Обновите гипотезу."}, status=400)
+    try:
+        hypothesis = apply_catalog_candidate(session.current_hypothesis, line, product_id)
+        hypothesis["session_id"] = session.pk
+        session.current_hypothesis = hypothesis
+        session.save(update_fields=["current_hypothesis", "updated_at"])
+        selection = hypothesis.get("catalog_selection", {})
+        product = CatalogProduct.objects.get(pk=selection.get("id"))
+        CatalogMatchDecision.objects.create(
+            session=session,
+            product=product,
+            decision="selected",
+            reason_codes=["backend_exact_match", "selected_by_admin"],
+            requirement_signature={
+                "name": str(line.get("name", ""))[:500],
+                "quantity": str(line.get("quantity", ""))[:50],
+                "requirements": line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
+            },
+            created_by=request.user,
+        )
+        change = f"Выбран товар Oasis: {selection.get('name', 'товар')} · арт. {selection.get('article', '')}".strip()
+        ProductionTrainingTurn.objects.create(session=session, feedback=change, understood_changes=[change], hypothesis=hypothesis)
+        return JsonResponse(hypothesis)
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception:
+        return JsonResponse({"error": "Не удалось применить товар Oasis к расчёту."}, status=400)
+
+
+@login_required
+@require_POST
 def add_calculation_source(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Добавлять источники расчёта может только администратор."}, status=403)
@@ -379,6 +421,7 @@ def confirm_production_type(request):
                     "costs": hypothesis.get("costs", [])[:12],
                     "totals": hypothesis.get("totals", {}),
                     "psodin_calculation": hypothesis.get("psodin_calculation", {}),
+                    "catalog_selection": hypothesis.get("catalog_selection", {}),
                 }],
                 note=str(payload.get("note", ""))[:500],
                 created_by=request.user,
@@ -390,6 +433,7 @@ def confirm_production_type(request):
             session.is_confirmed = True
             session.confirmed_example = example
             session.save(update_fields=["is_confirmed", "confirmed_example", "updated_at"])
+            session.catalog_decisions.update(is_confirmed=True)
             return JsonResponse({"message": f"Расчёт подтверждён и сохранён как учебный пример: {production_type.name}.", "example_id": example.pk})
         production_type = ProductionType.objects.get(code=payload.get("production_type"), is_active=True)
         name = str(line.get("name", "")).strip()

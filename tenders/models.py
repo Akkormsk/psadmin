@@ -139,6 +139,147 @@ class TenderKnowledgeSource(models.Model):
         return f"{self.supplier_name + ' · ' if self.supplier_name else ''}{self.title}"
 
 
+class CatalogSupplier(models.Model):
+    code = models.SlugField("Код", max_length=50, unique=True)
+    name = models.CharField("Поставщик", max_length=200)
+    base_url = models.URLField("Адрес API", max_length=500)
+    is_active = models.BooleanField("Активен", default=True)
+    last_synced_at = models.DateTimeField("Последняя синхронизация", null=True, blank=True)
+    sync_status = models.CharField("Состояние", max_length=20, default="never")
+    sync_message = models.CharField("Сообщение", max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Поставщик каталога"
+        verbose_name_plural = "Поставщики каталогов"
+
+    def __str__(self):
+        return self.name
+
+
+class CatalogCategory(models.Model):
+    supplier = models.ForeignKey(CatalogSupplier, on_delete=models.CASCADE, related_name="categories")
+    external_id = models.CharField("ID поставщика", max_length=100)
+    parent_external_id = models.CharField("Родительский ID", max_length=100, blank=True)
+    name = models.CharField("Категория", max_length=300)
+    path = models.CharField("Полный путь", max_length=1000, blank=True)
+    is_active = models.BooleanField("Активна", default=True)
+
+    class Meta:
+        ordering = ["supplier", "path", "name"]
+        constraints = [models.UniqueConstraint(fields=["supplier", "external_id"], name="unique_catalog_category_supplier_id")]
+        indexes = [models.Index(fields=["supplier", "is_active"])]
+        verbose_name = "Категория каталога"
+        verbose_name_plural = "Категории каталога"
+
+    def __str__(self):
+        return self.path or self.name
+
+
+class CatalogProduct(models.Model):
+    supplier = models.ForeignKey(CatalogSupplier, on_delete=models.CASCADE, related_name="products")
+    external_id = models.CharField("ID поставщика", max_length=100)
+    article = models.CharField("Артикул", max_length=120, blank=True)
+    article_base = models.CharField("Базовый артикул", max_length=120, blank=True)
+    group_id = models.CharField("Группа товара", max_length=120, blank=True)
+    color_group_id = models.CharField("Группа цвета", max_length=120, blank=True)
+    name = models.CharField("Название", max_length=500)
+    full_name = models.CharField("Полное название", max_length=1000, blank=True)
+    description = models.TextField("Описание", blank=True)
+    category_ids = models.JSONField("Категории", default=list, blank=True)
+    category_names = models.JSONField("Названия категорий", default=list, blank=True)
+    brand = models.CharField("Бренд", max_length=200, blank=True)
+    size = models.CharField("Размер", max_length=100, blank=True)
+    materials = models.JSONField("Материалы", default=list, blank=True)
+    colors = models.JSONField("Цвета", default=list, blank=True)
+    attributes = models.JSONField("Характеристики", default=list, blank=True)
+    branding = models.JSONField("Виды нанесения", default=list, blank=True)
+    package = models.JSONField("Упаковка", default=list, blank=True)
+    price = models.DecimalField("Цена", max_digits=14, decimal_places=2, null=True, blank=True)
+    discount_price = models.DecimalField("Дилерская цена", max_digits=14, decimal_places=2, null=True, blank=True)
+    total_stock = models.IntegerField("Свободный остаток", default=0)
+    stock_moscow = models.IntegerField("Москва", default=0)
+    stock_remote = models.IntegerField("Удалённый склад", default=0)
+    stock_transit = models.IntegerField("В пути", default=0)
+    is_on_order = models.BooleanField("Под заказ", default=False)
+    delivery_days = models.PositiveIntegerField("Дней до поставки", null=True, blank=True)
+    image_url = models.URLField("Изображение", max_length=1000, blank=True)
+    product_url = models.URLField("Карточка товара", max_length=1000, blank=True)
+    supply_terms = models.CharField("Условия поставки", max_length=1000, blank=True)
+    warning = models.CharField("Важное примечание", max_length=1000, blank=True)
+    defect = models.CharField("Дефекты", max_length=1000, blank=True)
+    search_text = models.TextField("Поисковый индекс", blank=True)
+    source_updated_at = models.DateTimeField("Обновлено поставщиком", null=True, blank=True)
+    synced_at = models.DateTimeField("Получено", auto_now=True)
+    sync_marker = models.CharField(max_length=36, blank=True, db_index=True, editable=False)
+    is_active = models.BooleanField("Активен", default=True)
+    raw_data = models.JSONField("Служебные данные", default=dict, blank=True)
+
+    class Meta:
+        ordering = ["supplier", "name", "article"]
+        constraints = [models.UniqueConstraint(fields=["supplier", "external_id"], name="unique_catalog_product_supplier_id")]
+        indexes = [
+            models.Index(fields=["supplier", "is_active"]),
+            models.Index(fields=["supplier", "article"]),
+            models.Index(fields=["supplier", "group_id"]),
+            models.Index(fields=["supplier", "total_stock"]),
+        ]
+        verbose_name = "Товар каталога"
+        verbose_name_plural = "Товары каталога"
+
+    @property
+    def effective_price(self):
+        return self.discount_price if self.discount_price is not None else self.price
+
+    def __str__(self):
+        return f"{self.article} · {self.full_name or self.name}" if self.article else (self.full_name or self.name)
+
+
+class CatalogSyncRun(models.Model):
+    STATUS_CHOICES = [("running", "Выполняется"), ("success", "Готово"), ("failed", "Ошибка")]
+
+    supplier = models.ForeignKey(CatalogSupplier, on_delete=models.CASCADE, related_name="sync_runs")
+    status = models.CharField("Статус", max_length=20, choices=STATUS_CHOICES, default="running")
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    received_count = models.PositiveIntegerField(default=0)
+    created_count = models.PositiveIntegerField(default=0)
+    updated_count = models.PositiveIntegerField(default=0)
+    deactivated_count = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        verbose_name = "Синхронизация каталога"
+        verbose_name_plural = "Синхронизации каталога"
+
+    def __str__(self):
+        return f"{self.supplier} · {self.started_at:%d.%m.%Y %H:%M} · {self.status}"
+
+
+class CatalogMatchDecision(models.Model):
+    DECISION_CHOICES = [("selected", "Выбран"), ("rejected", "Отклонён")]
+
+    session = models.ForeignKey(ProductionTrainingSession, on_delete=models.CASCADE, related_name="catalog_decisions")
+    product = models.ForeignKey(CatalogProduct, on_delete=models.PROTECT, related_name="training_decisions")
+    decision = models.CharField("Решение", max_length=20, choices=DECISION_CHOICES)
+    reason_codes = models.JSONField("Причины", default=list, blank=True)
+    requirement_signature = models.JSONField("Требования на момент решения", default=dict, blank=True)
+    note = models.CharField("Комментарий", max_length=500, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="catalog_match_decisions")
+    is_confirmed = models.BooleanField("Учитывать в обучении", default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["decision", "is_confirmed"])]
+        verbose_name = "Решение по товару каталога"
+        verbose_name_plural = "Решения по товарам каталога"
+
+    def __str__(self):
+        return f"{self.get_decision_display()}: {self.product}"
+
+
 class TenderEstimate(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
     tender_number = models.CharField("Номер тендера", max_length=100)
