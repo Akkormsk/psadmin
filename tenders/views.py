@@ -12,7 +12,20 @@ from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
 from .models import ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, recognize_tender_items
+from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
+
+
+SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
+
+
+def _document_upload_error(upload):
+    if upload is None:
+        return "Выберите документ."
+    if upload.size > 10 * 1024 * 1024:
+        return "Файл больше 10 МБ."
+    if Path(upload.name).suffix.lower() not in SUPPORTED_TENDER_DOCUMENTS:
+        return "Поддерживаются .xlsx, .xls, .doc, .docx и .pdf."
+    return ""
 
 
 def _estimate_for_user(request, pk):
@@ -54,14 +67,26 @@ def import_preview(request):
 
 @login_required
 @require_POST
+def document_inspect(request):
+    upload = request.FILES.get("file")
+    error = _document_upload_error(upload)
+    if error:
+        return JsonResponse({"error": error}, status=400)
+    try:
+        return JsonResponse(inspect_tender_document(upload))
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception:
+        return JsonResponse({"error": "Не удалось проверить структуру документа."}, status=400)
+
+
+@login_required
+@require_POST
 def ai_import_preview(request):
     upload = request.FILES.get("file")
-    if upload is None:
-        return JsonResponse({"error": "Выберите документ."}, status=400)
-    if upload.size > 10 * 1024 * 1024:
-        return JsonResponse({"error": "Файл больше 10 МБ."}, status=400)
-    if Path(upload.name).suffix.lower() not in {".xlsx", ".xls", ".doc", ".docx", ".pdf"}:
-        return JsonResponse({"error": "Поддерживаются .xlsx, .xls, .doc, .docx и .pdf."}, status=400)
+    error = _document_upload_error(upload)
+    if error:
+        return JsonResponse({"error": error}, status=400)
     try:
         return JsonResponse(recognize_tender_items(upload))
     except TenderAIError as exc:
@@ -74,12 +99,9 @@ def ai_import_preview(request):
 @require_POST
 def document_preview(request):
     upload = request.FILES.get("file")
-    if upload is None:
-        return JsonResponse({"error": "Выберите документ."}, status=400)
-    if upload.size > 10 * 1024 * 1024:
-        return JsonResponse({"error": "Файл больше 10 МБ."}, status=400)
-    if Path(upload.name).suffix.lower() not in {".xlsx", ".xls", ".doc", ".docx", ".pdf"}:
-        return JsonResponse({"error": "Поддерживаются .xlsx, .xls, .doc, .docx и .pdf."}, status=400)
+    error = _document_upload_error(upload)
+    if error:
+        return JsonResponse({"error": error}, status=400)
     try:
         raw_lines = json.loads(request.POST.get("lines_json", "[]"))
         current_lines = raw_lines if isinstance(raw_lines, list) else []
@@ -120,12 +142,9 @@ def document_preview(request):
 @require_POST
 def technical_requirements_preview(request):
     upload = request.FILES.get("file")
-    if upload is None:
-        return JsonResponse({"error": "Выберите ООЗ или ТЗ."}, status=400)
-    if upload.size > 10 * 1024 * 1024:
-        return JsonResponse({"error": "Файл больше 10 МБ."}, status=400)
-    if Path(upload.name).suffix.lower() not in {".xlsx", ".xls", ".doc", ".docx", ".pdf"}:
-        return JsonResponse({"error": "Поддерживаются .xlsx, .xls, .doc, .docx и .pdf."}, status=400)
+    error = _document_upload_error(upload)
+    if error:
+        return JsonResponse({"error": "Выберите ООЗ или ТЗ." if upload is None else error}, status=400)
     try:
         raw_lines = json.loads(request.POST.get("lines_json", "[]"))
         current_lines = raw_lines if isinstance(raw_lines, list) else []

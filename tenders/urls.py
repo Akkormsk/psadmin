@@ -6,6 +6,7 @@ urlpatterns = [
     path("", views.home, name="tender_home"),
     path("import/preview/", views.import_preview, name="tender_import_preview"),
     path("import/ai/", views.ai_import_preview, name="tender_ai_import_preview"),
+    path("documents/inspect/", views.document_inspect, name="tender_document_inspect"),
     path("documents/analyze/", views.document_preview, name="tender_document_preview"),
     path("import/requirements/", views.technical_requirements_preview, name="tender_requirements_preview"),
     path("production/route/", views.production_route_preview, name="tender_production_route_preview"),

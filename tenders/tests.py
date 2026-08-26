@@ -11,7 +11,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from .models import ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .services import _apply_psodin_calculation, _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _resolve_line_match, _shorten_structured_item_names, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
+from .services import _apply_psodin_calculation, _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -234,6 +234,20 @@ class TenderTests(TestCase):
         self.assertEqual(result["items"][0]["match_status"], "matched")
         self.assertGreater(result["items"][0]["confidence"], .8)
 
+    @patch("tenders.services._ai_gateway_json")
+    def test_matched_technical_quantity_comes_from_nmck_line(self, gateway):
+        gateway.return_value = ({"document_summary": "Футболка", "global_requirements": [], "items": [{"line_index": 0, "source_name": "Футболка", "quantity": 1, "requirements": [{"label": "Материал", "value": "хлопок"}], "missing": [], "questions": [], "confidence": .9}], "warnings": []}, {})
+        document = Document()
+        document.add_paragraph("Футболка, количество 20, материал хлопок")
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "ТЗ.docx"
+
+        result = analyze_tender_requirements(content, [{"name": "Футболка", "quantity": "20"}])
+
+        self.assertEqual(result["items"][0]["quantity"], "20")
+
     @patch("tenders.views.recognize_tender_items")
     def test_ai_preview_returns_editable_items(self, recognize):
         recognize.return_value = {"items": [{"name": "Блокнот", "quantity": "20", "nmck_unit": "150.00", "nmck_total": "3000.00", "total_from_source": True, "total_matches": True, "confidence": 0.9}], "warnings": [], "usage": {}}
@@ -276,6 +290,99 @@ class TenderTests(TestCase):
             text, truncated = extract_tender_source(content)
         self.assertEqual(text, "")
         self.assertFalse(truncated)
+
+    @patch("tenders.views.inspect_tender_document")
+    def test_document_preflight_reports_visual_processing_mode(self, inspect):
+        inspect.return_value = {"document_type": "unknown", "processing_mode": "visual", "truncated": False, "quality": {"usable": False}}
+        content = BytesIO(b"%PDF-1.4")
+        content.name = "scan.pdf"
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_document_inspect"), {"file": content}, format="multipart")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["processing_mode"], "visual")
+
+    def test_project_contract_is_not_classified_as_technical_document(self):
+        document = Document()
+        document.add_heading("Проект контракта")
+        document.add_paragraph("Приложение содержит описание объекта закупки и требования к товару.")
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "Проект контракта.docx"
+
+        self.assertEqual(detect_tender_document_type(content), "unknown")
+
+    def test_technical_filename_and_content_are_classified_together(self):
+        document = Document()
+        document.add_heading("Описание объекта закупки")
+        document.add_paragraph("Технические характеристики футболки: хлопок, плотность 180 г/м².")
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "Описание объекта закупки.docx"
+
+        self.assertEqual(detect_tender_document_type(content), "technical")
+
+    def test_short_tz_filename_is_a_valid_technical_signal(self):
+        document = Document()
+        document.add_paragraph("Футболка: материал хлопок, плотность 180 г/м², нанесение DTF.")
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "ТЗ_мерч_2_позиции.docx"
+
+        self.assertEqual(detect_tender_document_type(content), "technical")
+
+    def test_broken_nonempty_pdf_text_layer_requires_visual_fallback(self):
+        quality = _source_text_quality("/i1041 /i1086 /i1083 /i1086 /i0003 /i1090 /i1077 /i1082 /i1089 /i1090")
+
+        self.assertFalse(quality["usable"])
+
+    def test_normal_russian_pdf_text_layer_stays_on_fast_path(self):
+        quality = _source_text_quality("Описание объекта закупки. Футболка хлопок, размер XL, тираж 100 штук.")
+
+        self.assertTrue(quality["usable"])
+
+    def test_document_numbers_accept_comma_dot_and_group_separators(self):
+        self.assertEqual(_parse_document_decimal("3 870,67"), Decimal("3870.67"))
+        self.assertEqual(_parse_document_decimal("3,870.67 руб."), Decimal("3870.67"))
+        self.assertEqual(_parse_document_decimal("2.129,21"), Decimal("2129.21"))
+
+    @patch("tenders.services._pdf_page_count", return_value=1)
+    @patch("tenders.services.extract_tender_source", return_value=("/i1041 /i1086 /i1083 /i1086 /i0003", False))
+    @patch("tenders.services._ai_gateway_json")
+    def test_broken_pdf_text_layer_uses_visual_recognition(self, gateway, _extract, _page_count):
+        gateway.return_value = ({"items": [{"name": "Футболка", "quantity": "10", "nmck_unit": "100", "nmck_total": None, "confidence": .9}], "warnings": []}, {})
+        content = BytesIO(b"%PDF-1.4")
+        content.name = "nmck.pdf"
+
+        result = recognize_tender_items(content)
+
+        self.assertTrue(result["scan_ocr"])
+        self.assertEqual(result["processing_mode"], "visual")
+        self.assertEqual(result["items"][0]["nmck_total"], "1000.00")
+        self.assertTrue(gateway.call_args.kwargs["scan_ocr"])
+
+    @patch("tenders.services._pdf_page_count", return_value=25)
+    @patch("tenders.services._scan_pdf_images", return_value=["encoded-page"])
+    @patch("tenders.services._ai_gateway_json")
+    def test_long_scanned_pdf_is_processed_in_bounded_page_batches(self, gateway, scan_images, _page_count):
+        from .services import _visual_gateway_responses
+
+        gateway.return_value = ({"items": [], "warnings": []}, {"prompt_tokens": 1, "completion_tokens": 1})
+        content = BytesIO(b"%PDF-1.4")
+        content.name = "long-scan.pdf"
+
+        responses = _visual_gateway_responses("Распознай документ", content, max_tokens=1000)
+
+        self.assertEqual(len(responses), 3)
+        self.assertEqual(scan_images.call_count, 3)
+        self.assertEqual(scan_images.call_args_list[0].kwargs, {"start_page": 0, "page_limit": 12})
+        self.assertEqual(scan_images.call_args_list[-1].kwargs, {"start_page": 24, "page_limit": 12})
+        self.assertEqual(gateway.call_count, 3)
+        self.assertEqual(gateway.call_args.kwargs["image_data_urls"], ["data:image/jpeg;base64,encoded-page"])
 
     @patch("tenders.views.analyze_tender_requirements")
     def test_technical_document_preview_uses_current_lines(self, analyze):
@@ -506,6 +613,42 @@ class TenderTests(TestCase):
         self.assertEqual(result["items"][0]["nmck_unit"], "18.90")
         self.assertEqual(result["items"][0]["nmck_total"], "37800.00")
 
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": ""})
+    def test_nmck_xlsx_accepts_cost_wording_without_price_word(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Наименование", "Количество", "Среднеарифметическая стоимость за единицу", "Среднеарифметическая стоимость за все кол-во товара"])
+        sheet.append(["Папка картонная", 889, 1458.5, 1296606.5])
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        stream.name = "НМЦК.xlsx"
+
+        result = recognize_tender_items(stream)
+
+        self.assertTrue(result["local_parse"])
+        self.assertEqual(result["items"][0]["quantity"], "889")
+        self.assertEqual(result["items"][0]["nmck_unit"], "1458.50")
+        self.assertEqual(result["items"][0]["nmck_total"], "1296606.50")
+
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": ""})
+    def test_nmck_table_accepts_characteristics_as_name_and_yo_in_volume(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Основные характеристики объекта закупки", "Объём", "Среднее ценовое значение", "Начальная (максимальная) цена контракта"])
+        sheet.append(["Чехол на чемодан с логотипом", 200, 1713, 342600])
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        stream.name = "Обоснование НМЦК.xlsx"
+
+        result = recognize_tender_items(stream)
+
+        self.assertTrue(result["local_parse"])
+        self.assertEqual(result["items"][0]["name"], "Чехол на чемодан с логотипом")
+        self.assertEqual(result["items"][0]["quantity"], "200")
+        self.assertEqual(result["items"][0]["nmck_total"], "342600.00")
+
     @patch("tenders.services.extract_tender_source", return_value=("", False))
     def test_structured_nmck_xlsx_is_detected_when_text_classification_fails(self, _extract):
         workbook = Workbook()
@@ -663,6 +806,36 @@ class TenderTests(TestCase):
 
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual(result["items"][0]["line_index"], 1)
+        self.assertIn("Первый товар", result["warnings"][0])
+        self.assertIn("1 строку", result["warnings"][0])
+
+    @patch("tenders.services.extract_tender_source")
+    @patch("tenders.services._ai_gateway_json")
+    def test_requirements_warn_about_every_nmck_line_missing_from_technical_document(self, gateway, extract):
+        extract.return_value = ("Описание объекта закупки", False)
+        gateway.return_value = ({
+            "items": [{
+                "line_index": 1,
+                "source_name": "Карта с картонной обложкой",
+                "quantity": 5000,
+                "requirements": [{"label": "Материал", "value": "Картон", "source": "таблица 1"}],
+                "missing": [],
+                "questions": [],
+                "confidence": .95,
+            }],
+            "global_requirements": [], "warnings": [], "document_summary": "Карты",
+        }, {"prompt_tokens": 20, "completion_tokens": 20})
+        lines = [
+            {"name": "Карта «Саранск-Мордовия»", "quantity": 2000},
+            {"name": "Карта «Саранск-Мордовия» с картонными обложками", "quantity": 5000},
+        ]
+
+        result = analyze_tender_requirements(type("Upload", (), {"name": "test.docx"})(), lines)
+
+        self.assertEqual(result["items"][0]["line_index"], 1)
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("ООЗ/ТЗ не покрывает 1 строку НМЦК", result["warnings"][0])
+        self.assertIn("Карта «Саранск-Мордовия»", result["warnings"][0])
 
     def test_local_batch_index_does_not_override_a_better_name_match(self):
         lines = [

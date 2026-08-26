@@ -28,7 +28,7 @@ from PIL import Image
 MONEY = Decimal("0.01")
 AI_MAX_SOURCE_CHARS = 120_000
 AI_MAX_SCAN_PAGES = 12
-AI_SCAN_MAX_SIDE = 1800
+AI_SCAN_MAX_SIDE = 2600
 
 
 class TenderAIError(Exception):
@@ -149,6 +149,58 @@ def _shorten_structured_item_names(items):
 def _decimal_text(value):
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _parse_document_decimal(value):
+    """Parse a number copied from Russian or international tender documents."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+    text = str(value).strip().replace("\u00a0", "").replace("\u202f", "").replace(" ", "")
+    text = re.sub(r"[^0-9,\.\-+]", "", text).strip(".,")
+    if not text or text in {"-", "+", ".", ","}:
+        return None
+    comma, dot = text.rfind(","), text.rfind(".")
+    if comma >= 0 and dot >= 0:
+        decimal_separator = "," if comma > dot else "."
+        thousands_separator = "." if decimal_separator == "," else ","
+        text = text.replace(thousands_separator, "").replace(decimal_separator, ".")
+    elif comma >= 0:
+        parts = text.split(",")
+        text = "".join(parts) if len(parts) > 2 or (len(parts[-1]) == 3 and len(parts[0]) > 3) else ".".join(parts)
+    elif dot >= 0:
+        parts = text.split(".")
+        text = "".join(parts) if len(parts) > 2 or (len(parts[-1]) == 3 and len(parts[0]) > 3) else ".".join(parts)
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
+def _source_text_quality(text):
+    """Reject non-empty but unusable PDF text layers before they block OCR."""
+    text = text or ""
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", text)
+    words = re.findall(r"[A-Za-zА-Яа-яЁё]{3,}", text)
+    cyrillic = re.findall(r"[А-Яа-яЁё]", text)
+    slash_codes = re.findall(r"/(?:i)?\d+", text, flags=re.IGNORECASE)
+    replacement_chars = text.count("�")
+    cyrillic_share = len(cyrillic) / max(1, len(letters))
+    suspicious_share = (len(slash_codes) + replacement_chars) / max(1, len(words))
+    usable = len(words) >= 3 and cyrillic_share >= .15 and suspicious_share <= .8
+    return {
+        "usable": usable,
+        "word_count": len(words),
+        "cyrillic_share": round(cyrillic_share, 3),
+        "suspicious_tokens": len(slash_codes) + replacement_chars,
+    }
+
+
+def _requires_visual_recognition(upload, source):
+    return Path(upload.name).suffix.lower() == ".pdf" and not _source_text_quality(source)["usable"]
 
 
 def _table_text(rows):
@@ -280,29 +332,66 @@ def extract_tender_source(upload):
     return text[:AI_MAX_SOURCE_CHARS], len(text) > AI_MAX_SOURCE_CHARS
 
 
-def _scan_pdf_images(upload):
+def _pdf_page_count(upload):
+    upload.seek(0)
+    document = pdfium.PdfDocument(upload.read())
+    page_count = len(document)
+    document.close()
+    upload.seek(0)
+    if not page_count:
+        raise TenderAIError("В PDF нет страниц.")
+    return page_count
+
+
+def _scan_pdf_images(upload, start_page=0, page_limit=None):
     """Render scanned PDF pages in memory for multimodal recognition."""
     upload.seek(0)
     document = pdfium.PdfDocument(upload.read())
     page_count = len(document)
     if not page_count:
         raise TenderAIError("В PDF нет страниц.")
-    if page_count > AI_MAX_SCAN_PAGES:
-        raise TenderAIError(f"Скан содержит {page_count} страниц. Пока можно распознать не более {AI_MAX_SCAN_PAGES} страниц за один раз.")
+    start_page = max(0, int(start_page or 0))
+    end_page = page_count if page_limit is None else min(page_count, start_page + max(1, int(page_limit)))
+    if start_page >= page_count:
+        document.close()
+        upload.seek(0)
+        return []
     images = []
-    for page_number in range(page_count):
+    for page_number in range(start_page, end_page):
         page = document[page_number]
-        bitmap = page.render(scale=2)
+        # Small tender tables contain negations and decimal values where one
+        # missed glyph changes the commercial meaning. Render above screen DPI
+        # before the bounded thumbnail instead of enlarging a blurry raster.
+        bitmap = page.render(scale=3)
         image = bitmap.to_pil().convert("RGB")
         image.thumbnail((AI_SCAN_MAX_SIDE, AI_SCAN_MAX_SIDE))
         output = BytesIO()
-        image.save(output, format="JPEG", quality=88, optimize=True)
+        image.save(output, format="JPEG", quality=92, optimize=True)
         images.append(base64.b64encode(output.getvalue()).decode("ascii"))
         bitmap.close()
         page.close()
     document.close()
     upload.seek(0)
     return images
+
+
+def _visual_gateway_responses(prompt, upload, max_tokens):
+    """Send a long scan in bounded page batches and preserve page order."""
+    page_count = _pdf_page_count(upload)
+    if page_count <= AI_MAX_SCAN_PAGES:
+        return [_ai_gateway_json(prompt, upload=upload, scan_ocr=True, max_tokens=max_tokens)]
+    responses = []
+    for start_page in range(0, page_count, AI_MAX_SCAN_PAGES):
+        end_page = min(page_count, start_page + AI_MAX_SCAN_PAGES)
+        images = _scan_pdf_images(upload, start_page=start_page, page_limit=AI_MAX_SCAN_PAGES)
+        page_prompt = (
+            f"{prompt}\n\nПАКЕТ СТРАНИЦ: {start_page + 1}–{end_page} из {page_count}. "
+            "Верни только позиции и требования, действительно видимые на этих страницах; "
+            "не повторяй товары из контекста, если их нет в этом пакете."
+        )
+        image_urls = [f"data:image/jpeg;base64,{value}" for value in images]
+        responses.append(_ai_gateway_json(page_prompt, max_tokens=max_tokens, image_data_urls=image_urls))
+    return responses
 
 
 def _json_from_model(content):
@@ -453,42 +542,54 @@ def extract_calculation_source(source_text="", source_url="", upload=None):
 
 
 def recognize_tender_items(upload):
-    if Path(upload.name).suffix.lower() == ".xlsx":
+    if Path(upload.name).suffix.lower() in {".xlsx", ".xls"}:
         structured = _recognize_structured_nmck_xlsx(upload)
         if structured:
             structured, usage, warning = _shorten_structured_item_names(structured)
             return {"items": structured, "warnings": [warning] if warning else [], "scan_ocr": False, "usage": usage, "local_parse": True}
     source, truncated = extract_tender_source(upload)
-    scan_ocr = Path(upload.name).suffix.lower() == ".pdf" and not source
-    schema = '{"items":[{"name":"товар","quantity":1,"nmck_unit":100,"nmck_total":1000,"confidence":0.95}],"warnings":[]}'
+    scan_ocr = _requires_visual_recognition(upload, source)
+    schema = '{"items":[{"name":"товар","quantity":"исходное значение","nmck_unit":"исходное значение или null","nmck_total":"исходное значение или null","confidence":0.95}],"warnings":[]}'
     prompt = f"""Извлеки из документа позиции НМЦК для расчёта тендера.
 Для каждой товарной позиции нужны: короткое рабочее наименование, количество, НМЦК за единицу и итоговая НМЦК всей позиции.
 Убирай из названия канцелярские вводные вроде «услуги по изготовлению и поставке продукции», но сохраняй сам вид товара, номер варианта и отличающие его характеристики.
 Если указаны цены коммерческих предложений поставщиков (КП 1, КП 2, КП 3 или источники цены), не используй ни одну из них как НМЦК.
 В таких таблицах выбирай конечную рассчитанную колонку «Средняя цена» или «Средняя рыночная цена» — это нужная НМЦК за единицу.
 Колонка «НМЦК» рядом со средней ценой обычно содержит общую стоимость позиции: перенеси её в nmck_total, а не в nmck_unit.
-Если в документе дана только общая сумма позиции, раздели её на количество.
-Если отдельной общей суммы нет, рассчитай nmck_total как quantity * nmck_unit.
+Не выполняй никакие вычисления. Переноси quantity, nmck_unit и nmck_total только как исходные числа из документа. Если одного из двух ценовых значений нет, верни для него null: деление и умножение выполнит сервер.
 Не включай заголовки, итоги, НДС, доставку и пустые строки как товары.
 Не выдумывай значения. Сомнения кратко перечисли в warnings.
 Верни только JSON строго такого вида: {schema}
 
 ДОКУМЕНТ:
-{source or 'Перед тобой страницы сканированного документа в исходном порядке. Внимательно прочитай таблицу на изображениях.'}"""
-    result, usage = _ai_gateway_json(prompt, upload=upload, scan_ocr=scan_ocr)
+{source if not scan_ocr else 'Перед тобой страницы документа в исходном порядке. Текстовый слой отсутствует или повреждён; внимательно прочитай таблицу на изображениях.'}"""
+    responses = _visual_gateway_responses(prompt, upload, max_tokens=6000) if scan_ocr else [_ai_gateway_json(prompt)]
+    result = {"items": [], "warnings": []}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    for partial, partial_usage in responses:
+        result["items"].extend(partial.get("items", []) if isinstance(partial.get("items"), list) else [])
+        result["warnings"].extend(partial.get("warnings", []) if isinstance(partial.get("warnings"), list) else [])
+        usage["prompt_tokens"] += partial_usage.get("prompt_tokens", 0) or 0
+        usage["completion_tokens"] += partial_usage.get("completion_tokens", 0) or 0
     items = []
     for raw in result.get("items", []):
         try:
             name = _compact_item_name(raw.get("name"))
-            quantity = Decimal(str(raw.get("quantity", 0)).replace(",", "."))
-            nmck_unit = Decimal(str(raw.get("nmck_unit", 0)).replace(",", "."))
+            quantity = _parse_document_decimal(raw.get("quantity"))
+            nmck_unit = _parse_document_decimal(raw.get("nmck_unit"))
             raw_total = raw.get("nmck_total")
-            nmck_total = Decimal(str(raw_total).replace(",", ".")) if raw_total not in (None, "") else quantity * nmck_unit
+            nmck_total = _parse_document_decimal(raw_total)
             confidence = max(0, min(1, float(raw.get("confidence", 0))))
-        except (InvalidOperation, TypeError, ValueError):
+        except (TypeError, ValueError):
             continue
-        if name and quantity > 0 and nmck_unit > 0:
-            source_total = _money(nmck_total) if nmck_total > 0 else _money(quantity * nmck_unit)
+        if not quantity or quantity <= 0:
+            continue
+        if (not nmck_unit or nmck_unit <= 0) and nmck_total and nmck_total > 0:
+            nmck_unit = nmck_total / quantity
+        if (not nmck_total or nmck_total <= 0) and nmck_unit and nmck_unit > 0:
+            nmck_total = quantity * nmck_unit
+        if name and nmck_unit and nmck_unit > 0 and nmck_total and nmck_total > 0:
+            source_total = _money(nmck_total)
             calculated_total = _money(quantity * nmck_unit)
             # The source unit price is often displayed rounded to kopecks while the
             # source line total is calculated from a more precise hidden value.
@@ -498,7 +599,7 @@ def recognize_tender_items(upload):
                 "quantity": _decimal_text(quantity),
                 "nmck_unit": str(_money(nmck_unit)),
                 "nmck_total": str(source_total),
-                "total_from_source": raw_total not in (None, "") and nmck_total > 0,
+                "total_from_source": raw_total not in (None, "") and _parse_document_decimal(raw_total) is not None,
                 "total_matches": abs(source_total - calculated_total) <= rounding_tolerance,
                 "confidence": confidence,
             })
@@ -509,22 +610,40 @@ def recognize_tender_items(upload):
         warnings.append("Документ был слишком большим: обработана основная часть содержимого.")
     if scan_ocr:
         warnings.insert(0, "PDF распознан по изображению. Внимательно проверьте названия, количество, цены и итоговые суммы.")
-    return {"items": items, "warnings": warnings, "scan_ocr": scan_ocr, "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}}
+    return {"items": items, "warnings": warnings, "scan_ocr": scan_ocr, "processing_mode": "visual" if scan_ocr else "text", "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}}
 
 
 def _recognize_structured_nmck_xlsx(upload):
-    """Read common multi-row NMCK tables locally before spending AI tokens."""
+    """Read common multi-row XLSX/XLS NMCK tables before spending AI tokens."""
     upload.seek(0)
+    suffix = Path(upload.name).suffix.lower()
+    workbook = None
     try:
-        workbook = load_workbook(upload, read_only=True, data_only=True)
+        if suffix == ".xlsx":
+            workbook = load_workbook(upload, read_only=True, data_only=True)
+            sheets = []
+            for sheet in workbook.worksheets:
+                if not sheet.max_row or not sheet.max_column:
+                    sheet.calculate_dimension(force=True)
+                sheets.append(list(sheet.iter_rows(
+                    min_row=1,
+                    max_row=min(sheet.max_row or 1, 500),
+                    max_col=min(sheet.max_column or 1, 60),
+                    values_only=True,
+                )))
+        elif suffix == ".xls":
+            book = xlrd.open_workbook(file_contents=upload.read())
+            sheets = [
+                [tuple(sheet.row_values(index)[:60]) for index in range(min(sheet.nrows, 500))]
+                for sheet in book.sheets()
+            ]
+        else:
+            return []
     except Exception:
         upload.seek(0)
         return []
     best = []
-    for sheet in workbook.worksheets:
-        if not sheet.max_row or not sheet.max_column:
-            sheet.calculate_dimension(force=True)
-        rows = list(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row or 1, 500), max_col=min(sheet.max_column or 1, 60), values_only=True))
+    for rows in sheets:
         header_row = None
         # NMCK workbooks often split one logical header across 2–3 rows and
         # use abbreviated labels such as «Кол-во». Inspect a short window
@@ -536,7 +655,8 @@ def _recognize_structured_nmck_xlsx(upload):
                 for row in window for value in row if _cell_text(value)
             )
             has_quantity = any(marker in text for marker in ("колич", "кол-во", "кол во", "объем"))
-            if "наимен" in text and has_quantity:
+            has_name = "наимен" in text or ("характеристик" in text and "объект" in text)
+            if has_name and has_quantity:
                 header_row = index
                 break
         if header_row is None:
@@ -552,8 +672,10 @@ def _recognize_structured_nmck_xlsx(upload):
         headers = []
         width = max((len(row) for row in rows), default=0)
         for column in range(width):
-            headers.append(" ".join(_cell_text(rows[row][column]).lower() for row in range(header_row, header_end) if column < len(rows[row]) and _cell_text(rows[row][column])))
+            headers.append(" ".join(_cell_text(rows[row][column]).lower().replace("ё", "е") for row in range(header_row, header_end) if column < len(rows[row]) and _cell_text(rows[row][column])))
         name_col = next((index for index, value in enumerate(headers) if "наимен" in value), None)
+        if name_col is None:
+            name_col = next((index for index, value in enumerate(headers) if "характеристик" in value and "объект" in value), None)
         quantity_col = next((
             index for index, value in enumerate(headers)
             if any(marker in value for marker in ("колич", "кол-во", "кол во")) and "цен" not in value
@@ -571,8 +693,20 @@ def _recognize_structured_nmck_xlsx(upload):
         unit_candidates = [index for index, value in enumerate(headers) if "минималь" in value and "за единиц" in value]
         unit_candidates += [index for index, value in enumerate(headers) if "выбран" in value and "за единиц" in value]
         unit_candidates += [index for index, value in enumerate(headers) if "началь" in value and "за единиц" in value]
-        unit_candidates += [index for index, value in enumerate(headers) if "средн" in value and "цен" in value]
-        total_candidates = [index for index, value in enumerate(headers) if "началь" in value or "нмцк" in value]
+        unit_candidates += [
+            index for index, value in enumerate(headers)
+            if "средн" in value and any(marker in value for marker in ("цен", "стоим"))
+            and not any(marker in value for marker in ("сумм", "за все кол", "общая стоимость", "стоимость позиции"))
+        ]
+        unit_candidates += [
+            index for index, value in enumerate(headers)
+            if "за единиц" in value and any(marker in value for marker in ("цен", "стоим"))
+        ]
+        total_candidates = [
+            index for index, value in enumerate(headers)
+            if any(marker in value for marker in ("сумм", "за все кол", "общая стоимость", "стоимость позиции", "нмцк"))
+            or ("началь" in value and "за единиц" not in value)
+        ]
         if name_col is None or quantity_col is None:
             continue
         parsed = []
@@ -614,37 +748,74 @@ def _recognize_structured_nmck_xlsx(upload):
             })
         if len(parsed) > len(best):
             best = parsed
-    workbook.close()
+    if workbook is not None:
+        workbook.close()
     upload.seek(0)
     return best
 
 
-def detect_tender_document_type(upload):
-    """Determine the document's role independently from the upload control/order."""
-    source, _ = extract_tender_source(upload)
-    upload.seek(0)
+def _classify_tender_source(file_name, source):
+    """Classify a readable document while keeping contracts/instructions out."""
     text = source.lower().replace("ё", "е")
+    opening = text[:6000]
+    file_hint = re.sub(r"[^a-zа-я0-9]+", " ", Path(file_name).stem.lower().replace("ё", "е")).strip()
+    excluded_file = any(marker in file_hint for marker in (
+        "проект контракт", "проект договора", "государственн контракт",
+        "требовани к содержанию", "составу заявки", "инструкц", "извещен",
+        "лист согласован", "информационная карта",
+    ))
+    nmck_file = any(marker in file_hint for marker in ("нмцк", "обоснован", "расчет", "расчёт"))
+    technical_file = (
+        any(marker in file_hint for marker in ("техническ", "техзадан", "описание объекта", "ооз", "требования к товар"))
+        or "тз" in file_hint.split()
+    ) and not excluded_file
     nmck_score = sum(phrase in text for phrase in (
         "обоснование начальной", "расчет начальной", "нмцк",
         "средняя арифметич", "цена исполнителя", "ценовое предложение",
         "минимальная цена выбранная", "начальная (максимальная) цена контракта",
-    ))
-    technical_score = sum(phrase in text for phrase in ("описание объекта закупки", "техническое задание", "технические характеристики", "требования к товар", "требования к услуг"))
-    if nmck_score >= 2 and technical_score >= 2:
+    )) + (2 if nmck_file else 0)
+    technical_score = sum(phrase in opening for phrase in (
+        "описание объекта закупки", "техническое задание", "технические характеристики",
+        "требования к товар", "требования к услуг", "характеристики объекта закупки",
+    )) + (2 if technical_file else 0)
+    if excluded_file and not nmck_file:
+        return "unknown"
+    if nmck_score >= 2 and technical_score >= 3:
         return "mixed"
     if nmck_score >= 2:
         return "nmck"
-    if technical_score >= 1:
+    if technical_score >= 2:
         return "technical"
+    return "unknown"
+
+
+def inspect_tender_document(upload):
+    """Run the cheap preflight used by the UI before a potentially slow pass."""
+    source, truncated = extract_tender_source(upload)
+    quality = _source_text_quality(source)
+    visual = _requires_visual_recognition(upload, source)
+    role = "unknown" if visual else _classify_tender_source(upload.name, source)
+    if role == "unknown" and Path(upload.name).suffix.lower() in {".xlsx", ".xls"}:
+        upload.seek(0)
+        if _recognize_structured_nmck_xlsx(upload):
+            role = "nmck"
+    upload.seek(0)
+    return {
+        "document_type": role,
+        "processing_mode": "visual" if visual else "text",
+        "truncated": truncated,
+        "quality": quality,
+    }
+
+
+def detect_tender_document_type(upload):
+    """Determine the document's role independently from the upload control/order."""
+    inspection = inspect_tender_document(upload)
+    if inspection["document_type"] != "unknown":
+        return inspection["document_type"]
     # Text extraction can differ between Excel readers and operating systems.
     # The structured parser is a stronger signal: it only succeeds when it
     # finds item names, quantities, unit NMCK and final line totals.
-    if Path(upload.name).suffix.lower() == ".xlsx":
-        try:
-            if _recognize_structured_nmck_xlsx(upload):
-                return "nmck"
-        finally:
-            upload.seek(0)
     return "unknown"
 
 
@@ -842,7 +1013,7 @@ def _merge_technical_items(raw_items):
 
 def analyze_tender_requirements(upload, current_lines):
     source, truncated = extract_tender_source(upload)
-    scan_ocr = Path(upload.name).suffix.lower() == ".pdf" and not source
+    scan_ocr = _requires_visual_recognition(upload, source)
     compact_lines = [
         {"line_index": index, "name": _cell_text(line.get("name"))[:500], "quantity": _cell_text(line.get("quantity"))[:50]}
         for index, line in enumerate(current_lines[:100]) if isinstance(line, dict) and _cell_text(line.get("name"))
@@ -852,9 +1023,11 @@ def analyze_tender_requirements(upload, current_lines):
         return f"""Проанализируй ООЗ или техническое задание для будущего расчёта заказа.
 Извлеки требования к каждой товарной позиции: вид продукции, размеры, материал, цвет, плотность, печать или нанесение, постобработку, упаковку, сроки, доставку и другие влияющие на себестоимость характеристики.
 Сопоставь требования с уже имеющимися строками по названию, смыслу и количеству. line_index должен быть индексом подходящей строки, а confidence — уверенностью именно в этом сопоставлении от 0 до 1. Всегда возвращай source_name, quantity и confidence. Если подходящей строки нет, верни null и сохрани исходное название и количество, чтобы позицию можно было создать.
+quantity переноси только из документа; количество из ТЕКУЩИХ СТРОК используй лишь для проверки сопоставления.
 Возвращай только позиции, которые действительно присутствуют в переданном фрагменте ДОКУМЕНТА. Не копируй остальные ТЕКУЩИЕ СТРОКИ и не создавай для них элементы без требований.
 Не рассчитывай цены и себестоимость. Не выдумывай отсутствующие сведения.
 Сначала внимательно прочитай все вложенные таблицы характеристик. Не превращай найденные требования в вопросы.
+Числа, единицы измерения и ограничения переписывай без вычислений и сокращений. Критично сохраняй частицы «не», «не менее», «не более», «от» и «до»: их потеря меняет смысл требования. Перед ответом повторно сверь каждое числовое ограничение с документом или изображением.
 В missing перечисли только параметры, которых действительно нет во всём документе и без которых нельзя выбрать технологию или посчитать себестоимость. В questions — не более 4 коротких вопросов менеджеру только по этим критическим пробелам. Если данных достаточно для предварительного расчёта, верни пустые массивы.
 В source укажи страницу, раздел или таблицу, если это можно определить.
 Общие для всего заказа сроки, доставка, приёмка и упаковка должны попасть в global_requirements.
@@ -866,10 +1039,12 @@ def analyze_tender_requirements(upload, current_lines):
 ДОКУМЕНТ:
 {source_part or 'Перед тобой страницы сканированного документа в исходном порядке.'}"""
 
-    source_chunks = [source] if scan_ocr else _technical_source_chunks(source)
+    source_chunks = [""] if scan_ocr else _technical_source_chunks(source)
     prompts = [build_prompt(value) for value in source_chunks]
-    if len(prompts) == 1:
-        responses = [_ai_gateway_json(prompts[0], upload=upload, scan_ocr=scan_ocr, max_tokens=7000)]
+    if scan_ocr:
+        responses = _visual_gateway_responses(prompts[0], upload, max_tokens=7000)
+    elif len(prompts) == 1:
+        responses = [_ai_gateway_json(prompts[0], max_tokens=7000)]
     else:
         # The work is network-bound. Small parallel requests stay within the
         # hosting request timeout and use little additional application RAM.
@@ -910,11 +1085,35 @@ def analyze_tender_requirements(upload, current_lines):
         confidence = max(model_confidence, fallback_confidence) if line_index is not None else fallback_confidence
         if line_index is not None:
             used_indexes.add(line_index)
+            # The NMCK line is the calculation authority for quantity. The
+            # technical model may echo context or misread a dense scanned cell.
+            quantity = _cell_text(current_lines[line_index].get("quantity"))[:50] or quantity
         if source_name or requirements or line_index is not None:
             items.append({"line_index": line_index, "source_name": source_name, "quantity": quantity, "requirements": requirements, "missing": missing, "questions": questions, "confidence": confidence, "match_status": "matched" if line_index is not None else "unmatched", "match_reason": match_reason})
     if not items and not result.get("global_requirements"):
         raise TenderAIError("Не удалось найти технические требования к позициям.")
     warnings = _short_text_list(result.get("warnings"))
+    unmatched_nmck_lines = [
+        _cell_text(line.get("name"))[:160]
+        for index, line in enumerate(current_lines[:100])
+        if isinstance(line, dict) and _cell_text(line.get("name")) and index not in used_indexes
+    ]
+    if unmatched_nmck_lines:
+        unmatched_count = len(unmatched_nmck_lines)
+        count_mod_100 = unmatched_count % 100
+        count_mod_10 = unmatched_count % 10
+        line_word = (
+            "строку" if count_mod_10 == 1 and count_mod_100 != 11
+            else "строки" if 2 <= count_mod_10 <= 4 and not 12 <= count_mod_100 <= 14
+            else "строк"
+        )
+        preview = "; ".join(unmatched_nmck_lines[:5])
+        remainder = unmatched_count - 5
+        suffix = f"; и ещё {remainder}" if remainder > 0 else ""
+        warnings.append(
+            f"ООЗ/ТЗ не покрывает {unmatched_count} "
+            f"{line_word} НМЦК: {preview}{suffix}."
+        )
     if truncated:
         warnings.append("Документ был слишком большим: обработана основная часть содержимого.")
     if scan_ocr:
@@ -932,6 +1131,7 @@ def analyze_tender_requirements(upload, current_lines):
         "items": items,
         "warnings": warnings,
         "scan_ocr": scan_ocr,
+        "processing_mode": "visual" if scan_ocr else "text",
         "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)},
     }
 
