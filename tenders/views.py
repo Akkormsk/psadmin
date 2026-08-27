@@ -1,20 +1,17 @@
-import hmac
 import json
 import logging
-import os
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
 from .models import CatalogMatchDecision, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
-from .knowledge import export_knowledge_bundle
 from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
@@ -22,15 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
-
-
-def knowledge_export(request):
-    expected = os.getenv("KNOWLEDGE_EXPORT_TOKEN", "d6ec18929b2849b3b9832f83bfe1f5685483ef009b3945ca824d907af45b04dc")
-    if not expected or not hmac.compare_digest(request.GET.get("token", ""), expected):
-        return HttpResponse(status=403)
-    response = JsonResponse(export_knowledge_bundle(), json_dumps_params={"ensure_ascii": False})
-    return response
-
 
 def _document_upload_error(upload):
     if upload is None:
