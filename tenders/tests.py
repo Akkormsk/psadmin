@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, catalog_candidates_for_line, parse_gifts_catalog, sync_oasis_catalog
+from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
@@ -1100,8 +1100,8 @@ class TenderTests(TestCase):
         self.assertIsNone(total)
         self.assertEqual(steps, [])
 
-    def test_gifts_parser_filters_category_and_ignores_images(self):
-        product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет утеплённый</name><product_size>М-L</product_size><matherial>Полиэстер</matherial><brand>Brand</brand><content>Описание</content><price><price>1200</price></price><small_image src=\"secret.jpg\"/><ondemand>false</ondemand></product><product product_id=\"m1\"><code>M-1</code><name>Магнит</name></product></doct>""")
+    def test_gifts_parser_filters_category_and_maps_image_url(self):
+        product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет утеплённый</name><product_size>М-L</product_size><matherial>Полиэстер</matherial><brand>Brand</brand><content>Описание</content><price><price>1200</price></price><small_image src=\"reviewer/webp/test.webp\"/><ondemand>false</ondemand></product><product product_id=\"m1\"><code>M-1</code><name>Магнит</name></product></doct>""")
         tree_xml = StringIO("""<doct><page page_id=\"10\" name=\"Одежда / Жилеты\"><product product=\"v1\" page=\"10\"/></page><page page_id=\"20\" name=\"Сувениры\"><product product=\"m1\" page=\"20\"/></page></doct>""")
         stock_xml = StringIO("""<doct><stock product_id=\"v1\"><free>7</free><dealerprice>999</dealerprice></stock></doct>""")
 
@@ -1112,7 +1112,7 @@ class TenderTests(TestCase):
         self.assertEqual(result[0]["article"], "V-1")
         self.assertEqual(result[0]["total_stock"], 7)
         self.assertEqual(result[0]["discount_price"], Decimal("999.00"))
-        self.assertEqual(result[0]["image_url"], "")
+        self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/test.webp")
 
     @patch.dict("os.environ", {"GIFTS_XML_USERNAME": "user", "GIFTS_XML_PASSWORD": "pass"})
     def test_gifts_client_requires_server_side_credentials(self):
@@ -1266,6 +1266,49 @@ class TenderTests(TestCase):
 
         self.assertEqual({value["supplier_code"] for value in candidates}, {"oasis", "gifts"})
         self.assertEqual(candidates[0]["supplier_code"], "gifts")
+
+    def test_purple_vest_from_gifts_is_ranked_before_nonmatching_oasis_vest(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="249789", article="26728.78", name="Жилет детский Kama Kids, фиолетовый",
+            full_name="Жилет детский Kama Kids, фиолетовый", materials=["полиэстер 100%"], colors=["фиолетовый"],
+            total_stock=45, discount_price=2600, search_text="жилет детский kama kids фиолетовый полиэстер одежда",
+            product_url="https://gifts.ru/id/249789",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Жилеты", "path": "categories/odezhda/zhilety"}]
+                return [{"id": "oasis-vest", "article": "O-1", "name": "Жилет", "full_name": "Жилет чёрный", "colors": ["черный"], "total_stock": 100, "categories": [10]}]
+
+        line = {"name": "Жилет", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "фиолетовый"}]}}
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "жилет"}, client=Client())
+
+        self.assertEqual(candidates[0]["external_id"], "249789")
+        self.assertEqual(candidates[0]["supplier_code"], "gifts")
+        self.assertEqual(candidates[0]["fit"], "exact")
+
+    def test_gifts_sync_persists_filtered_xml_rows_without_images(self):
+        class Client:
+            base_url = "https://api2.gifts.ru/export/v2"
+
+            def open(self, path):
+                payloads = {
+                    "catalogue/product.xml": "<doct><product product_id='v1'><code>V-1</code><name>Жилет фиолетовый</name><matherial>полиэстер</matherial><small_image src='reviewer/v.webp'/></product></doct>",
+                    "catalogue/tree.xml": "<doct><page page_id='1' name='Жилеты'><product product='v1'/></page></doct>",
+                    "catalogue/stock.xml": "<doct><stock product_id='v1'><free>12</free><dealerprice>1000</dealerprice></stock></doct>",
+                }
+                return StringIO(payloads[path])
+
+        run = sync_gifts_catalog(Client(), category="жилеты")
+        product = CatalogProduct.objects.get(supplier__code="gifts", external_id="v1")
+
+        self.assertEqual(run.status, "success")
+        self.assertEqual(product.total_stock, 12)
+        self.assertEqual(product.image_url, "https://files.gifts.ru/reviewer/v.webp")
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
