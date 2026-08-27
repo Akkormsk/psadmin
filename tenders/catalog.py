@@ -112,18 +112,19 @@ def _gifts_text(node, name):
 def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None):
     category = _normalized(category) if category else ""
     category_ids = {}
-    for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
-        if page.tag.rsplit("}", 1)[-1] != "page":
-            continue
-        page_name = _gifts_text(page, "name")
-        if not category or category in _normalized(page_name):
-            for product in page.iter():
-                if product.tag.rsplit("}", 1)[-1] != "product":
-                    continue
-                product_id = product.attrib.get("product") or _gifts_text(product, "product") or _text(product.text, 500)
-                if product_id:
-                    category_ids[str(product_id)] = page_name
-        page.clear()
+    if category:
+        for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
+            if page.tag.rsplit("}", 1)[-1] != "page":
+                continue
+            page_name = _gifts_text(page, "name")
+            if category in _normalized(page_name):
+                for product in page.iter():
+                    if product.tag.rsplit("}", 1)[-1] != "product":
+                        continue
+                    product_id = product.attrib.get("product") or _gifts_text(product, "product") or _text(product.text, 500)
+                    if product_id:
+                        category_ids[str(product_id)] = page_name
+            page.clear()
 
     stocks = {}
     if stock_xml is not None:
