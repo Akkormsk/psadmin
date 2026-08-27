@@ -1,4 +1,5 @@
 import json
+import logging
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -11,8 +12,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
-from .models import CatalogMatchDecision, CatalogProduct, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogMatchDecision, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
+
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
@@ -183,7 +187,8 @@ def production_route_preview(request):
     except TenderAIError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     except Exception:
-        return JsonResponse({"error": "Не удалось определить тип производства. Попробуйте ещё раз."}, status=400)
+        logger.exception("Unexpected production hypothesis error")
+        return JsonResponse({"error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}, status=400)
 
 
 @login_required
@@ -229,7 +234,9 @@ def select_catalog_product(request):
         payload = json.loads(request.POST.get("payload", "{}"))
         session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
-        product_id = int(payload.get("product_id"))
+        product_id = str(payload.get("product_id", "")).strip()[:100]
+        if not product_id:
+            raise ValueError
         if not str(line.get("name", "")).strip():
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
@@ -240,12 +247,22 @@ def select_catalog_product(request):
         session.current_hypothesis = hypothesis
         session.save(update_fields=["current_hypothesis", "updated_at"])
         selection = hypothesis.get("catalog_selection", {})
-        product = CatalogProduct.objects.get(pk=selection.get("id"))
         CatalogMatchDecision.objects.create(
             session=session,
-            product=product,
+            product=None,
+            supplier_code=str(selection.get("supplier_code") or "oasis")[:50],
+            product_external_id=str(selection.get("external_id") or selection.get("id") or "")[:100],
+            product_article=str(selection.get("article") or "")[:120],
+            product_snapshot={
+                key: selection.get(key) for key in (
+                    "external_id", "article", "name", "price", "stock", "url", "category", "matches",
+                )
+            },
             decision="selected",
-            reason_codes=["backend_exact_match", "selected_by_admin"],
+            reason_codes=[
+                "backend_exact_match" if selection.get("fit") == "exact" else "admin_override_mismatch",
+                "selected_by_admin",
+            ],
             requirement_signature={
                 "name": str(line.get("name", ""))[:500],
                 "quantity": str(line.get("quantity", ""))[:50],
@@ -403,6 +420,12 @@ def confirm_production_type(request):
             name = session.position_name.strip()
             if not name or not hypothesis.get("route"):
                 raise ValueError
+            learning_warnings = [str(value) for value in hypothesis.get("learning_warnings", []) if str(value).strip()]
+            if learning_warnings:
+                return JsonResponse({
+                    "error": "Пока нельзя сохранить в обучение: " + " ".join(learning_warnings[:3]),
+                    "learning_warnings": learning_warnings,
+                }, status=400)
             route = hypothesis["route"]
             attached_source_ids = [
                 value.get("id") for value in hypothesis.get("sources", [])
@@ -421,11 +444,17 @@ def confirm_production_type(request):
                     "costs": hypothesis.get("costs", [])[:12],
                     "totals": hypothesis.get("totals", {}),
                     "psodin_calculation": hypothesis.get("psodin_calculation", {}),
+                    "catalog_intent": hypothesis.get("catalog_intent", {}),
                     "catalog_selection": hypothesis.get("catalog_selection", {}),
                 }],
                 note=str(payload.get("note", ""))[:500],
                 created_by=request.user,
             )
+            ProductionTrainingExample.objects.filter(
+                production_type=production_type,
+                position_name__iexact=name,
+                is_active=True,
+            ).exclude(pk=example.pk).update(is_active=False, superseded_by=example)
             if attached_source_ids:
                 TenderKnowledgeSource.objects.filter(
                     pk__in=attached_source_ids, created_by=request.user, is_active=False,
@@ -470,6 +499,11 @@ def confirm_production_type(request):
         note=str(payload.get("note", ""))[:500],
         created_by=request.user,
     )
+    ProductionTrainingExample.objects.filter(
+        production_type=production_type,
+        position_name__iexact=name,
+        is_active=True,
+    ).exclude(pk=example.pk).update(is_active=False, superseded_by=example)
     return JsonResponse({"message": f"Пример сохранён: {production_type.name}.", "example_id": example.pk})
 
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import base64
@@ -6,6 +7,9 @@ import ipaddress
 import math
 import socket
 import struct
+import zipfile
+import time
+from xml.etree import ElementTree
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from difflib import SequenceMatcher
@@ -26,10 +30,17 @@ from PIL import Image
 from django.utils import timezone
 
 
+logger = logging.getLogger(__name__)
+
+
 MONEY = Decimal("0.01")
 AI_MAX_SOURCE_CHARS = 120_000
 AI_MAX_SCAN_PAGES = 12
 AI_SCAN_MAX_SIDE = 2600
+OFFICE_EMBEDDED_FILE_LIMIT = 20
+OFFICE_EMBEDDED_BYTES_LIMIT = 40 * 1024 * 1024
+OFFICE_IMAGE_BYTES_LIMIT = 12 * 1024 * 1024
+WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
 class TenderAIError(Exception):
@@ -59,6 +70,10 @@ def _cell_text(value):
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _normalized_text(value):
+    return re.sub(r"[^a-zа-я0-9]+", " ", _cell_text(value).lower().replace("ё", "е")).strip()
 
 
 def _compact_item_name(value):
@@ -204,6 +219,18 @@ def _requires_visual_recognition(upload, source):
     return Path(upload.name).suffix.lower() == ".pdf" and not _source_text_quality(source)["usable"]
 
 
+def _pdf_unreadable_pages(upload):
+    if Path(upload.name).suffix.lower() != ".pdf":
+        return []
+    upload.seek(0)
+    try:
+        reader = PdfReader(upload)
+        pages = [index for index, page in enumerate(reader.pages[:100]) if not _source_text_quality(page.extract_text() or "")["usable"]]
+    finally:
+        upload.seek(0)
+    return pages
+
+
 def _table_text(rows):
     result = []
     for row in rows:
@@ -231,6 +258,226 @@ def _docx_table_rows(table):
             seen_cells.add(cell._tc)
             values.append(_docx_cell_text(cell))
         yield values
+
+
+def _safe_office_zip(upload):
+    upload.seek(0)
+    data = upload.read()
+    upload.seek(0)
+    try:
+        return zipfile.ZipFile(BytesIO(data))
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise TenderAIError("Файл Office повреждён или имеет неподдерживаемую внутреннюю структуру.") from exc
+
+
+def _xlsx_text(upload):
+    upload.seek(0)
+    workbook = load_workbook(upload, read_only=True, data_only=True)
+    parts = []
+    try:
+        for sheet in workbook.worksheets:
+            if not sheet.max_row or not sheet.max_column:
+                sheet.calculate_dimension(force=True)
+            rows = sheet.iter_rows(
+                min_row=1,
+                max_row=min(sheet.max_row or 1, 1000),
+                max_col=min(sheet.max_column or 1, 60),
+                values_only=True,
+            )
+            parts.append(f"ЛИСТ: {sheet.title}\n{_table_text(rows)}")
+    finally:
+        workbook.close()
+        upload.seek(0)
+    return "\n\n".join(parts)
+
+
+def _xls_text(data):
+    book = xlrd.open_workbook(file_contents=data)
+    parts = []
+    for sheet in book.sheets():
+        rows = (sheet.row_values(index) for index in range(min(sheet.nrows, 1000)))
+        parts.append(f"ЛИСТ: {sheet.name}\n{_table_text(rows)}")
+    return "\n\n".join(parts)
+
+
+def _embedded_spreadsheet(name, data):
+    """Return a named in-memory XLS/XLSX, including common OLE .bin wrappers."""
+    suffix = Path(name).suffix.lower()
+    candidates = [(suffix, data)]
+    if suffix == ".bin" and olefile.isOleFile(BytesIO(data)):
+        try:
+            container = olefile.OleFileIO(BytesIO(data))
+            for stream_name in container.listdir(streams=True, storages=False):
+                if stream_name[-1].lower() in {"package", "\x01ole10native"}:
+                    payload = container.openstream(stream_name).read()
+                    marker = payload.find(b"PK\x03\x04")
+                    if marker >= 0:
+                        candidates.insert(0, (".xlsx", payload[marker:]))
+            container.close()
+        except Exception:
+            pass
+        candidates.append((".xls", data))
+    for kind, payload in candidates:
+        stream = BytesIO(payload)
+        if kind in {".xlsx", ".xlsm"}:
+            stream.name = f"{Path(name).stem}.xlsx"
+            try:
+                return stream, _xlsx_text(stream)
+            except Exception:
+                continue
+        if kind == ".xls":
+            stream.name = f"{Path(name).stem}.xls"
+            try:
+                return stream, _xls_text(payload)
+            except Exception:
+                continue
+    return None, ""
+
+
+def _docx_package(upload):
+    """Read visible Word content plus safe embedded spreadsheets and raster images."""
+    upload.seek(0)
+    document = Document(upload)
+    parts = [_cell_text(paragraph.text) for paragraph in document.paragraphs if _cell_text(paragraph.text)]
+    for index, table in enumerate(document.tables, start=1):
+        parts.append(f"ТАБЛИЦА {index}\n{_table_text(_docx_table_rows(table))}")
+
+    embedded, images, warnings = [], [], []
+    archive = _safe_office_zip(upload)
+    try:
+        # python-docx omits top-level content controls, text boxes, headers,
+        # footers and notes. Recover their text directly from OOXML.
+        xml_names = [
+            name for name in archive.namelist()
+            if name == "word/document.xml"
+            or re.fullmatch(r"word/(?:header|footer)\d+\.xml", name)
+            or name in {"word/footnotes.xml", "word/endnotes.xml", "word/comments.xml"}
+        ]
+        visible_text = "\n".join(parts)
+        extra_text = []
+        for name in xml_names:
+            try:
+                root = ElementTree.fromstring(archive.read(name))
+            except (ElementTree.ParseError, KeyError):
+                continue
+            values = [_cell_text(node.text) for node in root.iter(f"{{{WORD_NS}}}t") if _cell_text(node.text)]
+            joined = " ".join(values)
+            if joined and joined not in visible_text:
+                extra_text.append(f"ДОПОЛНИТЕЛЬНЫЙ ТЕКСТ WORD ({Path(name).name})\n{joined}")
+        parts.extend(extra_text)
+
+        embedded_bytes = 0
+        for name in [value for value in archive.namelist() if value.startswith("word/embeddings/")][:OFFICE_EMBEDDED_FILE_LIMIT]:
+            info = archive.getinfo(name)
+            if info.file_size <= 0 or embedded_bytes + info.file_size > OFFICE_EMBEDDED_BYTES_LIMIT:
+                warnings.append(f"Пропущено слишком большое вложение: {Path(name).name}")
+                continue
+            data = archive.read(name)
+            embedded_bytes += len(data)
+            suffix = Path(name).suffix.lower()
+            stream = BytesIO(data)
+            stream.name = Path(name).name
+            spreadsheet, text = _embedded_spreadsheet(stream.name, data)
+            if spreadsheet is not None:
+                embedded.append(spreadsheet)
+                parts.append(f"ВСТРОЕННЫЙ EXCEL: {spreadsheet.name}\n{text}")
+            else:
+                warnings.append(f"Обнаружено неподдерживаемое вложение Word: {stream.name}")
+
+        image_bytes = 0
+        for name in [value for value in archive.namelist() if value.startswith("word/media/")]:
+            suffix = Path(name).suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                # EMF/WMF commonly duplicate an embedded spreadsheet preview.
+                if not embedded:
+                    warnings.append(f"Обнаружено изображение неподдерживаемого формата: {Path(name).name}")
+                continue
+            info = archive.getinfo(name)
+            if image_bytes + info.file_size > OFFICE_IMAGE_BYTES_LIMIT:
+                warnings.append("Часть изображений Word пропущена из-за ограничения размера.")
+                break
+            data = archive.read(name)
+            image_bytes += len(data)
+            try:
+                image = Image.open(BytesIO(data)).convert("RGB")
+                image.thumbnail((AI_SCAN_MAX_SIDE, AI_SCAN_MAX_SIDE))
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=92, optimize=True)
+                images.append(f"data:image/jpeg;base64,{base64.b64encode(output.getvalue()).decode('ascii')}")
+            except Exception:
+                warnings.append(f"Не удалось прочитать изображение: {Path(name).name}")
+    finally:
+        archive.close()
+        upload.seek(0)
+    return {
+        "text": "\n".join(value for value in parts if value).strip(),
+        "embedded_spreadsheets": embedded,
+        "images": images,
+        "warnings": warnings,
+        "components": {
+            "paragraphs": len(document.paragraphs),
+            "tables": len(document.tables),
+            "embedded_spreadsheets": len(embedded),
+            "images": len(images),
+        },
+    }
+
+
+def _pdf_package(upload):
+    upload.seek(0)
+    reader = PdfReader(upload)
+    pages = []
+    for index, page in enumerate(reader.pages[:100], start=1):
+        page_text = (page.extract_text() or "").strip()
+        if page_text:
+            pages.append(f"СТРАНИЦА {index}\n{page_text}")
+    embedded, warnings = [], []
+    try:
+        attachments = reader.attachments or {}
+    except Exception:
+        attachments = {}
+    total_bytes = 0
+    for name, payloads in list(attachments.items())[:OFFICE_EMBEDDED_FILE_LIMIT]:
+        for payload in payloads if isinstance(payloads, list) else [payloads]:
+            if not isinstance(payload, bytes) or total_bytes + len(payload) > OFFICE_EMBEDDED_BYTES_LIMIT:
+                warnings.append(f"Пропущено слишком большое вложение PDF: {name}")
+                continue
+            total_bytes += len(payload)
+            spreadsheet, text = _embedded_spreadsheet(name, payload)
+            if spreadsheet is not None:
+                embedded.append(spreadsheet)
+                pages.append(f"ВСТРОЕННЫЙ EXCEL PDF: {spreadsheet.name}\n{text}")
+            else:
+                warnings.append(f"Обнаружено неподдерживаемое вложение PDF: {name}")
+    upload.seek(0)
+    return {
+        "text": "\n\n".join(pages).strip(),
+        "embedded_spreadsheets": embedded,
+        "images": [],
+        "warnings": warnings,
+        "components": {
+            "pages": len(reader.pages),
+            "embedded_spreadsheets": len(embedded),
+        },
+    }
+
+
+def _document_package(upload):
+    # Some integrations provide only a named upload proxy and delegate the
+    # actual extraction to extract_tender_source. Do not turn that supported
+    # path into a hard failure merely because the proxy is not file-like.
+    if not callable(getattr(upload, "seek", None)) or not callable(getattr(upload, "read", None)):
+        return None
+    suffix = Path(upload.name).suffix.lower()
+    if suffix in {".docx", ".docm"}:
+        return _docx_package(upload)
+    if suffix == ".pdf":
+        try:
+            return _pdf_package(upload)
+        except Exception:
+            upload.seek(0)
+            return None
+    return None
 
 
 def _extract_legacy_doc(upload):
@@ -291,15 +538,8 @@ def _extract_legacy_doc(upload):
 def extract_tender_source(upload):
     """Extract text/tables locally. The uploaded file is never persisted."""
     suffix = Path(upload.name).suffix.lower()
-    if suffix == ".xlsx":
-        workbook = load_workbook(upload, read_only=True, data_only=True)
-        parts = []
-        for sheet in workbook.worksheets:
-            if not sheet.max_row or not sheet.max_column:
-                sheet.calculate_dimension(force=True)
-            rows = sheet.iter_rows(min_row=1, max_row=min(sheet.max_row or 1, 1000), max_col=min(sheet.max_column or 1, 60), values_only=True)
-            parts.append(f"ЛИСТ: {sheet.title}\n{_table_text(rows)}")
-        text = "\n\n".join(parts)
+    if suffix in {".xlsx", ".xlsm"}:
+        text = _xlsx_text(upload)
     elif suffix == ".xls":
         book = xlrd.open_workbook(file_contents=upload.read())
         parts = []
@@ -307,30 +547,47 @@ def extract_tender_source(upload):
             rows = (sheet.row_values(index) for index in range(min(sheet.nrows, 1000)))
             parts.append(f"ЛИСТ: {sheet.name}\n{_table_text(rows)}")
         text = "\n\n".join(parts)
-    elif suffix == ".docx":
-        document = Document(upload)
-        parts = [_cell_text(paragraph.text) for paragraph in document.paragraphs if _cell_text(paragraph.text)]
-        for index, table in enumerate(document.tables, start=1):
-            parts.append(f"ТАБЛИЦА {index}\n{_table_text(_docx_table_rows(table))}")
-        text = "\n".join(parts)
+    elif suffix in {".docx", ".docm"}:
+        text = _docx_package(upload)["text"]
     elif suffix == ".doc":
         text = _extract_legacy_doc(upload)
     elif suffix == ".pdf":
-        reader = PdfReader(upload)
-        pages = []
-        for index, page in enumerate(reader.pages[:100], start=1):
-            page_text = (page.extract_text() or "").strip()
-            if page_text:
-                pages.append(f"СТРАНИЦА {index}\n{page_text}")
-        text = "\n\n".join(pages)
+        text = _pdf_package(upload)["text"]
     else:
-        raise TenderAIError("Поддерживаются .xlsx, .xls, .doc, .docx и .pdf.")
+        raise TenderAIError("Поддерживаются .xlsx, .xlsm, .xls, .doc, .docx, .docm и .pdf.")
     text = text.strip()
     if not text and suffix == ".pdf":
         return "", False
     if not text:
         raise TenderAIError("В документе не найден текст. Сканированные PDF пока не поддерживаются.")
     return text[:AI_MAX_SOURCE_CHARS], len(text) > AI_MAX_SOURCE_CHARS
+
+
+def _control_nmck_total(source):
+    patterns = (
+        r"начальн\w*\s*\(максимальн\w*\)\s*цен\w*\s*контракт\w*[^\d]{0,80}([\d\s]+(?:[,.]\d{1,2})?)",
+        r"итог\w*\s*нмцк[^\d]{0,40}([\d\s]+(?:[,.]\d{1,2})?)",
+    )
+    values = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, source, flags=re.IGNORECASE):
+            value = _parse_document_decimal(match.group(1))
+            if value and value > 0:
+                values.append(_money(value))
+    return values[-1] if values else None
+
+
+def _nmck_validation_warnings(items, source):
+    warnings = []
+    if not items:
+        return ["Документ похож на НМЦК, но структурированные позиции не найдены."]
+    control_total = _control_nmck_total(source)
+    if control_total is not None:
+        rows_total = _money(sum((_parse_document_decimal(value.get("nmck_total")) or Decimal("0")) for value in items))
+        tolerance = max(Decimal("0.10"), Decimal(len(items)) * Decimal("0.02"))
+        if abs(rows_total - control_total) > tolerance:
+            warnings.append(f"Сумма найденных позиций {rows_total} ₽ не совпадает с итогом документа {control_total} ₽.")
+    return warnings
 
 
 def _pdf_page_count(upload):
@@ -373,6 +630,32 @@ def _scan_pdf_images(upload, start_page=0, page_limit=None):
         page.close()
     document.close()
     upload.seek(0)
+    return images
+
+
+def _scan_pdf_selected_images(upload, page_numbers):
+    page_numbers = sorted({int(value) for value in page_numbers if int(value) >= 0})[:AI_MAX_SCAN_PAGES]
+    if not page_numbers:
+        return []
+    upload.seek(0)
+    document = pdfium.PdfDocument(upload.read())
+    images = []
+    try:
+        for page_number in page_numbers:
+            if page_number >= len(document):
+                continue
+            page = document[page_number]
+            bitmap = page.render(scale=3)
+            image = bitmap.to_pil().convert("RGB")
+            image.thumbnail((AI_SCAN_MAX_SIDE, AI_SCAN_MAX_SIDE))
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=92, optimize=True)
+            images.append(f"data:image/jpeg;base64,{base64.b64encode(output.getvalue()).decode('ascii')}")
+            bitmap.close()
+            page.close()
+    finally:
+        document.close()
+        upload.seek(0)
     return images
 
 
@@ -434,17 +717,27 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
             messages[0]["content"] += " Предыдущая попытка содержала синтаксическую ошибку. Особенно тщательно проверь кавычки, запятые и закрывающие скобки."
         payload = json.dumps({"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}, ensure_ascii=False).encode("utf-8")
         request = Request(f"{base_url}/chat/completions", data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
-        try:
-            with urlopen(request, timeout=90) as response:
-                response_data = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
+        response_data = None
+        last_network_error = None
+        for network_attempt in range(3):
             try:
-                detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message")
-            except Exception:
-                detail = None
-            raise TenderAIError(detail or "AI Gateway отклонил запрос.") from exc
-        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise TenderAIError("AI Gateway временно недоступен. Попробуйте ещё раз.") from exc
+                with urlopen(request, timeout=90) as response:
+                    response_data = json.loads(response.read().decode("utf-8"))
+                break
+            except HTTPError as exc:
+                if exc.code not in {429, 500, 502, 503, 504}:
+                    try:
+                        detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message")
+                    except Exception:
+                        detail = None
+                    raise TenderAIError(detail or "AI Gateway отклонил запрос.") from exc
+                last_network_error = exc
+            except (URLError, TimeoutError, ConnectionError, OSError, json.JSONDecodeError) as exc:
+                last_network_error = exc
+            if network_attempt < 2:
+                time.sleep(1 + network_attempt * 2)
+        if response_data is None:
+            raise TenderAIError("AI Gateway не ответил после трёх попыток. Попробуйте позже.") from last_network_error
         usage = response_data.get("usage", {})
         total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
         total_usage["completion_tokens"] += usage.get("completion_tokens", 0) or 0
@@ -543,13 +836,38 @@ def extract_calculation_source(source_text="", source_url="", upload=None):
 
 
 def recognize_tender_items(upload):
-    if Path(upload.name).suffix.lower() in {".xlsx", ".xls"}:
+    suffix = Path(upload.name).suffix.lower()
+    package = _document_package(upload)
+    if package and package["embedded_spreadsheets"]:
+        structured = []
+        for spreadsheet in package["embedded_spreadsheets"]:
+            structured.extend(_recognize_structured_nmck_xlsx(spreadsheet))
+        if structured:
+            structured, usage, warning = _shorten_structured_item_names(structured)
+            warnings = [*package["warnings"], *([warning] if warning else [])]
+            warnings.extend(_nmck_validation_warnings(structured, package["text"]))
+            return {
+                "items": structured,
+                "warnings": warnings,
+                "scan_ocr": False,
+                "processing_mode": "embedded",
+                "usage": usage,
+                "local_parse": True,
+                "components": package["components"],
+            }
+    if suffix in {".xlsx", ".xlsm", ".xls"}:
         structured = _recognize_structured_nmck_xlsx(upload)
         if structured:
             structured, usage, warning = _shorten_structured_item_names(structured)
-            return {"items": structured, "warnings": [warning] if warning else [], "scan_ocr": False, "usage": usage, "local_parse": True}
+            source, _ = extract_tender_source(upload)
+            warnings = [warning] if warning else []
+            warnings.extend(_nmck_validation_warnings(structured, source))
+            return {"items": structured, "warnings": warnings, "scan_ocr": False, "processing_mode": "structured", "usage": usage, "local_parse": True}
     source, truncated = extract_tender_source(upload)
     scan_ocr = _requires_visual_recognition(upload, source)
+    docx_images = package["images"] if package and suffix in {".docx", ".docm"} and not package["components"].get("tables") and not package["components"].get("embedded_spreadsheets") else []
+    mixed_pdf_pages = [] if scan_ocr else _pdf_unreadable_pages(upload)
+    visual_mode = scan_ocr or bool(docx_images) or bool(mixed_pdf_pages)
     schema = '{"items":[{"name":"товар","quantity":"исходное значение","nmck_unit":"исходное значение или null","nmck_total":"исходное значение или null","confidence":0.95}],"warnings":[]}'
     prompt = f"""Извлеки из документа позиции НМЦК для расчёта тендера.
 Для каждой товарной позиции нужны: короткое рабочее наименование, количество, НМЦК за единицу и итоговая НМЦК всей позиции.
@@ -564,7 +882,18 @@ def recognize_tender_items(upload):
 
 ДОКУМЕНТ:
 {source if not scan_ocr else 'Перед тобой страницы документа в исходном порядке. Текстовый слой отсутствует или повреждён; внимательно прочитай таблицу на изображениях.'}"""
-    responses = _visual_gateway_responses(prompt, upload, max_tokens=6000) if scan_ocr else [_ai_gateway_json(prompt)]
+    if scan_ocr:
+        responses = _visual_gateway_responses(prompt, upload, max_tokens=6000)
+    elif docx_images:
+        responses = [_ai_gateway_json(prompt, max_tokens=6000, image_data_urls=docx_images)]
+    elif mixed_pdf_pages:
+        responses = []
+        for start in range(0, len(mixed_pdf_pages), AI_MAX_SCAN_PAGES):
+            page_batch = mixed_pdf_pages[start:start + AI_MAX_SCAN_PAGES]
+            batch_prompt = f"{prompt}\n\nДОПОЛНИТЕЛЬНО РАСПОЗНАЮТСЯ СТРАНИЦЫ: {', '.join(str(value + 1) for value in page_batch)}."
+            responses.append(_ai_gateway_json(batch_prompt, max_tokens=6000, image_data_urls=_scan_pdf_selected_images(upload, page_batch)))
+    else:
+        responses = [_ai_gateway_json(prompt)]
     result = {"items": [], "warnings": []}
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     for partial, partial_usage in responses:
@@ -605,13 +934,18 @@ def recognize_tender_items(upload):
                 "confidence": confidence,
             })
     if not items:
-        raise TenderAIError("Не удалось уверенно найти позиции с количеством и НМЦК.")
+        details = "; ".join(package["warnings"][:3]) if package and package["warnings"] else ""
+        suffix = f" Обнаруженные ограничения: {details}." if details else ""
+        raise TenderAIError(f"Не удалось уверенно найти позиции с количеством и НМЦК.{suffix}")
     warnings = [str(value)[:300] for value in result.get("warnings", []) if str(value).strip()]
+    if package:
+        warnings = [*package["warnings"], *warnings]
+    warnings.extend(_nmck_validation_warnings(items, source))
     if truncated:
         warnings.append("Документ был слишком большим: обработана основная часть содержимого.")
-    if scan_ocr:
-        warnings.insert(0, "PDF распознан по изображению. Внимательно проверьте названия, количество, цены и итоговые суммы.")
-    return {"items": items, "warnings": warnings, "scan_ocr": scan_ocr, "processing_mode": "visual" if scan_ocr else "text", "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}}
+    if visual_mode:
+        warnings.insert(0, "Документ распознан по изображению. Внимательно проверьте названия, количество, цены и итоговые суммы.")
+    return {"items": items, "warnings": warnings, "scan_ocr": visual_mode, "processing_mode": "visual" if visual_mode else "text", "components": package["components"] if package else {}, "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}}
 
 
 def _recognize_structured_nmck_xlsx(upload):
@@ -620,7 +954,7 @@ def _recognize_structured_nmck_xlsx(upload):
     suffix = Path(upload.name).suffix.lower()
     workbook = None
     try:
-        if suffix == ".xlsx":
+        if suffix in {".xlsx", ".xlsm"}:
             workbook = load_workbook(upload, read_only=True, data_only=True)
             sheets = []
             for sheet in workbook.worksheets:
@@ -792,9 +1126,23 @@ def _classify_tender_source(file_name, source):
 
 def inspect_tender_document(upload):
     """Run the cheap preflight used by the UI before a potentially slow pass."""
-    source, truncated = extract_tender_source(upload)
+    suffix = Path(upload.name).suffix.lower()
+    package = _document_package(upload)
+    if package:
+        source = package["text"][:AI_MAX_SOURCE_CHARS]
+        truncated = len(package["text"]) > AI_MAX_SOURCE_CHARS
+    else:
+        source, truncated = extract_tender_source(upload)
     quality = _source_text_quality(source)
     visual = _requires_visual_recognition(upload, source)
+    unreadable_pdf_pages = _pdf_unreadable_pages(upload) if suffix == ".pdf" else []
+    mode = "visual" if visual else "text"
+    if package and package["components"]["embedded_spreadsheets"]:
+        mode = "embedded"
+    elif package and package["images"] and not package["components"]["tables"]:
+        mode = "visual"
+    elif unreadable_pdf_pages:
+        mode = "visual"
     role = "unknown" if visual else _classify_tender_source(upload.name, source)
     if role == "unknown" and Path(upload.name).suffix.lower() in {".xlsx", ".xls"}:
         upload.seek(0)
@@ -803,9 +1151,18 @@ def inspect_tender_document(upload):
     upload.seek(0)
     return {
         "document_type": role,
-        "processing_mode": "visual" if visual else "text",
+        "processing_mode": mode,
         "truncated": truncated,
         "quality": quality,
+        "components": package["components"] if package else ({"unreadable_pdf_pages": [value + 1 for value in unreadable_pdf_pages]} if unreadable_pdf_pages else {}),
+        "warnings": package["warnings"] if package else [],
+        "status_message": (
+            "Обнаружена встроенная таблица Excel — извлекаю её локально."
+            if mode == "embedded" else
+            "Часть страниц не имеет надёжного текстового слоя — распознаю их изображения."
+            if mode == "visual" else
+            "Структура документа прочитана."
+        ),
     }
 
 
@@ -1013,8 +1370,17 @@ def _merge_technical_items(raw_items):
 
 
 def analyze_tender_requirements(upload, current_lines):
-    source, truncated = extract_tender_source(upload)
+    suffix = Path(upload.name).suffix.lower()
+    package = _document_package(upload)
+    if package:
+        source = package["text"][:AI_MAX_SOURCE_CHARS]
+        truncated = len(package["text"]) > AI_MAX_SOURCE_CHARS
+    else:
+        source, truncated = extract_tender_source(upload)
     scan_ocr = _requires_visual_recognition(upload, source)
+    docx_images = package["images"] if package and suffix in {".docx", ".docm"} and not package["components"].get("tables") and not package["components"].get("embedded_spreadsheets") else []
+    mixed_pdf_pages = [] if scan_ocr else _pdf_unreadable_pages(upload)
+    visual_mode = scan_ocr or bool(docx_images) or bool(mixed_pdf_pages)
     compact_lines = [
         {"line_index": index, "name": _cell_text(line.get("name"))[:500], "quantity": _cell_text(line.get("quantity"))[:50]}
         for index, line in enumerate(current_lines[:100]) if isinstance(line, dict) and _cell_text(line.get("name"))
@@ -1044,6 +1410,14 @@ quantity переноси только из документа; количест
     prompts = [build_prompt(value) for value in source_chunks]
     if scan_ocr:
         responses = _visual_gateway_responses(prompts[0], upload, max_tokens=7000)
+    elif docx_images:
+        responses = [_ai_gateway_json(prompts[0], max_tokens=7000, image_data_urls=docx_images)]
+    elif mixed_pdf_pages:
+        responses = []
+        for start in range(0, len(mixed_pdf_pages), AI_MAX_SCAN_PAGES):
+            page_batch = mixed_pdf_pages[start:start + AI_MAX_SCAN_PAGES]
+            batch_prompt = f"{prompts[0]}\n\nДОПОЛНИТЕЛЬНО РАСПОЗНАЮТСЯ СТРАНИЦЫ: {', '.join(str(value + 1) for value in page_batch)}."
+            responses.append(_ai_gateway_json(batch_prompt, max_tokens=7000, image_data_urls=_scan_pdf_selected_images(upload, page_batch)))
     elif len(prompts) == 1:
         responses = [_ai_gateway_json(prompts[0], max_tokens=7000)]
     else:
@@ -1094,6 +1468,8 @@ quantity переноси только из документа; количест
     if not items and not result.get("global_requirements"):
         raise TenderAIError("Не удалось найти технические требования к позициям.")
     warnings = _short_text_list(result.get("warnings"))
+    if package:
+        warnings = [*package["warnings"], *warnings]
     unmatched_nmck_lines = [
         _cell_text(line.get("name"))[:160]
         for index, line in enumerate(current_lines[:100])
@@ -1117,7 +1493,7 @@ quantity переноси только из документа; количест
         )
     if truncated:
         warnings.append("Документ был слишком большим: обработана основная часть содержимого.")
-    if scan_ocr:
+    if visual_mode:
         warnings.insert(0, "ТЗ распознано по изображению. Проверьте извлечённые требования.")
     global_requirements = []
     seen_global = set()
@@ -1131,8 +1507,9 @@ quantity переноси только из документа; количест
         "global_requirements": global_requirements,
         "items": items,
         "warnings": warnings,
-        "scan_ocr": scan_ocr,
-        "processing_mode": "visual" if scan_ocr else "text",
+        "scan_ocr": visual_mode,
+        "processing_mode": "visual" if visual_mode else ("embedded" if package and package["components"]["embedded_spreadsheets"] else "text"),
+        "components": package["components"] if package else ({"unreadable_pdf_pages": [value + 1 for value in mixed_pdf_pages]} if mixed_pdf_pages else {}),
         "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)},
     }
 
@@ -1322,7 +1699,7 @@ def classify_production_type(line):
     production_types = list(ProductionType.objects.filter(is_active=True))
     # Ограничиваем контекст, чтобы обучение не раздувало время и стоимость
     # каждого запроса на малом тарифе приложения.
-    examples = list(ProductionTrainingExample.objects.select_related("production_type")[:25])
+    examples = list(ProductionTrainingExample.objects.filter(is_active=True).select_related("production_type")[:25])
     type_payload = [{"code": value.code, "name": value.name, "description": value.description} for value in production_types]
     example_payload = [
         {"id": value.pk, "name": value.position_name, "type": value.production_type.code, "features": value.features, "routes": value.routes}
@@ -1415,7 +1792,7 @@ def _training_examples_for_line(line, limit=12):
     from .models import ProductionTrainingExample
 
     target = _normalized_item_name(line.get("name"))
-    examples = list(ProductionTrainingExample.objects.select_related("production_type")[:80])
+    examples = list(ProductionTrainingExample.objects.filter(is_active=True).select_related("production_type")[:80])
     ranked = []
     for example in examples:
         source = _normalized_item_name(example.position_name)
@@ -1715,6 +2092,9 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
     except (InvalidOperation, TypeError, ValueError):
         quantity = Decimal("1")
     costs = []
+    learning_warnings = []
+    requirements_text = json.dumps(line.get("requirements", {}), ensure_ascii=False).lower().replace("ё", "е")
+    requirements_contain_price = bool(re.search(r"(?:₽|\bруб\.?\b|цен[аы]|стоимост)", requirements_text))
     totals = {"material": Decimal("0"), "application": Decimal("0"), "logistics": Decimal("0")}
     for item in raw.get("costs", [])[:12] if isinstance(raw.get("costs"), list) else []:
         if not isinstance(item, dict):
@@ -1729,6 +2109,8 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
             amount = Decimal("0")
         if not name or (amount <= 0 and calculated_amount is None):
             continue
+        if amount > 0 and calculated_amount is None:
+            learning_warnings.append(f"Для статьи «{name}» нет проверяемой серверной формулы.")
         amount = calculated_amount if calculated_amount is not None else _money(amount)
         totals[category] += amount
         source_type = item.get("source_type") if item.get("source_type") in {"calculator", "catalog", "supplier", "history", "manager"} else "manager"
@@ -1737,6 +2119,10 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
         if "тз" in source.lower().replace("ё", "е") and manual_unit > 0 and abs(amount - _money(manual_unit * quantity)) <= Decimal("0.02"):
             source = "Введено администратором в расчёте"
             source_type = "manager"
+        elif "тз" in source.lower().replace("ё", "е") and not requirements_contain_price:
+            source = "Источник цены не подтверждён"
+            source_type = "manager"
+            learning_warnings.append(f"Для статьи «{name}» цена ошибочно приписана ТЗ.")
         raw_steps = _short_text_list(item.get("calculation_steps"), limit=12)
         costs.append({
             "category": category,
@@ -1785,18 +2171,38 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
         "questions": _short_text_list(raw.get("questions"), limit=3),
         "assumptions": _short_text_list(raw.get("assumptions"), limit=6),
         "understood_changes": _short_text_list(raw.get("understood_changes"), limit=8),
+        "learning_warnings": learning_warnings,
         "matched_example_ids": matched_ids,
     }
 
 
+def _attach_memory_preview(hypothesis):
+    preview = []
+    intent = hypothesis.get("catalog_intent") if isinstance(hypothesis.get("catalog_intent"), dict) else {}
+    if intent.get("product_class"):
+        preview.append(f"Тип товара: {intent['product_class']}")
+    route = hypothesis.get("route") if isinstance(hypothesis.get("route"), dict) else {}
+    if route.get("name"):
+        preview.append(f"Маршрут: {route['name']}")
+    for cost in hypothesis.get("costs", []) if isinstance(hypothesis.get("costs"), list) else []:
+        if not isinstance(cost, dict):
+            continue
+        recipe = cost.get("recipe") if isinstance(cost.get("recipe"), dict) else {}
+        method = recipe.get("method") or "без формулы"
+        preview.append(f"Цена: {cost.get('name', 'статья')} — {cost.get('amount_total', '0')} ₽; расчёт: {method}; источник: {cost.get('source') or 'не указан'}")
+    for change in hypothesis.get("understood_changes", []) if isinstance(hypothesis.get("understood_changes"), list) else []:
+        preview.append(f"Корректировка: {change}")
+    hypothesis["memory_preview"] = preview[:12]
+    return hypothesis
+
+
 def build_training_hypothesis(line, current=None, feedback=""):
     from .models import ProductionType
-    from .catalog import catalog_candidates_for_line
+    from .catalog import CatalogSyncError, catalog_candidates_for_line
 
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
     knowledge_sources = _knowledge_sources_for_line(line)
-    catalog_candidates = catalog_candidates_for_line(line, limit=3)
     example_payload = [{
         "id": value.pk,
         "position": value.position_name,
@@ -1806,6 +2212,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
     } for value in examples]
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
+    schema = schema[:-1] + ',"catalog_intent":{"product_class":"канонический тип товара в единственном числе","synonyms":["синоним из позиции"],"hard_constraints":["обязательное требование без вычислений"],"preferences":["желательное свойство"]}}'
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
@@ -1817,6 +2224,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
+Для поиска готового товара заполни catalog_intent. Здесь работает только понимание слов: приведи название к каноническому типу в единственном числе (например, «майка брендированная» → «футболка», «жилетка» → «жилет»), выдели синонимы и раздели обязательные требования от пожеланий. Не подбирай артикулы, не сравнивай числа и ничего не рассчитывай — это выполнит бэкенд.
 Верни только JSON: {schema}
 
 ПОЗИЦИЯ:
@@ -1835,11 +2243,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
 {json.dumps(example_payload, ensure_ascii=False)}
 
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ:
-{json.dumps(knowledge_sources, ensure_ascii=False)}
-
-КАНДИДАТЫ ИЗ КАТАЛОГА OASIS:
-{json.dumps(catalog_candidates, ensure_ascii=False)}
-Кандидаты уже проверены бэкендом. Не называй товар точным соответствием, если fit=partial, и не придумывай другие артикулы. Не добавляй цену кандидата в costs до явного выбора администратором."""
+{json.dumps(knowledge_sources, ensure_ascii=False)}"""
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     valid_ids = {value.pk for value in examples}
     matched_ids = []
@@ -1857,6 +2261,25 @@ def build_training_hypothesis(line, current=None, feedback=""):
         for route in example.routes[:1] if isinstance(route, dict) and isinstance(route.get("psodin_calculation"), dict)
     ), None)
     hypothesis = _apply_psodin_calculation(hypothesis, result, line, current=current, feedback=feedback, confirmed=confirmed_psodin)
+    raw_intent = result.get("catalog_intent") if isinstance(result.get("catalog_intent"), dict) else {}
+    catalog_intent = {
+        "product_class": _cell_text(raw_intent.get("product_class"))[:100],
+        "synonyms": _short_text_list(raw_intent.get("synonyms"), limit=8),
+        "hard_constraints": _short_text_list(raw_intent.get("hard_constraints"), limit=12),
+        "preferences": _short_text_list(raw_intent.get("preferences"), limit=8),
+    }
+    try:
+        catalog_candidates = catalog_candidates_for_line(line, limit=3, intent=catalog_intent)
+    except CatalogSyncError as exc:
+        catalog_candidates = []
+        hypothesis["catalog_warning"] = str(exc)[:300]
+    except Exception:
+        # Oasis is an optional price source. A malformed external row or a
+        # temporary API problem must not discard the already valid LLM route.
+        logger.exception("Unexpected Oasis catalog failure while building a training hypothesis")
+        catalog_candidates = []
+        hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
+    hypothesis["catalog_intent"] = catalog_intent
     hypothesis["catalog_candidates"] = catalog_candidates
     if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
         selected_id = current["catalog_selection"].get("id")
@@ -1866,28 +2289,40 @@ def build_training_hypothesis(line, current=None, feedback=""):
         hypothesis["sources"] = current["sources"][:20]
     hypothesis["usage"] = {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}
     hypothesis["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
-    return hypothesis
+    # A fully matching live offer is an executable backend price source, not
+    # merely a visual suggestion. Apply it immediately so the displayed total
+    # and the tender material field cannot remain zero while showing a product.
+    exact_candidate = next((
+        value for value in catalog_candidates
+        if value.get("fit") == "exact" and value.get("price") not in (None, "")
+    ), None)
+    if exact_candidate and not hypothesis.get("catalog_selection"):
+        preserved_usage = hypothesis.get("usage", {})
+        preserved_warning = hypothesis.get("catalog_warning")
+        hypothesis = apply_catalog_candidate(hypothesis, line, exact_candidate.get("id"))
+        hypothesis["catalog_selection"]["selection_mode"] = "automatic"
+        hypothesis["usage"] = preserved_usage
+        if preserved_warning:
+            hypothesis["catalog_warning"] = preserved_warning
+    return _attach_memory_preview(hypothesis)
 
 
 def apply_catalog_candidate(hypothesis, line, product_id):
-    from .catalog import catalog_candidates_for_line
-    from .models import CatalogProduct, ProductionType
+    from .models import ProductionType
 
-    candidates = catalog_candidates_for_line(line, limit=10)
+    candidates = hypothesis.get("catalog_candidates", []) if isinstance(hypothesis, dict) else []
     try:
-        candidate = next(value for value in candidates if value.get("id") == int(product_id))
+        candidate = next(value for value in candidates if str(value.get("id")) == str(product_id))
     except (StopIteration, TypeError, ValueError):
         raise TenderAIError("Товар больше не входит в актуальную подборку. Обновите гипотезу.")
-    if candidate.get("fit") != "exact":
-        raise TenderAIError("Товар имеет расхождения с обязательными требованиями ТЗ и не может быть применён автоматически.")
     try:
         quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
         raise TenderAIError("Не удалось определить количество для товара Oasis.")
-    product = CatalogProduct.objects.filter(pk=candidate["id"], is_active=True, supplier__is_active=True).first()
-    if not product or product.effective_price is None:
+    try:
+        price = Decimal(str(candidate.get("price")))
+    except (InvalidOperation, TypeError, ValueError):
         raise TenderAIError("У товара Oasis больше нет актуальной цены.")
-    price = product.effective_price
     raw = json.loads(json.dumps(hypothesis, ensure_ascii=False)) if isinstance(hypothesis, dict) else {}
     costs = [
         value for value in raw.get("costs", [])
@@ -1896,25 +2331,35 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     costs.insert(0, {
         "category": "material",
         "process_name": "Закупка готового изделия",
-        "name": product.full_name or product.name,
+        "name": candidate.get("name") or "Товар Oasis",
         "amount_total": str(_money(price * quantity)),
-        "source": f"Oasis · арт. {product.article}",
+        "source": f"Oasis · арт. {candidate.get('article', '')}",
         "source_type": "catalog",
-        "source_url": product.product_url,
-        "source_date": product.synced_at.date().isoformat() if product.synced_at else "",
+        "source_url": candidate.get("url", ""),
+        "source_date": timezone.localdate().isoformat(),
         "basis": f"{_decimal_text(quantity)} шт. × {_money(price)} ₽/шт.",
         "recipe": {"method": "unit_rate", "inputs": {"unit_rate": str(price)}},
         "calculation_steps": [],
-        "adaptation": "Цена и свободный остаток получены из локального индекса Oasis; перед закупкой требуется повторная проверка актуальности.",
+        "adaptation": "Цена и свободный остаток получены прямым запросом к API Oasis; перед закупкой требуется повторная проверка актуальности.",
         "confirmed": False,
     })
     raw["costs"] = costs
     route = raw.get("route") if isinstance(raw.get("route"), dict) else {}
     processes = route.get("processes") if isinstance(route.get("processes"), list) else []
     processes = [value for value in processes if isinstance(value, dict) and _canonical_process_name(value.get("name")) not in {"Закупка материала", "Закупка готового изделия"}]
-    route["processes"] = [{"name": "Закупка готового изделия", "details": [f"Oasis, арт. {product.article}"]}, *processes]
-    route["reason"] = _cell_text(route.get("reason")) or "Готовое изделие найдено в каталоге поставщика и соответствует обязательным требованиям ТЗ."
+    route["processes"] = [{"name": "Закупка готового изделия", "details": [f"Oasis, арт. {candidate.get('article', '')}"]}, *processes]
+    if candidate.get("fit") == "exact":
+        route["reason"] = "Готовое изделие найдено в Oasis и соответствует проверенным требованиям ТЗ. Его актуальная дилерская цена автоматически включена в закупочную себестоимость; нанесение считается отдельным процессом."
+    else:
+        mismatch_text = "; ".join(_short_text_list(candidate.get("mismatches"), limit=3))
+        route["reason"] = f"Товар Oasis выбран администратором как рабочая альтернатива. Расхождения, которые нужно учитывать: {mismatch_text or 'часть характеристик требует проверки'}."
     raw["route"] = route
+    raw["questions"] = [
+        value for value in raw.get("questions", []) if not (
+            "цен" in _normalized_text(value)
+            and any(marker in _normalized_text(value) for marker in ("закуп", "готов", "товар", "майк", "футбол", "oasis", "поставщик"))
+        )
+    ] if isinstance(raw.get("questions"), list) else []
     production_types = list(ProductionType.objects.filter(is_active=True))
     normalized = _normalize_training_hypothesis(raw, line, production_types, raw.get("matched_example_ids", []))
     normalized["catalog_candidates"] = candidates[:3]
@@ -1922,12 +2367,33 @@ def apply_catalog_candidate(hypothesis, line, product_id):
         **candidate,
         "price": str(price),
         "cost_total": str(_money(price * quantity)),
+        "selection_mode": "manual",
+        "accepted_mismatches": candidate.get("mismatches", []) if candidate.get("fit") != "exact" else [],
         "selected_at": timezone.now().isoformat(),
     }
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
-    if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list):
-        normalized["sources"] = hypothesis["sources"][:20]
-    return normalized
+    if isinstance(hypothesis, dict) and isinstance(hypothesis.get("catalog_intent"), dict):
+        normalized["catalog_intent"] = hypothesis["catalog_intent"]
+    existing_sources = hypothesis.get("sources", []) if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list) else []
+    normalized["sources"] = [
+        value for value in existing_sources
+        if isinstance(value, dict) and value.get("source_type") != "catalog"
+    ][:19]
+    normalized["sources"].append({
+        "source_type": "catalog",
+        "supplier_name": "Oasis",
+        "title": candidate.get("name") or "Товар Oasis",
+        "url": candidate.get("url", ""),
+        "article": candidate.get("article", ""),
+        "price": str(price),
+        "cost_name": candidate.get("name") or "Закупка готового изделия",
+        "is_pending": False,
+    })
+    if isinstance(hypothesis, dict) and isinstance(hypothesis.get("usage"), dict):
+        normalized["usage"] = hypothesis["usage"]
+    if isinstance(hypothesis, dict) and hypothesis.get("catalog_warning"):
+        normalized["catalog_warning"] = _cell_text(hypothesis.get("catalog_warning"))[:300]
+    return _attach_memory_preview(normalized)
 
 
 def analyze_production_route(line):

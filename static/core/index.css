@@ -1125,9 +1125,11 @@ h1 {
 .training-catalog-card > span { display:grid; gap:1px; min-width:0; }
 .training-catalog-card a { overflow:hidden; color:#263442; font-size:10px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
 .training-catalog-card small, .training-catalog-card em { color:#6f7b87; font-size:8px; font-style:normal; }
+.training-catalog-card .training-catalog-price { margin:2px 0; color:#176b3a; font-size:11px; font-weight:750; }
 .training-catalog-card em { color:#247445; }
 .training-catalog-card em.is-warning { color:#936516; }
 .training-catalog-card button { min-height:27px; padding:4px 8px; font-size:9px; }
+.training-catalog-actions { display:grid; justify-items:end; gap:4px; }
 .training-catalog-selected, .training-catalog-mismatch { padding:3px 6px; border-radius:6px; background:#e9f7ee; color:#168245; font-size:8px; white-space:nowrap; }
 .training-catalog-mismatch { background:#fff5df; color:#8a621b; }
 .training-dialogue__route { display:flex; flex-wrap:wrap; gap:5px; }

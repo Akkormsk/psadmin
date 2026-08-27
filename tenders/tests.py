@@ -1,9 +1,11 @@
 import json
+import zipfile
 from io import BytesIO
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
 from docx import Document
@@ -12,11 +14,12 @@ from openpyxl import Workbook
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, OasisClient, catalog_candidates_for_line, sync_oasis_catalog
-from .services import _apply_psodin_calculation, _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, recognize_tender_items
+from .services import _apply_psodin_calculation, _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
 class TenderTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.user = get_user_model().objects.create_user(username="manager", password="password")
         self.other = get_user_model().objects.create_user(username="other", password="password")
         self.payload = [{"name": "Ручка", "quantity": "10", "nmck_unit": "100", "material_unit": "40", "application_unit": "10", "logistics_unit": "5", "product_url": "https://example.com/item", "comment": "Синяя"}]
@@ -161,6 +164,38 @@ class TenderTests(TestCase):
         self.assertIn("Дизайнерский картон", text)
         self.assertIn("не менее 290 г/м²", text)
         self.assertFalse(truncated)
+
+    @patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": ""})
+    def test_docx_embedded_excel_is_detected_and_parsed_locally(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["№", "Наименование", "Ед.", "Кол-во", "Средняя цена", "НМЦК"])
+        sheet.append([1, "Календарь настенный", "шт", 100, 440, 44000])
+        sheet.append([2, "Календарь настольный", "шт", 300, 401.67, 120501])
+        embedded = BytesIO()
+        workbook.save(embedded)
+
+        document = Document()
+        document.add_heading("Обоснование НМЦК")
+        base = BytesIO()
+        document.save(base)
+        content = BytesIO()
+        with zipfile.ZipFile(BytesIO(base.getvalue())) as source, zipfile.ZipFile(content, "w", zipfile.ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                target.writestr(info, source.read(info.filename))
+            target.writestr("word/embeddings/Microsoft_Excel_Worksheet.xlsx", embedded.getvalue())
+        content.seek(0)
+        content.name = "Обоснование НМЦК.docx"
+
+        inspection = inspect_tender_document(content)
+        content.seek(0)
+        result = recognize_tender_items(content)
+
+        self.assertEqual(inspection["processing_mode"], "embedded")
+        self.assertEqual(inspection["components"]["embedded_spreadsheets"], 1)
+        self.assertTrue(result["local_parse"])
+        self.assertEqual(len(result["items"]), 2)
+        self.assertEqual(sum(Decimal(value["nmck_total"]) for value in result["items"]), Decimal("164501.00"))
 
     def test_model_json_accepts_explanatory_wrapper_and_control_characters(self):
         result = _json_from_model('Ответ модели:\n```json\n{"items":[{"name":"строка\tс табуляцией"}]}\n```')
@@ -507,6 +542,48 @@ class TenderTests(TestCase):
         self.assertTrue(session.is_confirmed)
         self.assertEqual(session.confirmed_example.routes[0]["name"], "Под ключ")
         self.assertEqual(session.confirmed_example.routes[0]["psodin_calculation"]["productivity_per_hour"], "10")
+
+    def test_new_confirmation_supersedes_duplicate_without_deleting_history(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        production_type = ProductionType.objects.get(code="binding_special")
+        previous = ProductionTrainingExample.objects.create(
+            production_type=production_type, position_name="Папка", requirements={}, features=[],
+            routes=[{"name": "Старый маршрут"}], created_by=self.user,
+        )
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Папка", requirements={},
+            current_hypothesis={
+                "product_type": production_type.code,
+                "route": {"name": "Новый маршрут", "reason": "Исправлено", "steps": ["Новый маршрут"]},
+                "costs": [], "totals": {}, "learning_warnings": [],
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_confirm_production_type"), {"payload": json.dumps({"session_id": session.pk})})
+
+        self.assertEqual(response.status_code, 200)
+        previous.refresh_from_db()
+        self.assertFalse(previous.is_active)
+        self.assertEqual(previous.superseded_by_id, response.json()["example_id"])
+
+    def test_unverified_tz_price_is_blocked_from_learning(self):
+        production_type = ProductionType.objects.get(code="binding_special")
+        raw = {
+            "product_type": production_type.code,
+            "route": {"reason": "Под ключ", "processes": [{"name": "Универсальная типография"}]},
+            "costs": [{
+                "category": "logistics", "name": "Логистика", "amount_total": "3000",
+                "source": "дано в ТЗ", "source_type": "manager",
+                "recipe": {"method": "fixed", "inputs": {"fixed_amount": "3000"}},
+            }],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 1000, "requirements": {"requirements": []}}, [production_type], [])
+
+        self.assertEqual(result["costs"][0]["source"], "Источник цены не подтверждён")
+        self.assertTrue(result["learning_warnings"])
 
     @patch("tenders.services._ai_gateway_json")
     def test_untrained_classification_cannot_claim_high_confidence(self, gateway):
@@ -1000,23 +1077,15 @@ class TenderTests(TestCase):
         self.assertEqual(CatalogSyncRun.objects.get().status, "failed")
 
     def test_catalog_search_enforces_material_density_branding_and_stock(self):
-        supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://api.oasiscatalog.com")
-        CatalogProduct.objects.create(
-            supplier=supplier, external_id="exact", article="POLO-190", group_id="polo-exact",
-            name="Футболка поло", full_name="Футболка поло тёмно-синяя",
-            materials=["хлопок"], colors=["темно-синий"], branding=["Вышивка", "DTF"],
-            attributes=[{"name": "Плотность материала", "value": "190 г/м²"}],
-            price=Decimal("700"), discount_price=Decimal("650"), total_stock=500,
-            search_text="футболка поло темно синий хлопок плотность 190 г м² вышивка dtf", is_active=True,
-        )
-        CatalogProduct.objects.create(
-            supplier=supplier, external_id="thin", article="POLO-160", group_id="polo-thin",
-            name="Футболка поло", full_name="Футболка поло тёмно-синяя эконом",
-            materials=["хлопок"], colors=["темно-синий"], branding=["Вышивка"],
-            attributes=[{"name": "Плотность материала", "value": "160 г/м²"}],
-            price=Decimal("400"), total_stock=1000,
-            search_text="футболка поло темно синий хлопок плотность 160 г м² вышивка", is_active=True,
-        )
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки поло", "path": "categories/tekstil/polo"}]
+                return [
+                    {"id": "exact", "article": "POLO-190", "group_id": "polo-exact", "name": "Футболка поло", "full_name": "Футболка поло тёмно-синяя", "materials": ["хлопок"], "colors": ["темно-синий"], "branding": ["Вышивка", "DTF"], "attributes": [{"name": "Плотность материала", "value": "190 г/м²"}], "price": 700, "discount_price": 650, "total_stock": 500, "categories": [10]},
+                    {"id": "thin", "article": "POLO-160", "group_id": "polo-thin", "name": "Футболка поло", "full_name": "Футболка поло тёмно-синяя эконом", "materials": ["хлопок"], "colors": ["темно-синий"], "branding": ["Вышивка"], "attributes": [{"name": "Плотность материала", "value": "160 г/м²"}], "price": 400, "total_stock": 1000, "categories": [10]},
+                ]
         line = {
             "name": "Футболка поло", "quantity": "300",
             "requirements": {"requirements": [
@@ -1027,7 +1096,7 @@ class TenderTests(TestCase):
             ]},
         }
 
-        candidates = catalog_candidates_for_line(line, limit=3)
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "поло"}, client=Client())
 
         self.assertEqual(candidates[0]["external_id"], "exact")
         self.assertEqual(candidates[0]["fit"], "exact")
@@ -1037,29 +1106,104 @@ class TenderTests(TestCase):
         self.assertEqual(thin["fit"], "partial")
         self.assertTrue(any("требуется не менее 190" in value for value in thin["mismatches"]))
 
-    def test_catalog_search_does_not_repeat_color_variants_as_alternatives(self):
-        supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://api.oasiscatalog.com")
-        for external_id, color in (("blue", "синий"), ("red", "красный")):
-            CatalogProduct.objects.create(
-                supplier=supplier, external_id=external_id, article=external_id, group_id="same-shirt",
-                name="Футболка", full_name=f"Футболка {color}", colors=[color], materials=["хлопок"],
-                price=Decimal("500"), total_stock=100, search_text=f"футболка {color} хлопок", is_active=True,
-            )
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_llm_interprets_words_before_backend_catalog_search(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "textile_merch", "summary": "Футболка", "confidence": .5,
+            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+            "catalog_intent": {"product_class": "футболка", "synonyms": ["майка"], "hard_constraints": ["лаймово-зелёный цвет"], "preferences": []},
+        }, {})
+        catalog_search.return_value = [{
+            "id": "shirt", "external_id": "shirt", "supplier_code": "oasis",
+            "article": "SHIRT-1", "name": "Футболка", "price": "500.00",
+            "stock": 500, "url": "https://www.oasiscatalog.com/item/shirt",
+            "fit": "exact", "matches": ["Тип товара: футболка"],
+            "mismatches": [], "unknown": [],
+        }]
+        line = {"name": "Майка брендированная", "quantity": 160, "requirements": {"requirements": []}}
 
-        candidates = catalog_candidates_for_line({"name": "Футболка", "quantity": 10}, limit=3)
+        result = build_training_hypothesis(line)
+
+        self.assertEqual(result["catalog_intent"]["product_class"], "футболка")
+        self.assertEqual(result["catalog_candidates"][0]["name"], "Футболка")
+        self.assertEqual(catalog_search.call_args.kwargs["intent"]["synonyms"], ["майка"])
+        self.assertEqual(result["catalog_selection"]["selection_mode"], "automatic")
+        self.assertEqual(result["totals"]["material_unit"], "500.00")
+        self.assertEqual(result["totals"]["cost_total"], "80000.00")
+        self.assertEqual(result["costs"][0]["source_type"], "catalog")
+
+    @patch("tenders.catalog.catalog_candidates_for_line", side_effect=ValueError("broken external row"))
+    @patch("tenders.services._ai_gateway_json")
+    def test_catalog_failure_does_not_discard_valid_production_hypothesis(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "textile_merch", "summary": "Футболка", "confidence": .5,
+            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+            "catalog_intent": {"product_class": "футболка", "synonyms": ["майка"], "hard_constraints": [], "preferences": []},
+        }, {})
+
+        result = build_training_hypothesis({"name": "Майка", "quantity": 10, "requirements": {"requirements": []}})
+
+        self.assertEqual(result["product_type"], "textile_merch")
+        self.assertEqual(result["catalog_candidates"], [])
+        self.assertIn("Oasis", result["catalog_warning"])
+
+    def test_catalog_search_does_not_repeat_color_variants_as_alternatives(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
+                return [{"id": external_id, "article": external_id, "group_id": "same-shirt", "name": "Футболка", "full_name": f"Футболка {color}", "colors": [color], "materials": ["хлопок"], "price": 500, "total_stock": 100, "categories": [10]} for external_id, color in (("blue", "синий"), ("red", "красный"))]
+
+        candidates = catalog_candidates_for_line({"name": "Футболка", "quantity": 10}, limit=3, intent={"product_class": "футболка"}, client=Client())
 
         self.assertEqual(len(candidates), 1)
 
+    def test_catalog_search_reads_later_pages_and_matches_lime_to_green_apple(self):
+        target = {
+            "id": "00000008300", "article": "3100868S", "group_id": "apple-shirt", "color_group_id": "00000008300",
+            "name": "Футболка Super Heavy Super Club мужская",
+            "full_name": "Футболка Super Heavy Super Club мужская, зеленое яблоко",
+            "colors": [{"name": "зеленое яблоко"}], "materials": ["хлопок"],
+            "attributes": [{"name": "Плотность", "value": "180 г/м2"}],
+            "branding": ["DTF (Полноцвет)"], "discount_price": "510.60",
+            "total_stock": 200, "categories": [10],
+        }
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
+                if params.get("offset") == 0:
+                    return [{
+                        "id": f"dummy-{index}", "article": f"D-{index}", "group_id": f"dummy-{index}",
+                        "name": "Футболка", "full_name": "Футболка зеленая",
+                        "colors": [{"name": "зеленый"}], "materials": ["хлопок"],
+                        "attributes": [{"name": "Плотность", "value": "180 г/м2"}],
+                        "branding": ["DTF"], "price": "500", "total_stock": 200, "categories": [10],
+                    } for index in range(500)]
+                return [target]
+
+        line = {"name": "Майка брендированная", "quantity": 160, "requirements": {"requirements": [
+            {"label": "Материал", "value": "хлопок"},
+            {"label": "Цвет", "value": "лаймово-зелёный"},
+            {"label": "Плотность", "value": "не менее 180 г/м²"},
+            {"label": "Нанесение", "value": "DTF"},
+        ]}}
+
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "футболка"}, client=Client())
+
+        self.assertEqual(candidates[0]["external_id"], "00000008300")
+        self.assertEqual(candidates[0]["fit"], "exact")
+        self.assertEqual(candidates[0]["price"], "510.60")
+        self.assertTrue(any("семейство: lime" in value for value in candidates[0]["matches"]))
+
     def test_selected_catalog_product_is_recalculated_on_backend_and_replaces_material_cost(self):
         production_type = ProductionType.objects.create(code="catalog-product", name="Каталожный товар")
-        supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://api.oasiscatalog.com")
-        product = CatalogProduct.objects.create(
-            supplier=supplier, external_id="exact", article="POLO-190", group_id="polo-exact",
-            name="Футболка поло", full_name="Футболка поло тёмно-синяя",
-            materials=["хлопок"], colors=["темно-синий"], branding=["Вышивка"],
-            attributes=[{"name": "Плотность", "value": "190 г/м²"}], discount_price=Decimal("650"),
-            total_stock=500, search_text="футболка поло темно синий хлопок плотность 190 г м² вышивка", is_active=True,
-        )
         line = {
             "name": "Футболка поло", "quantity": "300",
             "requirements": {"requirements": [
@@ -1072,15 +1216,17 @@ class TenderTests(TestCase):
         hypothesis = {
             "product_type": production_type.code, "confidence": .8, "matched_example_ids": [1],
             "route": {"reason": "Нужен готовый товар и нанесение", "processes": [{"name": "Закупка материала"}, {"name": "Нанесение"}]},
+            "questions": ["Какова цена закупки готовой футболки?", "Какова цена нанесения?"],
             "costs": [{
                 "category": "material", "name": "Старая ручная цена", "amount_total": "99999",
                 "source": "Введено администратором", "source_type": "manager", "process_name": "Закупка материала",
             }],
+            "catalog_candidates": [{"id": "exact", "external_id": "exact", "supplier_code": "oasis", "article": "POLO-190", "name": "Футболка поло тёмно-синяя", "price": "650.00", "stock": 500, "url": "https://www.oasiscatalog.com/item/exact", "fit": "exact", "matches": ["Тип товара: поло"], "mismatches": [], "unknown": []}],
         }
 
-        result = apply_catalog_candidate(hypothesis, line, product.pk)
+        result = apply_catalog_candidate(hypothesis, line, "exact")
 
-        self.assertEqual(result["catalog_selection"]["id"], product.pk)
+        self.assertEqual(result["catalog_selection"]["id"], "exact")
         self.assertEqual(result["product_type"], production_type.code)
         self.assertIn({"code": production_type.code, "name": production_type.name}, result["production_types"])
         self.assertEqual(result["totals"]["material_unit"], "650.00")
@@ -1088,16 +1234,36 @@ class TenderTests(TestCase):
         self.assertEqual(result["costs"][0]["source_type"], "catalog")
         self.assertEqual(result["costs"][0]["calculation_steps"][-1], "300 шт. × 650.00 ₽/шт. = 195000.00 ₽")
         self.assertEqual(result["route"]["steps"][0], "Закупка готового изделия")
+        self.assertEqual(result["questions"], ["Какова цена нанесения?"])
+        self.assertIn("дилерская цена", result["route"]["reason"])
+        self.assertEqual(result["sources"][-1]["supplier_name"], "Oasis")
+        self.assertEqual(result["sources"][-1]["price"], "650.00")
+
+    def test_admin_can_use_partial_catalog_candidate_with_visible_mismatches(self):
+        production_type = ProductionType.objects.create(code="catalog-partial", name="Каталожный товар")
+        line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": []}}
+        hypothesis = {
+            "product_type": production_type.code, "confidence": .5,
+            "route": {"reason": "Каталог", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "catalog_candidates": [{
+                "id": "partial", "external_id": "partial", "supplier_code": "oasis",
+                "article": "PART-1", "name": "Футболка зелёная", "price": "400.00",
+                "stock": 100, "url": "https://www.oasiscatalog.com/item/partial",
+                "fit": "partial", "matches": ["Тип товара: футболка"],
+                "mismatches": ["Плотность ниже требования"], "unknown": [],
+            }],
+        }
+
+        result = apply_catalog_candidate(hypothesis, line, "partial")
+
+        self.assertEqual(result["totals"]["material_unit"], "400.00")
+        self.assertEqual(result["totals"]["cost_total"], "4000.00")
+        self.assertEqual(result["catalog_selection"]["selection_mode"], "manual")
+        self.assertEqual(result["catalog_selection"]["accepted_mismatches"], ["Плотность ниже требования"])
 
     def test_catalog_choice_becomes_training_data_only_after_confirmation(self):
         admin = get_user_model().objects.create_superuser(username="catalog-admin", password="password")
         production_type = ProductionType.objects.create(code="catalog-training", name="Каталожный товар")
-        supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://api.oasiscatalog.com")
-        product = CatalogProduct.objects.create(
-            supplier=supplier, external_id="shirt", article="SHIRT-1", group_id="shirt",
-            name="Футболка", full_name="Футболка белая", materials=["хлопок"], colors=["белый"],
-            discount_price=Decimal("500"), total_stock=100, search_text="футболка белый хлопок", is_active=True,
-        )
         line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [
             {"label": "Материал", "value": "хлопок"}, {"label": "Цвет", "value": "белый"},
         ]}}
@@ -1107,17 +1273,20 @@ class TenderTests(TestCase):
                 "stage": "training_dialogue", "product_type": production_type.code, "confidence": .5,
                 "route": {"name": "Закупка", "reason": "Каталог", "steps": ["Закупка готового изделия"], "processes": [{"name": "Закупка готового изделия"}]},
                 "costs": [], "matched_example_ids": [],
+                "catalog_candidates": [{"id": "shirt", "external_id": "shirt", "supplier_code": "oasis", "article": "SHIRT-1", "name": "Футболка белая", "price": "500.00", "stock": 100, "url": "https://www.oasiscatalog.com/item/shirt", "fit": "exact", "matches": ["Тип товара: футболка"], "mismatches": [], "unknown": []}],
             },
         )
         self.client.force_login(admin)
 
         selected = self.client.post(reverse("tender_select_catalog_product"), {
-            "payload": json.dumps({"session_id": session.pk, "line": line, "product_id": product.pk}),
+            "payload": json.dumps({"session_id": session.pk, "line": line, "product_id": "shirt"}),
         })
 
         self.assertEqual(selected.status_code, 200)
         decision = CatalogMatchDecision.objects.get()
         self.assertFalse(decision.is_confirmed)
+        self.assertIsNone(decision.product)
+        self.assertEqual(decision.product_external_id, "shirt")
         self.assertEqual(selected.json()["totals"]["cost_total"], "5000.00")
 
         confirmed = self.client.post(reverse("tender_confirm_production_type"), {
@@ -1128,7 +1297,7 @@ class TenderTests(TestCase):
         decision.refresh_from_db()
         self.assertTrue(decision.is_confirmed)
         example = ProductionTrainingExample.objects.get(pk=confirmed.json()["example_id"])
-        self.assertEqual(example.routes[0]["catalog_selection"]["id"], product.pk)
+        self.assertEqual(example.routes[0]["catalog_selection"]["id"], "shirt")
 
     def test_route_name_contains_only_universal_processes(self):
         production_type = ProductionType.objects.create(code="route-test", name="Тест маршрута")

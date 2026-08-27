@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from django.db import transaction
-from django.db.models import Q
+from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -300,7 +300,10 @@ def sync_oasis_catalog(client=None):
 
 
 PRODUCT_ANCHORS = {
-    "футболка": ("футболка",),
+    "футболка": ("футболка", "майка"),
+    "майка": ("футболка", "майка"),
+    "жилет": ("жилет", "безрукавка"),
+    "жилетка": ("жилет", "безрукавка"),
     "поло": ("поло", "футболка поло"),
     "кепка": ("кепка", "бейсболка"),
     "бейсболка": ("бейсболка", "кепка"),
@@ -358,6 +361,62 @@ def _meaningful_tokens(value):
     return {token for token in _normalized(value).split() if len(token) >= 3 and token not in ignored and not token.isdigit()}
 
 
+COLOR_FAMILIES = {
+    "lime": ("лайм", "лаймов", "салатов", "зеленое яблоко", "яблочно зелен", "кислотно зелен"),
+    "navy": ("темно син", "темно син", "navy"),
+    "sky": ("голуб", "небесно син"),
+    "turquoise": ("бирюз", "аквамарин"),
+    "burgundy": ("бордов", "бургунди", "марсала"),
+    "scarlet": ("алый", "ярко крас"),
+    "orange": ("оранж", "апельсин"),
+    "violet": ("фиолет", "пурпур"),
+    "pink": ("розов", "фуксия"),
+    "beige": ("бежев", "песочн", "слоновая кость"),
+    "gray": ("серый", "серебрист", "графит", "меланж"),
+    "white": ("белый", "молочн"),
+    "black": ("черный", "антрацит"),
+    "yellow": ("желтый", "лимонн"),
+}
+COLOR_PARENTS = {
+    "lime": "green", "navy": "blue", "sky": "blue", "turquoise": "blue",
+    "burgundy": "red", "scarlet": "red", "orange": "orange", "violet": "violet",
+    "pink": "pink", "beige": "beige", "gray": "gray", "white": "white",
+    "black": "black", "yellow": "yellow",
+}
+BASE_COLOR_MARKERS = {
+    "green": ("зелен",), "blue": ("син",), "red": ("красн",),
+    "orange": ("оранж",), "violet": ("фиолет",), "pink": ("розов",),
+    "beige": ("бежев",), "gray": ("сер", "графит", "меланж"),
+    "white": ("бел",), "black": ("черн",), "yellow": ("желт",),
+}
+
+
+def _color_family(value):
+    """Map commercial shade names to a stable family without flattening shades."""
+    normalized = _normalized(value)
+    for family, aliases in COLOR_FAMILIES.items():
+        if any(_normalized(alias) in normalized for alias in aliases):
+            return family
+    for family, aliases in BASE_COLOR_MARKERS.items():
+        if any(alias in normalized for alias in aliases):
+            return family
+    return ""
+
+
+def _colors_compatible(required, offered):
+    required_family = _color_family(required)
+    offered_family = _color_family(offered)
+    if not required_family or not offered_family:
+        return bool(_meaningful_tokens(required) & _meaningful_tokens(offered)), ""
+    if required_family == offered_family:
+        return True, required_family
+    # A generic requirement such as "green" accepts its named shades, but a
+    # precise requirement such as "lime" must not silently accept any green.
+    if COLOR_PARENTS.get(offered_family) == required_family:
+        return True, offered_family
+    return False, ""
+
+
 def _density_constraint(line):
     text = _normalized(_constraint_text(line, "плотност"))
     match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:г|гр)?\s*(?:м2|м²)", text)
@@ -403,6 +462,127 @@ def _product_anchors(line):
     return tuple(token for token in name.split() if len(token) >= 4)[:3]
 
 
+CATALOG_CLASS_ALIASES = {
+    "футболка": ("футболка", "майка", "тенниска", "t shirt", "tshirt"),
+    "жилет": ("жилет", "жилетка", "безрукавка"),
+    "поло": ("поло", "футболка поло"),
+    "кепка": ("кепка", "бейсболка"),
+    "толстовка": ("толстовка", "худи", "свитшот"),
+}
+
+
+def _canonical_catalog_class(value):
+    normalized = _normalized(value)
+    for canonical, aliases in CATALOG_CLASS_ALIASES.items():
+        if any(_normalized(alias) in normalized for alias in aliases):
+            return canonical
+    return normalized.split()[0] if normalized else ""
+
+
+def _live_category_data(client):
+    cached = cache.get("oasis-live-categories-v1")
+    if isinstance(cached, list) and cached:
+        return cached
+    payload = client.get("/v4/categories", {"format": "json"})
+    items = payload.get("items", []) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        raise CatalogSyncError("Oasis вернул неожиданный формат категорий.")
+    result = [{
+        "id": str(item.get("id")),
+        "parent_id": str(item.get("parent_id") or ""),
+        "name": _text(item.get("name"), 300),
+        "path": _text(item.get("path") or item.get("name"), 1000),
+    } for item in items if isinstance(item, dict) and item.get("id") not in (None, "")]
+    cache.set("oasis-live-categories-v1", result, 6 * 60 * 60)
+    return result
+
+
+def _live_category_for_intent(categories, intent, line):
+    product_class = _canonical_catalog_class(intent.get("product_class") if isinstance(intent, dict) else "")
+    if not product_class:
+        product_class = _canonical_catalog_class(line.get("name", ""))
+    aliases = list(CATALOG_CLASS_ALIASES.get(product_class, (product_class,)))
+    if isinstance(intent, dict):
+        aliases.extend(_text(value, 80) for value in intent.get("synonyms", [])[:8] if _text(value, 80))
+    terms = {_normalized(value) for value in aliases if _normalized(value)}
+    ranked = []
+    for category in categories:
+        name = _normalized(category["name"])
+        path = _normalized(category["path"])
+        matches = [
+            term for term in terms
+            if term == name or term in name or name in term or SequenceMatcher(None, term, name).ratio() >= .72
+        ]
+        if not matches:
+            continue
+        exact = any(term == name for term in matches)
+        depth = category["path"].count("/")
+        score = (100 if exact else 60) + max(len(value) for value in matches) - depth * 2
+        ranked.append((score, -depth, category))
+    return max(ranked, default=(0, 0, None), key=lambda value: (value[0], value[1]))[2]
+
+
+def _attribute_values(product, markers):
+    values = []
+    for attribute in product.attributes if isinstance(product.attributes, list) else []:
+        if not isinstance(attribute, dict):
+            continue
+        name = _normalized(attribute.get("name"))
+        if any(marker in name for marker in markers):
+            value = _text(attribute.get("value"), 500)
+            if value:
+                values.append(value)
+    return values
+
+
+def _product_sizes(product):
+    values = []
+    if _text(product.size, 100):
+        values.append(_text(product.size, 100))
+    for attribute in product.attributes if isinstance(product.attributes, list) else []:
+        if not isinstance(attribute, dict):
+            continue
+        name = _normalized(attribute.get("name"))
+        if name not in {"размер", "российский размер"}:
+            continue
+        value = _text(attribute.get("value"), 100)
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _aggregate_color_variants(products):
+    """Represent one colour family as one offer instead of one card per size SKU."""
+    grouped = {}
+    for product in products:
+        grouped.setdefault(product.color_group_id or product.external_id, []).append(product)
+    result = []
+    for family_id, variants in grouped.items():
+        representative = next((value for value in variants if value.external_id == family_id), variants[0])
+        variant_ids = [value.external_id for value in variants]
+        prices = [value.effective_price for value in variants if value.effective_price is not None]
+        sizes = []
+        for value in variants:
+            for size in _product_sizes(value):
+                if size not in sizes:
+                    sizes.append(size)
+        representative.external_id = family_id
+        representative.total_stock = sum(max(0, value.total_stock) for value in variants)
+        representative.is_on_order = any(value.is_on_order for value in variants)
+        representative.product_url = f"https://www.oasiscatalog.com/item/{family_id}"
+        if prices:
+            # Use the highest variant price to avoid silently understating a
+            # mixed-size tender when a supplier prices sizes differently.
+            representative.discount_price = max(prices)
+        representative.raw_data = {
+            **(representative.raw_data if isinstance(representative.raw_data, dict) else {}),
+            "variant_ids": variant_ids,
+            "sizes": sizes,
+        }
+        result.append(representative)
+    return result
+
+
 def _fit_product(product, line, anchors, quantity):
     matches, mismatches, unknown = [], [], []
     product_text = _normalized(product.search_text)
@@ -414,23 +594,26 @@ def _fit_product(product, line, anchors, quantity):
 
     material_text = _constraint_text(line, "материал") or _constraint_text(line, "состав")
     material_tokens = _meaningful_tokens(material_text)
-    product_materials = _meaningful_tokens(" ".join(product.materials if isinstance(product.materials, list) else []))
+    material_values = product.materials if isinstance(product.materials, list) and product.materials else _attribute_values(product, ("материал", "состав"))
+    product_materials = _meaningful_tokens(" ".join(material_values))
     if material_tokens:
         if material_tokens & product_materials:
             matches.append(f"Материал: {', '.join(sorted(material_tokens & product_materials))}")
         elif product_materials:
-            mismatches.append(f"Материал не совпадает: требуется {material_text}; в каталоге {', '.join(product.materials)}")
+            mismatches.append(f"Материал не совпадает: требуется {material_text}; в каталоге {', '.join(material_values)}")
         else:
             unknown.append("Материал не указан в каталоге")
 
     color_text = _constraint_text(line, "цвет")
-    color_tokens = _meaningful_tokens(color_text)
-    product_colors = _meaningful_tokens(" ".join(product.colors if isinstance(product.colors, list) else []))
-    if color_tokens:
-        if color_tokens & product_colors:
-            matches.append(f"Цвет: {', '.join(sorted(color_tokens & product_colors))}")
-        elif product_colors:
-            mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(product.colors)}")
+    color_values = product.colors if isinstance(product.colors, list) and product.colors else _attribute_values(product, ("цвет",))
+    product_color_text = " ".join(color_values)
+    if _meaningful_tokens(color_text):
+        color_matches, color_family = _colors_compatible(color_text, product_color_text)
+        if color_matches:
+            family_note = f" (семейство: {color_family})" if color_family else ""
+            matches.append(f"Цвет: {', '.join(color_values)}{family_note}")
+        elif _meaningful_tokens(product_color_text):
+            mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(color_values)}")
         else:
             unknown.append("Цвет не указан в каталоге")
 
@@ -452,7 +635,8 @@ def _fit_product(product, line, anchors, quantity):
                 mismatches.append(f"Плотность {_text(product_density)} г/м²; требуется {sign} {_text(density['value'])} г/м²")
 
     requested_branding = _requested_branding(line)
-    product_branding = _normalized(" ".join(product.branding if isinstance(product.branding, list) else []))
+    branding_values = product.branding if isinstance(product.branding, list) and product.branding else _attribute_values(product, ("нанес", "брендирован"))
+    product_branding = _normalized(" ".join(branding_values))
     for method in requested_branding:
         if any(alias in product_branding for alias in BRANDING_ALIASES[method]):
             matches.append(f"Поддерживается нанесение: {method}")
@@ -478,26 +662,53 @@ def _fit_product(product, line, anchors, quantity):
     return score, matches, mismatches, unknown
 
 
-def catalog_candidates_for_line(line, limit=3, supplier_code="oasis"):
+def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=None, client=None):
+    """Return a small live shortlist. Products are never persisted locally."""
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
         quantity = 0
-    anchors = _product_anchors(line)
-    query = CatalogProduct.objects.filter(supplier__code=supplier_code, supplier__is_active=True, is_active=True)
-    if anchors:
-        anchor_filter = Q()
-        for value in anchors:
-            anchor_filter |= Q(search_text__icontains=_normalized(value))
-        query = query.filter(anchor_filter)
-    pool = list(query.only(
-        "id", "supplier_id", "external_id", "article", "group_id", "name", "full_name", "materials", "colors",
-        "attributes", "branding", "price", "discount_price", "total_stock", "is_on_order", "delivery_days",
-        "image_url", "product_url", "search_text", "synced_at",
-    )[:600])
+    client = client or OasisClient()
+    categories = _live_category_data(client)
+    category = _live_category_for_intent(categories, intent or {}, line)
+    if not category:
+        return []
+    category_map = {value["id"]: value["path"] or value["name"] for value in categories}
+    fields = (
+        "id,article,name,full_name,description,article_base,group_id,color_group_id,size,images,colors,"
+        "categories,categories_array,brand,attributes,materials,branding,package,price,discount_price,"
+        "total_stock,is_on_order,delivery_days,supply_terms,lead,defect,updated_at"
+    )
+    rows, seen_ids = [], set()
+    # Oasis orders category results independently of relevance. Read bounded
+    # pages instead of ranking only the arbitrary first 500 products.
+    for offset in range(0, 1000, 500):
+        payload = client.get("/v4/products", {
+            "format": "json", "category": category["id"], "limit": 500, "offset": offset,
+            "available": 1, "includeGroupId": 1, "fields": fields,
+        })
+        page = payload.get("items", []) if isinstance(payload, dict) else payload
+        if not isinstance(page, list):
+            raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
+        fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
+        rows.extend(fresh)
+        seen_ids.update(str(value.get("id", "")) for value in fresh)
+        if len(page) < 500 or not fresh:
+            break
+    supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
+    marker = str(uuid.uuid4())
+    pool = [value for value in (
+        _product_from_payload(supplier, raw, category_map, marker)
+        for raw in rows if isinstance(raw, dict)
+    ) if value and value.is_active]
+    pool = _aggregate_color_variants(pool)
+    canonical_class = _canonical_catalog_class((intent or {}).get("product_class") or line.get("name", ""))
+    anchors = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
     ranked = []
     for product in pool:
         score, matches, mismatches, unknown = _fit_product(product, line, anchors, quantity)
+        if "Не совпадает тип товара" in mismatches:
+            continue
         ranked.append((score, product, matches, mismatches, unknown))
     ranked.sort(key=lambda value: (not value[3], value[0], value[1].total_stock), reverse=True)
     selected, seen_groups = [], set()
@@ -508,7 +719,8 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis"):
         seen_groups.add(group_key)
         price = product.effective_price
         selected.append({
-            "id": product.pk,
+            "id": product.external_id,
+            "supplier_code": supplier_code,
             "external_id": product.external_id,
             "article": product.article,
             "name": product.full_name or product.name,
@@ -523,7 +735,10 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis"):
             "mismatches": mismatches,
             "unknown": unknown,
             "score": round(score, 2),
-            "synced_at": product.synced_at.isoformat() if product.synced_at else "",
+            "synced_at": timezone.now().isoformat(),
+            "category": category["path"] or category["name"],
+            "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
+            "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
         })
         if len(selected) >= max(1, min(10, limit)):
             break

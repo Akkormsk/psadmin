@@ -38,6 +38,8 @@ class ProductionTrainingExample(models.Model):
     features = models.JSONField("Существенные признаки", default=list, blank=True)
     routes = models.JSONField("Подтверждённые маршруты", default=list, blank=True)
     note = models.CharField("Комментарий администратора", max_length=500, blank=True)
+    is_active = models.BooleanField("Используется в обучении", default=True)
+    superseded_by = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="superseded_examples")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="production_training_examples")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -261,7 +263,11 @@ class CatalogMatchDecision(models.Model):
     DECISION_CHOICES = [("selected", "Выбран"), ("rejected", "Отклонён")]
 
     session = models.ForeignKey(ProductionTrainingSession, on_delete=models.CASCADE, related_name="catalog_decisions")
-    product = models.ForeignKey(CatalogProduct, on_delete=models.PROTECT, related_name="training_decisions")
+    product = models.ForeignKey(CatalogProduct, on_delete=models.SET_NULL, null=True, blank=True, related_name="training_decisions")
+    supplier_code = models.CharField("Код поставщика", max_length=50, default="oasis")
+    product_external_id = models.CharField("ID товара поставщика", max_length=100, blank=True)
+    product_article = models.CharField("Артикул", max_length=120, blank=True)
+    product_snapshot = models.JSONField("Карточка товара на момент решения", default=dict, blank=True)
     decision = models.CharField("Решение", max_length=20, choices=DECISION_CHOICES)
     reason_codes = models.JSONField("Причины", default=list, blank=True)
     requirement_signature = models.JSONField("Требования на момент решения", default=dict, blank=True)
@@ -277,7 +283,8 @@ class CatalogMatchDecision(models.Model):
         verbose_name_plural = "Решения по товарам каталога"
 
     def __str__(self):
-        return f"{self.get_decision_display()}: {self.product}"
+        product = self.product or self.product_article or self.product_external_id or "товар"
+        return f"{self.get_decision_display()}: {product}"
 
 
 class TenderEstimate(models.Model):
