@@ -1,4 +1,5 @@
 from decimal import Decimal
+import uuid
 
 from django.conf import settings
 from django.db import models
@@ -32,6 +33,7 @@ class ProductionType(models.Model):
 
 
 class ProductionTrainingExample(models.Model):
+    knowledge_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     production_type = models.ForeignKey(ProductionType, on_delete=models.PROTECT, related_name="examples", verbose_name="Подтверждённый тип")
     position_name = models.CharField("Наименование позиции", max_length=500)
     requirements = models.JSONField("Исходные требования", default=dict, blank=True)
@@ -40,6 +42,9 @@ class ProductionTrainingExample(models.Model):
     note = models.CharField("Комментарий администратора", max_length=500, blank=True)
     is_active = models.BooleanField("Используется в обучении", default=True)
     superseded_by = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="superseded_examples")
+    embedding = models.JSONField("Смысловой индекс", default=list, blank=True)
+    embedding_model = models.CharField("Модель смыслового индекса", max_length=100, blank=True)
+    embedding_updated_at = models.DateTimeField("Индекс обновлён", null=True, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="production_training_examples")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -121,6 +126,7 @@ class TenderKnowledgeSource(models.Model):
         ("catalog", "Каталог / API"),
     ]
 
+    knowledge_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     title = models.CharField("Источник", max_length=300)
     supplier_name = models.CharField("Поставщик", max_length=200, blank=True)
     source_type = models.CharField("Тип", max_length=20, choices=SOURCE_CHOICES)

@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import base64
+import hashlib
 import ipaddress
 import math
 import socket
@@ -27,6 +28,7 @@ import pypdfium2 as pdfium
 import xlrd
 import olefile
 from PIL import Image
+from django.core.cache import cache
 from django.utils import timezone
 
 
@@ -2013,21 +2015,97 @@ matched_example_ids указывай только для действитель�
     }
 
 
+def _embeddings_enabled():
+    return os.getenv("TIMEWEB_EMBEDDINGS_ENABLED", "0") == "1"
+
+
+def _embedding_model():
+    return os.getenv("TIMEWEB_EMBEDDING_MODEL", "openai/text-embedding-3-small").strip()
+
+
+def _embedding_vector(text, model=None):
+    api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
+    base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
+    model = model or _embedding_model()
+    if not api_key:
+        raise TenderAIError("AI Gateway ещё не настроен для смыслового поиска.")
+    payload = json.dumps({"model": model, "input": _cell_text(text)[:12_000]}, ensure_ascii=False).encode("utf-8")
+    request = Request(
+        f"{base_url}/embeddings", data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urlopen(request, timeout=45) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        vector = result["data"][0]["embedding"]
+        if not isinstance(vector, list) or not vector:
+            raise ValueError
+        return [float(value) for value in vector]
+    except (HTTPError, URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise TenderAIError("Не удалось построить смысловой индекс.") from exc
+
+
+def _training_example_embedding_text(example):
+    return json.dumps({
+        "position": example.position_name,
+        "requirements": example.requirements,
+        "features": example.features,
+        "routes": example.routes,
+    }, ensure_ascii=False)
+
+
+def refresh_training_example_embedding(example):
+    if not _embeddings_enabled():
+        return False
+    try:
+        example.embedding = _embedding_vector(_training_example_embedding_text(example))
+    except TenderAIError:
+        logger.warning("Could not refresh training embedding for example %s", example.pk)
+        return False
+    example.embedding_model = _embedding_model()
+    example.embedding_updated_at = timezone.now()
+    example.save(update_fields=["embedding", "embedding_model", "embedding_updated_at"])
+    return True
+
+
+def _cosine_similarity(left, right):
+    if not left or not right or len(left) != len(right):
+        return 0
+    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
+    return sum(a * b for a, b in zip(left, right)) / denominator if denominator else 0
+
+
 def _training_examples_for_line(line, limit=12):
     from .models import ProductionTrainingExample
 
     target = _normalized_item_name(line.get("name"))
-    examples = list(ProductionTrainingExample.objects.filter(is_active=True).select_related("production_type")[:80])
+    examples = list(ProductionTrainingExample.objects.filter(is_active=True).select_related("production_type")[:200])
+    semantic_scores = {}
+    model = _embedding_model()
+    embedded = [value for value in examples if value.embedding_model == model and isinstance(value.embedding, list) and value.embedding]
+    if _embeddings_enabled() and embedded:
+        source = json.dumps(line, ensure_ascii=False, sort_keys=True)
+        cache_key = f"training-query-embedding:{model}:{hashlib.sha256(source.encode('utf-8')).hexdigest()}"
+        query_embedding = cache.get(cache_key)
+        if query_embedding is None:
+            try:
+                query_embedding = _embedding_vector(source, model=model)
+                cache.set(cache_key, query_embedding, 24 * 60 * 60)
+            except TenderAIError:
+                query_embedding = []
+        semantic_scores = {value.pk: max(0, _cosine_similarity(query_embedding, value.embedding)) for value in embedded}
     ranked = []
     for example in examples:
         source = _normalized_item_name(example.position_name)
-        score = SequenceMatcher(None, target, source).ratio() if target and source else 0
+        lexical_score = SequenceMatcher(None, target, source).ratio() if target and source else 0
         target_tokens, source_tokens = set(target.split()), set(source.split())
         if target_tokens and source_tokens:
-            score = max(score, len(target_tokens & source_tokens) / len(target_tokens | source_tokens))
-        ranked.append((score, example))
-    ranked.sort(key=lambda value: (value[0], value[1].created_at), reverse=True)
-    return [value for score, value in ranked[:limit] if score >= .12]
+            lexical_score = max(lexical_score, len(target_tokens & source_tokens) / len(target_tokens | source_tokens))
+        semantic_score = semantic_scores.get(example.pk)
+        score = semantic_score * .8 + lexical_score * .2 if semantic_score is not None else lexical_score
+        ranked.append((score, lexical_score, semantic_score, example))
+    ranked.sort(key=lambda value: (value[0], value[3].created_at), reverse=True)
+    return [value for score, lexical, semantic, value in ranked[:limit] if lexical >= .12 or (semantic or 0) >= .2]
 
 
 def _knowledge_sources_for_line(line, limit=4):

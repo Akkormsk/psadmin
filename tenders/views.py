@@ -13,7 +13,7 @@ from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
 from .models import CatalogMatchDecision, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
+from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
 logger = logging.getLogger(__name__)
@@ -490,6 +490,7 @@ def confirm_production_type(request):
                 position_name__iexact=name,
                 is_active=True,
             ).exclude(pk=example.pk).update(is_active=False, superseded_by=example)
+            refresh_training_example_embedding(example)
             if attached_source_ids:
                 TenderKnowledgeSource.objects.filter(
                     pk__in=attached_source_ids, created_by=request.user, is_active=False,
@@ -534,6 +535,7 @@ def confirm_production_type(request):
         note=str(payload.get("note", ""))[:500],
         created_by=request.user,
     )
+    refresh_training_example_embedding(example)
     ProductionTrainingExample.objects.filter(
         production_type=production_type,
         position_name__iexact=name,
