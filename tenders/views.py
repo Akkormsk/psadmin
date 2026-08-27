@@ -29,7 +29,6 @@ def knowledge_export(request):
     if not expected or not hmac.compare_digest(request.GET.get("token", ""), expected):
         return HttpResponse(status=403)
     response = JsonResponse(export_knowledge_bundle(), json_dumps_params={"ensure_ascii": False})
-    response["Content-Disposition"] = 'attachment; filename="assistant_knowledge.json"'
     return response
 
 
