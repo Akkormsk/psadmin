@@ -2109,10 +2109,6 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
             amount = Decimal("0")
         if not name or (amount <= 0 and calculated_amount is None):
             continue
-        if amount > 0 and calculated_amount is None:
-            learning_warnings.append(f"Для статьи «{name}» нет проверяемой серверной формулы.")
-        amount = calculated_amount if calculated_amount is not None else _money(amount)
-        totals[category] += amount
         source_type = item.get("source_type") if item.get("source_type") in {"calculator", "catalog", "supplier", "history", "manager"} else "manager"
         source = _cell_text(item.get("source"))[:300]
         manual_unit = _decimal_input(line, {"material": "material_unit", "application": "application_unit", "logistics": "logistics_unit"}[category], 0) or Decimal("0")
@@ -2123,6 +2119,16 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
             source = "Источник цены не подтверждён"
             source_type = "manager"
             learning_warnings.append(f"Для статьи «{name}» цена ошибочно приписана ТЗ.")
+        if amount > 0 and calculated_amount is None and source_type == "manager":
+            # A fixed amount explicitly supplied by the administrator is already
+            # a complete backend input. Do not depend on the LLM to serialize the
+            # equivalent recipe correctly and do not show a false warning.
+            recipe = {"method": "fixed", "inputs": {"fixed_amount": str(_money(amount))}}
+            calculated_amount, calculated_steps = _evaluate_cost_recipe(recipe, quantity)
+        if amount > 0 and calculated_amount is None:
+            learning_warnings.append(f"Для статьи «{name}» нет проверяемой серверной формулы.")
+        amount = calculated_amount if calculated_amount is not None else _money(amount)
+        totals[category] += amount
         raw_steps = _short_text_list(item.get("calculation_steps"), limit=12)
         costs.append({
             "category": category,

@@ -1403,6 +1403,29 @@ class TenderTests(TestCase):
         self.assertEqual(result["costs"][0]["source"], "Введено администратором в расчёте")
         self.assertEqual(result["costs"][0]["source_type"], "manager")
 
+    def test_manual_fixed_logistics_gets_backend_recipe_without_warning(self):
+        production_type = ProductionType.objects.create(code="manual-logistics", name="Ручная логистика")
+        raw = {
+            "product_type": production_type.code,
+            "route": {"steps": ["Закупка готового изделия", "Нанесение"]},
+            "costs": [{
+                "category": "logistics",
+                "name": "Межцеховая доставка",
+                "amount_total": 1000,
+                "source": "Введено администратором",
+                "source_type": "manager",
+                "recipe": {"method": "none", "inputs": {}},
+            }],
+        }
+
+        result = _normalize_training_hypothesis(raw, {"quantity": 160}, [production_type], [])
+
+        logistics = result["costs"][0]
+        self.assertEqual(logistics["amount_total"], "1000.00")
+        self.assertEqual(logistics["recipe"], {"method": "fixed", "inputs": {"fixed_amount": "1000.00"}})
+        self.assertEqual(logistics["calculation_steps"], ["Фиксированная стоимость на тираж: 1000.00 ₽"])
+        self.assertNotIn("нет проверяемой серверной формулы", " ".join(result["learning_warnings"]))
+
     def test_private_url_cannot_be_used_as_calculation_source(self):
         with self.assertRaisesMessage(Exception, "Локальные и служебные адреса"):
             _validate_public_url("http://127.0.0.1/price")
