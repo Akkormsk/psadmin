@@ -13,7 +13,7 @@ from django.views.decorators.http import require_POST
 from openpyxl import load_workbook
 
 from .models import CatalogMatchDecision, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
+from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items
 
 
 logger = logging.getLogger(__name__)
@@ -303,6 +303,7 @@ def add_calculation_source(request):
     try:
         prepared_sources = []
         batch_mode = isinstance(payload.get("sources"), list)
+        administrator_feedback = str(payload.get("feedback", "")).strip()[:6000]
         for source_index, raw_source in enumerate(raw_sources):
             if not isinstance(raw_source, dict):
                 raise ValueError
@@ -314,19 +315,39 @@ def add_calculation_source(request):
             if upload is not None and upload.size > 10 * 1024 * 1024:
                 return JsonResponse({"error": f"Файл источника № {source_index + 1} больше 10 МБ."}, status=400)
             existing = None
+            target_name = costs[cost_index].get("name", "") if cost_index is not None else ""
             if raw_source.get("source_id"):
                 existing = TenderKnowledgeSource.objects.get(pk=raw_source["source_id"], is_active=True)
             if existing:
-                extracted = {"content": existing.content_summary, "source_type": existing.source_type, "url": existing.url}
+                if existing.url:
+                    extracted = extract_calculation_source(
+                        source_url=existing.url,
+                        selection_context={"line": line, "feedback": administrator_feedback, "target_name": target_name},
+                    )
+                    refreshed = extracted.get("structured_data") if isinstance(extracted.get("structured_data"), dict) else {}
+                    existing.content_summary = extracted["content"]
+                    existing.structured_data = {
+                        **(existing.structured_data if isinstance(existing.structured_data, dict) else {}),
+                        **refreshed,
+                    }
+                    existing.save(update_fields=["content_summary", "structured_data", "updated_at"])
+                else:
+                    extracted = {
+                        "content": existing.content_summary,
+                        "source_type": existing.source_type,
+                        "url": existing.url,
+                        "structured_data": existing.structured_data if isinstance(existing.structured_data, dict) else {},
+                    }
                 source = existing
             else:
                 extracted = extract_calculation_source(
                     source_text=str(raw_source.get("source_text", "")),
                     source_url=str(raw_source.get("source_url", "")),
                     upload=upload,
+                    selection_context={"line": line, "feedback": administrator_feedback, "target_name": target_name},
                 )
-                target_name = costs[cost_index].get("name", "") if cost_index is not None else ""
                 title = str(raw_source.get("title", "")).strip() or str(raw_source.get("supplier_name", "")).strip() or target_name or f"Источник для {line.get('name')}"
+                extracted_structured = extracted.get("structured_data") if isinstance(extracted.get("structured_data"), dict) else {}
                 source = TenderKnowledgeSource.objects.create(
                     title=title[:300],
                     supplier_name=str(raw_source.get("supplier_name", "")).strip()[:200],
@@ -337,6 +358,7 @@ def add_calculation_source(request):
                         "scope": "cost" if cost_index is not None else "position",
                         "position_name": str(line.get("name", ""))[:300],
                         "cost_name": target_name,
+                        **extracted_structured,
                     },
                     created_by=request.user,
                     is_active=False,
@@ -348,7 +370,6 @@ def add_calculation_source(request):
                 "target": costs[cost_index] if cost_index is not None else None,
             })
 
-        administrator_feedback = str(payload.get("feedback", "")).strip()[:6000]
         feedback_parts = [administrator_feedback] if administrator_feedback else []
         for source_index, prepared in enumerate(prepared_sources, start=1):
             source, target, extracted = prepared["source"], prepared["target"], prepared["extracted"]
@@ -367,6 +388,16 @@ def add_calculation_source(request):
         feedback_parts.append("Сохрани универсальные процессы, подробные формулы, все промежуточные действия и способы адаптации к текущему тиражу. Не смешивай предложения разных поставщиков в одну цену.")
         feedback = "\n\n".join(feedback_parts)
         updated = build_training_hypothesis(line, current=hypothesis, feedback=feedback)
+        for prepared in prepared_sources:
+            structured = prepared["extracted"].get("structured_data") if isinstance(prepared["extracted"].get("structured_data"), dict) else {}
+            updated = apply_verified_source_quote(
+                updated,
+                line,
+                structured.get("price_quote"),
+                str(prepared["source"]),
+                prepared["source"].url,
+                prepared["target"],
+            )
         updated["session_id"] = session.pk
         attached_sources = hypothesis.get("sources") if isinstance(hypothesis.get("sources"), list) else []
         new_source_ids = {prepared["source"].pk for prepared in prepared_sources}
@@ -390,8 +421,10 @@ def add_calculation_source(request):
             if matching is None and cost_index < len(updated_costs):
                 matching = updated_costs[cost_index]
             if matching is not None:
+                structured = prepared["extracted"].get("structured_data") if isinstance(prepared["extracted"].get("structured_data"), dict) else {}
                 matching.update({
-                    "source": str(source), "source_id": source.pk, "source_type": source.source_type,
+                    "source": str(source), "source_id": source.pk,
+                    "source_type": "supplier" if structured.get("price_quote") else source.source_type,
                     "source_url": source.url, "source_date": source.updated_at.date().isoformat(),
                 })
         session.current_hypothesis = updated

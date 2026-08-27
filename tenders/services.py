@@ -52,18 +52,78 @@ class _VisibleTextParser(HTMLParser):
         super().__init__()
         self.parts = []
         self.hidden = 0
+        self.tables = []
+        self._table = None
+        self._row = None
+        self._cell = None
+        self._cell_span = (1, 1)
+        self._rowspans = {}
+        self._next_cell_index = 0
 
     def handle_starttag(self, tag, attrs):
         if tag in {"script", "style", "noscript", "svg"}:
             self.hidden += 1
+            return
+        if self.hidden:
+            return
+        if tag == "table" and self._table is None:
+            self._table = []
+            self._rowspans = {}
+        elif tag == "tr" and self._table is not None:
+            width = max(self._rowspans.keys(), default=-1) + 1
+            self._row = [""] * width
+            for column, (remaining, value) in list(self._rowspans.items()):
+                self._row[column] = value
+                if remaining <= 1:
+                    del self._rowspans[column]
+                else:
+                    self._rowspans[column] = (remaining - 1, value)
+            self._next_cell_index = 0
+        elif tag in {"th", "td"} and self._row is not None:
+            self._cell = []
+            attributes = dict(attrs)
+            try:
+                colspan = max(1, min(40, int(attributes.get("colspan", 1))))
+                rowspan = max(1, min(300, int(attributes.get("rowspan", 1))))
+            except (TypeError, ValueError):
+                colspan, rowspan = 1, 1
+            self._cell_span = (colspan, rowspan)
 
     def handle_endtag(self, tag):
         if tag in {"script", "style", "noscript", "svg"} and self.hidden:
             self.hidden -= 1
+            return
+        if self.hidden:
+            return
+        if tag in {"th", "td"} and self._cell is not None:
+            value = _cell_text(" ".join(self._cell))
+            while self._next_cell_index < len(self._row) and self._row[self._next_cell_index]:
+                self._next_cell_index += 1
+            colspan, rowspan = self._cell_span
+            required = self._next_cell_index + colspan
+            if len(self._row) < required:
+                self._row.extend([""] * (required - len(self._row)))
+            for column in range(self._next_cell_index, required):
+                self._row[column] = value
+                if rowspan > 1:
+                    self._rowspans[column] = (rowspan - 1, value)
+            self._next_cell_index = required
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            if any(self._row):
+                self._table.append(self._row[:40])
+            self._row = None
+        elif tag == "table" and self._table is not None:
+            if self._table:
+                self.tables.append(self._table[:300])
+            self._table = None
 
     def handle_data(self, data):
         if not self.hidden and data.strip():
-            self.parts.append(data.strip())
+            value = data.strip()
+            self.parts.append(value)
+            if self._cell is not None:
+                self._cell.append(value)
 
 
 def _cell_text(value):
@@ -768,6 +828,157 @@ def _validate_public_url(value):
     return value
 
 
+def _format_html_tables(tables, limit=18_000):
+    parts = []
+    for table_index, rows in enumerate(tables[:20], start=1):
+        rendered = []
+        for row_index, row in enumerate(rows[:300], start=1):
+            cells = [_cell_text(value).replace("|", "/") for value in row]
+            if any(cells):
+                rendered.append(f"СТРОКА {row_index}: " + " | ".join(cells))
+        if rendered:
+            parts.append(f"HTML-ТАБЛИЦА {table_index}\n" + "\n".join(rendered))
+        if sum(len(value) for value in parts) >= limit:
+            break
+    return "\n\n".join(parts)[:limit]
+
+
+def _tier_bounds(value):
+    text = _normalized_text(value)
+    numbers = [Decimal(item.replace(",", ".")) for item in re.findall(r"\d+(?:[.,]\d+)?", text)]
+    if not numbers:
+        return None
+    if re.search(r"\b(?:от|свыше|более)\b", text) or "+" in str(value):
+        return numbers[0], None
+    if re.search(r"\bдо\b", text):
+        return Decimal("0"), numbers[0]
+    if len(numbers) >= 2 and re.search(r"[-–—]", str(value)):
+        return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
+    return None
+
+
+def _tier_contains(bounds, quantity):
+    if not bounds:
+        return False
+    lower, upper = bounds
+    return quantity >= lower and (upper is None or quantity <= upper)
+
+
+def _price_cell(value):
+    text = _cell_text(value).replace("\xa0", " ")
+    matches = re.findall(r"(?<!\d)(\d[\d ]*(?:[.,]\d{1,2})?)(?!\d)", text)
+    if len(matches) != 1:
+        return None
+    try:
+        return Decimal(matches[0].replace(" ", "").replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def _dimension_signatures(value):
+    normalized = _cell_text(value).lower().replace("×", "х").replace("x", "х")
+    signatures = set()
+    for match in re.finditer(r"\d+(?:[.,]\d+)?(?:\s*х\s*\d+(?:[.,]\d+)?){1,3}", normalized):
+        signatures.add(re.sub(r"\s+", "", match.group(0)).replace(",", "."))
+    return signatures
+
+
+def _select_html_price_quote(tables, context):
+    if not tables or not isinstance(context, dict):
+        return None
+    line = context.get("line") if isinstance(context.get("line"), dict) else {}
+    query = " ".join([
+        _cell_text(line.get("name")),
+        json.dumps(line.get("requirements", {}), ensure_ascii=False),
+        _cell_text(context.get("feedback")),
+        _cell_text(context.get("target_name")),
+    ])
+    try:
+        quantity = Decimal(str(line.get("quantity") or 0).replace(",", "."))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if quantity <= 0:
+        return None
+    query_normalized = _normalized_text(query)
+    query_dimensions = _dimension_signatures(query)
+    markers = {
+        "армани": ("армани",), "мокрый шелк": ("мокрый шелк",), "полиэфирный шелк": ("полиэфир",),
+        "джерси": ("джерси",), "габардин": ("габардин",), "атлас": ("атлас",),
+        "оверлок": ("оверлок",), "горячий рез": ("горяч", "рез"),
+        "треугольный": ("треуголь",), "квадратный": ("квадрат",),
+    }
+    requested_markers = {
+        label for label, roots in markers.items() if all(root in query_normalized for root in roots)
+    }
+    candidates = []
+    for table_index, rows in enumerate(tables, start=1):
+        headers = None
+        for row_index, row in enumerate(rows, start=1):
+            tier_columns = {index: _tier_bounds(cell) for index, cell in enumerate(row)}
+            tier_columns = {index: bounds for index, bounds in tier_columns.items() if bounds}
+            if len(tier_columns) >= 2:
+                headers = (row, tier_columns)
+                continue
+            if not headers or not row:
+                continue
+            header_row, tier_columns = headers
+            matching_columns = [index for index, bounds in tier_columns.items() if _tier_contains(bounds, quantity)]
+            if len(matching_columns) != 1:
+                continue
+            column = matching_columns[0]
+            if column >= len(row):
+                continue
+            price = _price_cell(row[column])
+            if price is None or price <= 0:
+                continue
+            label = _cell_text(row[0])
+            row_normalized = _normalized_text(label)
+            row_dimensions = _dimension_signatures(label)
+            score = 0
+            evidence = []
+            if query_dimensions:
+                common_dimensions = query_dimensions & row_dimensions
+                if common_dimensions:
+                    score += 100
+                    evidence.append(f"размер {sorted(common_dimensions)[0]}")
+                elif row_dimensions:
+                    score -= 100
+            for marker in requested_markers:
+                roots = markers[marker]
+                if all(root in row_normalized for root in roots):
+                    score += 18
+                    evidence.append(marker)
+                elif any(root in row_normalized for root in roots):
+                    score += 5
+                else:
+                    score -= 12
+            query_tokens = {value for value in re.findall(r"[a-zа-я]{4,}", query_normalized) if value not in {"товар", "цена", "тираж", "штук", "источник", "требования"}}
+            row_tokens = set(re.findall(r"[a-zа-я]{4,}", row_normalized))
+            score += min(20, len(query_tokens & row_tokens) * 3)
+            candidates.append({
+                "score": score,
+                "table_index": table_index,
+                "row_index": row_index,
+                "row_label": label,
+                "tier": _cell_text(header_row[column]),
+                "quantity": str(quantity),
+                "unit_price": str(_money(price)),
+                "amount_total": str(_money(price * quantity)),
+                "evidence": evidence,
+                "method": "html_table_tier",
+            })
+    if not candidates:
+        return None
+    candidates.sort(key=lambda value: value["score"], reverse=True)
+    best = candidates[0]
+    conflicting = [value for value in candidates[1:] if value["unit_price"] != best["unit_price"] and value["score"] >= best["score"] - 8]
+    minimum_score = 90 if query_dimensions else 30
+    if best["score"] < minimum_score or conflicting:
+        return None
+    best["confidence"] = "exact" if best["score"] >= 110 else "probable"
+    return best
+
+
 def _fetch_public_page(value):
     value = _validate_public_url(value)
     request = Request(value, headers={"User-Agent": "PSAdmin tender calculator/1.0", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
@@ -784,15 +995,19 @@ def _fetch_public_page(value):
     if content_type not in {"text/html", "text/plain", "application/xhtml+xml"}:
         raise TenderAIError("По ссылке нет читаемой страницы. Приложите PDF или скриншот.")
     text = raw.decode(charset, errors="replace")
+    tables = []
     if content_type != "text/plain":
         parser = _VisibleTextParser()
         parser.feed(text)
-        text = "\n".join(parser.parts)
+        tables = parser.tables
+        visible_text = "\n".join(parser.parts)
+        table_text = _format_html_tables(tables)
+        text = f"{table_text}\n\nТЕКСТ СТРАНИЦЫ:\n{visible_text}" if table_text else visible_text
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not text:
         raise TenderAIError("На странице не найден читаемый прайс. Приложите скриншот.")
-    return text[:20_000], final_url
+    return text[:40_000], final_url, tables
 
 
 def _image_data_url(upload):
@@ -808,12 +1023,22 @@ def _image_data_url(upload):
     return f"data:image/jpeg;base64,{base64.b64encode(output.getvalue()).decode('ascii')}"
 
 
-def extract_calculation_source(source_text="", source_url="", upload=None):
+def extract_calculation_source(source_text="", source_url="", upload=None, selection_context=None):
     parts, source_type, resolved_url = [], "text", source_url
+    structured_data = {}
     if source_text.strip():
         parts.append(source_text.strip()[:12_000])
     if source_url.strip():
-        page_text, resolved_url = _fetch_public_page(source_url.strip())
+        page_text, resolved_url, tables = _fetch_public_page(source_url.strip())
+        quote = _select_html_price_quote(tables, selection_context)
+        if quote:
+            structured_data["price_quote"] = quote
+            page_text = (
+                "ЦЕНА, ПРОВЕРЕННАЯ БЭКЕНДОМ ПО HTML-ТАБЛИЦЕ:\n"
+                f"{quote['row_label']} | диапазон {quote['tier']} | {quote['unit_price']} ₽/шт. | "
+                f"{quote['quantity']} шт. = {quote['amount_total']} ₽\n\n{page_text}"
+            )
+        structured_data["html_table_count"] = len(tables)
         parts.append(f"СТРАНИЦА ПОСТАВЩИКА:\n{page_text}")
         source_type = "link"
     if upload is not None:
@@ -832,7 +1057,7 @@ def extract_calculation_source(source_text="", source_url="", upload=None):
     content = "\n\n".join(value for value in parts if value).strip()
     if not content:
         raise TenderAIError("Добавьте ссылку, текст или файл источника.")
-    return {"content": content[:20_000], "source_type": source_type, "url": resolved_url[:1000]}
+    return {"content": content[:20_000], "source_type": source_type, "url": resolved_url[:1000], "structured_data": structured_data}
 
 
 def recognize_tender_items(upload):
@@ -2180,6 +2405,75 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
         "learning_warnings": learning_warnings,
         "matched_example_ids": matched_ids,
     }
+
+
+def apply_verified_source_quote(hypothesis, line, quote, source_name, source_url="", target=None):
+    """Replace an LLM-read web price with the exact row/tier chosen by the backend."""
+    from .models import ProductionType
+
+    if not isinstance(hypothesis, dict) or not isinstance(quote, dict) or quote.get("confidence") != "exact":
+        return hypothesis
+    try:
+        quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
+        unit_price = Decimal(str(quote.get("unit_price", "")).replace(",", "."))
+    except (InvalidOperation, TypeError, ValueError):
+        return hypothesis
+    if unit_price <= 0:
+        return hypothesis
+    raw = json.loads(json.dumps(hypothesis, ensure_ascii=False))
+    costs = [value for value in raw.get("costs", []) if isinstance(value, dict)]
+    target = target if isinstance(target, dict) else None
+    matching = None
+    if target:
+        matching = next((value for value in costs if _normalized_text(value.get("name")) == _normalized_text(target.get("name"))), None)
+    if matching is None and source_url:
+        matching = next((value for value in costs if _cell_text(value.get("source_url")) == source_url), None)
+    category = (matching or target or {}).get("category")
+    if category not in {"material", "application", "logistics"}:
+        category = "material"
+    route = raw.get("route") if isinstance(raw.get("route"), dict) else {}
+    processes = _normalize_route_processes(route)
+    process_name = _cell_text((matching or target or {}).get("process_name"))
+    if not process_name:
+        process_name = processes[0]["name"] if processes else "Изготовление под ключ"
+    cost_name = _cell_text((target or matching or {}).get("name")) or _cell_text(quote.get("row_label")) or "Изготовление по прайсу поставщика"
+    retained = []
+    for cost in costs:
+        same_target = target and _normalized_text(cost.get("name")) == _normalized_text(target.get("name"))
+        same_source = source_url and _cell_text(cost.get("source_url")) == source_url
+        if same_target or same_source:
+            continue
+        retained.append(cost)
+    amount_total = _money(unit_price * quantity)
+    retained.insert(0, {
+        "category": category,
+        "process_name": process_name,
+        "name": cost_name,
+        "amount_total": str(amount_total),
+        "source": _cell_text(source_name)[:300],
+        "source_type": "supplier",
+        "source_url": _cell_text(source_url)[:1000],
+        "source_date": timezone.localdate().isoformat(),
+        "basis": f"{_decimal_text(quantity)} шт. × {_money(unit_price)} ₽/шт.; строка «{_cell_text(quote.get('row_label'))}»; диапазон «{_cell_text(quote.get('tier'))}»",
+        "recipe": {"method": "unit_rate", "inputs": {"unit_rate": str(_money(unit_price))}},
+        "calculation_steps": [],
+        "adaptation": "Строка товара выбрана по характеристикам, а ценовой столбец — бэкендом по текущему тиражу из HTML-таблицы поставщика.",
+        "confirmed": False,
+    })
+    raw["costs"] = retained
+    raw["questions"] = [
+        value for value in raw.get("questions", []) if "цен" not in _normalized_text(value)
+    ] if isinstance(raw.get("questions"), list) else []
+    change = f"Цена поставщика проверена по строке «{quote.get('row_label')}» и диапазону «{quote.get('tier')}»: {_money(unit_price)} ₽/шт."
+    raw["understood_changes"] = [*_short_text_list(raw.get("understood_changes"), limit=7), change]
+    production_types = list(ProductionType.objects.filter(is_active=True))
+    normalized = _normalize_training_hypothesis(raw, line, production_types, raw.get("matched_example_ids", []))
+    for key in ("catalog_candidates", "catalog_selection", "catalog_intent", "catalog_warning", "psodin_calculation", "sources", "usage"):
+        if key in hypothesis:
+            normalized[key] = hypothesis[key]
+    normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
+    normalized["verified_source_quote"] = quote
+    return _attach_memory_preview(normalized)
 
 
 def _attach_memory_preview(hypothesis):

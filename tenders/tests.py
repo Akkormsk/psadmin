@@ -14,7 +14,7 @@ from openpyxl import Workbook
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, OasisClient, catalog_candidates_for_line, sync_oasis_catalog
-from .services import _apply_psodin_calculation, _evaluate_cost_recipe, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
+from .services import _VisibleTextParser, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -1431,6 +1431,99 @@ class TenderTests(TestCase):
         self.assertEqual(logistics["calculation_steps"], ["Фиксированная стоимость на тираж: 1000.00 ₽"])
         self.assertNotIn("нет проверяемой серверной формулы", " ".join(result["learning_warnings"]))
 
+    def test_html_price_table_keeps_rows_and_backend_selects_exact_tier(self):
+        html = """
+            <div>КВАДРАТНЫЕ 70х70 см полиэфирный шелк, горячий рез</div>
+            <div>Основная цена 325 ₽</div><div>от 101 шт. — 250 ₽</div>
+            <table>
+              <tr><th>Косынки, банданы ТРЕУГОЛЬНЫЕ</th><th>до 10 шт</th><th>11-20 шт</th><th>21-50 шт</th><th>51-100 шт</th><th>101-200 шт</th><th>201-500 шт</th><th>от 500 шт</th></tr>
+              <tr><td>70х70х100 см полиэфирный шелк, горячий рез</td><td>225 ₽</td><td>215 ₽</td><td>210 ₽</td><td>200 ₽</td><td>185 ₽</td><td>165 ₽</td><td>155 ₽</td></tr>
+              <tr><td>70х70х100 см армани/мокрый шелк, оверлок</td><td>380 ₽</td><td>365 ₽</td><td>360 ₽</td><td>345 ₽</td><td>325 ₽</td><td>285 ₽</td><td>275 ₽</td></tr>
+              <tr><th>Цены на косынки КВАДРАТНЫЕ</th><th>до 10 шт</th><th>11-20 шт</th><th>21-50 шт</th><th>51-100 шт</th><th>101-200 шт</th><th>201-500 шт</th><th>от 500 шт</th></tr>
+              <tr><td>70х70 см армани/мокрый шелк, оверлок</td><td>635 ₽</td><td>620 ₽</td><td>615 ₽</td><td>575 ₽</td><td>545 ₽</td><td>474 ₽</td><td>465 ₽</td></tr>
+            </table>
+        """
+        parser = _VisibleTextParser()
+        parser.feed(html)
+
+        quote = _select_html_price_quote(parser.tables, {
+            "line": {"name": "Платок", "quantity": 600, "requirements": {}},
+            "feedback": "Найди платок армани, оверлок, 70х70х100, тираж 600 штук",
+        })
+
+        self.assertIn("СТРОКА 3: 70х70х100 см армани/мокрый шелк, оверлок", _format_html_tables(parser.tables))
+        self.assertEqual(quote["row_label"], "70х70х100 см армани/мокрый шелк, оверлок")
+        self.assertEqual(quote["tier"], "от 500 шт")
+        self.assertEqual(quote["unit_price"], "275.00")
+        self.assertEqual(quote["amount_total"], "165000.00")
+        self.assertEqual(quote["confidence"], "exact")
+
+    def test_html_price_table_refuses_ambiguous_product_row(self):
+        html = """
+            <table>
+              <tr><th>Товар</th><th>до 100 шт</th><th>от 101 шт</th></tr>
+              <tr><td>Платок армани красный</td><td>400 ₽</td><td>300 ₽</td></tr>
+              <tr><td>Платок армани синий</td><td>410 ₽</td><td>310 ₽</td></tr>
+            </table>
+        """
+        parser = _VisibleTextParser()
+        parser.feed(html)
+
+        quote = _select_html_price_quote(parser.tables, {
+            "line": {"name": "Платок армани", "quantity": 600, "requirements": {}},
+            "feedback": "Найди цену платка армани",
+        })
+
+        self.assertIsNone(quote)
+
+    def test_html_price_table_respects_rowspan_and_colspan_headers(self):
+        html = """
+            <table>
+              <tr><th rowspan="2">Товар</th><th colspan="2">Цена по тиражу</th></tr>
+              <tr><th>до 100 шт</th><th>от 101 шт</th></tr>
+              <tr><td>Платок 70х70 армани</td><td>400 ₽</td><td>300 ₽</td></tr>
+            </table>
+        """
+        parser = _VisibleTextParser()
+        parser.feed(html)
+
+        quote = _select_html_price_quote(parser.tables, {
+            "line": {"name": "Платок 70х70 армани", "quantity": 600, "requirements": {}},
+        })
+
+        self.assertEqual(parser.tables[0][1], ["Товар", "до 100 шт", "от 101 шт"])
+        self.assertEqual(quote["unit_price"], "300.00")
+
+    def test_backend_verified_web_quote_overrides_llm_price(self):
+        production_type = ProductionType.objects.create(code="web-price", name="Цена с сайта")
+        line = {"name": "Платок", "quantity": 600, "requirements": {}}
+        hypothesis = {
+            "product_type": production_type.code,
+            "confidence": .5,
+            "route": {"processes": [{"name": "Изготовление под ключ"}], "reason": "Поставщик"},
+            "costs": [{
+                "category": "material", "process_name": "Изготовление под ключ", "name": "Платок армани",
+                "amount_total": "150000", "source": "Pro-flag", "source_type": "supplier",
+                "source_url": "https://pro-flag.ru/price", "recipe": {"method": "unit_rate", "inputs": {"unit_rate": "250"}},
+            }],
+            "questions": ["Какова точная цена платка?"],
+        }
+        quote = {
+            "confidence": "exact", "method": "html_table_tier",
+            "row_label": "70х70х100 см армани/мокрый шелк, оверлок",
+            "tier": "от 500 шт", "quantity": "600", "unit_price": "275.00", "amount_total": "165000.00",
+        }
+
+        result = apply_verified_source_quote(
+            hypothesis, line, quote, "Pro-flag · платки", "https://pro-flag.ru/price"
+        )
+
+        self.assertEqual(result["costs"][0]["recipe"], {"method": "unit_rate", "inputs": {"unit_rate": "275.00"}})
+        self.assertEqual(result["costs"][0]["amount_total"], "165000.00")
+        self.assertEqual(result["totals"]["cost_unit"], "275.00")
+        self.assertEqual(result["questions"], [])
+        self.assertEqual(result["verified_source_quote"]["tier"], "от 500 шт")
+
     def test_private_url_cannot_be_used_as_calculation_source(self):
         with self.assertRaisesMessage(Exception, "Локальные и служебные адреса"):
             _validate_public_url("http://127.0.0.1/price")
@@ -1444,7 +1537,13 @@ class TenderTests(TestCase):
         production_type = ProductionType.objects.get(code="digital_sheet")
         current = {"stage": "training_dialogue", "product_type": production_type.code, "route": {"name": "Закупка материала", "steps": ["Закупка материала"]}, "costs": [{"name": "Бумага", "amount_total": "1000"}], "totals": {}}
         session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Папка", requirements={}, current_hypothesis=current)
-        extract.return_value = {"content": "Majestic SRA3 — 380 руб./лист", "source_type": "link", "url": "https://supplier.example/price"}
+        extract.return_value = {
+            "content": "Majestic SRA3 — 380 руб./лист", "source_type": "link", "url": "https://supplier.example/price",
+            "structured_data": {"price_quote": {
+                "confidence": "exact", "method": "html_table_tier", "row_label": "Majestic SRA3",
+                "tier": "от 1 шт", "quantity": "100", "unit_price": "380.00", "amount_total": "38000.00",
+            }},
+        }
         rebuilt = {**current, "costs": [{"name": "Бумага", "amount_total": "9500", "calculation_steps": ["25 листов × 380 ₽"]}], "understood_changes": ["Цена бумаги пересчитана"]}
         rebuild.return_value = rebuilt
         self.client.force_login(self.user)
@@ -1458,6 +1557,8 @@ class TenderTests(TestCase):
         self.assertEqual(source.supplier_name, "Дубль В")
         self.assertFalse(source.is_active)
         self.assertEqual(response.json()["costs"][0]["source_id"], source.pk)
+        self.assertEqual(response.json()["costs"][0]["amount_total"], "38000.00")
+        self.assertEqual(response.json()["costs"][0]["source_type"], "supplier")
         self.assertTrue(response.json()["sources"][0]["is_pending"])
         self.assertIn("Majestic SRA3", rebuild.call_args.kwargs["feedback"])
 
