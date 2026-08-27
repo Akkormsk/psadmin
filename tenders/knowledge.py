@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime
 from uuid import UUID
 
 from django.db import transaction
@@ -25,7 +26,7 @@ SOURCE_SIGNATURE_FIELDS = (
 )
 
 
-def export_knowledge_bundle():
+def export_knowledge_bundle(include_embeddings=False):
     examples = list(ProductionTrainingExample.objects.select_related("production_type", "superseded_by").order_by("created_at", "pk"))
     sources = list(TenderKnowledgeSource.objects.filter(is_active=True).order_by("created_at", "pk"))
     return {
@@ -54,6 +55,11 @@ def export_knowledge_bundle():
             "note": value.note,
             "is_active": value.is_active,
             "superseded_by": str(value.superseded_by.knowledge_id) if value.superseded_by else None,
+            **({
+                "embedding": value.embedding,
+                "embedding_model": value.embedding_model,
+                "embedding_updated_at": value.embedding_updated_at.isoformat() if value.embedding_updated_at else None,
+            } if include_embeddings else {}),
         } for value in examples],
         "knowledge_sources": [{
             "knowledge_id": str(value.knowledge_id),
@@ -137,6 +143,11 @@ def import_knowledge_bundle(bundle, user):
             example.embedding = []
             example.embedding_model = ""
             example.embedding_updated_at = None
+        if "embedding" in raw:
+            example.embedding = raw.get("embedding") or []
+            example.embedding_model = raw.get("embedding_model", "")[:100]
+            updated_at = raw.get("embedding_updated_at")
+            example.embedding_updated_at = datetime.fromisoformat(updated_at) if updated_at else None
         example.save()
         example_map[str(knowledge_id)] = example
 

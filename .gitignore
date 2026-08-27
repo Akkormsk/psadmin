@@ -5,6 +5,7 @@ __pycache__/
 db.sqlite3
 psadmin-local-export-*.json
 .env
+.knowledge_sync_token
 .codex/
 runserver*.log
 staticfiles/

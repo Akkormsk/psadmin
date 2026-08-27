@@ -8,6 +8,7 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from .models import ProductionTrainingExample, ProductionType, TenderKnowledgeSource
+from .knowledge import export_knowledge_bundle, import_knowledge_bundle
 from .services import _training_examples_for_line
 
 
@@ -55,6 +56,18 @@ class KnowledgeBundleTests(TestCase):
         self.assertEqual(imported.knowledge_id, self.example.knowledge_id)
         self.assertEqual(imported.routes[0]["name"], "Закупка готового изделия")
         self.assertEqual(TenderKnowledgeSource.objects.get().knowledge_id, self.source.knowledge_id)
+
+    def test_export_import_can_carry_embeddings(self):
+        self.example.embedding = [0.1, 0.2]
+        self.example.embedding_model = "test-embedding"
+        self.example.save(update_fields=["embedding", "embedding_model"])
+
+        payload = export_knowledge_bundle(include_embeddings=True)
+        self.assertEqual(payload["training_examples"][0]["embedding"], [0.1, 0.2])
+
+        import_knowledge_bundle(payload, self.user)
+        self.example.refresh_from_db()
+        self.assertEqual(self.example.embedding_model, "test-embedding")
 
 
 class TrainingEmbeddingTests(TestCase):
