@@ -191,21 +191,30 @@ def sync_gifts_catalog(client=None, category=None):
         with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml:
             rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category)
         marker = str(uuid.uuid4())
-        objects = [CatalogProduct(supplier=supplier, **{**row, "sync_marker": marker}) for row in rows]
-        external_ids = [value.external_id for value in objects]
-        existing = set(CatalogProduct.objects.filter(supplier=supplier, external_id__in=external_ids).values_list("external_id", flat=True))
-        if objects:
-            CatalogProduct.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=PRODUCT_UPDATE_FIELDS)
+        created_count = updated_count = 0
+        batch_size = 500
+        for offset in range(0, len(rows), batch_size):
+            batch = [CatalogProduct(supplier=supplier, **{**row, "sync_marker": marker}) for row in rows[offset:offset + batch_size]]
+            external_ids = [value.external_id for value in batch]
+            existing = set(CatalogProduct.objects.filter(supplier=supplier, external_id__in=external_ids).values_list("external_id", flat=True))
+            if batch:
+                CatalogProduct.objects.bulk_create(batch, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=PRODUCT_UPDATE_FIELDS)
+            created_count += len(batch) - len(existing)
+            updated_count += len(existing)
+            run.received_count = offset + len(batch)
+            run.created_count = created_count
+            run.updated_count = updated_count
+            run.save(update_fields=["received_count", "created_count", "updated_count"])
         now = timezone.now()
         supplier.last_synced_at = now
         supplier.sync_status = "success"
-        supplier.sync_message = f"Товаров: {len(objects)}; новых: {len(objects) - len(existing)}; обновлено: {len(existing)}"
+        supplier.sync_message = f"Товаров: {len(rows)}; новых: {created_count}; обновлено: {updated_count}"
         supplier.save(update_fields=["last_synced_at", "sync_status", "sync_message"])
         run.status = "success"
         run.finished_at = now
-        run.received_count = len(objects)
-        run.created_count = len(objects) - len(existing)
-        run.updated_count = len(existing)
+        run.received_count = len(rows)
+        run.created_count = created_count
+        run.updated_count = updated_count
         run.save(update_fields=["status", "finished_at", "received_count", "created_count", "updated_count"])
         return run
     except Exception as exc:
