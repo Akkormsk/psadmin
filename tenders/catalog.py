@@ -99,6 +99,12 @@ class GiftsXmlClient:
 
 
 def _gifts_text(node, name):
+    value = node.attrib.get(name)
+    if value:
+        return _text(value, 5000)
+    for child in node:
+        if child.tag.rsplit("}", 1)[-1] == name:
+            return _text(child.text, 5000)
     value = node.find(name)
     return _text(value.text if value is not None else "", 5000)
 
@@ -109,10 +115,12 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None):
     for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
         if page.tag.rsplit("}", 1)[-1] != "page":
             continue
-        page_name = _text(page.attrib.get("name"), 500)
+        page_name = _gifts_text(page, "name")
         if not category or category in _normalized(page_name):
-            for product in page.findall(".//product"):
-                product_id = product.attrib.get("product") or _gifts_text(product, "product")
+            for product in page.iter():
+                if product.tag.rsplit("}", 1)[-1] != "product":
+                    continue
+                product_id = product.attrib.get("product") or _gifts_text(product, "product") or _text(product.text, 500)
                 if product_id:
                     category_ids[str(product_id)] = page_name
         page.clear()
