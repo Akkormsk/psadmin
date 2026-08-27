@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from django.db import transaction
@@ -718,9 +718,15 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             continue
         seen_groups.add(group_key)
         price = product.effective_price
+        product_url = product.product_url
+        supplier_site = urlparse(product_url or supplier.base_url).netloc.lower()
+        if supplier_site.startswith("www."):
+            supplier_site = supplier_site[4:]
         selected.append({
             "id": product.external_id,
             "supplier_code": supplier_code,
+            "supplier_name": supplier.name,
+            "supplier_site": supplier_site,
             "external_id": product.external_id,
             "article": product.article,
             "name": product.full_name or product.name,
@@ -729,7 +735,7 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             "stock": product.total_stock,
             "delivery_days": product.delivery_days,
             "image_url": product.image_url,
-            "url": product.product_url,
+            "url": product_url,
             "fit": "exact" if not mismatches and not unknown else "partial",
             "matches": matches,
             "mismatches": mismatches,

@@ -2321,14 +2321,18 @@ def apply_catalog_candidate(hypothesis, line, product_id):
         candidate = next(value for value in candidates if str(value.get("id")) == str(product_id))
     except (StopIteration, TypeError, ValueError):
         raise TenderAIError("Товар больше не входит в актуальную подборку. Обновите гипотезу.")
+    supplier_code = _cell_text(candidate.get("supplier_code")).lower()
+    supplier_name = _cell_text(candidate.get("supplier_name"))[:200] or {"oasis": "Oasis"}.get(supplier_code, supplier_code or "Поставщик")
+    supplier_site = _cell_text(candidate.get("supplier_site"))[:200]
+    supplier_label = " · ".join(value for value in (supplier_name, supplier_site) if value)
     try:
         quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
-        raise TenderAIError("Не удалось определить количество для товара Oasis.")
+        raise TenderAIError("Не удалось определить количество для товара поставщика.")
     try:
         price = Decimal(str(candidate.get("price")))
     except (InvalidOperation, TypeError, ValueError):
-        raise TenderAIError("У товара Oasis больше нет актуальной цены.")
+        raise TenderAIError("У товара поставщика больше нет актуальной цены.")
     raw = json.loads(json.dumps(hypothesis, ensure_ascii=False)) if isinstance(hypothesis, dict) else {}
     costs = [
         value for value in raw.get("costs", [])
@@ -2337,28 +2341,28 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     costs.insert(0, {
         "category": "material",
         "process_name": "Закупка готового изделия",
-        "name": candidate.get("name") or "Товар Oasis",
+        "name": candidate.get("name") or "Товар поставщика",
         "amount_total": str(_money(price * quantity)),
-        "source": f"Oasis · арт. {candidate.get('article', '')}",
+        "source": f"{supplier_label} · арт. {candidate.get('article', '')}",
         "source_type": "catalog",
         "source_url": candidate.get("url", ""),
         "source_date": timezone.localdate().isoformat(),
         "basis": f"{_decimal_text(quantity)} шт. × {_money(price)} ₽/шт.",
         "recipe": {"method": "unit_rate", "inputs": {"unit_rate": str(price)}},
         "calculation_steps": [],
-        "adaptation": "Цена и свободный остаток получены прямым запросом к API Oasis; перед закупкой требуется повторная проверка актуальности.",
+        "adaptation": f"Цена и свободный остаток получены из каталога поставщика {supplier_name}; перед закупкой требуется повторная проверка актуальности.",
         "confirmed": False,
     })
     raw["costs"] = costs
     route = raw.get("route") if isinstance(raw.get("route"), dict) else {}
     processes = route.get("processes") if isinstance(route.get("processes"), list) else []
     processes = [value for value in processes if isinstance(value, dict) and _canonical_process_name(value.get("name")) not in {"Закупка материала", "Закупка готового изделия"}]
-    route["processes"] = [{"name": "Закупка готового изделия", "details": [f"Oasis, арт. {candidate.get('article', '')}"]}, *processes]
+    route["processes"] = [{"name": "Закупка готового изделия", "details": [f"{supplier_name}, арт. {candidate.get('article', '')}"]}, *processes]
     if candidate.get("fit") == "exact":
-        route["reason"] = "Готовое изделие найдено в Oasis и соответствует проверенным требованиям ТЗ. Его актуальная дилерская цена автоматически включена в закупочную себестоимость; нанесение считается отдельным процессом."
+        route["reason"] = f"Готовое изделие найдено у поставщика {supplier_name} и соответствует проверенным требованиям ТЗ. Его актуальная цена автоматически включена в закупочную себестоимость; нанесение считается отдельным процессом."
     else:
         mismatch_text = "; ".join(_short_text_list(candidate.get("mismatches"), limit=3))
-        route["reason"] = f"Товар Oasis выбран администратором как рабочая альтернатива. Расхождения, которые нужно учитывать: {mismatch_text or 'часть характеристик требует проверки'}."
+        route["reason"] = f"Товар поставщика {supplier_name} выбран администратором как рабочая альтернатива. Расхождения, которые нужно учитывать: {mismatch_text or 'часть характеристик требует проверки'}."
     raw["route"] = route
     raw["questions"] = [
         value for value in raw.get("questions", []) if not (
@@ -2387,8 +2391,8 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     ][:19]
     normalized["sources"].append({
         "source_type": "catalog",
-        "supplier_name": "Oasis",
-        "title": candidate.get("name") or "Товар Oasis",
+        "supplier_name": supplier_name,
+        "title": candidate.get("name") or "Товар поставщика",
         "url": candidate.get("url", ""),
         "article": candidate.get("article", ""),
         "price": str(price),

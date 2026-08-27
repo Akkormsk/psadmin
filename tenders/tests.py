@@ -1200,6 +1200,8 @@ class TenderTests(TestCase):
         self.assertEqual(candidates[0]["external_id"], "00000008300")
         self.assertEqual(candidates[0]["fit"], "exact")
         self.assertEqual(candidates[0]["price"], "510.60")
+        self.assertEqual(candidates[0]["supplier_name"], "Oasis")
+        self.assertEqual(candidates[0]["supplier_site"], "oasiscatalog.com")
         self.assertTrue(any("семейство: lime" in value for value in candidates[0]["matches"]))
 
     def test_selected_catalog_product_is_recalculated_on_backend_and_replaces_material_cost(self):
@@ -1235,7 +1237,7 @@ class TenderTests(TestCase):
         self.assertEqual(result["costs"][0]["calculation_steps"][-1], "300 шт. × 650.00 ₽/шт. = 195000.00 ₽")
         self.assertEqual(result["route"]["steps"][0], "Закупка готового изделия")
         self.assertEqual(result["questions"], ["Какова цена нанесения?"])
-        self.assertIn("дилерская цена", result["route"]["reason"])
+        self.assertIn("поставщика Oasis", result["route"]["reason"])
         self.assertEqual(result["sources"][-1]["supplier_name"], "Oasis")
         self.assertEqual(result["sources"][-1]["price"], "650.00")
 
@@ -1246,7 +1248,8 @@ class TenderTests(TestCase):
             "product_type": production_type.code, "confidence": .5,
             "route": {"reason": "Каталог", "processes": [{"name": "Закупка готового изделия"}]},
             "costs": [], "catalog_candidates": [{
-                "id": "partial", "external_id": "partial", "supplier_code": "oasis",
+                "id": "partial", "external_id": "partial", "supplier_code": "other",
+                "supplier_name": "Другой поставщик", "supplier_site": "catalog.example",
                 "article": "PART-1", "name": "Футболка зелёная", "price": "400.00",
                 "stock": 100, "url": "https://www.oasiscatalog.com/item/partial",
                 "fit": "partial", "matches": ["Тип товара: футболка"],
@@ -1260,6 +1263,8 @@ class TenderTests(TestCase):
         self.assertEqual(result["totals"]["cost_total"], "4000.00")
         self.assertEqual(result["catalog_selection"]["selection_mode"], "manual")
         self.assertEqual(result["catalog_selection"]["accepted_mismatches"], ["Плотность ниже требования"])
+        self.assertEqual(result["sources"][-1]["supplier_name"], "Другой поставщик")
+        self.assertIn("поставщика Другой поставщик", result["route"]["reason"])
 
     def test_catalog_choice_becomes_training_data_only_after_confirmation(self):
         admin = get_user_model().objects.create_superuser(username="catalog-admin", password="password")

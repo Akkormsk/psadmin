@@ -240,7 +240,7 @@ def select_catalog_product(request):
         if not str(line.get("name", "")).strip():
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
-        return JsonResponse({"error": "Не удалось выбрать товар Oasis. Обновите гипотезу."}, status=400)
+        return JsonResponse({"error": "Не удалось выбрать товар поставщика. Обновите гипотезу."}, status=400)
     try:
         hypothesis = apply_catalog_candidate(session.current_hypothesis, line, product_id)
         hypothesis["session_id"] = session.pk
@@ -256,6 +256,7 @@ def select_catalog_product(request):
             product_snapshot={
                 key: selection.get(key) for key in (
                     "external_id", "article", "name", "price", "stock", "url", "category", "matches",
+                    "supplier_code", "supplier_name", "supplier_site",
                 )
             },
             decision="selected",
@@ -270,13 +271,14 @@ def select_catalog_product(request):
             },
             created_by=request.user,
         )
-        change = f"Выбран товар Oasis: {selection.get('name', 'товар')} · арт. {selection.get('article', '')}".strip()
+        supplier_name = str(selection.get("supplier_name") or selection.get("supplier_code") or "поставщика")
+        change = f"Выбран товар поставщика {supplier_name}: {selection.get('name', 'товар')} · арт. {selection.get('article', '')}".strip()
         ProductionTrainingTurn.objects.create(session=session, feedback=change, understood_changes=[change], hypothesis=hypothesis)
         return JsonResponse(hypothesis)
     except TenderAIError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     except Exception:
-        return JsonResponse({"error": "Не удалось применить товар Oasis к расчёту."}, status=400)
+        return JsonResponse({"error": "Не удалось применить товар поставщика к расчёту."}, status=400)
 
 
 @login_required
