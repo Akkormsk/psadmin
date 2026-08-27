@@ -6,6 +6,7 @@ import time
 import uuid
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
+from xml.etree import ElementTree
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -73,6 +74,141 @@ class OasisClient:
             if len(items) < limit:
                 return
             offset += len(items)
+
+
+class GiftsXmlClient:
+    def __init__(self, username=None, password=None, base_url=None, timeout=120):
+        self.username = (username or os.getenv("GIFTS_XML_USERNAME", "")).strip()
+        self.password = password or os.getenv("GIFTS_XML_PASSWORD", "")
+        self.base_url = (base_url or os.getenv("GIFTS_XML_BASE_URL", "https://api2.gifts.ru/export/v2")).rstrip("/")
+        self.timeout = timeout
+        if not self.username or not self.password:
+            raise CatalogSyncError("GIFTS_XML_USERNAME и GIFTS_XML_PASSWORD не настроены.")
+
+    def open(self, path):
+        token = base64.b64encode(f"{self.username}:{self.password}".encode("utf-8")).decode("ascii")
+        request = Request(f"{self.base_url}/{path.lstrip('/')}", headers={"Authorization": f"Basic {token}", "User-Agent": "PSAdmin gifts XML sync/1.0"})
+        try:
+            return urlopen(request, timeout=self.timeout)
+        except HTTPError as exc:
+            if exc.code in {401, 403}:
+                raise CatalogSyncError("gifts.ru отклонил XML-доступ или IP не зарегистрирован.") from exc
+            raise CatalogSyncError(f"gifts.ru вернул HTTP {exc.code}.") from exc
+        except (URLError, TimeoutError, ConnectionError, OSError) as exc:
+            raise CatalogSyncError("gifts.ru XML недоступен.") from exc
+
+
+def _gifts_text(node, name):
+    value = node.find(name)
+    return _text(value.text if value is not None else "", 5000)
+
+
+def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None):
+    category = _normalized(category) if category else ""
+    category_ids = {}
+    for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
+        if page.tag.rsplit("}", 1)[-1] != "page":
+            continue
+        page_name = _text(page.attrib.get("name"), 500)
+        if not category or category in _normalized(page_name):
+            for product in page.findall(".//product"):
+                product_id = product.attrib.get("product") or _gifts_text(product, "product")
+                if product_id:
+                    category_ids[str(product_id)] = page_name
+        page.clear()
+
+    stocks = {}
+    if stock_xml is not None:
+        for _, stock in ElementTree.iterparse(stock_xml, events=("end",)):
+            if stock.tag.rsplit("}", 1)[-1] != "stock":
+                continue
+            product_id = stock.attrib.get("product_id") or _gifts_text(stock, "product_id")
+            if product_id:
+                stocks[str(product_id)] = {
+                    "free": _gifts_text(stock, "free"),
+                    "dealerprice": _gifts_text(stock, "dealerprice"),
+                    "inwayfree": _gifts_text(stock, "inwayfree"),
+                }
+            stock.clear()
+
+    result = []
+    for _, product in ElementTree.iterparse(product_xml, events=("end",)):
+        if product.tag.rsplit("}", 1)[-1] != "product":
+            continue
+        product_id = product.attrib.get("product_id") or _gifts_text(product, "product_id")
+        if not product_id or (category and str(product_id) not in category_ids):
+            product.clear()
+            continue
+        stock = stocks.get(str(product_id))
+        name = _gifts_text(product, "name") or str(product_id)
+        article = _gifts_text(product, "code")
+        material = _gifts_text(product, "matherial")
+        size = _gifts_text(product, "product_size")
+        brand = _gifts_text(product, "brand")
+        description = _gifts_text(product, "content")
+        image_node = product.find("small_image")
+        image_src = _text(image_node.attrib.get("src") if image_node is not None else "", 1000)
+        image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src.startswith("reviewer/") else ""
+        price_node = product.find("price/price")
+        price = _decimal(price_node.text if price_node is not None else None)
+        stock_free = _integer(stock.get("free")) if stock is not None else 0
+        dealer_price = _decimal(stock.get("dealerprice")) if stock is not None else None
+        category_name = category_ids.get(str(product_id), "")
+        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description])))[:20_000]
+        result.append({
+            "external_id": str(product_id), "article": article, "name": name, "full_name": name,
+            "description": description, "category_ids": [], "category_names": [category_name] if category_name else [],
+            "brand": brand, "size": size, "materials": [material] if material else [], "colors": [], "attributes": [],
+            "branding": [], "package": [], "price": price, "discount_price": dealer_price, "total_stock": stock_free,
+            "stock_moscow": stock_free, "stock_remote": 0, "stock_transit": _integer(stock.get("inwayfree")) if stock is not None else 0,
+            "is_on_order": _gifts_text(product, "ondemand").lower() == "true", "delivery_days": _integer(_gifts_text(product, "days")) or None,
+            "image_url": image_url, "product_url": f"https://gifts.ru/catalog/{article}" if article else "https://gifts.ru",
+            "supply_terms": _gifts_text(product, "demandtype"), "warning": _gifts_text(product, "alert"), "defect": "",
+            "search_text": search_text, "source_updated_at": None, "sync_marker": "", "is_active": True, "raw_data": {"status": _gifts_text(product, "status")},
+        })
+        product.clear()
+    return result
+
+
+def sync_gifts_catalog(client=None, category=None):
+    client = client or GiftsXmlClient()
+    supplier, _ = CatalogSupplier.objects.get_or_create(code="gifts", defaults={"name": "gifts.ru", "base_url": client.base_url})
+    supplier.base_url = client.base_url
+    supplier.sync_status = "running"
+    supplier.sync_message = "Получаю XML gifts.ru"
+    supplier.save(update_fields=["base_url", "sync_status", "sync_message"])
+    run = CatalogSyncRun.objects.create(supplier=supplier)
+    try:
+        with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml:
+            rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category)
+        marker = str(uuid.uuid4())
+        objects = [CatalogProduct(supplier=supplier, **{**row, "sync_marker": marker}) for row in rows]
+        external_ids = [value.external_id for value in objects]
+        existing = set(CatalogProduct.objects.filter(supplier=supplier, external_id__in=external_ids).values_list("external_id", flat=True))
+        if objects:
+            CatalogProduct.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=PRODUCT_UPDATE_FIELDS)
+        now = timezone.now()
+        supplier.last_synced_at = now
+        supplier.sync_status = "success"
+        supplier.sync_message = f"Товаров: {len(objects)}; новых: {len(objects) - len(existing)}; обновлено: {len(existing)}"
+        supplier.save(update_fields=["last_synced_at", "sync_status", "sync_message"])
+        run.status = "success"
+        run.finished_at = now
+        run.received_count = len(objects)
+        run.created_count = len(objects) - len(existing)
+        run.updated_count = len(existing)
+        run.save(update_fields=["status", "finished_at", "received_count", "created_count", "updated_count"])
+        return run
+    except Exception as exc:
+        now = timezone.now()
+        supplier.sync_status = "failed"
+        supplier.sync_message = _text(exc, 500)
+        supplier.save(update_fields=["sync_status", "sync_message"])
+        run.status = "failed"
+        run.finished_at = now
+        run.error = _text(exc, 5000)
+        run.save(update_fields=["status", "finished_at", "error"])
+        raise
 
 
 def _text(value, limit=1000):
@@ -663,7 +799,7 @@ def _fit_product(product, line, anchors, quantity):
 
 
 def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=None, client=None):
-    """Return a small live shortlist. Products are never persisted locally."""
+    """Return a relevance-ranked shortlist from live Oasis and cached suppliers."""
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
@@ -702,6 +838,10 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         for raw in rows if isinstance(raw, dict)
     ) if value and value.is_active]
     pool = _aggregate_color_variants(pool)
+    cached_products = list(CatalogProduct.objects.filter(supplier__code="gifts", is_active=True))
+    if cached_products:
+        aliases = CATALOG_CLASS_ALIASES.get(_canonical_catalog_class((intent or {}).get("product_class") or line.get("name", "")), ())
+        pool.extend(value for value in cached_products if any(_normalized(alias) in _normalized(value.search_text) for alias in aliases))
     canonical_class = _canonical_catalog_class((intent or {}).get("product_class") or line.get("name", ""))
     anchors = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
     ranked = []
@@ -710,7 +850,7 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         if "Не совпадает тип товара" in mismatches:
             continue
         ranked.append((score, product, matches, mismatches, unknown))
-    ranked.sort(key=lambda value: (not value[3], value[0], value[1].total_stock), reverse=True)
+    ranked.sort(key=lambda value: (not value[3], value[0]), reverse=True)
     selected, seen_groups = [], set()
     for score, product, matches, mismatches, unknown in ranked:
         group_key = product.group_id or product.external_id
@@ -724,8 +864,8 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             supplier_site = supplier_site[4:]
         selected.append({
             "id": product.external_id,
-            "supplier_code": supplier_code,
-            "supplier_name": supplier.name,
+            "supplier_code": product.supplier.code,
+            "supplier_name": product.supplier.name,
             "supplier_site": supplier_site,
             "external_id": product.external_id,
             "article": product.article,
