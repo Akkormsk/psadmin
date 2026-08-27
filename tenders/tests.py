@@ -1,7 +1,8 @@
 import json
 import zipfile
-from io import BytesIO
+from io import BytesIO, StringIO
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -13,7 +14,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .catalog import CatalogSyncError, OasisClient, catalog_candidates_for_line, sync_oasis_catalog
+from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, catalog_candidates_for_line, parse_gifts_catalog, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
@@ -23,6 +24,87 @@ class TenderTests(TestCase):
         self.user = get_user_model().objects.create_user(username="manager", password="password")
         self.other = get_user_model().objects.create_user(username="other", password="password")
         self.payload = [{"name": "Ручка", "quantity": "10", "nmck_unit": "100", "material_unit": "40", "application_unit": "10", "logistics_unit": "5", "product_url": "https://example.com/item", "comment": "Синяя"}]
+
+    def test_smart_upload_has_separate_nmck_and_technical_fields(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, 'id="tender-ai-nmck-file"')
+        self.assertContains(response, 'id="tender-ai-technical-file"')
+        self.assertNotContains(response, 'id="tender-tech-modal"')
+
+    def test_pending_nmck_rows_show_technical_status_and_use_duplicate_guard(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, "data-ai-technical-status")
+        self.assertContains(response, "function applyTechnicalResultToNmckRows")
+        self.assertContains(response, "function findExistingTenderLine")
+
+    def test_line_ai_button_opens_drawer_and_starts_hypothesis_immediately(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, "openRequirements=(index,autoCalculate=false)=>")
+        self.assertContains(response, "questionControl.onclick=()=>openRequirements(index,true)")
+        self.assertContains(response, "shouldAutoCalculate=autoCalculate&&!info.production")
+        self.assertContains(response, "if(shouldAutoCalculate)build.click()")
+
+    def test_smart_import_finishes_in_the_product_list_for_nmck_or_technical_document(self):
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("tender_home")).content.decode()
+
+        nmck_apply = content[content.index("document.getElementById('tender-ai-add').onclick"):]
+        technical_apply = content[content.index("function applyTechnicalResult(result,sourceName)"):]
+        self.assertIn("aiModal.classList.remove('is-open')", nmck_apply)
+        self.assertIn("aiModal.classList.remove('is-open')", technical_apply)
+        self.assertIn("function isPristineTenderLine", content)
+
+    def test_cost_row_places_comment_and_link_before_assistant_action(self):
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("tender_home")).content.decode()
+
+        expected_order = "${field('Комментарий','comment','text','Необязательно')}${linkControl()}${questionButton(line)}"
+        self.assertIn(expected_order, content)
+
+    def test_assistant_deduplicates_questions_and_highlights_route(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+        styles = (Path(__file__).resolve().parents[1] / "static" / "core" / "index.css").read_text(encoding="utf-8")
+
+        self.assertContains(response, "function uniqueAssistantQuestions")
+        self.assertIn(".training-dialogue .training-step:nth-child(2) > header", styles)
+        self.assertIn(".training-dialogue .training-step:nth-child(4)", styles)
+        self.assertNotIn(".training-dialogue .training-step:nth-child(2) { margin:0 -10px", styles)
+
+    def test_line_assistant_button_matches_compact_metric_height(self):
+        styles = (Path(__file__).resolve().parents[1] / "static" / "core" / "index.css").read_text(encoding="utf-8")
+
+        self.assertIn(".tender-line-questions.ai-route-button { min-height:27px", styles)
+
+    def test_assistant_dialogue_uses_requested_section_order(self):
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("tender_home")).content.decode()
+        content = content[content.index("function trainingDialogueHtml"):]
+
+        sections = [
+            "Полученное ТЗ",
+            "Технологический маршрут",
+            "Ваши корректировки",
+            "Предложенные товары",
+            "Нужно уточнить",
+            "Обратная связь",
+            "Добавить поставщика или источник",
+        ]
+        positions = [content.index(section) for section in sections]
+        self.assertEqual(positions, sorted(positions))
 
     def test_formula_includes_every_expense_in_roi(self):
         _, result = calculate_tender([{**self.payload[0], **{key: Decimal(self.payload[0][key]) for key in ("quantity", "nmck_unit", "material_unit", "application_unit", "logistics_unit")}}], Decimal("30"), Decimal("100"), Decimal("5"))
@@ -253,6 +335,38 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("Загрузить НМЦК", response.json()["error"])
         analyze.assert_not_called()
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_technical_analysis_excludes_delivery_terms_but_keeps_shared_specs(self, gateway):
+        gateway.return_value = ({
+            "document_summary": "Футболки",
+            "global_requirements": [
+                {"label": "Срок поставки", "value": "10 дней", "source": "стр. 1"},
+                {"label": "Общий цвет", "value": "чёрный", "source": "стр. 1"},
+            ],
+            "items": [{
+                "line_index": 0,
+                "source_name": "Футболка",
+                "quantity": 20,
+                "requirements": [{"label": "Материал", "value": "хлопок"}],
+                "missing": [],
+                "questions": [],
+                "confidence": .9,
+            }],
+            "warnings": [],
+        }, {})
+        document = Document()
+        document.add_paragraph("Футболка, хлопок, чёрный цвет. Поставка за 10 дней.")
+        content = BytesIO()
+        document.save(content)
+        content.seek(0)
+        content.name = "ТЗ.docx"
+
+        result = analyze_tender_requirements(content, [{"name": "Футболка", "quantity": "20"}])
+
+        self.assertEqual(result["global_requirements"], [{"label": "Общий цвет", "value": "чёрный", "source": "стр. 1"}])
+        self.assertIn("Не извлекай условия поставки", gateway.call_args.args[0])
+        self.assertIn("Все числовые технические характеристики значимы", gateway.call_args.args[0])
 
     @patch("tenders.services._ai_gateway_json")
     def test_requirements_match_is_recovered_when_model_omits_confidence(self, gateway):
@@ -986,6 +1100,26 @@ class TenderTests(TestCase):
         self.assertIsNone(total)
         self.assertEqual(steps, [])
 
+    def test_gifts_parser_filters_category_and_ignores_images(self):
+        product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет утеплённый</name><product_size>М-L</product_size><matherial>Полиэстер</matherial><brand>Brand</brand><content>Описание</content><price><price>1200</price></price><small_image src=\"secret.jpg\"/><ondemand>false</ondemand></product><product product_id=\"m1\"><code>M-1</code><name>Магнит</name></product></doct>""")
+        tree_xml = StringIO("""<doct><page page_id=\"10\" name=\"Одежда / Жилеты\"><product product=\"v1\" page=\"10\"/></page><page page_id=\"20\" name=\"Сувениры\"><product product=\"m1\" page=\"20\"/></page></doct>""")
+        stock_xml = StringIO("""<doct><stock product_id=\"v1\"><free>7</free><dealerprice>999</dealerprice></stock></doct>""")
+
+        result = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category="жилеты")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["external_id"], "v1")
+        self.assertEqual(result[0]["article"], "V-1")
+        self.assertEqual(result[0]["total_stock"], 7)
+        self.assertEqual(result[0]["discount_price"], Decimal("999.00"))
+        self.assertEqual(result[0]["image_url"], "")
+
+    @patch.dict("os.environ", {"GIFTS_XML_USERNAME": "user", "GIFTS_XML_PASSWORD": "pass"})
+    def test_gifts_client_requires_server_side_credentials(self):
+        client = GiftsXmlClient()
+        self.assertEqual(client.base_url, "https://api2.gifts.ru/export/v2")
+
+
     @patch.dict("os.environ", {"OASIS_API_KEY": ""})
     def test_oasis_client_requires_server_side_api_key(self):
         with self.assertRaisesMessage(CatalogSyncError, "OASIS_API_KEY не настроен"):
@@ -1105,6 +1239,33 @@ class TenderTests(TestCase):
         thin = next(value for value in candidates if value["external_id"] == "thin")
         self.assertEqual(thin["fit"], "partial")
         self.assertTrue(any("требуется не менее 190" in value for value in thin["mismatches"]))
+
+    def test_catalog_search_combines_cached_gifts_with_oasis_by_relevance(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="gifts-vest", article="G-1", name="Жилет утеплённый",
+            full_name="Жилет утеплённый чёрный", materials=["полиэстер"], colors=["черный"],
+            total_stock=20, discount_price=1200, search_text="жилет утепленный черный полиэстер одежда",
+            product_url="https://gifts.ru/catalog/G-1",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Жилеты", "path": "categories/odezhda/zhilety"}]
+                return [{"id": "oasis-vest", "article": "O-1", "name": "Жилет для работы", "full_name": "Жилет для работы спецодежда", "materials": ["полиэстер"], "colors": ["черный"], "total_stock": 100, "categories": [10]}]
+
+        line = {
+            "name": "Жилет", "quantity": "10",
+            "requirements": {"requirements": [{"label": "Материал", "value": "полиэстер"}, {"label": "Цвет", "value": "черный"}]},
+        }
+
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "жилет"}, client=Client())
+
+        self.assertEqual({value["supplier_code"] for value in candidates}, {"oasis", "gifts"})
+        self.assertEqual(candidates[0]["supplier_code"], "gifts")
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
