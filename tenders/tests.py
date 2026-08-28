@@ -1101,7 +1101,7 @@ class TenderTests(TestCase):
         self.assertEqual(steps, [])
 
     def test_gifts_parser_filters_category_and_maps_image_url(self):
-        product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет утеплённый</name><product_size>М-L</product_size><matherial>Полиэстер</matherial><brand>Brand</brand><content>Описание</content><price><price>1200</price></price><small_image src=\"reviewer/webp/test.webp\"/><ondemand>false</ondemand></product><product product_id=\"m1\"><code>M-1</code><name>Магнит</name></product></doct>""")
+        product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет утеплённый</name><product_size>М-L</product_size><matherial>Полиэстер</matherial><color>фиолетовый</color><brand>Brand</brand><content>Описание</content><price><price>1200</price></price><small_image src=\"reviewer/webp/test.webp\"/><ondemand>false</ondemand></product><product product_id=\"m1\"><code>M-1</code><name>Магнит</name></product></doct>""")
         tree_xml = StringIO("""<doct><page page_id=\"10\" name=\"Одежда / Жилеты\"><product product=\"v1\" page=\"10\"/></page><page page_id=\"20\" name=\"Сувениры\"><product product=\"m1\" page=\"20\"/></page></doct>""")
         stock_xml = StringIO("""<doct><stock product_id=\"v1\"><free>7</free><dealerprice>999</dealerprice></stock></doct>""")
 
@@ -1112,6 +1112,7 @@ class TenderTests(TestCase):
         self.assertEqual(result[0]["article"], "V-1")
         self.assertEqual(result[0]["total_stock"], 7)
         self.assertEqual(result[0]["discount_price"], Decimal("999.00"))
+        self.assertEqual(result[0]["colors"], ["фиолетовый"])
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/test.webp")
 
     def test_gifts_parser_uses_primary_catalog_image(self):

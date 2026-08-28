@@ -114,6 +114,20 @@ def _gifts_child(node, name):
     return next((child for child in node if child.tag.rsplit("}", 1)[-1] == name), None)
 
 
+def _gifts_colors(node):
+    names = {"color", "colour", "colors", "color_name", "colour_name", "product_color", "product_colour", "цвет"}
+    values = []
+    for child in node:
+        local_name = child.tag.rsplit("}", 1)[-1].lower()
+        if local_name not in names:
+            continue
+        value = child.attrib.get("name") or child.attrib.get("value") or child.text
+        value = _text(value, 200)
+        if value and value not in values:
+            values.append(value)
+    return values[:20]
+
+
 def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None):
     category = _normalized(category) if category else ""
     category_ids = {}
@@ -160,6 +174,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         size = _text(_gifts_text(product, "product_size"), 100)
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
+        colors = _gifts_colors(product)
         image_node = _gifts_child(product, "small_image")
         if image_node is None or not image_node.attrib.get("src"):
             image_node = _gifts_child(product, "super_big_image")
@@ -171,11 +186,11 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         stock_free = _integer(stock.get("free")) if stock is not None else 0
         dealer_price = _decimal(stock.get("dealerprice")) if stock is not None else None
         category_name = category_ids.get(str(product_id), "")
-        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description])))[:20_000]
+        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description, *colors])))[:20_000]
         result.append({
             "external_id": _text(str(product_id), 100), "article": article, "name": name, "full_name": name,
             "description": description, "category_ids": [], "category_names": [category_name] if category_name else [],
-            "brand": brand, "size": size, "materials": [material] if material else [], "colors": [], "attributes": [],
+            "brand": brand, "size": size, "materials": [material] if material else [], "colors": colors, "attributes": [],
             "branding": [], "package": [], "price": price, "discount_price": dealer_price, "total_stock": stock_free,
             "stock_moscow": stock_free, "stock_remote": 0, "stock_transit": _integer(stock.get("inwayfree")) if stock is not None else 0,
             "is_on_order": _gifts_text(product, "ondemand").lower() == "true", "delivery_days": _integer(_gifts_text(product, "days")) or None,
