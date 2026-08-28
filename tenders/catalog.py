@@ -168,6 +168,24 @@ def _gifts_colors(node):
     return values[:20]
 
 
+_GIFTS_NAME_COLORS = (
+    "белый", "белая", "белое", "белые", "черный", "черная", "черное", "черные",
+    "серый", "серая", "серое", "серые", "красный", "красная", "красное", "красные",
+    "синий", "синяя", "синее", "синие", "голубой", "голубая", "голубое", "голубые",
+    "зеленый", "зеленая", "зеленое", "зеленые", "желтый", "желтая", "желтое", "желтые",
+    "фиолетовый", "фиолетовая", "фиолетовое", "фиолетовые", "оранжевый", "оранжевая",
+    "розовый", "розовая", "розовое", "розовые", "коричневый", "коричневая", "коричневое",
+    "бежевый", "бежевая", "бежевое", "хаки", "лайм", "мятный", "мятная", "мятное",
+    "бордовый", "бордовая", "бордовое", "бирюзовый", "бирюзовая", "золотой", "золотая",
+    "серебристый", "серебристая", "мультиколор", "разноцветный", "разноцветная",
+)
+
+
+def _gifts_name_colors(name):
+    normalized = _normalized(name)
+    return [color for color in _GIFTS_NAME_COLORS if re.search(rf"(?<![\w-]){re.escape(color)}(?![\w-])", normalized)]
+
+
 def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None):
     category = _normalized(category) if category else ""
     category_ids = {}
@@ -215,6 +233,9 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
+        for color in _gifts_name_colors(name):
+            if color not in colors:
+                colors.append(color)
         image_src = _gifts_image_src(product)
         if image_src.startswith("//"):
             image_url = f"https:{image_src}"
