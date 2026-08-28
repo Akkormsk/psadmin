@@ -119,6 +119,19 @@ def _gifts_descendants(node, name):
     return (child for child in node.iter() if child is not node and child.tag.rsplit("}", 1)[-1].lower() == name)
 
 
+def _gifts_image_src(node):
+    image_names = {"small_image", "super_big_image", "image", "picture", "photo"}
+    for child in node.iter():
+        local_name = child.tag.rsplit("}", 1)[-1].lower()
+        if local_name not in image_names and "image" not in local_name and "photo" not in local_name:
+            continue
+        value = next((child.attrib.get(key) for key in ("src", "url", "href", "path") if child.attrib.get(key)), None) or child.text
+        value = _text(value, 1000)
+        if value:
+            return value
+    return ""
+
+
 def _gifts_colors(node):
     names = {"color", "colour", "colors", "color_name", "colour_name", "product_color", "product_colour", "цвет"}
     values = []
@@ -200,10 +213,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
-        image_node = _gifts_child(product, "small_image") or next(_gifts_descendants(product, "small_image"), None)
-        if image_node is None or not image_node.attrib.get("src"):
-            image_node = _gifts_child(product, "super_big_image") or next(_gifts_descendants(product, "super_big_image"), None)
-        image_src = _text(image_node.attrib.get("src") if image_node is not None else "", 1000)
+        image_src = _gifts_image_src(product)
         image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src else ""
         price_group = _gifts_child(product, "price")
         price_node = _gifts_child(price_group, "price") if price_group is not None else None
