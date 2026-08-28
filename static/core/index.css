@@ -50,8 +50,7 @@ body::before {
 .account-bar .logout-link { color: #4b5563; text-decoration: none; }
 .account-bar a:hover,
 .account-bar .logout-link:hover { color: #111827; }
-.account-bar__profile { position: relative; display: inline-flex; align-items: center; gap: 7px; }
-.account-bar__version { position: absolute; top: 42px; right: 0; color: #64748b; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.account-bar__profile { display: inline-flex; align-items: center; gap: 7px; }
 .account-avatar {
   width: 40px;
   height: 40px;
@@ -809,7 +808,6 @@ h1 {
 .cash-edit-modal .modal { max-width: 520px; }
 .form-panel { max-width: 680px; margin: 0 auto; }
 .form-error { margin: 6px 0 0; color: #b91c1c; font-size: 14px; }
-.tender-route-progress { margin: 8px 0 0; padding: 10px 12px; border: 1px solid #cfe7d8; border-radius: 10px; background: #f1faf4; color: #176b3a; font-size: 14px; }
 
 /* ---------- calculator ---------- */
 .calc-group { padding: 16px 0; border-top: 1px solid #eee; }

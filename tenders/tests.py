@@ -564,8 +564,9 @@ class TenderTests(TestCase):
         self.assertEqual(exact_sra3["ups"], 4)
         self.assertEqual(exact_sra3["sheets"], 4635)
 
-    @patch("tenders.views.threading.Thread")
-    def test_production_route_preview_starts_background_job(self, start_job):
+    @patch("tenders.views.build_training_hypothesis")
+    def test_production_route_preview_uses_current_position(self, analyze):
+        analyze.return_value = {"stage": "training_dialogue", "product_type": "digital_sheet", "confidence": .4, "route": {"name": "Под ключ", "steps": ["Изготовление"]}, "costs": [], "totals": {}}
         self.client.force_login(self.user)
 
         self.user.is_superuser = True
@@ -574,13 +575,11 @@ class TenderTests(TestCase):
 
         response = self.client.post(reverse("tender_production_route_preview"), {"line_json": json.dumps({"name": "Блокнот А5", "quantity": 300, "requirements": {}})})
 
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.json()["status"], "pending")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["product_type"], "digital_sheet")
         self.assertTrue(response.json()["session_id"])
-        start_job.assert_called_once()
-        start_job.return_value.start.assert_called_once()
-        session = ProductionTrainingSession.objects.get(pk=response.json()["session_id"])
-        self.assertEqual(session.requirements["line"]["name"], "Блокнот А5")
+        analyze.assert_called_once()
+        self.assertEqual(analyze.call_args.args[0]["name"], "Блокнот А5")
 
     def test_manager_cannot_start_ai_calculation(self):
         self.client.force_login(self.user)
