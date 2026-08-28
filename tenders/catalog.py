@@ -110,6 +110,10 @@ def _gifts_text(node, name):
     return _text(value.text if value is not None else "", 5000)
 
 
+def _gifts_child(node, name):
+    return next((child for child in node if child.tag.rsplit("}", 1)[-1] == name), None)
+
+
 def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None):
     category = _normalized(category) if category else ""
     category_ids = {}
@@ -156,12 +160,13 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         size = _text(_gifts_text(product, "product_size"), 100)
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
-        image_node = product.find("small_image")
+        image_node = _gifts_child(product, "small_image")
         if image_node is None or not image_node.attrib.get("src"):
-            image_node = product.find("super_big_image")
+            image_node = _gifts_child(product, "super_big_image")
         image_src = _text(image_node.attrib.get("src") if image_node is not None else "", 1000)
         image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src.startswith("reviewer/") else ""
-        price_node = product.find("price/price")
+        price_group = _gifts_child(product, "price")
+        price_node = _gifts_child(price_group, "price") if price_group is not None else None
         price = _decimal(price_node.text if price_node is not None else None)
         stock_free = _integer(stock.get("free")) if stock is not None else 0
         dealer_price = _decimal(stock.get("dealerprice")) if stock is not None else None
