@@ -168,7 +168,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         category_name = category_ids.get(str(product_id), "")
         search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description])))[:20_000]
         result.append({
-            "external_id": str(product_id), "article": article, "name": name, "full_name": name,
+            "external_id": _text(str(product_id), 100), "article": article, "name": name, "full_name": name,
             "description": description, "category_ids": [], "category_names": [category_name] if category_name else [],
             "brand": brand, "size": size, "materials": [material] if material else [], "colors": [], "attributes": [],
             "branding": [], "package": [], "price": price, "discount_price": dealer_price, "total_stock": stock_free,
