@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 
 from .models import CatalogMatchDecision, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
+from .catalog import CatalogSyncError, sync_gifts_catalog
 from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
@@ -30,6 +31,19 @@ def knowledge_sync(request):
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         return HttpResponse(status=403)
     return JsonResponse(export_knowledge_bundle(include_embeddings=True), json_dumps_params={"ensure_ascii": False})
+
+
+@require_POST
+def gifts_import_test(request):
+    expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
+    supplied = request.headers.get("Authorization", "")
+    if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
+        return HttpResponse(status=403)
+    try:
+        run = sync_gifts_catalog(limit=10)
+    except CatalogSyncError as exc:
+        return JsonResponse({"error": str(exc)}, status=502)
+    return JsonResponse({"status": run.status, "received": run.received_count, "created": run.created_count, "updated": run.updated_count})
 
 def _document_upload_error(upload):
     if upload is None:
