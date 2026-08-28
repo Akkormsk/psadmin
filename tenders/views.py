@@ -41,12 +41,16 @@ def gifts_import_test(request):
     supplied = request.headers.get("Authorization", "")
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         return HttpResponse(status=403)
-    try:
-        limit = int(request.GET.get("limit", "10"))
-    except (TypeError, ValueError):
-        return JsonResponse({"error": "Параметр limit должен быть числом от 1 до 100."}, status=400)
-    if not 1 <= limit <= 100:
-        return JsonResponse({"error": "Параметр limit должен быть от 1 до 100."}, status=400)
+    full = request.GET.get("full") == "1"
+    if full:
+        limit = None
+    else:
+        try:
+            limit = int(request.GET.get("limit", "10"))
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Параметр limit должен быть числом от 1 до 100."}, status=400)
+        if not 1 <= limit <= 100:
+            return JsonResponse({"error": "Параметр limit должен быть от 1 до 100."}, status=400)
     started = time.monotonic()
     try:
         run = sync_gifts_catalog(limit=limit)
@@ -55,7 +59,7 @@ def gifts_import_test(request):
     products = [
         {"external_id": row["external_id"], "article": row["article"], "name": row["name"]}
         for row in getattr(run, "imported_rows", [])
-    ]
+    ] if not full else []
     return JsonResponse({
         "status": run.status,
         "received": run.received_count,
