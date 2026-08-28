@@ -239,7 +239,11 @@ def production_route_preview(request):
         requirements={"line": line},
         current_hypothesis={"stage": "pending"},
     )
-    subprocess.Popen([sys.executable, "manage.py", "run_production_job", str(session.pk)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    project_root = Path(__file__).resolve().parents[1]
+    subprocess.Popen(
+        [sys.executable, str(project_root / "manage.py"), "run_production_job", str(session.pk)],
+        cwd=str(project_root), start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
     return JsonResponse({"status": "pending", "session_id": session.pk}, status=202)
 
 
