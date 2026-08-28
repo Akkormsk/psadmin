@@ -1123,6 +1123,12 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/26/6728.60_1_500.webp?v=2")
 
+    def test_gifts_parser_normalizes_protocol_relative_image_url(self):
+        product_xml = StringIO("""<doct><product product_id=\"184880\"><code>03564102</code><name>Футболка унисекс Epic, белая</name><small_image src=\"//files.gifts.ru/reviewer/webp/8/03564102_2_200x200.webp?v=2\"/></product></doct>""")
+        result = parse_gifts_catalog(product_xml, StringIO("<doct/>"))
+
+        self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/8/03564102_2_200x200.webp?v=2")
+
     @patch.dict("os.environ", {"GIFTS_XML_USERNAME": "user", "GIFTS_XML_PASSWORD": "pass"})
     def test_gifts_client_requires_server_side_credentials(self):
         client = GiftsXmlClient()

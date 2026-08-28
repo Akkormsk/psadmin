@@ -214,7 +214,14 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
         image_src = _gifts_image_src(product)
-        image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src else ""
+        if image_src.startswith("//"):
+            image_url = f"https:{image_src}"
+        elif image_src.startswith("http"):
+            image_url = image_src
+        elif image_src:
+            image_url = f"https://files.gifts.ru/{image_src.lstrip('/')}"
+        else:
+            image_url = ""
         price_group = _gifts_child(product, "price")
         price_node = _gifts_child(price_group, "price") if price_group is not None else None
         price = _decimal(price_node.text if price_node is not None else None)
