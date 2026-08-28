@@ -2824,7 +2824,7 @@ def analyze_production_route(line):
 
 НАШ КАТАЛОГ МАТЕРИАЛОВ И ОПЕРАЦИЙ:
 {json.dumps(catalog, ensure_ascii=False)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=5000)
+    result, usage = _ai_gateway_json(prompt, max_tokens=3200)
     route = result.get("route") if result.get("route") in {"internal", "hybrid", "outsourcing", "unknown"} else "unknown"
     calculator = result.get("calculator") if result.get("calculator") in {"sheet", "canon", "none"} else "none"
     valid_sources = {"psodin_sheet", "psodin_canon", "supplier_price", "supplier_api", "history", "white_site", "open_web", "manager", "unknown"}
