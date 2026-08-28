@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -239,11 +241,7 @@ def production_route_preview(request):
         requirements={"line": line},
         current_hypothesis={"stage": "pending"},
     )
-    project_root = Path(__file__).resolve().parents[1]
-    subprocess.Popen(
-        [sys.executable, str(project_root / "manage.py"), "run_production_job", str(session.pk)],
-        cwd=str(project_root), start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    threading.Thread(target=call_command, args=("run_production_job",), kwargs={"session_id": session.pk}, daemon=True).start()
     return JsonResponse({"status": "pending", "session_id": session.pk}, status=202)
 
 

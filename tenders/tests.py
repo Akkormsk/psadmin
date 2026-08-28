@@ -564,7 +564,7 @@ class TenderTests(TestCase):
         self.assertEqual(exact_sra3["ups"], 4)
         self.assertEqual(exact_sra3["sheets"], 4635)
 
-    @patch("tenders.views.subprocess.Popen")
+    @patch("tenders.views.threading.Thread")
     def test_production_route_preview_starts_background_job(self, start_job):
         self.client.force_login(self.user)
 
@@ -578,6 +578,7 @@ class TenderTests(TestCase):
         self.assertEqual(response.json()["status"], "pending")
         self.assertTrue(response.json()["session_id"])
         start_job.assert_called_once()
+        start_job.return_value.start.assert_called_once()
         session = ProductionTrainingSession.objects.get(pk=response.json()["session_id"])
         self.assertEqual(session.requirements["line"]["name"], "Блокнот А5")
 
