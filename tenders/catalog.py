@@ -156,6 +156,8 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None):
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         image_node = product.find("small_image")
+        if image_node is None or not image_node.attrib.get("src"):
+            image_node = product.find("super_big_image")
         image_src = _text(image_node.attrib.get("src") if image_node is not None else "", 1000)
         image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src.startswith("reviewer/") else ""
         price_node = product.find("price/price")

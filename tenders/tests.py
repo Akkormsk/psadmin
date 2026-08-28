@@ -1114,6 +1114,14 @@ class TenderTests(TestCase):
         self.assertEqual(result[0]["discount_price"], Decimal("999.00"))
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/test.webp")
 
+    def test_gifts_parser_uses_primary_catalog_image(self):
+        product_xml = StringIO("""<doct><product product_id="93294"><code>26728.60</code><name>Жилет Kama, белый</name><super_big_image src="reviewer/webp/26/6728.60_1_500.webp?v=2"/></product></doct>""")
+        tree_xml = StringIO("<doct/>")
+
+        result = parse_gifts_catalog(product_xml, tree_xml)
+
+        self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/26/6728.60_1_500.webp?v=2")
+
     @patch.dict("os.environ", {"GIFTS_XML_USERNAME": "user", "GIFTS_XML_PASSWORD": "pass"})
     def test_gifts_client_requires_server_side_credentials(self):
         client = GiftsXmlClient()
