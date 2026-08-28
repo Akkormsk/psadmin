@@ -13,6 +13,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from django.db import transaction
+from django.db.models import Q
 from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -910,10 +911,15 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         for raw in rows if isinstance(raw, dict)
     ) if value and value.is_active]
     pool = _aggregate_color_variants(pool)
-    cached_products = list(CatalogProduct.objects.filter(supplier__code="gifts", is_active=True))
-    if cached_products:
-        aliases = CATALOG_CLASS_ALIASES.get(_canonical_catalog_class((intent or {}).get("product_class") or line.get("name", "")), ())
-        pool.extend(value for value in cached_products if any(_normalized(alias) in _normalized(value.search_text) for alias in aliases))
+    aliases = CATALOG_CLASS_ALIASES.get(_canonical_catalog_class((intent or {}).get("product_class") or line.get("name", "")), ())
+    if aliases:
+        gifts_query = Q()
+        for alias in aliases:
+            gifts_query |= Q(search_text__icontains=alias)
+        cached_products = CatalogProduct.objects.filter(
+            Q(supplier__code="gifts") & Q(is_active=True) & gifts_query
+        ).order_by("id")[:1500]
+        pool.extend(cached_products)
     canonical_class = _canonical_catalog_class((intent or {}).get("product_class") or line.get("name", ""))
     anchors = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
     ranked = []
