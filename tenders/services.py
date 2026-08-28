@@ -2583,14 +2583,18 @@ def _attach_memory_preview(hypothesis):
     return hypothesis
 
 
-def build_training_hypothesis(line, current=None, feedback=""):
+def build_training_hypothesis(line, current=None, feedback="", progress_callback=None):
     started_at = time.perf_counter()
+    if progress_callback:
+        progress_callback("ai")
     from .models import ProductionType
     from .catalog import CatalogSyncError, catalog_candidates_for_line
 
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
     knowledge_sources = _knowledge_sources_for_line(line)
+    if progress_callback:
+        progress_callback("cases")
     example_payload = [{
         "id": value.pk,
         "position": value.position_name,
@@ -2659,6 +2663,8 @@ def build_training_hypothesis(line, current=None, feedback=""):
         "preferences": _short_text_list(raw_intent.get("preferences"), limit=8),
     }
     catalog_started_at = time.perf_counter()
+    if progress_callback:
+        progress_callback("catalog")
     try:
         catalog_candidates = catalog_candidates_for_line(line, limit=3, intent=catalog_intent)
     except CatalogSyncError as exc:
@@ -2686,6 +2692,8 @@ def build_training_hypothesis(line, current=None, feedback=""):
         "total_seconds": round(time.perf_counter() - started_at, 3),
     }
     hypothesis["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
+    if progress_callback:
+        progress_callback("finalizing")
     # A fully matching live offer is an executable backend price source, not
     # merely a visual suggestion. Apply it immediately so the displayed total
     # and the tender material field cannot remain zero while showing a product.

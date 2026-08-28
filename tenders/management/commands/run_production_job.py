@@ -13,9 +13,12 @@ class Command(BaseCommand):
         session = ProductionTrainingSession.objects.get(pk=options["session_id"])
         line = (session.requirements or {}).get("line", {})
         try:
-            session.current_hypothesis = {"stage": "ai", "started_at": timezone.now().isoformat()}
-            session.save(update_fields=["current_hypothesis", "updated_at"])
-            hypothesis = build_training_hypothesis(line)
+            def set_progress(stage):
+                session.current_hypothesis = {"stage": stage, "started_at": session.current_hypothesis.get("started_at", timezone.now().isoformat())}
+                session.save(update_fields=["current_hypothesis", "updated_at"])
+
+            set_progress("ai")
+            hypothesis = build_training_hypothesis(line, progress_callback=set_progress)
             hypothesis["session_id"] = session.pk
             session.current_hypothesis = hypothesis
             session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
