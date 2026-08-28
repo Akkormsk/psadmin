@@ -114,17 +114,41 @@ def _gifts_child(node, name):
     return next((child for child in node if child.tag.rsplit("}", 1)[-1] == name), None)
 
 
+def _gifts_descendants(node, name):
+    return (child for child in node.iter() if child is not node and child.tag.rsplit("}", 1)[-1].lower() == name)
+
+
 def _gifts_colors(node):
     names = {"color", "colour", "colors", "color_name", "colour_name", "product_color", "product_colour", "цвет"}
     values = []
-    for child in node:
+    candidates = [node]
+    candidates.extend(_gifts_descendants(node, "color"))
+    candidates.extend(_gifts_descendants(node, "colour"))
+    candidates.extend(_gifts_descendants(node, "colors"))
+    candidates.extend(_gifts_descendants(node, "color_name"))
+    candidates.extend(_gifts_descendants(node, "colour_name"))
+    candidates.extend(_gifts_descendants(node, "product_color"))
+    candidates.extend(_gifts_descendants(node, "product_colour"))
+    candidates.extend(_gifts_descendants(node, "цвет"))
+    for child in candidates:
         local_name = child.tag.rsplit("}", 1)[-1].lower()
-        if local_name not in names:
+        if child is node or local_name not in names:
             continue
         value = child.attrib.get("name") or child.attrib.get("value") or child.text
         value = _text(value, 200)
         if value and value not in values:
             values.append(value)
+    for group in node.iter():
+        group_name = _text(group.attrib.get("name") or group.attrib.get("title"), 200).lower()
+        if "цвет" not in group_name and "color" not in group_name and "colour" not in group_name:
+            continue
+        for value_node in group.iter():
+            if value_node is group:
+                continue
+            value = value_node.attrib.get("name") or value_node.attrib.get("value") or value_node.text
+            value = _text(value, 200)
+            if value and value not in values and value_node.tag.rsplit("}", 1)[-1].lower() in {"value", "item", "option", "color", "colour"}:
+                values.append(value)
     return values[:20]
 
 
@@ -175,11 +199,11 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
-        image_node = _gifts_child(product, "small_image")
+        image_node = _gifts_child(product, "small_image") or next(_gifts_descendants(product, "small_image"), None)
         if image_node is None or not image_node.attrib.get("src"):
-            image_node = _gifts_child(product, "super_big_image")
+            image_node = _gifts_child(product, "super_big_image") or next(_gifts_descendants(product, "super_big_image"), None)
         image_src = _text(image_node.attrib.get("src") if image_node is not None else "", 1000)
-        image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src.startswith("reviewer/") else ""
+        image_url = image_src if image_src.startswith("http") else f"https://files.gifts.ru/{image_src.lstrip('/')}" if image_src else ""
         price_group = _gifts_child(product, "price")
         price_node = _gifts_child(price_group, "price") if price_group is not None else None
         price = _decimal(price_node.text if price_node is not None else None)
