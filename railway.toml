@@ -1,8 +1,0 @@
-[build]
-buildCommand = "pip install --upgrade -r requirements.txt && python manage.py collectstatic --noinput"
-
-[deploy]
-preDeployCommand = ["python manage.py migrate --noinput"]
-startCommand = "gunicorn mysite.wsgi:application --bind 0.0.0.0:$PORT"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10

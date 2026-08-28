@@ -32,13 +32,11 @@ DEFAULT_ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
     "akkormsk-psadmin-852a.twc1.net",
-    "psadmin-production.up.railway.app",
     "admin.psodin.ru",
 ]
 
 DEFAULT_CSRF_TRUSTED_ORIGINS = [
     "https://akkormsk-psadmin-852a.twc1.net",
-    "https://psadmin-production.up.railway.app",
     "https://admin.psodin.ru",
 ]
 
@@ -51,7 +49,7 @@ def env_list(name, default):
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS)
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", DEFAULT_CSRF_TRUSTED_ORIGINS)
 
-# Railway terminates HTTPS before the Django container.
+# Timeweb terminates HTTPS before the Django container.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_HTTPS_COOKIES = os.getenv("DJANGO_SECURE_COOKIES", "0") == "1"
 SECURE_SSL_REDIRECT = USE_HTTPS_COOKIES
