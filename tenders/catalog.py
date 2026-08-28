@@ -125,11 +125,13 @@ def _gifts_image_src(node):
         local_name = child.tag.rsplit("}", 1)[-1].lower()
         if local_name not in image_names and "image" not in local_name and "photo" not in local_name:
             continue
-        value = next((child.attrib.get(key) for key in ("src", "url", "href", "path") if child.attrib.get(key)), None) or child.text
+        value = next((child.attrib.get(key) for key in ("src", "url", "href", "path", "file", "value") if child.attrib.get(key)), None) or child.text
         value = _text(value, 1000)
         if value:
             return value
-    return ""
+    raw_xml = ElementTree.tostring(node, encoding="unicode")
+    match = re.search(r"(?:https?:)?//files\.gifts\.ru/[^\"'<\s]+", raw_xml)
+    return match.group(0) if match else ""
 
 
 def _gifts_colors(node):

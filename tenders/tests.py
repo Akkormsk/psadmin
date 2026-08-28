@@ -1129,6 +1129,12 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/8/03564102_2_200x200.webp?v=2")
 
+    def test_gifts_parser_finds_image_url_in_unknown_nested_xml_node(self):
+        product_xml = StringIO("""<doct><product product_id=\"x\"><code>X</code><name>Товар</name><media><preview data-url=\"//files.gifts.ru/reviewer/webp/x.webp\"/></media></product></doct>""")
+        result = parse_gifts_catalog(product_xml, StringIO("<doct/>"))
+
+        self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/x.webp")
+
     @patch.dict("os.environ", {"GIFTS_XML_USERNAME": "user", "GIFTS_XML_PASSWORD": "pass"})
     def test_gifts_client_requires_server_side_credentials(self):
         client = GiftsXmlClient()
