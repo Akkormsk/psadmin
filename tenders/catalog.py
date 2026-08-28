@@ -186,8 +186,32 @@ def _gifts_name_colors(name):
     return [color for color in _GIFTS_NAME_COLORS if re.search(rf"(?<![\w-]){re.escape(color)}(?![\w-])", normalized)]
 
 
-def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None):
+def _gifts_filter_colors(filters_xml):
+    result = {}
+    if filters_xml is None:
+        return result
+    for _, filtertype in ElementTree.iterparse(filters_xml, events=("end",)):
+        if filtertype.tag.rsplit("}", 1)[-1].lower() != "filtertype":
+            continue
+        filtertype_id = _gifts_text(filtertype, "filtertypeid")
+        filtertype_name = _normalized(_gifts_text(filtertype, "filtertypename"))
+        if filtertype_id != "21" and "цвет" not in filtertype_name and "color" not in filtertype_name:
+            filtertype.clear()
+            continue
+        for value in filtertype.iter():
+            if value.tag.rsplit("}", 1)[-1].lower() != "filter":
+                continue
+            filter_id = _gifts_text(value, "filterid")
+            filter_name = _gifts_text(value, "filtername")
+            if filter_id and filter_name:
+                result[filter_id] = filter_name
+        filtertype.clear()
+    return result
+
+
+def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None, filters_xml=None):
     category = _normalized(category) if category else ""
+    filter_colors = _gifts_filter_colors(filters_xml)
     category_ids = {}
     if category:
         for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
@@ -233,6 +257,12 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
+        product_filters = _gifts_descendants(product, "filter")
+        for product_filter in product_filters:
+            filter_type = _gifts_text(product_filter, "filtertypeid")
+            filter_id = _gifts_text(product_filter, "filterid")
+            if filter_type == "21" and filter_id in filter_colors and filter_colors[filter_id] not in colors:
+                colors.append(filter_colors[filter_id])
         name_colors = _gifts_name_colors(name)
         image_src = _gifts_image_src(product)
         if image_src.startswith("//"):
@@ -278,11 +308,11 @@ def sync_gifts_catalog(client=None, category=None, limit=None):
     run = CatalogSyncRun.objects.create(supplier=supplier)
     try:
         if limit:
-            with client.open("catalogue/product.xml") as product_xml:
-                rows = parse_gifts_catalog(product_xml, io.BytesIO(b"<root />"), category=category, limit=limit)
+            with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/filters.xml") as filters_xml:
+                rows = parse_gifts_catalog(product_xml, io.BytesIO(b"<root />"), category=category, limit=limit, filters_xml=filters_xml)
         else:
-            with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml:
-                rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category)
+            with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml, client.open("catalogue/filters.xml") as filters_xml:
+                rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category, filters_xml=filters_xml)
         marker = str(uuid.uuid4())
         created_count = updated_count = 0
         batch_size = 500

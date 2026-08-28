@@ -1138,6 +1138,14 @@ class TenderTests(TestCase):
         self.assertEqual(result[1]["colors"], [])
         self.assertEqual(result[1]["raw_data"]["name_colors"], ["хаки"])
 
+    def test_gifts_parser_reads_color_from_filters_catalog(self):
+        product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет Kama, фиолетовый</name><filters><filter><filtertypeid>21</filtertypeid><filterid>77</filterid></filter></filters></product></doct>""")
+        filters_xml = StringIO("""<root><filtertypes><filtertype><filtertypeid>21</filtertypeid><filtertypename>Цвет</filtertypename><filters><filter><filterid>77</filterid><filtername>фиолетовый</filtername></filter></filters></filtertype></filtertypes></root>""")
+
+        result = parse_gifts_catalog(product_xml, StringIO("<doct/>"), filters_xml=filters_xml)
+
+        self.assertEqual(result[0]["colors"], ["фиолетовый"])
+
     def test_gifts_parser_finds_image_url_in_unknown_nested_xml_node(self):
         product_xml = StringIO("""<doct><product product_id=\"x\"><code>X</code><name>Товар</name><media><preview data-url=\"//files.gifts.ru/reviewer/webp/x.webp\"/></media></product></doct>""")
         result = parse_gifts_catalog(product_xml, StringIO("<doct/>"))
@@ -1330,6 +1338,7 @@ class TenderTests(TestCase):
                     "catalogue/product.xml": "<doct><product product_id='v1'><code>V-1</code><name>Жилет фиолетовый</name><matherial>полиэстер</matherial><small_image src='reviewer/v.webp'/></product></doct>",
                     "catalogue/tree.xml": "<doct><page page_id='1' name='Жилеты'><product product='v1'/></page></doct>",
                     "catalogue/stock.xml": "<doct><stock product_id='v1'><free>12</free><dealerprice>1000</dealerprice></stock></doct>",
+                    "catalogue/filters.xml": "<root><filtertypes/></root>",
                 }
                 return StringIO(payloads[path])
 
