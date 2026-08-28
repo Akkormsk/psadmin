@@ -1129,12 +1129,14 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/8/03564102_2_200x200.webp?v=2")
 
-    def test_gifts_parser_falls_back_to_color_in_product_name(self):
+    def test_gifts_parser_keeps_name_color_out_of_catalog_color_field(self):
         product_xml = StringIO("""<doct><product product_id=\"lime\"><code>03564102</code><name>Футболка унисекс Regent 150, лайм</name></product><product product_id=\"khaki\"><code>03564103</code><name>Футболка унисекс Regent 150, хаки</name></product></doct>""")
         result = parse_gifts_catalog(product_xml, StringIO("<doct/>"))
 
-        self.assertEqual(result[0]["colors"], ["лайм"])
-        self.assertEqual(result[1]["colors"], ["хаки"])
+        self.assertEqual(result[0]["colors"], [])
+        self.assertEqual(result[0]["raw_data"]["name_colors"], ["лайм"])
+        self.assertEqual(result[1]["colors"], [])
+        self.assertEqual(result[1]["raw_data"]["name_colors"], ["хаки"])
 
     def test_gifts_parser_finds_image_url_in_unknown_nested_xml_node(self):
         product_xml = StringIO("""<doct><product product_id=\"x\"><code>X</code><name>Товар</name><media><preview data-url=\"//files.gifts.ru/reviewer/webp/x.webp\"/></media></product></doct>""")

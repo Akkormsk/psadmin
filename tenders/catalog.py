@@ -233,9 +233,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
-        for color in _gifts_name_colors(name):
-            if color not in colors:
-                colors.append(color)
+        name_colors = _gifts_name_colors(name)
         image_src = _gifts_image_src(product)
         if image_src.startswith("//"):
             image_url = f"https:{image_src}"
@@ -251,7 +249,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         stock_free = _integer(stock.get("free")) if stock is not None else 0
         dealer_price = _decimal(stock.get("dealerprice")) if stock is not None else None
         category_name = category_ids.get(str(product_id), "")
-        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description, *colors])))[:20_000]
+        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description, *colors, *name_colors])))[:20_000]
         result.append({
             "external_id": _text(str(product_id), 100), "article": article, "name": name, "full_name": name,
             "description": description, "category_ids": [], "category_names": [category_name] if category_name else [],
@@ -261,7 +259,8 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
             "is_on_order": _gifts_text(product, "ondemand").lower() == "true", "delivery_days": _integer(_gifts_text(product, "days")) or None,
             "image_url": image_url, "product_url": f"https://gifts.ru/catalog/{article}" if article else "https://gifts.ru",
             "supply_terms": _gifts_text(product, "demandtype"), "warning": _gifts_text(product, "alert"), "defect": "",
-            "search_text": search_text, "source_updated_at": None, "sync_marker": "", "is_active": True, "raw_data": {"status": _gifts_text(product, "status")},
+            "search_text": search_text, "source_updated_at": None, "sync_marker": "", "is_active": True,
+            "raw_data": {"status": _gifts_text(product, "status"), "name_colors": name_colors},
         })
         product.clear()
         if limit and len(result) >= limit:
@@ -856,6 +855,10 @@ def _fit_product(product, line, anchors, quantity):
     color_text = _constraint_text(line, "цвет")
     color_values = product.colors if isinstance(product.colors, list) and product.colors else _attribute_values(product, ("цвет",))
     product_color_text = " ".join(color_values)
+    name_color_values = []
+    if isinstance(product.raw_data, dict):
+        name_color_values = [str(value) for value in product.raw_data.get("name_colors", []) if str(value).strip()]
+    name_color_match = False
     if _meaningful_tokens(color_text):
         color_matches, color_family = _colors_compatible(color_text, product_color_text)
         if color_matches:
@@ -865,6 +868,7 @@ def _fit_product(product, line, anchors, quantity):
             mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(color_values)}")
         else:
             unknown.append("Цвет не указан в каталоге")
+            name_color_match, _ = _colors_compatible(color_text, " ".join(name_color_values))
 
     density = _density_constraint(line)
     product_density = _product_density(product)
@@ -904,6 +908,8 @@ def _fit_product(product, line, anchors, quantity):
 
     name_score = SequenceMatcher(None, _normalized(line.get("name", "")), _normalized(product.full_name or product.name)).ratio()
     score = name_score * 30 + len(matches) * 12 - len(mismatches) * 35 - len(unknown) * 8
+    if name_color_match:
+        score += 12
     if not mismatches:
         score += 40
     if product.effective_price is not None:
