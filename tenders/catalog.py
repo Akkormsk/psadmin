@@ -153,7 +153,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         name = _gifts_text(product, "name") or str(product_id)
         article = _gifts_text(product, "code")
         material = _gifts_text(product, "matherial")
-        size = _gifts_text(product, "product_size")
+        size = _text(_gifts_text(product, "product_size"), 100)
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         image_node = product.find("small_image")
