@@ -225,6 +225,7 @@ def sync_gifts_catalog(client=None, category=None, limit=None):
         run.created_count = created_count
         run.updated_count = updated_count
         run.save(update_fields=["status", "finished_at", "received_count", "created_count", "updated_count"])
+        run.imported_rows = rows
         return run
     except Exception as exc:
         now = timezone.now()

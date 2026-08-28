@@ -2,6 +2,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -41,10 +42,28 @@ def gifts_import_test(request):
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         return HttpResponse(status=403)
     try:
-        run = sync_gifts_catalog(limit=10)
+        limit = int(request.GET.get("limit", "10"))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Параметр limit должен быть числом от 1 до 100."}, status=400)
+    if not 1 <= limit <= 100:
+        return JsonResponse({"error": "Параметр limit должен быть от 1 до 100."}, status=400)
+    started = time.monotonic()
+    try:
+        run = sync_gifts_catalog(limit=limit)
     except CatalogSyncError as exc:
         return JsonResponse({"error": str(exc)}, status=502)
-    return JsonResponse({"status": run.status, "received": run.received_count, "created": run.created_count, "updated": run.updated_count})
+    products = [
+        {"external_id": row["external_id"], "article": row["article"], "name": row["name"]}
+        for row in getattr(run, "imported_rows", [])
+    ]
+    return JsonResponse({
+        "status": run.status,
+        "received": run.received_count,
+        "created": run.created_count,
+        "updated": run.updated_count,
+        "seconds": round(time.monotonic() - started, 2),
+        "products": products,
+    })
 
 def _document_upload_error(upload):
     if upload is None:
