@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
@@ -34,8 +34,7 @@ def knowledge_sync(request):
     return JsonResponse(export_knowledge_bundle(include_embeddings=True), json_dumps_params={"ensure_ascii": False})
 
 
-@csrf_exempt
-@require_POST
+@require_GET
 def gifts_import_test(request):
     expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
     supplied = request.headers.get("Authorization", "")
