@@ -50,7 +50,8 @@ body::before {
 .account-bar .logout-link { color: #4b5563; text-decoration: none; }
 .account-bar a:hover,
 .account-bar .logout-link:hover { color: #111827; }
-.account-bar__profile { display: inline-flex; align-items: center; gap: 7px; }
+.account-bar__profile { position: relative; display: inline-flex; align-items: center; gap: 7px; }
+.account-bar__version { position: absolute; top: 42px; right: 0; color: #64748b; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .account-avatar {
   width: 40px;
   height: 40px;

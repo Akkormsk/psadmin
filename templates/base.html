@@ -18,6 +18,7 @@
             <span class="account-avatar">
                 {% if request.user.profile.has_avatar %}<img src="{% url 'account_avatar' %}" alt="">{% else %}<span>{% if request.user.first_name or request.user.last_name %}{{ request.user.first_name|slice:":1" }}{{ request.user.last_name|slice:":1" }}{% else %}?{% endif %}</span>{% endif %}
             </span>
+            <small class="account-bar__version">Версия {{ app_commit }}</small>
         </a>
         <form method="post" action="{% url 'logout' %}" class="logout-form">{% csrf_token %}<button type="submit" class="logout-link">Выйти</button></form>
     </nav>
