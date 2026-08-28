@@ -233,22 +233,22 @@ def production_route_preview(request):
             raise ValueError
     except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({"error": "Сначала заполните позицию и примените требования ТЗ."}, status=400)
-    try:
-        hypothesis = build_training_hypothesis(line)
-        session = ProductionTrainingSession.objects.create(
-            created_by=request.user,
-            position_name=str(line.get("name", ""))[:500],
-            requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
-            current_hypothesis=hypothesis,
-        )
-        ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
-        hypothesis["session_id"] = session.pk
-        return JsonResponse(hypothesis)
-    except TenderAIError as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    except Exception:
-        logger.exception("Unexpected production hypothesis error")
-        return JsonResponse({"error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}, status=400)
+    session = ProductionTrainingSession.objects.create(
+        created_by=request.user,
+        position_name=str(line.get("name", ""))[:500],
+        requirements={"line": line},
+        current_hypothesis={"stage": "pending"},
+    )
+    subprocess.Popen([sys.executable, "manage.py", "run_production_job", str(session.pk)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return JsonResponse({"status": "pending", "session_id": session.pk}, status=202)
+
+
+@login_required
+@require_GET
+def production_route_status(request, pk):
+    session = get_object_or_404(ProductionTrainingSession, pk=pk, created_by=request.user)
+    hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+    return JsonResponse({**hypothesis, "session_id": session.pk}, status=202 if hypothesis.get("stage") == "pending" else 200)
 
 
 @login_required
