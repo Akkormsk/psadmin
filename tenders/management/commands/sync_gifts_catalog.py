@@ -10,10 +10,11 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--category", default=os.getenv("GIFTS_XML_CATEGORY", ""))
+        parser.add_argument("--limit", type=int, default=None)
 
     def handle(self, *args, **options):
         try:
-            run = sync_gifts_catalog(category=options["category"] or None)
+            run = sync_gifts_catalog(category=options["category"] or None, limit=options["limit"])
         except CatalogSyncError as exc:
             raise CommandError(str(exc)) from exc
         self.stdout.write(self.style.SUCCESS(

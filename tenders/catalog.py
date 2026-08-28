@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import os
 import re
@@ -109,7 +110,7 @@ def _gifts_text(node, name):
     return _text(value.text if value is not None else "", 5000)
 
 
-def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None):
+def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None):
     category = _normalized(category) if category else ""
     category_ids = {}
     if category:
@@ -178,10 +179,12 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None):
             "search_text": search_text, "source_updated_at": None, "sync_marker": "", "is_active": True, "raw_data": {"status": _gifts_text(product, "status")},
         })
         product.clear()
+        if limit and len(result) >= limit:
+            break
     return result
 
 
-def sync_gifts_catalog(client=None, category=None):
+def sync_gifts_catalog(client=None, category=None, limit=None):
     client = client or GiftsXmlClient()
     supplier, _ = CatalogSupplier.objects.get_or_create(code="gifts", defaults={"name": "gifts.ru", "base_url": client.base_url})
     supplier.base_url = client.base_url
@@ -190,8 +193,12 @@ def sync_gifts_catalog(client=None, category=None):
     supplier.save(update_fields=["base_url", "sync_status", "sync_message"])
     run = CatalogSyncRun.objects.create(supplier=supplier)
     try:
-        with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml:
-            rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category)
+        if limit:
+            with client.open("catalogue/product.xml") as product_xml:
+                rows = parse_gifts_catalog(product_xml, io.BytesIO(b"<root />"), category=category, limit=limit)
+        else:
+            with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml:
+                rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category)
         marker = str(uuid.uuid4())
         created_count = updated_count = 0
         batch_size = 500
