@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
 from tenders.models import ProductionTrainingSession, ProductionTrainingTurn
 from tenders.services import TenderAIError, build_training_hypothesis
@@ -12,6 +13,8 @@ class Command(BaseCommand):
         session = ProductionTrainingSession.objects.get(pk=options["session_id"])
         line = (session.requirements or {}).get("line", {})
         try:
+            session.current_hypothesis = {"stage": "ai", "started_at": timezone.now().isoformat()}
+            session.save(update_fields=["current_hypothesis", "updated_at"])
             hypothesis = build_training_hypothesis(line)
             hypothesis["session_id"] = session.pk
             session.current_hypothesis = hypothesis

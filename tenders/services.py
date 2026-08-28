@@ -2584,6 +2584,7 @@ def _attach_memory_preview(hypothesis):
 
 
 def build_training_hypothesis(line, current=None, feedback=""):
+    started_at = time.perf_counter()
     from .models import ProductionType
     from .catalog import CatalogSyncError, catalog_candidates_for_line
 
@@ -2631,7 +2632,9 @@ def build_training_hypothesis(line, current=None, feedback=""):
 
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ:
 {json.dumps(knowledge_sources, ensure_ascii=False)}"""
+    ai_started_at = time.perf_counter()
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
+    ai_seconds = round(time.perf_counter() - ai_started_at, 3)
     valid_ids = {value.pk for value in examples}
     matched_ids = []
     for value in result.get("matched_example_ids", []) if isinstance(result.get("matched_example_ids"), list) else []:
@@ -2655,6 +2658,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
         "hard_constraints": _short_text_list(raw_intent.get("hard_constraints"), limit=12),
         "preferences": _short_text_list(raw_intent.get("preferences"), limit=8),
     }
+    catalog_started_at = time.perf_counter()
     try:
         catalog_candidates = catalog_candidates_for_line(line, limit=3, intent=catalog_intent)
     except CatalogSyncError as exc:
@@ -2666,6 +2670,7 @@ def build_training_hypothesis(line, current=None, feedback=""):
         logger.exception("Unexpected Oasis catalog failure while building a training hypothesis")
         catalog_candidates = []
         hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
+    catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
     hypothesis["catalog_intent"] = catalog_intent
     hypothesis["catalog_candidates"] = catalog_candidates
     if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
@@ -2675,6 +2680,11 @@ def build_training_hypothesis(line, current=None, feedback=""):
     if isinstance(current, dict) and isinstance(current.get("sources"), list):
         hypothesis["sources"] = current["sources"][:20]
     hypothesis["usage"] = {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}
+    hypothesis["timings"] = {
+        "ai_seconds": ai_seconds,
+        "catalog_seconds": catalog_seconds,
+        "total_seconds": round(time.perf_counter() - started_at, 3),
+    }
     hypothesis["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     # A fully matching live offer is an executable backend price source, not
     # merely a visual suggestion. Apply it immediately so the displayed total
