@@ -808,6 +808,7 @@ h1 {
 .cash-edit-modal .modal { max-width: 520px; }
 .form-panel { max-width: 680px; margin: 0 auto; }
 .form-error { margin: 6px 0 0; color: #b91c1c; font-size: 14px; }
+.tender-route-progress { margin: 8px 0 0; padding: 10px 12px; border: 1px solid #cfe7d8; border-radius: 10px; background: #f1faf4; color: #176b3a; font-size: 14px; }
 
 /* ---------- calculator ---------- */
 .calc-group { padding: 16px 0; border-top: 1px solid #eee; }
