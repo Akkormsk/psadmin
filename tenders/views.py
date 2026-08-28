@@ -2,7 +2,10 @@ import hmac
 import json
 import logging
 import os
+import subprocess
+import sys
 import time
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -11,11 +14,12 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CatalogMatchDecision, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogMatchDecision, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .catalog import CatalogSyncError, sync_gifts_catalog
 from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
@@ -41,9 +45,18 @@ def gifts_import_test(request):
     supplied = request.headers.get("Authorization", "")
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         return HttpResponse(status=403)
+    if request.GET.get("status") == "1":
+        run = CatalogSyncRun.objects.filter(supplier__code="gifts").first()
+        if run is None:
+            return JsonResponse({"status": "not_started"})
+        return JsonResponse({"status": run.status, "received": run.received_count, "created": run.created_count, "updated": run.updated_count, "error": run.error})
     full = request.GET.get("full") == "1"
     if full:
-        limit = None
+        recent_running = CatalogSyncRun.objects.filter(supplier__code="gifts", status="running", started_at__gte=timezone.now() - timedelta(minutes=15)).exists()
+        if recent_running:
+            return JsonResponse({"status": "already_running"}, status=409)
+        subprocess.Popen([sys.executable, "manage.py", "sync_gifts_catalog"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return JsonResponse({"status": "started"}, status=202)
     else:
         try:
             limit = int(request.GET.get("limit", "10"))
