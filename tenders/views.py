@@ -115,10 +115,8 @@ def gifts_raw_sample(request):
                 stock.clear()
         filter_type = ""
         with client.open("catalogue/filters.xml") as filters_xml:
-            for _, node in ElementTree.iterparse(filters_xml, events=("end",)):
-                if node.tag.rsplit("}", 1)[-1].lower() == "filtertype" and _gifts_text(node, "filtertypeid") == "21":
-                    filter_type = ElementTree.tostring(node, encoding="unicode")
-                    break
+            filters_raw = filters_xml.read().decode("utf-8", errors="replace")
+            filter_type = filters_raw[:200000]
     except CatalogSyncError as exc:
         return JsonResponse({"error": str(exc)}, status=502)
     return JsonResponse({"products": products, "stocks": stocks, "color_filtertype": filter_type, "missing": sorted(articles - products.keys())}, json_dumps_params={"ensure_ascii": False})
