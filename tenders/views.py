@@ -56,7 +56,14 @@ def gifts_import_test(request):
         recent_running = CatalogSyncRun.objects.filter(supplier__code="gifts", status="running", started_at__gte=timezone.now() - timedelta(minutes=15)).exists()
         if recent_running:
             return JsonResponse({"status": "already_running"}, status=409)
-        subprocess.Popen([sys.executable, "manage.py", "sync_gifts_catalog"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        manage_path = Path(__file__).resolve().parent.parent / "manage.py"
+        subprocess.Popen(
+            [sys.executable, str(manage_path), "sync_gifts_catalog"],
+            cwd=str(manage_path.parent),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         return JsonResponse({"status": "started"}, status=202)
     else:
         try:
