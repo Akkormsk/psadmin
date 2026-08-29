@@ -1385,6 +1385,32 @@ class TenderTests(TestCase):
         self.assertEqual(result["totals"]["cost_total"], "80000.00")
         self.assertEqual(result["costs"][0]["source_type"], "catalog")
 
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_llm_catalog_plan_keeps_specific_category_from_full_title(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "textile_merch", "summary": "Поло", "confidence": .8,
+            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+            "catalog_intent": {
+                "product_class": "футболка", "item": "рубашка поло",
+                "categories": ["поло", "рубашка поло", "polo shirt"], "synonyms": ["polo shirt"],
+                "required": [{"label": "Цвет", "value": "белый", "weight": 1}],
+                "preferred": [{"label": "Материал", "value": "хлопок", "weight": .8}],
+                "secondary": [], "search_fields": ["category", "name", "attributes"],
+                "ranking": [{"criterion": "соответствие типу товара", "weight": 1}],
+                "fallback_queries": [{"terms": ["поло", "рубашка поло"], "relaxable": False}],
+            },
+        }, {})
+        catalog_search.return_value = []
+
+        result = build_training_hypothesis({"name": "Футболка поло унисекс", "quantity": 10, "requirements": {"requirements": []}})
+
+        intent = result["catalog_intent"]
+        self.assertEqual(intent["categories"], ["поло", "рубашка поло", "polo shirt"])
+        self.assertEqual(intent["required"][0]["label"], "Цвет")
+        self.assertEqual(catalog_search.call_args.kwargs["intent"]["categories"][0], "поло")
+
     @patch("tenders.catalog.catalog_candidates_for_line", side_effect=ValueError("broken external row"))
     @patch("tenders.services._ai_gateway_json")
     def test_catalog_failure_does_not_discard_valid_production_hypothesis(self, gateway, catalog_search):
@@ -1495,6 +1521,72 @@ class TenderTests(TestCase):
         candidates = catalog_candidates_for_line(line, limit=2, intent={"product_class": "футболка"}, client=Client())
 
         self.assertEqual([value["external_id"] for value in candidates], ["cheap", "expensive"])
+
+    def test_catalog_search_prioritizes_requirements_over_product_name_similarity(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Ручки", "path": "categories/office/pens"}]
+                return [
+                    {
+                        "id": "popular", "article": "P", "group_id": "popular",
+                        "name": "Ручка шариковая Popular", "full_name": "Ручка шариковая Popular, зеленая",
+                        "materials": ["металл"], "colors": ["зеленый"], "attributes": [],
+                        "categories": [10], "total_stock": 100, "price": "84",
+                    },
+                    {
+                        "id": "gold", "article": "G", "group_id": "gold",
+                        "name": "Ручка шариковая Euro Gold", "full_name": "Ручка шариковая Euro Gold, зеленая",
+                        "materials": ["металл"], "colors": ["зеленый"],
+                        "attributes": [{"name": "Чернила", "value": "синие"}, {"name": "Механизм", "value": "поворотный"}],
+                        "categories": [10], "total_stock": 100, "price": "12.80",
+                    },
+                    {
+                        "id": "chrome", "article": "C", "group_id": "chrome",
+                        "name": "Ручка шариковая Euro Chrome", "full_name": "Ручка шариковая Euro Chrome, зеленая",
+                        "materials": ["металл"], "colors": ["зеленый"],
+                        "attributes": [{"name": "Чернила", "value": "синие"}, {"name": "Механизм", "value": "поворотный"}],
+                        "categories": [10], "total_stock": 100, "price": "10.60",
+                    },
+                ]
+
+        line = {"name": "Ручка, зелёная, материал – металл, чернила синие, механизм поворотный", "quantity": "10", "requirements": {"requirements": [
+            {"label": "Материал", "value": "металл"},
+            {"label": "Цвет", "value": "зелёная"},
+            {"label": "Чернила", "value": "синие"},
+            {"label": "Механизм", "value": "поворотный"},
+            {"label": "Нанесение", "value": "гравировка 1+0"},
+        ]}}
+
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "ручка"}, client=Client())
+
+        self.assertEqual([value["external_id"] for value in candidates], ["chrome", "gold", "popular"])
+        self.assertTrue(any("Чернила" in value for value in candidates[0]["matches"]))
+        self.assertTrue(any("Механизм" in value for value in candidates[0]["matches"]))
+
+    def test_catalog_search_uses_llm_specific_categories_instead_of_generic_class(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [
+                        {"id": 10, "name": "Футболки", "path": "categories/textile/tshirts"},
+                        {"id": 11, "name": "Поло", "path": "categories/textile/polo"},
+                    ]
+                return [
+                    {"id": "shirt", "article": "S", "group_id": "shirt", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "categories": [10], "total_stock": 100, "price": "500"},
+                    {"id": "polo", "article": "P", "group_id": "polo", "name": "Футболка поло", "full_name": "Футболка поло белая", "colors": ["белый"], "categories": [11], "total_stock": 100, "price": "600"},
+                ]
+
+        line = {"name": "Футболка поло унисекс", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]}}
+        intent = {"product_class": "футболка", "item": "поло", "categories": ["поло", "рубашка поло"], "synonyms": [], "required": [], "preferred": [], "secondary": []}
+
+        candidates = catalog_candidates_for_line(line, limit=3, intent=intent, client=Client())
+
+        self.assertEqual([value["external_id"] for value in candidates], ["polo"])
 
     def test_catalog_search_does_not_prefer_supplier_when_relevance_and_price_are_equal(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")

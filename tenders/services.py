@@ -1410,6 +1410,91 @@ def _short_text_list(values, limit=12):
     return [_cell_text(value)[:300] for value in values[:limit] if _cell_text(value)]
 
 
+def _normalize_catalog_intent(raw):
+    """Keep the LLM catalogue planner structured while preserving legacy fields."""
+    raw = raw if isinstance(raw, dict) else {}
+
+    def text_list(values, limit=12):
+        return _short_text_list(values, limit=limit)
+
+    def weight(value, default):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return default
+        if value > 1:
+            value /= 100
+        return round(max(0, min(1, value)), 3)
+
+    def requirement_list(values, default_weight):
+        result = []
+        if not isinstance(values, list):
+            return result
+        for value in values[:20]:
+            if not isinstance(value, dict):
+                continue
+            label = _cell_text(value.get("label"))[:120]
+            item_value = _cell_text(value.get("value"))[:500]
+            if not label or not item_value:
+                continue
+            result.append({
+                "label": label,
+                "value": item_value,
+                "weight": weight(value.get("weight"), default_weight),
+            })
+        return result
+
+    def strategy_list(values):
+        result = []
+        if not isinstance(values, list):
+            return result
+        for value in values[:8]:
+            if not isinstance(value, dict):
+                continue
+            source = _cell_text(value.get("source"))[:80]
+            if not source:
+                continue
+            result.append({
+                "source": source,
+                "category_terms": text_list(value.get("category_terms"), limit=8),
+                "query_terms": text_list(value.get("query_terms"), limit=12),
+                "search_fields": text_list(value.get("search_fields"), limit=8),
+            })
+        return result
+
+    fallback_queries = []
+    for value in raw.get("fallback_queries", [])[:8] if isinstance(raw.get("fallback_queries"), list) else []:
+        if not isinstance(value, dict):
+            continue
+        terms = text_list(value.get("terms"), limit=8)
+        if terms:
+            fallback_queries.append({"terms": terms, "relaxable": bool(value.get("relaxable"))})
+    categories = text_list(raw.get("categories"), limit=8)
+    item = _cell_text(raw.get("item"))[:200]
+    product_class = _cell_text(raw.get("product_class"))[:100]
+    if item and not categories:
+        categories = [item]
+    return {
+        "item": item,
+        "product_class": product_class,
+        "categories": categories,
+        "synonyms": text_list(raw.get("synonyms"), limit=12),
+        "required": requirement_list(raw.get("required"), 1),
+        "preferred": requirement_list(raw.get("preferred"), .6),
+        "secondary": requirement_list(raw.get("secondary"), .3),
+        "search_fields": text_list(raw.get("search_fields"), limit=8),
+        "ranking": [
+            {"criterion": _cell_text(value.get("criterion"))[:160], "weight": weight(value.get("weight"), .5)}
+            for value in raw.get("ranking", [])[:12]
+            if isinstance(value, dict) and _cell_text(value.get("criterion"))
+        ],
+        "fallback_queries": fallback_queries,
+        "source_strategy": strategy_list(raw.get("source_strategy")),
+        "hard_constraints": text_list(raw.get("hard_constraints"), limit=12),
+        "preferences": text_list(raw.get("preferences"), limit=8),
+    }
+
+
 def _requirement_list(values):
     if not isinstance(values, list):
         return []
@@ -2604,7 +2689,11 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     } for value in examples]
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
-    schema = schema[:-1] + ',"catalog_intent":{"product_class":"канонический тип товара в единственном числе","synonyms":["синоним из позиции"],"hard_constraints":["обязательное требование без вычислений"],"preferences":["желательное свойство"]}}'
+    schema = schema[:-1] + ',"catalog_intent":{"item":"что фактически нужно найти или изготовить","product_class":"совместимое краткое имя типа товара","categories":["наиболее конкретная категория","допустимая категория"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"search_fields":["category","name","description","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["запасной поисковый запрос"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["категория источника"],"query_terms":["запрос источника"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
+    catalog_capabilities = [
+        {"source": "oasis", "fields": ["category", "name", "full_name", "description", "attributes", "materials", "colors", "price", "stock"]},
+        {"source": "gifts", "fields": ["category", "name", "description", "attributes", "materials", "colors", "price", "stock"]},
+    ]
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
@@ -2616,7 +2705,8 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
-Для поиска готового товара заполни catalog_intent. Здесь работает только понимание слов: приведи название к каноническому типу в единственном числе (например, «майка брендированная» → «футболка», «жилетка» → «жилет»), выдели синонимы и раздели обязательные требования от пожеланий. Не подбирай артикулы, не сравнивай числа и ничего не рассчитывай — это выполнит бэкенд.
+Для поиска готового товара заполни catalog_intent как планировщик поиска. Прочитай полный заголовок и требования как менеджер по закупкам: определи фактически требуемое изделие, отдели часть названия товара от его свойств и выбери одну или несколько наиболее конкретных категорий. Общие слова не должны заменять узкую сущность: например, в «футболка поло» изделие — поло, а не обычная футболка; в «футболка с длинным рукавом» изделие — лонгслив. Не добавляй категорию только потому, что слово встретилось в описании свойства.
+Составь required, preferred и secondary. В required помещай то, что нельзя нарушать, в preferred — желательное, в secondary — второстепенное. weight — относительная важность от 0 до 1 для сравнения внутри соответствующего класса. В ranking укажи, какие требования должны сильнее влиять на итоговый выбор именно для этой позиции. В source_strategy учитывай реальные поля каждого источника из переданных возможностей. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не сравнивай числа и ничего не рассчитывай — это выполнит бэкенд.
 Верни только JSON: {schema}
 
 ПОЗИЦИЯ:
@@ -2635,7 +2725,10 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 {json.dumps(example_payload, ensure_ascii=False)}
 
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ:
-{json.dumps(knowledge_sources, ensure_ascii=False)}"""
+{json.dumps(knowledge_sources, ensure_ascii=False)}
+
+ВОЗМОЖНОСТИ КАТАЛОГОВ:
+{json.dumps(catalog_capabilities, ensure_ascii=False)}"""
     ai_started_at = time.perf_counter()
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     ai_seconds = round(time.perf_counter() - ai_started_at, 3)
@@ -2656,12 +2749,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     ), None)
     hypothesis = _apply_psodin_calculation(hypothesis, result, line, current=current, feedback=feedback, confirmed=confirmed_psodin)
     raw_intent = result.get("catalog_intent") if isinstance(result.get("catalog_intent"), dict) else {}
-    catalog_intent = {
-        "product_class": _cell_text(raw_intent.get("product_class"))[:100],
-        "synonyms": _short_text_list(raw_intent.get("synonyms"), limit=8),
-        "hard_constraints": _short_text_list(raw_intent.get("hard_constraints"), limit=12),
-        "preferences": _short_text_list(raw_intent.get("preferences"), limit=8),
-    }
+    catalog_intent = _normalize_catalog_intent(raw_intent)
     catalog_started_at = time.perf_counter()
     if progress_callback:
         progress_callback("catalog")

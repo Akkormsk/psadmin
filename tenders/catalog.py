@@ -780,6 +780,92 @@ def _canonical_catalog_class(value):
     return normalized.split()[0] if normalized else ""
 
 
+def _planner_categories(intent):
+    if not isinstance(intent, dict):
+        return []
+    values = []
+    has_planned_categories = isinstance(intent.get("categories"), list) and intent.get("categories")
+    keys = ("categories",) if has_planned_categories else ("item", "product_class")
+    for key in keys:
+        raw = intent.get(key)
+        raw = raw if isinstance(raw, list) else [raw]
+        for value in raw:
+            value = _text(value, 200)
+            if not has_planned_categories:
+                canonical = _canonical_catalog_class(value)
+                if canonical and _normalized(canonical) != _normalized(value):
+                    value = canonical
+            if value and _normalized(value) not in {_normalized(item) for item in values}:
+                values.append(value)
+    return values[:12]
+
+
+def _planner_requirements(intent):
+    if not isinstance(intent, dict):
+        return []
+    result = []
+    defaults = (("required", 1), ("preferred", .6), ("secondary", .3))
+    for key, default_weight in defaults:
+        values = intent.get(key)
+        if not isinstance(values, list):
+            continue
+        for value in values[:20]:
+            if not isinstance(value, dict):
+                continue
+            label, item_value = _text(value.get("label"), 300), _text(value.get("value"), 1000)
+            if not label or not item_value:
+                continue
+            try:
+                weight = float(value.get("weight", default_weight))
+            except (TypeError, ValueError):
+                weight = default_weight
+            if weight > 1:
+                weight /= 100
+            result.append({"label": label, "value": item_value, "weight": max(0, min(1, weight)), "group": key})
+    return result
+
+
+def _line_with_planner_requirements(line, intent):
+    existing = _requirement_values(line)
+    requirements = list(existing)
+    seen = {(_normalized(value.get("label")), _normalized(value.get("value"))) for value in existing}
+    for value in _planner_requirements(intent):
+        key = (_normalized(value["label"]), _normalized(value["value"]))
+        if key in seen:
+            continue
+        requirements.append({"label": value["label"], "value": value["value"]})
+        seen.add(key)
+    if len(requirements) == len(existing):
+        return line
+    result = dict(line)
+    result["requirements"] = {"requirements": requirements}
+    return result
+
+
+def _planner_weight_map(intent):
+    result = {}
+    for value in _planner_requirements(intent):
+        label = _normalized(value["label"])
+        if label:
+            result.setdefault(label, value["weight"])
+    return result
+
+
+def _planner_source_terms(intent, source_code):
+    if not isinstance(intent, dict) or not isinstance(intent.get("source_strategy"), list):
+        return []
+    result = []
+    for strategy in intent["source_strategy"]:
+        if not isinstance(strategy, dict) or _normalized(strategy.get("source")) != _normalized(source_code):
+            continue
+        for key in ("category_terms", "query_terms"):
+            for value in strategy.get(key, []) if isinstance(strategy.get(key), list) else []:
+                value = _text(value, 300)
+                if value and _normalized(value) not in {_normalized(item) for item in result}:
+                    result.append(value)
+    return result[:16]
+
+
 def _live_category_data(client):
     cached = cache.get("oasis-live-categories-v1")
     if isinstance(cached, list) and cached:
@@ -799,10 +885,9 @@ def _live_category_data(client):
 
 
 def _live_category_for_intent(categories, intent, line):
-    product_class = _canonical_catalog_class(intent.get("product_class") if isinstance(intent, dict) else "")
-    if not product_class:
-        product_class = _canonical_catalog_class(line.get("name", ""))
-    aliases = list(CATALOG_CLASS_ALIASES.get(product_class, (product_class,)))
+    planner_categories = _planner_categories(intent)
+    product_class = _canonical_catalog_class(" ".join(planner_categories)) if planner_categories else _canonical_catalog_class(line.get("name", ""))
+    aliases = planner_categories or list(CATALOG_CLASS_ALIASES.get(product_class, (product_class,)))
     if isinstance(intent, dict):
         aliases.extend(_text(value, 80) for value in intent.get("synonyms", [])[:8] if _text(value, 80))
     terms = {_normalized(value) for value in aliases if _normalized(value)}
@@ -834,6 +919,52 @@ def _attribute_values(product, markers):
             if value:
                 values.append(value)
     return values
+
+
+def _values_compatible(required, offered):
+    """Compare a requirement with a catalogue value without relying on exact inflection."""
+    required_text = _text(required, 1000)
+    offered_text = _text(offered, 1000)
+    if _color_family(required_text) and _color_family(offered_text):
+        return _colors_compatible(required_text, offered_text)[0]
+    required_tokens = _meaningful_tokens(required_text)
+    offered_tokens = _meaningful_tokens(offered_text)
+    if required_tokens & offered_tokens:
+        return True
+    return any(
+        len(required_token) >= 4 and len(offered_token) >= 4
+        and (required_token.startswith(offered_token[:4]) or offered_token.startswith(required_token[:4]))
+        for required_token in required_tokens
+        for offered_token in offered_tokens
+    )
+
+
+def _catalog_parameter_weight(value, planner_weights=None):
+    normalized = _normalized(value)
+    for label, weight in (planner_weights or {}).items():
+        if label and (label in normalized or normalized.startswith(label)):
+            return max(1, round(100 * weight))
+    if "тип товара" in normalized:
+        return 100
+    if "материал" in normalized or "состав" in normalized:
+        return 40
+    if "цвет" in normalized:
+        return 40
+    if "плотност" in normalized:
+        return 30
+    if "нанес" in normalized or "гравиров" in normalized or "печать" in normalized:
+        return 25
+    if "остаток" in normalized:
+        return 15
+    return 35
+
+
+def _catalog_parameter_score(matches, mismatches, unknown, planner_weights=None):
+    return (
+        sum(_catalog_parameter_weight(value, planner_weights) for value in matches)
+        - sum(_catalog_parameter_weight(value, planner_weights) for value in mismatches)
+        - sum(max(8, _catalog_parameter_weight(value, planner_weights) // 3) for value in unknown)
+    )
 
 
 def _product_sizes(product):
@@ -884,7 +1015,7 @@ def _aggregate_color_variants(products):
     return result
 
 
-def _fit_product(product, line, anchors, quantity):
+def _fit_product(product, line, anchors, quantity, intent=None):
     matches, mismatches, unknown = [], [], []
     type_text = _normalized(" ".join([
         *(product.category_names if isinstance(product.category_names, list) else []),
@@ -962,6 +1093,34 @@ def _fit_product(product, line, anchors, quantity):
         else:
             unknown.append(f"Не указана совместимость с нанесением: {method}")
 
+    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив")
+    product_attributes = [
+        attribute for attribute in product.attributes
+        if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
+    ] if isinstance(product.attributes, list) else []
+    for requirement in _requirement_values(line):
+        label = _text(requirement.get("label"), 300)
+        value = _text(requirement.get("value"), 1000)
+        label_normalized = _normalized(label)
+        if not label_normalized or not value or any(marker in label_normalized for marker in handled_markers):
+            continue
+        if any(marker in label_normalized for marker in ("коммент", "примеч")):
+            continue
+        label_tokens = _meaningful_tokens(label_normalized)
+        related = [
+            attribute for attribute in product_attributes
+            if label_tokens and any(token in _normalized(attribute.get("name")) for token in label_tokens)
+        ]
+        display_label = label.rstrip(":")
+        if not related:
+            unknown.append(f"{display_label} не указан в каталоге")
+            continue
+        offered_values = [_text(attribute.get("value"), 1000) for attribute in related]
+        if any(_values_compatible(value, offered) for offered in offered_values):
+            matches.append(f"{display_label}: {', '.join(offered_values)}")
+        else:
+            mismatches.append(f"{display_label} не совпадает: требуется {value}; в каталоге {', '.join(offered_values)}")
+
     if quantity > 0:
         if product.total_stock >= quantity:
             matches.append(f"Остаток достаточен: {product.total_stock} шт.")
@@ -970,14 +1129,9 @@ def _fit_product(product, line, anchors, quantity):
         else:
             mismatches.append(f"Недостаточный остаток: {product.total_stock} из {quantity} шт.")
 
-    name_score = SequenceMatcher(None, _normalized(line.get("name", "")), _normalized(product.full_name or product.name)).ratio()
-    score = name_score * 30 + len(matches) * 12 - len(mismatches) * 35 - len(unknown) * 8
+    score = _catalog_parameter_score(matches, mismatches, unknown, _planner_weight_map(intent))
     if name_color_match:
-        score += 12
-    if not mismatches:
-        score += 40
-    if product.effective_price is not None:
-        score += 4
+        score += 8
     return score, matches, mismatches, unknown
 
 
@@ -994,17 +1148,26 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         "total_stock,is_on_order,delivery_days,supply_terms,lead,defect,updated_at"
     )
     rows, seen_ids = [], set()
-    canonical_class = _canonical_catalog_class((intent or {}).get("product_class") or line.get("name", ""))
-    anchors = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
-    aliases = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
-    search_aliases = CATALOG_CLASS_SEARCH_TERMS.get(canonical_class, aliases)
+    planner_categories = _planner_categories(intent)
+    canonical_class = _canonical_catalog_class(" ".join(planner_categories)) if planner_categories else _canonical_catalog_class(line.get("name", ""))
+    legacy_aliases = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
+    anchors = tuple(planner_categories) or legacy_aliases
+    aliases = tuple(planner_categories) or legacy_aliases
+    search_aliases = tuple(dict.fromkeys([*aliases, *((intent or {}).get("synonyms", []) if isinstance(intent, dict) else [])]))
+    effective_line = _line_with_planner_requirements(line, intent)
     text_terms = list(aliases)
     for value in [
         line.get("name", ""),
         *((intent or {}).get("synonyms", []) if isinstance(intent, dict) else []),
         *((intent or {}).get("hard_constraints", []) if isinstance(intent, dict) else []),
         *((intent or {}).get("preferences", []) if isinstance(intent, dict) else []),
-        *[item.get("value", "") for item in _requirement_values(line)],
+        *[item.get("value", "") for item in _requirement_values(effective_line)],
+        *[item.get("value", "") for item in _planner_requirements(intent)],
+        *[
+            term
+            for query in (intent or {}).get("fallback_queries", []) if isinstance(query, dict)
+            for term in query.get("terms", []) if isinstance(query.get("terms"), list)
+        ],
     ]:
         text_terms.extend(sorted(_meaningful_tokens(value)))
     text_terms = list(dict.fromkeys(value for value in text_terms if _text(value, 100)))
@@ -1018,7 +1181,7 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
         # Use the category when available. Otherwise ask Oasis for a bounded
         # full-text page; final matching is still performed by _fit_product.
-        search_terms = list(search_aliases) + [value for value in text_terms if value not in search_aliases]
+        search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(search_aliases) + [value for value in text_terms if value not in search_aliases]))
         search_terms = search_terms[:8]
         for offset in range(0, 1000, 500):
             params = {
@@ -1052,7 +1215,8 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     # Gifts is searched independently by words present in its stored name and
     # description (search_text), regardless of whether Oasis had a category.
     gifts_query = Q()
-    for term in list(search_aliases) + [value for value in text_terms if value not in search_aliases]:
+    gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(search_aliases) + [value for value in text_terms if value not in search_aliases]))
+    for term in gifts_terms:
         gifts_query |= Q(search_text__icontains=term)
     cached_products = CatalogProduct.objects.filter(
         Q(supplier__code="gifts") & Q(is_active=True) & gifts_query
@@ -1062,21 +1226,27 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     for product in pool:
         if product.total_stock <= 0:
             continue
-        score, matches, mismatches, unknown = _fit_product(product, line, anchors, quantity)
+        score, matches, mismatches, unknown = _fit_product(product, effective_line, anchors, quantity, intent=intent)
         if "Не совпадает тип товара" in mismatches:
             continue
-        ranked.append((score, product, matches, mismatches, unknown))
+        name_score = SequenceMatcher(
+            None,
+            _normalized(line.get("name", "")),
+            _normalized(product.full_name or product.name),
+        ).ratio()
+        ranked.append((score, name_score, product, matches, mismatches, unknown))
     ranked.sort(key=lambda value: (
-        0 if quantity <= 0 or value[1].total_stock >= quantity else 1,
-        0 if not value[3] else 1,
+        0 if quantity <= 0 or value[2].total_stock >= quantity else 1,
+        0 if not value[4] else 1,
         -value[0],
-        value[1].effective_price is None,
-        value[1].effective_price if value[1].effective_price is not None else Decimal("Infinity"),
-        _normalized(value[1].full_name or value[1].name),
-        _normalized(value[1].article),
+        value[2].effective_price is None,
+        value[2].effective_price if value[2].effective_price is not None else Decimal("Infinity"),
+        -value[1],
+        _normalized(value[2].full_name or value[2].name),
+        _normalized(value[2].article),
     ))
     selected, seen_groups = [], set()
-    for score, product, matches, mismatches, unknown in ranked:
+    for score, name_score, product, matches, mismatches, unknown in ranked:
         group_key = product.group_id or product.external_id
         if group_key in seen_groups:
             continue
