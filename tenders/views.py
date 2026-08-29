@@ -119,7 +119,6 @@ def gifts_raw_sample(request):
                 if node.tag.rsplit("}", 1)[-1].lower() == "filtertype" and _gifts_text(node, "filtertypeid") == "21":
                     filter_type = ElementTree.tostring(node, encoding="unicode")
                     break
-                node.clear()
     except CatalogSyncError as exc:
         return JsonResponse({"error": str(exc)}, status=502)
     return JsonResponse({"products": products, "stocks": stocks, "color_filtertype": filter_type, "missing": sorted(articles - products.keys())}, json_dumps_params={"ensure_ascii": False})
