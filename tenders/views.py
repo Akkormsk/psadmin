@@ -8,7 +8,6 @@ import time
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from xml.etree import ElementTree
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -22,7 +21,7 @@ from openpyxl import load_workbook
 
 from .models import CatalogMatchDecision, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
-from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog
+from .catalog import CatalogSyncError, sync_gifts_catalog
 from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
@@ -82,39 +81,6 @@ def gifts_import_test(request):
         "seconds": round(time.monotonic() - started, 2),
         "products": products,
     })
-
-
-@require_GET
-def gifts_raw_probe(request):
-    expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
-    supplied = request.headers.get("Authorization", "")
-    if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
-        return HttpResponse(status=403)
-    requested = {value.strip() for value in request.GET.get("articles", "").split(",") if value.strip()}
-    if not requested:
-        return JsonResponse({"error": "Укажите articles через запятую."}, status=400)
-    found = {}
-    try:
-        with GiftsXmlClient().open("catalogue/product.xml") as product_xml:
-            for _, product in ElementTree.iterparse(product_xml, events=("end",)):
-                if product.tag.rsplit("}", 1)[-1].lower() != "product":
-                    continue
-                article = _gifts_text(product, "code")
-                if article in requested:
-                    found[article] = ElementTree.tostring(product, encoding="unicode")
-                product.clear()
-                if found.keys() >= requested:
-                    break
-        filter_xml = ""
-        with GiftsXmlClient().open("catalogue/filters.xml") as filters_file:
-            for _, node in ElementTree.iterparse(filters_file, events=("end",)):
-                if node.tag.rsplit("}", 1)[-1].lower() == "filtertype" and _gifts_text(node, "filtertypeid") == "21":
-                    filter_xml = ElementTree.tostring(node, encoding="unicode")
-                    break
-                node.clear()
-    except CatalogSyncError as exc:
-        return JsonResponse({"error": str(exc)}, status=502)
-    return JsonResponse({"products": found, "missing": sorted(requested - found.keys()), "color_filtertype": filter_xml}, json_dumps_params={"ensure_ascii": False})
 
 def _document_upload_error(upload):
     if upload is None:
