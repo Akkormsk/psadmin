@@ -1148,7 +1148,7 @@ class TenderTests(TestCase):
 
     def test_gifts_parser_reads_color_from_filters_catalog(self):
         product_xml = StringIO("""<doct><product product_id=\"v1\"><code>V-1</code><name>Жилет Kama, фиолетовый</name><filters><filter><filtertypeid>21</filtertypeid><filterid>77</filterid></filter></filters></product></doct>""")
-        filters_xml = StringIO("""<root><filtertypes><filtertype><filtertypeid>21</filtertypeid><filtertypename>Цвет</filtertypename><filters><filter><filterid>77</filterid><filtername>фиолетовый</filtername></filter></filters></filtertype></filtertypes></root>""")
+        filters_xml = StringIO("""<root><filtertypes><filtertype><filtertypeid>21</filtertypeid><filtertypename>Цвет</filtertypename><filters><filter><filterid>77</filterid><filtername>фиолетовый</filtername></filter></filters></filtertype><filtertype><filtertypeid>99</filtertypeid><filtertypename>Цвет упаковки</filtertypename><filters><filter><filterid>77</filterid><filtername>зеленый</filtername></filter></filters></filtertype></filtertypes></root>""")
 
         result = parse_gifts_catalog(product_xml, StringIO("<doct/>"), filters_xml=filters_xml)
 

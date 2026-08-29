@@ -200,8 +200,7 @@ def _gifts_filter_colors(filters_xml):
         if filtertype.tag.rsplit("}", 1)[-1].lower() != "filtertype":
             continue
         filtertype_id = _gifts_text(filtertype, "filtertypeid")
-        filtertype_name = _normalized(_gifts_text(filtertype, "filtertypename"))
-        if filtertype_id != "21" and "цвет" not in filtertype_name and "color" not in filtertype_name:
+        if filtertype_id != "21":
             filtertype.clear()
             continue
         for value in filtertype.iter():
