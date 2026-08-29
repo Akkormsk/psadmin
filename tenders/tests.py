@@ -62,6 +62,22 @@ class TenderTests(TestCase):
         self.assertContains(response, "Каталог временно недоступен")
         self.assertContains(response, "Поиск выполнен повторно")
 
+    def test_assistant_calculation_has_sticky_totals_and_scoped_loading_state(self):
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("tender_home")).content.decode()
+        styles = (Path(__file__).resolve().parents[1] / "static" / "core" / "index.css").read_text(encoding="utf-8")
+
+        self.assertIn("data-route-unit-total", content)
+        self.assertIn("data-route-order-total", content)
+        self.assertIn("function updateRouteToolbar", content)
+        self.assertIn("function setProductionBusy", content)
+        self.assertIn("aria-busy", content)
+        self.assertIn(".tender-production-header { position:sticky", styles)
+        self.assertIn(".tender-production-result.is-loading::after", styles)
+        self.assertIn(".is-loading-button::before", styles)
+        self.assertIn("bottom:0", styles)
+
     def test_smart_import_finishes_in_the_product_list_for_nmck_or_technical_document(self):
         self.client.force_login(self.user)
 
