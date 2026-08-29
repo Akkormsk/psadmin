@@ -1496,6 +1496,27 @@ class TenderTests(TestCase):
 
         self.assertEqual([value["external_id"] for value in candidates], ["cheap", "expensive"])
 
+    def test_catalog_search_does_not_prefer_supplier_when_relevance_and_price_are_equal(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="gifts-shirt", article="G", name="Футболка", full_name="Футболка Б",
+            materials=["хлопок"], colors=["белый"], discount_price=500, total_stock=100,
+            search_text="футболка б хлопок белый",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
+                return [{"id": "oasis-shirt", "article": "O", "group_id": "oasis-shirt", "name": "Футболка", "full_name": "Футболка А", "materials": ["хлопок"], "colors": ["белый"], "price": "500", "categories": [10], "total_stock": 100}]
+
+        line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}, {"label": "Цвет", "value": "белый"}]}}
+        candidates = catalog_candidates_for_line(line, limit=2, intent={"product_class": "футболка"}, client=Client())
+
+        self.assertEqual([value["supplier_code"] for value in candidates], ["oasis", "gifts"])
+
     def test_selected_catalog_product_is_recalculated_on_backend_and_replaces_material_cost(self):
         production_type = ProductionType.objects.create(code="catalog-product", name="Каталожный товар")
         line = {

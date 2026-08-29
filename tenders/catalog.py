@@ -900,6 +900,8 @@ def _fit_product(product, line, anchors, quantity):
     name_color_values = []
     if isinstance(product.raw_data, dict):
         name_color_values = [str(value) for value in product.raw_data.get("name_colors", []) if str(value).strip()]
+    if not name_color_values:
+        name_color_values = _gifts_name_colors(product.full_name or product.name)
     name_color_match = False
     if _meaningful_tokens(color_text):
         color_matches, color_family = _colors_compatible(color_text, product_color_text)
@@ -1026,6 +1028,8 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         -value[0],
         value[1].effective_price is None,
         value[1].effective_price if value[1].effective_price is not None else Decimal("Infinity"),
+        _normalized(value[1].full_name or value[1].name),
+        _normalized(value[1].article),
     ))
     selected, seen_groups = [], set()
     for score, product, matches, mismatches, unknown in ranked:
