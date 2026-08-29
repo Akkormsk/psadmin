@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import os
 import re
 import time
@@ -19,6 +20,27 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .models import CatalogCategory, CatalogProduct, CatalogSupplier, CatalogSyncRun
+
+
+logger = logging.getLogger(__name__)
+
+
+CATALOG_SOURCE_CAPABILITIES = (
+    {
+        "source": "oasis",
+        "mode": "live_api",
+        "fields": ["category", "name", "full_name", "description", "attributes", "materials", "colors", "branding", "price", "stock"],
+    },
+    {
+        "source": "gifts",
+        "mode": "database",
+        "fields": ["category", "name", "description", "attributes", "materials", "colors", "price", "stock"],
+    },
+)
+
+
+def catalog_source_capabilities():
+    return [dict(value) for value in CATALOG_SOURCE_CAPABILITIES]
 
 
 class CatalogSyncError(Exception):
@@ -589,34 +611,6 @@ def sync_oasis_catalog(client=None):
         raise
 
 
-PRODUCT_ANCHORS = {
-    "футболка": ("футболка", "майка"),
-    "майка": ("футболка", "майка"),
-    "жилет": ("жилет", "безрукавка"),
-    "жилетка": ("жилет", "безрукавка"),
-    "поло": ("поло", "футболка поло"),
-    "кепка": ("кепка", "бейсболка"),
-    "бейсболка": ("бейсболка", "кепка"),
-    "толстовка": ("толстовка", "худи", "свитшот"),
-    "худи": ("худи", "толстовка"),
-    "свитшот": ("свитшот", "толстовка"),
-    "ручка": ("ручка",),
-    "блокнот": ("блокнот",),
-    "ежедневник": ("ежедневник",),
-    "кружка": ("кружка",),
-    "бутылка": ("бутылка",),
-    "термокружка": ("термокружка",),
-    "термос": ("термос",),
-    "сумка": ("сумка",),
-    "рюкзак": ("рюкзак",),
-    "зонт": ("зонт",),
-    "плед": ("плед",),
-    "брелок": ("брелок",),
-    "шнурок": ("шнурок", "ланъярд", "ремувка"),
-    "флешка": ("флеш", "usb"),
-    "аккумулятор": ("аккумулятор", "power bank", "пауэрбанк"),
-}
-
 BRANDING_ALIASES = {
     "вышивка": ("вышив",),
     "dtf": ("dtf", "дтф"),
@@ -649,6 +643,23 @@ def _constraint_text(line, label_marker):
 def _meaningful_tokens(value):
     ignored = {"цвет", "материал", "состав", "изделие", "товар", "требуется", "должен", "должна", "менее", "более", "процентов"}
     return {token for token in _normalized(value).split() if len(token) >= 3 and token not in ignored and not token.isdigit()}
+
+
+def _entity_phrase_matches(required, offered):
+    required_tokens = _normalized(required).split()
+    offered_tokens = _normalized(offered).split()
+    if not required_tokens or not offered_tokens:
+        return False
+
+    def compatible(left, right):
+        if left == right:
+            return True
+        if min(len(left), len(right)) < 5:
+            return False
+        prefix_length = max(4, min(6, len(left) - 1, len(right) - 1))
+        return left[:prefix_length] == right[:prefix_length]
+
+    return all(any(compatible(required_token, offered_token) for offered_token in offered_tokens) for required_token in required_tokens)
 
 
 COLOR_FAMILIES = {
@@ -744,42 +755,6 @@ def _requested_branding(line):
     return [name for name, aliases in BRANDING_ALIASES.items() if any(alias in normalized for alias in aliases)]
 
 
-def _product_anchors(line):
-    name = _normalized(line.get("name") if isinstance(line, dict) else "")
-    for token in name.split():
-        if token in PRODUCT_ANCHORS:
-            return PRODUCT_ANCHORS[token]
-    return tuple(token for token in name.split() if len(token) >= 4)[:3]
-
-
-CATALOG_CLASS_ALIASES = {
-    "футболка": ("футболка", "майка", "тенниска", "t shirt", "tshirt"),
-    "лонгслив": ("лонгслив", "лонгсливы", "футболка с длинным рукавом"),
-    "жилет": ("жилет", "жилетка", "безрукавка"),
-    "поло": ("поло", "футболка поло"),
-    "кепка": ("кепка", "бейсболка"),
-    "толстовка": ("толстовка", "худи", "свитшот"),
-}
-
-CATALOG_CLASS_SEARCH_TERMS = {
-    **CATALOG_CLASS_ALIASES,
-    "лонгслив": (*CATALOG_CLASS_ALIASES["лонгслив"], "long sleeve", "longsleeve"),
-}
-
-
-def _canonical_catalog_class(value):
-    normalized = _normalized(value)
-    matched = []
-    for canonical, aliases in CATALOG_CLASS_SEARCH_TERMS.items():
-        for alias in aliases:
-            alias_normalized = _normalized(alias)
-            if alias_normalized and alias_normalized in normalized:
-                matched.append((len(alias_normalized), canonical))
-    if matched:
-        return max(matched, key=lambda item: item[0])[1]
-    return normalized.split()[0] if normalized else ""
-
-
 def _planner_categories(intent):
     if not isinstance(intent, dict):
         return []
@@ -791,10 +766,6 @@ def _planner_categories(intent):
         raw = raw if isinstance(raw, list) else [raw]
         for value in raw:
             value = _text(value, 200)
-            if not has_planned_categories:
-                canonical = _canonical_catalog_class(value)
-                if canonical and _normalized(canonical) != _normalized(value):
-                    value = canonical
             if value and _normalized(value) not in {_normalized(item) for item in values}:
                 values.append(value)
     return values[:12]
@@ -842,13 +813,74 @@ def _line_with_planner_requirements(line, intent):
     return result
 
 
+def _criterion_key(value):
+    normalized = _normalized(value)
+    groups = (
+        ("price", ("цена", "стоимост", "бюджет")),
+        ("name", ("назван", "наименован", "модель")),
+        ("product_type", ("тип товара", "категор", "вид изделия")),
+        ("material", ("материал", "состав", "сырье")),
+        ("color", ("цвет", "оттен")),
+        ("density", ("плотност",)),
+        ("branding", ("нанес", "вышив", "гравиров", "печать", "логотип")),
+        ("stock", ("остаток", "налич", "тираж", "количеств", "склад")),
+    )
+    return next((key for key, markers in groups if any(marker in normalized for marker in markers)), normalized)
+
+
 def _planner_weight_map(intent):
     result = {}
+    for value in intent.get("ranking", []) if isinstance(intent, dict) and isinstance(intent.get("ranking"), list) else []:
+        if not isinstance(value, dict):
+            continue
+        criterion = _criterion_key(value.get("criterion"))
+        try:
+            weight = float(value.get("weight", 0))
+        except (TypeError, ValueError):
+            continue
+        if weight > 1:
+            weight /= 100
+        if criterion:
+            result[criterion] = max(0, min(1, weight))
     for value in _planner_requirements(intent):
-        label = _normalized(value["label"])
+        label = _criterion_key(value["label"])
         if label:
-            result.setdefault(label, value["weight"])
+            result[label] = value["weight"]
     return result
+
+
+def _ranking_weight(intent, *markers):
+    if not isinstance(intent, dict) or not isinstance(intent.get("ranking"), list):
+        return 0
+    normalized_markers = tuple(_normalized(value) for value in markers if _normalized(value))
+    weights = []
+    for value in intent["ranking"]:
+        if not isinstance(value, dict):
+            continue
+        criterion = _normalized(value.get("criterion"))
+        if not criterion or not any(marker in criterion for marker in normalized_markers):
+            continue
+        try:
+            weight = float(value.get("weight", 0))
+        except (TypeError, ValueError):
+            continue
+        if weight > 1:
+            weight /= 100
+        weights.append(max(0, min(1, weight)))
+    return max(weights, default=0)
+
+
+def _required_mismatches(mismatches, intent):
+    required_labels = {
+        _criterion_key(value["label"])
+        for value in _planner_requirements(intent)
+        if value.get("group") == "required" and _normalized(value.get("label"))
+    }
+    return [
+        mismatch for mismatch in mismatches
+        if _criterion_key(mismatch) in required_labels
+        or any(label in _normalized(mismatch) for label in required_labels)
+    ]
 
 
 def _planner_source_terms(intent, source_code):
@@ -886,8 +918,7 @@ def _live_category_data(client):
 
 def _live_category_for_intent(categories, intent, line):
     planner_categories = _planner_categories(intent)
-    product_class = _canonical_catalog_class(" ".join(planner_categories)) if planner_categories else _canonical_catalog_class(line.get("name", ""))
-    aliases = planner_categories or list(CATALOG_CLASS_ALIASES.get(product_class, (product_class,)))
+    aliases = planner_categories or [_text(line.get("name", ""), 300)]
     if isinstance(intent, dict):
         aliases.extend(_text(value, 80) for value in intent.get("synonyms", [])[:8] if _text(value, 80))
     terms = {_normalized(value) for value in aliases if _normalized(value)}
@@ -941,6 +972,9 @@ def _values_compatible(required, offered):
 
 def _catalog_parameter_weight(value, planner_weights=None):
     normalized = _normalized(value)
+    criterion = _criterion_key(value)
+    if criterion in (planner_weights or {}):
+        return max(1, round(100 * planner_weights[criterion]))
     for label, weight in (planner_weights or {}).items():
         if label and (label in normalized or normalized.startswith(label)):
             return max(1, round(100 * weight))
@@ -1022,7 +1056,7 @@ def _fit_product(product, line, anchors, quantity, intent=None):
         product.name,
         product.full_name,
     ]))
-    anchor_hit = next((value for value in anchors if _normalized(value) in type_text), "")
+    anchor_hit = next((value for value in anchors if _entity_phrase_matches(value, type_text)), "")
     if anchor_hit:
         matches.append(f"Тип товара: {anchor_hit}")
     else:
@@ -1093,7 +1127,7 @@ def _fit_product(product, line, anchors, quantity, intent=None):
         else:
             unknown.append(f"Не указана совместимость с нанесением: {method}")
 
-    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив")
+    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж")
     product_attributes = [
         attribute for attribute in product.attributes
         if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
@@ -1135,7 +1169,7 @@ def _fit_product(product, line, anchors, quantity, intent=None):
     return score, matches, mismatches, unknown
 
 
-def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=None, client=None):
+def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False):
     """Return a relevance-ranked shortlist from live Oasis and cached suppliers."""
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
@@ -1149,11 +1183,9 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     )
     rows, seen_ids = [], set()
     planner_categories = _planner_categories(intent)
-    canonical_class = _canonical_catalog_class(" ".join(planner_categories)) if planner_categories else _canonical_catalog_class(line.get("name", ""))
-    legacy_aliases = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
-    anchors = tuple(planner_categories) or legacy_aliases
-    aliases = tuple(planner_categories) or legacy_aliases
+    aliases = tuple(planner_categories) or (_text(line.get("name", ""), 300),)
     search_aliases = tuple(dict.fromkeys([*aliases, *((intent or {}).get("synonyms", []) if isinstance(intent, dict) else [])]))
+    anchors = search_aliases
     effective_line = _line_with_planner_requirements(line, intent)
     text_terms = list(aliases)
     for value in [
@@ -1172,6 +1204,10 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         text_terms.extend(sorted(_meaningful_tokens(value)))
     text_terms = list(dict.fromkeys(value for value in text_terms if _text(value, 100)))
     pool = []
+    source_status = {
+        "oasis": {"status": "not_searched", "message": "", "received": 0},
+        "gifts": {"status": "not_searched", "message": "", "received": 0},
+    }
 
     # Oasis is optional: an API/category failure must not suppress Gifts.
     try:
@@ -1181,7 +1217,7 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
         # Use the category when available. Otherwise ask Oasis for a bounded
         # full-text page; final matching is still performed by _fit_product.
-        search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(search_aliases) + [value for value in text_terms if value not in search_aliases]))
+        search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(search_aliases)))
         search_terms = search_terms[:8]
         for offset in range(0, 1000, 500):
             params = {
@@ -1208,20 +1244,35 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             for raw in rows if isinstance(raw, dict)
         ) if value and value.is_active)
         pool = _aggregate_color_variants(pool)
-    except Exception:
-        # The cached supplier is searched below even when Oasis is unavailable.
+        source_status["oasis"] = {"status": "success", "message": "", "received": len(pool)}
+    except CatalogSyncError as exc:
+        source_status["oasis"] = {"status": "failed", "message": str(exc)[:300], "received": 0}
+        pool = []
+    except Exception as exc:
+        logger.exception("Unexpected Oasis catalogue search failure")
+        source_status["oasis"] = {
+            "status": "failed",
+            "message": "Oasis вернул данные в неожиданном формате.",
+            "received": 0,
+        }
         pool = []
 
     # Gifts is searched independently by words present in its stored name and
     # description (search_text), regardless of whether Oasis had a category.
     gifts_query = Q()
-    gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(search_aliases) + [value for value in text_terms if value not in search_aliases]))
+    gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(search_aliases)))
     for term in gifts_terms:
         gifts_query |= Q(search_text__icontains=term)
-    cached_products = CatalogProduct.objects.filter(
+    gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
+    cached_products = list(CatalogProduct.objects.filter(
         Q(supplier__code="gifts") & Q(is_active=True) & gifts_query
-    ).order_by("id")[:1500]
+    ).order_by("id")[:1500])
     pool.extend(cached_products)
+    source_status["gifts"] = {
+        "status": "success" if gifts_supplier_exists else "not_configured",
+        "message": "" if gifts_supplier_exists else "Каталог Gifts ещё не загружен.",
+        "received": len(cached_products),
+    }
     ranked = []
     for product in pool:
         if product.total_stock <= 0:
@@ -1229,16 +1280,34 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         score, matches, mismatches, unknown = _fit_product(product, effective_line, anchors, quantity, intent=intent)
         if "Не совпадает тип товара" in mismatches:
             continue
+        hard_mismatches = _required_mismatches(mismatches, intent)
+        if hard_mismatches:
+            continue
         name_score = SequenceMatcher(
             None,
             _normalized(line.get("name", "")),
             _normalized(product.full_name or product.name),
         ).ratio()
         ranked.append((score, name_score, product, matches, mismatches, unknown))
+    price_weight = _ranking_weight(intent, "цена", "стоимость")
+    name_weight = _ranking_weight(intent, "название", "наименование", "модель")
+    prices = [value[2].effective_price for value in ranked if value[2].effective_price is not None]
+    minimum_price = min(prices) if prices else None
+    maximum_price = max(prices) if prices else None
+
+    def total_score(value):
+        relevance_score, product = value[0], value[2]
+        score = relevance_score + value[1] * 100 * name_weight
+        if not price_weight or product.effective_price is None or minimum_price is None:
+            return score
+        if maximum_price == minimum_price:
+            price_score = 100
+        else:
+            price_score = float((maximum_price - product.effective_price) / (maximum_price - minimum_price)) * 100
+        return score + price_score * price_weight
+
     ranked.sort(key=lambda value: (
-        0 if quantity <= 0 or value[2].total_stock >= quantity else 1,
-        0 if not value[4] else 1,
-        -value[0],
+        -total_score(value),
         value[2].effective_price is None,
         value[2].effective_price if value[2].effective_price is not None else Decimal("Infinity"),
         -value[1],
@@ -1282,4 +1351,14 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         })
         if len(selected) >= max(1, min(10, limit)):
             break
+    if include_diagnostics:
+        return {
+            "candidates": selected,
+            "sources": source_status,
+            "attempts": [{
+                "categories": planner_categories,
+                "terms": text_terms,
+                "candidate_count": len(selected),
+            }],
+        }
     return selected

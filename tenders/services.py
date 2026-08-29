@@ -1495,6 +1495,53 @@ def _normalize_catalog_intent(raw):
     }
 
 
+def _catalog_search_outcome(raw):
+    if isinstance(raw, dict):
+        return {
+            "candidates": raw.get("candidates", []) if isinstance(raw.get("candidates"), list) else [],
+            "sources": raw.get("sources", {}) if isinstance(raw.get("sources"), dict) else {},
+            "attempts": raw.get("attempts", []) if isinstance(raw.get("attempts"), list) else [],
+        }
+    return {"candidates": raw if isinstance(raw, list) else [], "sources": {}, "attempts": []}
+
+
+def _merge_refined_catalog_intent(current, refined):
+    current = _normalize_catalog_intent(current)
+    refined = _normalize_catalog_intent(refined)
+    merged = dict(refined)
+    for key in ("item", "product_class", "categories", "synonyms", "search_fields", "ranking", "source_strategy"):
+        if not merged.get(key):
+            merged[key] = current.get(key)
+    required = []
+    seen = set()
+    for value in [*current.get("required", []), *refined.get("required", [])]:
+        key = (_normalized_text(value.get("label")), _normalized_text(value.get("value")))
+        if key in seen:
+            continue
+        seen.add(key)
+        required.append(value)
+    merged["required"] = required
+    return merged
+
+
+def _refine_catalog_intent(line, current_intent, search_outcome):
+    schema = '{"item":"товар","product_class":"краткий тип","categories":["категория"],"synonyms":["синоним"],"required":[{"label":"обязательное требование","value":"значение","weight":1}],"preferred":[{"label":"желательное требование","value":"значение","weight":0.6}],"secondary":[],"search_fields":["name","category","attributes"],"ranking":[{"criterion":"цена или характеристика","weight":0.7}],"fallback_queries":[],"source_strategy":[{"source":"oasis|gifts","category_terms":[],"query_terms":[],"search_fields":[]}]} '
+    prompt = f"""Первый поиск товара не дал подходящих вариантов. Скорректируй только стратегию каталожного поиска по фактическому ответу источников.
+Обязательные требования из текущего плана нельзя удалять, ослаблять или переносить в preferred/secondary. Можно менять категории, равнозначные названия, запросы источников и важность необязательных критериев. Не придумывай цены, остатки и характеристики.
+Верни только JSON: {schema}
+
+ПОЗИЦИЯ:
+{json.dumps(line, ensure_ascii=False)}
+
+ТЕКУЩИЙ ПЛАН:
+{json.dumps(current_intent, ensure_ascii=False)}
+
+РЕЗУЛЬТАТ ПЕРВОГО ПОИСКА:
+{json.dumps(search_outcome, ensure_ascii=False)}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=1800)
+    return _merge_refined_catalog_intent(current_intent, result), usage
+
+
 def _requirement_list(values):
     if not isinstance(values, list):
         return []
@@ -2640,7 +2687,7 @@ def apply_verified_source_quote(hypothesis, line, quote, source_name, source_url
     raw["understood_changes"] = [*_short_text_list(raw.get("understood_changes"), limit=7), change]
     production_types = list(ProductionType.objects.filter(is_active=True))
     normalized = _normalize_training_hypothesis(raw, line, production_types, raw.get("matched_example_ids", []))
-    for key in ("catalog_candidates", "catalog_selection", "catalog_intent", "catalog_warning", "psodin_calculation", "sources", "usage"):
+    for key in ("catalog_candidates", "catalog_selection", "catalog_intent", "catalog_warning", "catalog_sources", "catalog_attempts", "psodin_calculation", "sources", "usage"):
         if key in hypothesis:
             normalized[key] = hypothesis[key]
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
@@ -2673,7 +2720,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     if progress_callback:
         progress_callback("ai")
     from .models import ProductionType
-    from .catalog import CatalogSyncError, catalog_candidates_for_line
+    from .catalog import CatalogSyncError, catalog_candidates_for_line, catalog_source_capabilities
 
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
@@ -2690,10 +2737,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
     schema = schema[:-1] + ',"catalog_intent":{"item":"что фактически нужно найти или изготовить","product_class":"совместимое краткое имя типа товара","categories":["наиболее конкретная категория","допустимая категория"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"search_fields":["category","name","description","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["запасной поисковый запрос"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["категория источника"],"query_terms":["запрос источника"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
-    catalog_capabilities = [
-        {"source": "oasis", "fields": ["category", "name", "full_name", "description", "attributes", "materials", "colors", "price", "stock"]},
-        {"source": "gifts", "fields": ["category", "name", "description", "attributes", "materials", "colors", "price", "stock"]},
-    ]
+    catalog_capabilities = catalog_source_capabilities()
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
@@ -2705,8 +2749,10 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
-Для поиска готового товара заполни catalog_intent как планировщик поиска. Прочитай полный заголовок и требования как менеджер по закупкам: определи фактически требуемое изделие, отдели часть названия товара от его свойств и выбери одну или несколько наиболее конкретных категорий. Общие слова не должны заменять узкую сущность: например, в «футболка поло» изделие — поло, а не обычная футболка; в «футболка с длинным рукавом» изделие — лонгслив. Не добавляй категорию только потому, что слово встретилось в описании свойства.
-Составь required, preferred и secondary. В required помещай то, что нельзя нарушать, в preferred — желательное, в secondary — второстепенное. weight — относительная важность от 0 до 1 для сравнения внутри соответствующего класса. В ranking укажи, какие требования должны сильнее влиять на итоговый выбор именно для этой позиции. В source_strategy учитывай реальные поля каждого источника из переданных возможностей. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не сравнивай числа и ничего не рассчитывай — это выполнит бэкенд.
+Для поиска готового товара заполни catalog_intent как планировщик поиска. Прочитай полный заголовок и требования как менеджер по закупкам: определи фактически требуемое изделие, отдели часть названия товара от его свойств и выбери одну или несколько наиболее конкретных категорий. В составном естественном названии найди целую товарную сущность: общее слово внутри названия не должно подменять более конкретный вид изделия. Не добавляй категорию только потому, что слово встретилось в описании свойства.
+Составь required, preferred и secondary. В required помещай то, что нельзя нарушать, в preferred — желательное, в secondary — второстепенное. Наличие полного тиража делай обязательным только когда из ТЗ или обратной связи следует, что частичная поставка или ожидание недопустимы. weight — относительная важность от 0 до 1 для сравнения внутри соответствующего класса. В ranking укажи, какие требования должны сильнее влиять на итоговый выбор именно для этой позиции, включая цену и точность названия, если они существенны.
+Если администратор изменяет приоритеты обратной связью — например, говорит, что цена важнее состава, цвет важнее названия или наоборот, — полностью перестрой catalog_intent и веса для текущей ситуации. Это прямое указание администратора важнее предыдущей гипотезы. Подтверждённые catalog_intent из похожих примеров используй как опыт, но не как глобальное правило: переноси их только когда условия действительно похожи.
+В source_strategy учитывай реальные поля каждого источника из переданных возможностей. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не сравнивай числа, цены и остатки и ничего не рассчитывай — это выполнит бэкенд.
 Верни только JSON: {schema}
 
 ПОЗИЦИЯ:
@@ -2754,19 +2800,49 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     if progress_callback:
         progress_callback("catalog")
     try:
-        catalog_candidates = catalog_candidates_for_line(line, limit=3, intent=catalog_intent)
+        catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
+            line, limit=3, intent=catalog_intent, include_diagnostics=True,
+        ))
+        catalog_candidates = catalog_outcome["candidates"]
+        searchable_source_available = any(
+            isinstance(value, dict) and value.get("status") == "success"
+            for value in catalog_outcome["sources"].values()
+        )
+        if not catalog_candidates and searchable_source_available:
+            refined_intent, refinement_usage = _refine_catalog_intent(line, catalog_intent, catalog_outcome)
+            second_outcome = _catalog_search_outcome(catalog_candidates_for_line(
+                line, limit=3, intent=refined_intent, include_diagnostics=True,
+            ))
+            catalog_intent = refined_intent
+            catalog_candidates = second_outcome["candidates"]
+            catalog_outcome = {
+                "candidates": catalog_candidates,
+                "sources": second_outcome["sources"],
+                "attempts": [*catalog_outcome["attempts"], *second_outcome["attempts"]],
+            }
+            usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (refinement_usage.get("prompt_tokens", 0) or 0)
+            usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (refinement_usage.get("completion_tokens", 0) or 0)
     except CatalogSyncError as exc:
         catalog_candidates = []
+        catalog_outcome = {"candidates": [], "sources": {}, "attempts": []}
         hypothesis["catalog_warning"] = str(exc)[:300]
     except Exception:
-        # Oasis is an optional price source. A malformed external row or a
-        # temporary API problem must not discard the already valid LLM route.
-        logger.exception("Unexpected Oasis catalog failure while building a training hypothesis")
+        logger.exception("Unexpected catalog failure while building a training hypothesis")
         catalog_candidates = []
+        catalog_outcome = {"candidates": [], "sources": {}, "attempts": []}
         hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
     catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
     hypothesis["catalog_intent"] = catalog_intent
     hypothesis["catalog_candidates"] = catalog_candidates
+    hypothesis["catalog_sources"] = catalog_outcome["sources"]
+    hypothesis["catalog_attempts"] = catalog_outcome["attempts"]
+    failed_sources = [
+        f"{code}: {value.get('message')}"
+        for code, value in catalog_outcome["sources"].items()
+        if isinstance(value, dict) and value.get("status") in {"failed", "not_configured"} and value.get("message")
+    ]
+    if failed_sources:
+        hypothesis["catalog_warning"] = "Не все каталоги доступны. " + " ".join(failed_sources[:3])
     if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
         selected_id = current["catalog_selection"].get("id")
         if any(value.get("id") == selected_id and value.get("fit") == "exact" for value in catalog_candidates):
@@ -2871,6 +2947,9 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     if isinstance(hypothesis, dict) and isinstance(hypothesis.get("catalog_intent"), dict):
         normalized["catalog_intent"] = hypothesis["catalog_intent"]
+    for key in ("catalog_sources", "catalog_attempts"):
+        if isinstance(hypothesis, dict) and key in hypothesis:
+            normalized[key] = hypothesis[key]
     existing_sources = hypothesis.get("sources", []) if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list) else []
     normalized["sources"] = [
         value for value in existing_sources
