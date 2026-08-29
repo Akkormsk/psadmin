@@ -176,6 +176,7 @@ _GIFTS_NAME_COLORS = (
     "фиолетовый", "фиолетовая", "фиолетовое", "фиолетовые", "оранжевый", "оранжевая",
     "розовый", "розовая", "розовое", "розовые", "коричневый", "коричневая", "коричневое",
     "бежевый", "бежевая", "бежевое", "хаки", "лайм", "мятный", "мятная", "мятное",
+    "ярко-зеленый", "ярко-зеленая", "ярко-зеленое", "ярко-зеленые",
     "бордовый", "бордовая", "бордовое", "бирюзовый", "бирюзовая", "золотой", "золотая",
     "серебристый", "серебристая", "мультиколор", "разноцветный", "разноцветная",
 )
@@ -183,7 +184,12 @@ _GIFTS_NAME_COLORS = (
 
 def _gifts_name_colors(name):
     normalized = _normalized(name)
-    return [color for color in _GIFTS_NAME_COLORS if re.search(rf"(?<![\w-]){re.escape(color)}(?![\w-])", normalized)]
+    result = []
+    for color in _GIFTS_NAME_COLORS:
+        normalized_color = _normalized(color)
+        if normalized_color and re.search(rf"(?<!\w){re.escape(normalized_color)}(?!\w)", normalized) and color not in result:
+            result.append(color)
+    return result
 
 
 def _gifts_filter_colors(filters_xml):
@@ -207,6 +213,20 @@ def _gifts_filter_colors(filters_xml):
                 result[filter_id] = filter_name
         filtertype.clear()
     return result
+
+
+def _gifts_image_url(image_src):
+    image_src = _text(image_src, 1000)
+    if not image_src:
+        return ""
+    if image_src.startswith("//"):
+        return f"https:{image_src}"
+    if image_src.startswith("http"):
+        return image_src
+    relative = image_src.lstrip("/")
+    if not relative.startswith(("reviewer/", "size/", "download/")):
+        relative = f"reviewer/{relative}"
+    return f"https://files.gifts.ru/{relative}"
 
 
 def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None, filters_xml=None):
@@ -265,14 +285,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
                 colors.append(filter_colors[filter_id])
         name_colors = _gifts_name_colors(name)
         image_src = _gifts_image_src(product)
-        if image_src.startswith("//"):
-            image_url = f"https:{image_src}"
-        elif image_src.startswith("http"):
-            image_url = image_src
-        elif image_src:
-            image_url = f"https://files.gifts.ru/{image_src.lstrip('/')}"
-        else:
-            image_url = ""
+        image_url = _gifts_image_url(image_src)
         price_group = _gifts_child(product, "price")
         price_node = _gifts_child(price_group, "price") if price_group is not None else None
         price = _decimal(price_node.text if price_node is not None else None)
@@ -287,7 +300,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
             "branding": [], "package": [], "price": price, "discount_price": dealer_price, "total_stock": stock_free,
             "stock_moscow": stock_free, "stock_remote": 0, "stock_transit": _integer(stock.get("inwayfree")) if stock is not None else 0,
             "is_on_order": _gifts_text(product, "ondemand").lower() == "true", "delivery_days": _integer(_gifts_text(product, "days")) or None,
-            "image_url": image_url, "product_url": f"https://gifts.ru/catalog/{article}" if article else "https://gifts.ru",
+            "image_url": image_url, "product_url": f"https://gifts.ru/id/{product_id}" if product_id else "https://gifts.ru",
             "supply_terms": _gifts_text(product, "demandtype"), "warning": _gifts_text(product, "alert"), "defect": "",
             "search_text": search_text, "source_updated_at": None, "sync_marker": "", "is_active": True,
             "raw_data": {"status": _gifts_text(product, "status"), "name_colors": name_colors},
@@ -640,7 +653,7 @@ def _meaningful_tokens(value):
 
 
 COLOR_FAMILIES = {
-    "lime": ("лайм", "лаймов", "салатов", "зеленое яблоко", "яблочно зелен", "кислотно зелен"),
+    "lime": ("лайм", "лаймов", "салатов", "ярко зелен", "зеленое яблоко", "яблочно зелен", "кислотно зелен"),
     "navy": ("темно син", "темно син", "navy"),
     "sky": ("голуб", "небесно син"),
     "turquoise": ("бирюз", "аквамарин"),
@@ -894,11 +907,16 @@ def _fit_product(product, line, anchors, quantity):
         if color_matches:
             family_note = f" (семейство: {color_family})" if color_family else ""
             matches.append(f"Цвет: {', '.join(color_values)}{family_note}")
-        elif _meaningful_tokens(product_color_text):
-            mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(color_values)}")
         else:
-            unknown.append("Цвет не указан в каталоге")
             name_color_match, _ = _colors_compatible(color_text, " ".join(name_color_values))
+            required_family = _color_family(color_text)
+            offered_family = _color_family(product_color_text)
+            if name_color_match and required_family and offered_family and COLOR_PARENTS.get(required_family) == offered_family:
+                matches.append(f"Цвет: {', '.join(color_values)} (оттенок в названии: {', '.join(name_color_values)})")
+            elif _meaningful_tokens(product_color_text):
+                mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(color_values)}")
+            else:
+                unknown.append("Цвет не указан в каталоге")
 
     density = _density_constraint(line)
     product_density = _product_density(product)
@@ -1004,7 +1022,12 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         if "Не совпадает тип товара" in mismatches:
             continue
         ranked.append((score, product, matches, mismatches, unknown))
-    ranked.sort(key=lambda value: (not value[3], value[0]), reverse=True)
+    ranked.sort(key=lambda value: (
+        0 if not value[3] else 1,
+        -value[0],
+        value[1].effective_price is None,
+        value[1].effective_price if value[1].effective_price is not None else Decimal("Infinity"),
+    ))
     selected, seen_groups = [], set()
     for score, product, matches, mismatches, unknown in ranked:
         group_key = product.group_id or product.external_id

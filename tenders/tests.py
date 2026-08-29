@@ -1122,6 +1122,14 @@ class TenderTests(TestCase):
         result = parse_gifts_catalog(product_xml, tree_xml)
 
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/26/6728.60_1_500.webp?v=2")
+        self.assertEqual(result[0]["product_url"], "https://gifts.ru/id/93294")
+
+    def test_gifts_parser_maps_xml_thumbnail_to_public_reviewer_image(self):
+        product_xml = StringIO("""<doct><product product_id="16224"><code>1376.89</code><name>Футболка унисекс Regent 150, лайм</name><small_image src="thumbnails/7/1376.89_648_200x200.jpg"/></product></doct>""")
+
+        result = parse_gifts_catalog(product_xml, StringIO("<doct/>"))
+
+        self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/thumbnails/7/1376.89_648_200x200.jpg")
 
     def test_gifts_parser_normalizes_protocol_relative_image_url(self):
         product_xml = StringIO("""<doct><product product_id=\"184880\"><code>03564102</code><name>Футболка унисекс Epic, белая</name><small_image src=\"//files.gifts.ru/reviewer/webp/8/03564102_2_200x200.webp?v=2\"/></product></doct>""")
@@ -1446,6 +1454,47 @@ class TenderTests(TestCase):
         self.assertEqual(candidates[0]["supplier_name"], "Oasis")
         self.assertEqual(candidates[0]["supplier_site"], "oasiscatalog.com")
         self.assertTrue(any("семейство: lime" in value for value in candidates[0]["matches"]))
+
+    def test_catalog_search_uses_name_shade_as_soft_hint_with_explicit_parent_color(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="lime-shirt", article="1376.89", name="Футболка унисекс Regent 150, лайм",
+            full_name="Футболка унисекс Regent 150, лайм", materials=["хлопок"], colors=["зеленый"],
+            raw_data={"name_colors": ["лайм"]}, total_stock=100, discount_price=404,
+            search_text="футболка лайм зеленый хлопок", product_url="https://gifts.ru/id/16224",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
+                return []
+
+        line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "лайм"}]}}
+        candidates = catalog_candidates_for_line(line, limit=1, intent={"product_class": "футболка"}, client=Client())
+
+        self.assertEqual(candidates[0]["external_id"], "lime-shirt")
+        self.assertEqual(candidates[0]["fit"], "exact")
+        self.assertTrue(any("Цвет: зеленый" in value for value in candidates[0]["matches"]))
+
+    def test_catalog_search_uses_price_after_equal_relevance(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
+                return [
+                    {"id": "expensive", "article": "E", "group_id": "expensive", "name": "Футболка", "full_name": "Футболка", "materials": ["хлопок"], "colors": ["белый"], "price": "700", "categories": [10], "total_stock": 100},
+                    {"id": "cheap", "article": "C", "group_id": "cheap", "name": "Футболка", "full_name": "Футболка", "materials": ["хлопок"], "colors": ["белый"], "price": "500", "categories": [10], "total_stock": 100},
+                ]
+
+        line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}, {"label": "Цвет", "value": "белый"}]}}
+        candidates = catalog_candidates_for_line(line, limit=2, intent={"product_class": "футболка"}, client=Client())
+
+        self.assertEqual([value["external_id"] for value in candidates], ["cheap", "expensive"])
 
     def test_selected_catalog_product_is_recalculated_on_backend_and_replaces_material_cost(self):
         production_type = ProductionType.objects.create(code="catalog-product", name="Каталожный товар")
