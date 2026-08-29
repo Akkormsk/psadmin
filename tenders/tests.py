@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_oasis_catalog
-from .services import _VisibleTextParser, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
+from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -1495,17 +1495,182 @@ class TenderTests(TestCase):
                 "secondary": [],
                 "ranking": [{"criterion": "цена", "weight": 1}, {"criterion": "состав", "weight": .2}],
             },
+            "catalog_operations": [
+                {"op": "set_priority", "field": "price", "priority": "critical"},
+                {"op": "set_priority", "field": "material", "priority": "low"},
+                {"op": "require", "field": "color", "values": ["синий"]},
+                {"op": "prefer", "field": "material", "values": ["хлопок"], "priority": "low"},
+            ],
         }, {})
 
         result = build_training_hypothesis(
             {"name": "Промо-футболка", "quantity": 1000, "requirements": {"requirements": []}},
-            current={"catalog_intent": {"ranking": [{"criterion": "состав", "weight": 1}]}},
+            current={"catalog_intent": {"categories": ["футболка"], "ranking": [{"criterion": "состав", "weight": 1}]}},
             feedback="Для этого промо-тиража цена важнее состава, но синий цвет обязателен.",
         )
 
-        self.assertEqual(result["catalog_intent"]["ranking"][0], {"criterion": "цена", "weight": 1.0})
-        self.assertEqual(result["catalog_intent"]["preferred"][0]["weight"], .2)
+        weights = {value["criterion"]: value["weight"] for value in result["catalog_intent"]["ranking"]}
+        self.assertEqual(weights, {"price": 1.0, "material": .3})
+        constraints = {(value["field"], value["level"]): value for value in result["catalog_intent"]["constraints"]}
+        self.assertEqual(constraints[("color", "required")]["values"], ["синий"])
+        self.assertEqual(constraints[("material", "preferred")]["weight"], .3)
+
+    def test_catalog_feedback_operations_patch_existing_plan_without_losing_rules(self):
+        current = {
+            "categories": ["поло"], "synonyms": ["рубашка поло"],
+            "required": [
+                {"label": "Цвет", "value": "белый", "weight": 1},
+                {"label": "Пол", "value": "мужской или унисекс, исключить женский", "weight": 1},
+            ],
+            "ranking": [{"criterion": "состав", "weight": .6}],
+        }
+        operations = [
+            {"op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty"},
+            {"op": "forbid", "field": "gender", "values": ["female"]},
+            {"op": "add_alias", "values": ["футболка поло"]},
+            {"op": "set_priority", "field": "price", "relation": "higher_than", "target_field": "material"},
+        ]
+
+        updated, applied, errors = _apply_catalog_operations(current, operations)
+
+        self.assertFalse(errors)
+        self.assertEqual(len(applied), 4)
+        self.assertEqual([value["label"] for value in updated["required"]], ["Цвет"])
+        self.assertEqual(updated["synonyms"], ["рубашка поло", "футболка поло"])
+        self.assertEqual(updated["constraints"][0]["operator"], "not_in")
+        self.assertEqual(updated["constraints"][0]["missing_policy"], "allow_with_penalty")
+        weights = {value["criterion"]: value["weight"] for value in updated["ranking"]}
+        self.assertGreater(weights["price"], weights["состав"])
+
+    def test_catalog_contract_rejects_unknown_operation_instead_of_silently_applying_it(self):
+        updated, applied, errors = _apply_catalog_operations(
+            {"categories": ["поло"]},
+            [{"op": "magically_fix", "field": "gender", "values": ["female"]}],
+        )
+
+        self.assertEqual(updated["categories"], ["поло"])
+        self.assertFalse(applied)
+        self.assertIn("magically_fix", errors[0])
+
+    def test_catalog_contract_accepts_declared_filter_ranking_alias_and_source_operations(self):
+        operations = [
+            {"op": "allow", "field": "color", "values": ["синий", "белый"]},
+            {"op": "forbid", "field": "gender", "values": ["female"]},
+            {"op": "require", "field": "branding", "values": ["вышивка"]},
+            {"op": "prefer", "field": "material", "values": ["хлопок"]},
+            {"op": "deprioritize", "field": "material", "values": ["полиэстер"]},
+            {"op": "ignore", "field": "name"},
+            {"op": "set_priority", "field": "price", "priority": "high"},
+            {"op": "add_alias", "values": ["футболка поло"]},
+            {"op": "remove_alias", "values": ["старая категория"]},
+            {"op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty"},
+            {"op": "lte", "field": "price", "values": ["500"]},
+            {"op": "gte", "field": "stock", "values": ["100"]},
+            {"op": "between", "field": "density", "values": ["180", "220"]},
+            {"op": "source_only", "values": ["oasis"]},
+            {"op": "prefer_source", "values": ["gifts"]},
+            {"op": "set_scope", "values": ["одежда", "текстиль"]},
+            {"op": "remove_rule", "field": "branding"},
+        ]
+
+        updated, applied, errors = _apply_catalog_operations(
+            {"categories": ["поло"], "synonyms": ["старая категория"]}, operations,
+        )
+
+        self.assertFalse(errors)
+        self.assertEqual(len(applied), len(operations))
+        self.assertEqual(updated["synonyms"], ["футболка поло"])
+        self.assertEqual(updated["allowed_sources"], ["oasis"])
+        self.assertEqual(updated["preferred_sources"], ["gifts"])
+        self.assertEqual(updated["rule_scope"], ["одежда", "текстиль"])
+        self.assertFalse(any(value["field"] == "branding" for value in updated["constraints"]))
+        self.assertEqual(applied[9], {
+            "op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty",
+        })
+
+    def test_catalog_contract_compiles_deprioritized_missing_value_to_missing_policy(self):
+        updated, applied, errors = _apply_catalog_operations({"categories": ["поло"]}, [
+            {"op": "allow", "field": "gender", "values": ["male", "unisex"]},
+            {"op": "forbid", "field": "gender", "values": ["female"]},
+            {"op": "deprioritize", "field": "gender", "values": ["missing"]},
+        ])
+
+        self.assertFalse(errors)
+        self.assertEqual(applied[-1], {"op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty"})
+        self.assertTrue(all(value["missing_policy"] == "allow_with_penalty" for value in updated["constraints"]))
+
+    @patch("tenders.catalog.catalog_candidates_for_line", return_value=[])
+    @patch("tenders.services._ai_gateway_json")
+    def test_feedback_uses_catalog_operations_as_patch_over_current_intent(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "textile_merch", "summary": "Поло", "confidence": .7,
+            "facts": [], "route": {"reason": "Закупка", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [],
+            "understood_changes": ["Женские модели исключены"],
+            "catalog_intent": {"categories": ["ошибочно переписанная категория"]},
+            "catalog_operations": [
+                {"op": "forbid", "field": "gender", "values": ["female"]},
+                {"op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty"},
+            ],
+        }, {})
+        current = {"catalog_intent": {
+            "categories": ["поло"],
+            "required": [{"label": "Цвет", "value": "белый", "weight": 1}],
+        }}
+
+        result = build_training_hypothesis(
+            {"name": "Поло унисекс", "quantity": 50, "requirements": {"requirements": []}},
+            current=current, feedback="Исключи женские модели, модели без пола допустимы.",
+        )
+
+        self.assertEqual(result["catalog_intent"]["categories"], ["поло"])
         self.assertEqual(result["catalog_intent"]["required"][0]["label"], "Цвет")
+        self.assertEqual(result["catalog_intent"]["constraints"][0]["values"], ["female"])
+        self.assertEqual(len(result["catalog_operations_applied"]), 2)
+
+    @patch("tenders.catalog.catalog_candidates_for_line", return_value=[])
+    @patch("tenders.services._ai_gateway_json")
+    def test_empty_catalog_part_uses_compact_feedback_translator(self, gateway, catalog_search):
+        hypothesis = {
+            "product_type": "textile_merch", "summary": "Поло", "confidence": .7,
+            "facts": [], "route": {"reason": "Закупка", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+        }
+        gateway.side_effect = [
+            (hypothesis, {}),
+            ({"operations": [{"op": "forbid", "field": "gender", "values": ["female"]}]}, {"prompt_tokens": 20, "completion_tokens": 10}),
+        ]
+        current = {"catalog_intent": {"categories": ["поло"], "required": [{"label": "Цвет", "value": "белый", "weight": 1}]}}
+
+        result = build_training_hypothesis(
+            {"name": "Поло унисекс", "quantity": 50, "requirements": {"requirements": []}},
+            current=current, feedback="Женские модели исключи.",
+        )
+
+        self.assertEqual(gateway.call_count, 2)
+        self.assertEqual(result["catalog_intent"]["categories"], ["поло"])
+        self.assertEqual(result["catalog_intent"]["constraints"][0]["operator"], "not_in")
+        self.assertEqual(result["usage"], {"prompt_tokens": 20, "completion_tokens": 10})
+
+    @patch("tenders.catalog.catalog_candidates_for_line", return_value=[])
+    @patch("tenders.services._ai_gateway_json")
+    def test_empty_feedback_translation_preserves_plan_and_blocks_confirmation(self, gateway, catalog_search):
+        hypothesis = {
+            "product_type": "textile_merch", "summary": "Поло", "confidence": .7,
+            "facts": [], "route": {"reason": "Закупка", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+        }
+        gateway.side_effect = [(hypothesis, {}), ({"operations": []}, {})]
+        current = {"catalog_intent": {"categories": ["поло"], "required": [{"label": "Цвет", "value": "белый", "weight": 1}]}}
+
+        result = build_training_hypothesis(
+            {"name": "Поло унисекс", "quantity": 50, "requirements": {"requirements": []}},
+            current=current, feedback="Исключи неподходящие модели.",
+        )
+
+        self.assertEqual(result["catalog_intent"]["categories"], ["поло"])
+        self.assertTrue(result["catalog_contract_errors"])
+        self.assertTrue(result["learning_warnings"])
 
     @patch("tenders.views.refresh_training_example_embedding", return_value=True)
     def test_confirmed_feedback_weights_are_saved_with_training_example(self, refresh_embedding):
@@ -1745,6 +1910,67 @@ class TenderTests(TestCase):
         candidates = catalog_candidates_for_line(line, limit=3, intent=intent, client=Client())
 
         self.assertEqual([value["external_id"] for value in candidates], ["cotton"])
+
+    def test_catalog_constraints_exclude_forbidden_value_and_read_fact_from_name_or_attribute(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Поло", "path": "categories/textile/polo"}]
+                return [
+                    {"id": "female-attribute", "article": "F1", "group_id": "f1", "name": "Поло Boston", "full_name": "Поло Boston белое", "attributes": [{"name": "Пол", "value": "женский"}], "colors": ["белый"], "categories": [10], "total_stock": 100, "price": 100},
+                    {"id": "female-name", "article": "F2", "group_id": "f2", "name": "Поло Boston женское", "full_name": "Поло Boston женское, белое", "colors": ["белый"], "categories": [10], "total_stock": 100, "price": 90},
+                    {"id": "male", "article": "M", "group_id": "m", "name": "Поло Laguna мужское", "full_name": "Поло Laguna мужское, белое", "attributes": [{"name": "Пол", "value": "мужской"}], "colors": ["белый"], "categories": [10], "total_stock": 100, "price": 200},
+                    {"id": "unspecified", "article": "U", "group_id": "u", "name": "Поло Base", "full_name": "Поло Base, белое", "colors": ["белый"], "categories": [10], "total_stock": 100, "price": 80},
+                ]
+
+        intent = {
+            "categories": ["поло"],
+            "constraints": [
+                {
+                    "field": "gender", "operator": "in", "values": ["male", "unisex"],
+                    "level": "required", "weight": 1, "missing_policy": "allow_with_penalty",
+                },
+                {
+                    "field": "gender", "operator": "not_in", "values": ["female"],
+                    "level": "required", "weight": 1, "missing_policy": "allow_with_penalty",
+                },
+            ],
+        }
+
+        candidates = catalog_candidates_for_line(
+            {"name": "Поло унисекс", "quantity": 10, "requirements": {"requirements": []}},
+            limit=10, intent=intent, client=Client(),
+        )
+
+        self.assertEqual([value["external_id"] for value in candidates], ["male", "unspecified"])
+        self.assertTrue(any("Пол" in value for value in candidates[0]["matches"]))
+        self.assertEqual(sum("Пол" in value for value in candidates[0]["matches"]), 1)
+        self.assertTrue(any("Пол не указан" in value for value in candidates[1]["unknown"]))
+
+    def test_catalog_constraints_apply_numeric_limits_before_ranking(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Поло", "path": "categories/textile/polo"}]
+                return [
+                    {"id": "valid", "article": "V", "group_id": "v", "name": "Поло", "full_name": "Поло белое", "attributes": [{"name": "Плотность", "value": "190 г/м²"}], "categories": [10], "total_stock": 150, "price": 450},
+                    {"id": "expensive", "article": "E", "group_id": "e", "name": "Поло", "full_name": "Поло белое", "attributes": [{"name": "Плотность", "value": "190 г/м²"}], "categories": [10], "total_stock": 150, "price": 700},
+                    {"id": "thin", "article": "T", "group_id": "t", "name": "Поло", "full_name": "Поло белое", "attributes": [{"name": "Плотность", "value": "150 г/м²"}], "categories": [10], "total_stock": 150, "price": 300},
+                ]
+
+        intent = {"categories": ["поло"], "constraints": [
+            {"field": "price", "operator": "lte", "values": ["500"], "level": "required", "weight": 1, "missing_policy": "reject"},
+            {"field": "density", "operator": "between", "values": ["180", "220"], "level": "required", "weight": 1, "missing_policy": "reject"},
+            {"field": "stock", "operator": "gte", "values": ["100"], "level": "required", "weight": 1, "missing_policy": "reject"},
+        ]}
+
+        candidates = catalog_candidates_for_line({"name": "Поло", "quantity": 100}, limit=10, intent=intent, client=Client())
+
+        self.assertEqual([value["external_id"] for value in candidates], ["valid"])
 
     def test_catalog_search_can_prioritize_price_over_preferred_material(self):
         class Client:

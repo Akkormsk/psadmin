@@ -824,6 +824,8 @@ def _criterion_key(value):
         ("density", ("плотност",)),
         ("branding", ("нанес", "вышив", "гравиров", "печать", "логотип")),
         ("stock", ("остаток", "налич", "тираж", "количеств", "склад")),
+        ("gender", ("gender", "пол", "гендер", "мужск", "женск", "унисекс")),
+        ("source", ("source", "источник", "поставщик")),
     )
     return next((key for key, markers in groups if any(marker in normalized for marker in markers)), normalized)
 
@@ -846,6 +848,16 @@ def _planner_weight_map(intent):
         label = _criterion_key(value["label"])
         if label:
             result[label] = value["weight"]
+    for value in intent.get("constraints", []) if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []:
+        if not isinstance(value, dict):
+            continue
+        label = _criterion_key(value.get("field"))
+        try:
+            weight = float(value.get("weight", 1))
+        except (TypeError, ValueError):
+            weight = 1
+        if label:
+            result[label] = max(0, min(1, weight))
     return result
 
 
@@ -1047,6 +1059,143 @@ def _aggregate_color_variants(products):
         }
         result.append(representative)
     return result
+
+
+CONSTRAINT_FIELD_LABELS = {
+    "gender": "Пол", "material": "Материал", "color": "Цвет", "density": "Плотность",
+    "branding": "Нанесение", "stock": "Остаток", "price": "Цена", "name": "Название",
+    "product_type": "Тип товара", "source": "Поставщик",
+}
+
+
+def _canonical_gender(value):
+    normalized = _normalized(value)
+    if any(marker in normalized for marker in ("унисекс", "unisex")):
+        return "unisex"
+    if any(marker in normalized for marker in ("женск", "female", "women", "woman")):
+        return "female"
+    if any(marker in normalized for marker in ("мужск", "male", "men", "man")):
+        return "male"
+    return ""
+
+
+def _constraint_product_values(product, field):
+    field = _criterion_key(field)
+    attributes = product.attributes if isinstance(product.attributes, list) else []
+    related = [
+        _text(value.get("value"), 1000)
+        for value in attributes if isinstance(value, dict) and _criterion_key(value.get("name")) == field
+        and _text(value.get("value"), 1000)
+    ]
+    if field == "gender":
+        explicit = [value for value in (_canonical_gender(item) for item in related) if value]
+        if explicit:
+            return list(dict.fromkeys(explicit))
+        inferred = _canonical_gender(" ".join([product.name, product.full_name]))
+        return [inferred] if inferred else []
+    if field == "material":
+        return product.materials if isinstance(product.materials, list) and product.materials else related
+    if field == "color":
+        return product.colors if isinstance(product.colors, list) and product.colors else related
+    if field == "branding":
+        return product.branding if isinstance(product.branding, list) and product.branding else related
+    if field == "density":
+        value = _product_density(product)
+        return [value] if value is not None else []
+    if field == "stock":
+        return [product.total_stock]
+    if field == "price":
+        return [product.effective_price] if product.effective_price is not None else []
+    if field == "name":
+        return [product.full_name or product.name] if product.full_name or product.name else []
+    if field == "product_type":
+        return [*product.category_names, product.full_name or product.name]
+    if field == "source":
+        return [product.supplier.code, product.supplier.name]
+    return related
+
+
+def _constraint_expected_values(field, values):
+    if field == "gender":
+        return [value for value in (_canonical_gender(item) for item in values) if value]
+    return values
+
+
+def _constraint_number(value):
+    if isinstance(value, (int, float, Decimal)):
+        return Decimal(str(value))
+    match = re.search(r"-?\d+(?:[.,]\d+)?", _text(value, 300).replace(" ", ""))
+    if not match:
+        return None
+    try:
+        return Decimal(match.group(0).replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def _constraint_values_match(field, expected, offered):
+    if field == "gender":
+        return _canonical_gender(expected) == _canonical_gender(offered)
+    return _values_compatible(expected, offered)
+
+
+def _evaluate_structured_constraints(product, intent):
+    matches, mismatches, unknown, hard_mismatches = [], [], [], []
+    constraints = intent.get("constraints", []) if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []
+    for constraint in constraints:
+        if not isinstance(constraint, dict):
+            continue
+        field = _criterion_key(constraint.get("field"))
+        operator = _normalized(constraint.get("operator")).replace(" ", "_")
+        expected = _constraint_expected_values(field, constraint.get("values", []) if isinstance(constraint.get("values"), list) else [])
+        offered = _constraint_product_values(product, field)
+        label = CONSTRAINT_FIELD_LABELS.get(field, _text(constraint.get("field"), 80).rstrip(":") or "Характеристика")
+        level = _normalized(constraint.get("level"))
+        missing_policy = _normalized(constraint.get("missing_policy")).replace(" ", "_")
+        if not offered:
+            message = f"{label} не указан в каталоге"
+            if missing_policy == "reject":
+                mismatches.append(message)
+                if level == "required":
+                    hard_mismatches.append(message)
+            elif missing_policy == "allow_with_penalty":
+                unknown.append(message)
+            continue
+
+        valid = False
+        if operator == "exists":
+            valid = True
+        elif operator in {"in", "contains"}:
+            valid = any(_constraint_values_match(field, wanted, actual) for wanted in expected for actual in offered)
+        elif operator in {"not_in", "not_contains"}:
+            valid = not any(_constraint_values_match(field, wanted, actual) for wanted in expected for actual in offered)
+        elif operator in {"lte", "gte", "between"}:
+            actual_numbers = [value for value in (_constraint_number(item) for item in offered) if value is not None]
+            expected_numbers = [value for value in (_constraint_number(item) for item in expected) if value is not None]
+            if actual_numbers and expected_numbers:
+                if operator == "lte":
+                    valid = any(actual <= expected_numbers[0] for actual in actual_numbers)
+                elif operator == "gte":
+                    valid = any(actual >= expected_numbers[0] for actual in actual_numbers)
+                elif len(expected_numbers) >= 2:
+                    low, high = sorted(expected_numbers[:2])
+                    valid = any(low <= actual <= high for actual in actual_numbers)
+
+        offered_text = ", ".join(str(value) for value in offered)
+        if valid:
+            matches.append(f"{label}: {offered_text}")
+        else:
+            verb = "запрещённое значение" if operator in {"not_in", "not_contains"} else "не соответствует правилу"
+            message = f"{label}: {verb} ({offered_text})"
+            mismatches.append(message)
+            if level == "required":
+                hard_mismatches.append(message)
+    return (
+        list(dict.fromkeys(matches)),
+        list(dict.fromkeys(mismatches)),
+        list(dict.fromkeys(unknown)),
+        list(dict.fromkeys(hard_mismatches)),
+    )
 
 
 def _fit_product(product, line, anchors, quantity, intent=None):
@@ -1274,15 +1423,24 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         "received": len(cached_products),
     }
     ranked = []
+    allowed_source_values = intent.get("allowed_sources", []) if isinstance(intent, dict) and isinstance(intent.get("allowed_sources"), list) else []
+    allowed_sources = {_normalized(value) for value in allowed_source_values if _normalized(value)}
     for product in pool:
         if product.total_stock <= 0:
+            continue
+        if allowed_sources and not ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & allowed_sources):
             continue
         score, matches, mismatches, unknown = _fit_product(product, effective_line, anchors, quantity, intent=intent)
         if "Не совпадает тип товара" in mismatches:
             continue
         hard_mismatches = _required_mismatches(mismatches, intent)
-        if hard_mismatches:
+        constraint_matches, constraint_mismatches, constraint_unknown, constraint_hard = _evaluate_structured_constraints(product, intent)
+        if hard_mismatches or constraint_hard:
             continue
+        matches.extend(constraint_matches)
+        mismatches.extend(constraint_mismatches)
+        unknown.extend(constraint_unknown)
+        score += _catalog_parameter_score(constraint_matches, constraint_mismatches, constraint_unknown, _planner_weight_map(intent))
         name_score = SequenceMatcher(
             None,
             _normalized(line.get("name", "")),
@@ -1294,10 +1452,14 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     prices = [value[2].effective_price for value in ranked if value[2].effective_price is not None]
     minimum_price = min(prices) if prices else None
     maximum_price = max(prices) if prices else None
+    preferred_source_values = intent.get("preferred_sources", []) if isinstance(intent, dict) and isinstance(intent.get("preferred_sources"), list) else []
+    preferred_sources = {_normalized(value) for value in preferred_source_values if _normalized(value)}
 
     def total_score(value):
         relevance_score, product = value[0], value[2]
         score = relevance_score + value[1] * 100 * name_weight
+        if preferred_sources and ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & preferred_sources):
+            score += 20
         if not price_weight or product.effective_price is None or minimum_price is None:
             return score
         if maximum_price == minimum_price:

@@ -1410,6 +1410,51 @@ def _short_text_list(values, limit=12):
     return [_cell_text(value)[:300] for value in values[:limit] if _cell_text(value)]
 
 
+CATALOG_OPERATION_NAMES = {
+    "allow", "forbid", "require", "prefer", "deprioritize", "ignore",
+    "set_priority", "add_alias", "remove_alias", "set_missing_policy",
+    "lte", "gte", "between", "source_only", "prefer_source", "set_scope", "remove_rule",
+}
+CATALOG_CONSTRAINT_OPERATORS = {"in", "not_in", "contains", "not_contains", "lte", "gte", "between", "exists"}
+CATALOG_MISSING_POLICIES = {"reject", "allow", "allow_with_penalty"}
+CATALOG_PRIORITY_WEIGHTS = {"critical": 1.0, "high": .8, "normal": .6, "low": .3, "ignore": 0.0}
+
+
+def _catalog_field(value):
+    normalized = _normalized_text(value)
+    groups = (
+        ("price", ("price", "цена", "стоимост", "бюджет")),
+        ("name", ("name", "назван", "наименован", "модель")),
+        ("product_type", ("product type", "тип товара", "категор", "вид изделия")),
+        ("material", ("material", "материал", "состав", "сырье")),
+        ("color", ("color", "цвет", "оттен")),
+        ("density", ("density", "плотност")),
+        ("branding", ("branding", "нанес", "вышив", "гравиров", "печать", "логотип")),
+        ("stock", ("stock", "остаток", "налич", "тираж", "количеств", "склад")),
+        ("gender", ("gender", "пол", "гендер", "мужск", "женск", "унисекс")),
+        ("source", ("source", "источник", "поставщик")),
+    )
+    for key, markers in groups:
+        if any(marker in normalized for marker in markers):
+            return key
+    return re.sub(r"[^a-zа-я0-9]+", "_", normalized).strip("_")[:80]
+
+
+def catalog_feedback_contract():
+    return {
+        "operations": sorted(CATALOG_OPERATION_NAMES),
+        "constraint_operators": sorted(CATALOG_CONSTRAINT_OPERATORS),
+        "priority_levels": CATALOG_PRIORITY_WEIGHTS,
+        "missing_policies": sorted(CATALOG_MISSING_POLICIES),
+        "known_fields": ["product_type", "name", "price", "material", "color", "density", "branding", "stock", "gender", "source"],
+        "rules": [
+            "required constraints filter before ranking",
+            "weights never override a required constraint",
+            "feedback operations patch the current intent and do not replace it",
+        ],
+    }
+
+
 def _normalize_catalog_intent(raw):
     """Keep the LLM catalogue planner structured while preserving legacy fields."""
     raw = raw if isinstance(raw, dict) else {}
@@ -1462,6 +1507,30 @@ def _normalize_catalog_intent(raw):
             })
         return result
 
+    constraints = []
+    for value in raw.get("constraints", [])[:30] if isinstance(raw.get("constraints"), list) else []:
+        if not isinstance(value, dict):
+            continue
+        field = _catalog_field(value.get("field"))
+        operator = _normalized_text(value.get("operator")).replace(" ", "_")
+        values = value.get("values")
+        values = values if isinstance(values, list) else [values]
+        values = [_cell_text(item)[:300] for item in values[:20] if _cell_text(item)]
+        level = _normalized_text(value.get("level"))
+        missing_policy = _normalized_text(value.get("missing_policy")).replace(" ", "_")
+        if not field or operator not in CATALOG_CONSTRAINT_OPERATORS:
+            continue
+        if operator != "exists" and not values:
+            continue
+        constraints.append({
+            "field": field,
+            "operator": operator,
+            "values": values,
+            "level": level if level in {"required", "preferred", "secondary"} else "required",
+            "weight": weight(value.get("weight"), 1),
+            "missing_policy": missing_policy if missing_policy in CATALOG_MISSING_POLICIES else "reject",
+        })
+
     fallback_queries = []
     for value in raw.get("fallback_queries", [])[:8] if isinstance(raw.get("fallback_queries"), list) else []:
         if not isinstance(value, dict):
@@ -1490,9 +1559,185 @@ def _normalize_catalog_intent(raw):
         ],
         "fallback_queries": fallback_queries,
         "source_strategy": strategy_list(raw.get("source_strategy")),
+        "constraints": constraints,
+        "allowed_sources": text_list(raw.get("allowed_sources"), limit=8),
+        "preferred_sources": text_list(raw.get("preferred_sources"), limit=8),
+        "rule_scope": text_list(raw.get("rule_scope"), limit=12),
         "hard_constraints": text_list(raw.get("hard_constraints"), limit=12),
         "preferences": text_list(raw.get("preferences"), limit=8),
     }
+
+
+def _apply_catalog_operations(current, operations):
+    intent = _normalize_catalog_intent(current)
+    applied, errors = [], []
+    if not isinstance(operations, list):
+        return intent, applied, ["catalog_operations должен быть списком"]
+
+    def values_of(raw):
+        values = raw.get("values")
+        if not isinstance(values, list):
+            values = [raw.get("value")] if raw.get("value") is not None else []
+        return [_cell_text(value)[:300] for value in values[:20] if _cell_text(value)]
+
+    missing_value_markers = {
+        "missing", "unknown", "unspecified", "not specified",
+        "не указан", "не указано", "не указана", "без указания", "неизвестно", "отсутствует",
+    }
+
+    def implicit_missing_policy(raw):
+        op = _normalized_text(raw.get("op")).replace(" ", "_")
+        values = values_of(raw)
+        if not values or not all(_normalized_text(value) in missing_value_markers for value in values):
+            return ""
+        return {
+            "allow": "allow",
+            "forbid": "reject",
+            "prefer": "allow_with_penalty",
+            "deprioritize": "allow_with_penalty",
+        }.get(op, "")
+
+    requested_missing_policies = {}
+    for raw in operations[:30]:
+        if not isinstance(raw, dict):
+            continue
+        op = _normalized_text(raw.get("op")).replace(" ", "_")
+        field = _catalog_field(raw.get("field"))
+        policy = (
+            _normalized_text(raw.get("value")).replace(" ", "_")
+            if op == "set_missing_policy"
+            else implicit_missing_policy(raw)
+        )
+        if field and policy in CATALOG_MISSING_POLICIES:
+            requested_missing_policies[field] = policy
+
+    def set_ranking(field, value):
+        ranking = [item for item in intent["ranking"] if _catalog_field(item.get("criterion")) != field]
+        ranking.append({"criterion": field, "weight": round(max(0, min(1, value)), 3)})
+        intent["ranking"] = ranking[:12]
+
+    for index, raw in enumerate(operations[:30]):
+        if not isinstance(raw, dict):
+            errors.append(f"Операция {index + 1}: ожидается объект")
+            continue
+        op = _normalized_text(raw.get("op")).replace(" ", "_")
+        missing_policy_alias = implicit_missing_policy(raw)
+        if missing_policy_alias:
+            op = "set_missing_policy"
+        if op not in CATALOG_OPERATION_NAMES:
+            errors.append(f"Операция {index + 1}: неподдерживаемая команда {op or 'пусто'}")
+            continue
+        field = _catalog_field(raw.get("field"))
+        values = [] if missing_policy_alias else values_of(raw)
+        normalized = {"op": op}
+        if field:
+            normalized["field"] = field
+        if values and op != "set_missing_policy":
+            normalized["values"] = values
+
+        if op in {"add_alias", "remove_alias"}:
+            if not values:
+                errors.append(f"Операция {index + 1}: для {op} нужны values")
+                continue
+            aliases = list(intent["synonyms"])
+            if op == "add_alias":
+                for value in values:
+                    if _normalized_text(value) not in {_normalized_text(item) for item in aliases}:
+                        aliases.append(value)
+            else:
+                removing = {_normalized_text(value) for value in values}
+                aliases = [value for value in aliases if _normalized_text(value) not in removing]
+            intent["synonyms"] = aliases[:12]
+        elif op in {"source_only", "prefer_source", "set_scope"}:
+            if not values:
+                errors.append(f"Операция {index + 1}: для {op} нужны values")
+                continue
+            if op == "set_scope":
+                intent["rule_scope"] = values[:12]
+            else:
+                intent["allowed_sources" if op == "source_only" else "preferred_sources"] = values[:8]
+        elif op == "set_priority":
+            if not field:
+                errors.append(f"Операция {index + 1}: для set_priority нужен field")
+                continue
+            priority = _normalized_text(raw.get("priority"))
+            relation = _normalized_text(raw.get("relation")).replace(" ", "_")
+            target = _catalog_field(raw.get("target_field"))
+            if priority in CATALOG_PRIORITY_WEIGHTS:
+                value = CATALOG_PRIORITY_WEIGHTS[priority]
+            elif relation == "higher_than" and target:
+                target_weight = next((item["weight"] for item in intent["ranking"] if _catalog_field(item.get("criterion")) == target), .6)
+                value = min(1, max(.8, target_weight + .2))
+            else:
+                errors.append(f"Операция {index + 1}: у set_priority нужен priority или relation=higher_than")
+                continue
+            set_ranking(field, value)
+            normalized.update({"priority": priority, "relation": relation, "target_field": target})
+        elif op in {"ignore", "remove_rule"}:
+            if not field:
+                errors.append(f"Операция {index + 1}: для {op} нужен field")
+                continue
+            intent["constraints"] = [item for item in intent["constraints"] if item["field"] != field]
+            intent["ranking"] = [item for item in intent["ranking"] if _catalog_field(item.get("criterion")) != field]
+            for group in ("required", "preferred", "secondary"):
+                intent[group] = [item for item in intent[group] if _catalog_field(item.get("label")) != field]
+            if op == "ignore":
+                set_ranking(field, 0)
+        elif op == "set_missing_policy":
+            policy = missing_policy_alias or _normalized_text(raw.get("value")).replace(" ", "_")
+            if not field or policy not in CATALOG_MISSING_POLICIES:
+                errors.append(f"Операция {index + 1}: неверные field или missing policy")
+                continue
+            for constraint in intent["constraints"]:
+                if constraint["field"] == field:
+                    constraint["missing_policy"] = policy
+            normalized["value"] = policy
+        else:
+            if not field:
+                errors.append(f"Операция {index + 1}: для {op} нужен field")
+                continue
+            negative_markers = ("исключ", "не показы", "не предлаг", "запрещ", "избег", "кроме")
+            for group in ("required", "preferred", "secondary"):
+                intent[group] = [
+                    item for item in intent[group]
+                    if not (
+                        _catalog_field(item.get("label")) == field
+                        and any(marker in _normalized_text(item.get("value")) for marker in negative_markers)
+                    )
+                ]
+            operator = {"allow": "in", "forbid": "not_in", "require": "in", "prefer": "in", "deprioritize": "not_in", "lte": "lte", "gte": "gte", "between": "between"}[op]
+            if not values and op != "require":
+                errors.append(f"Операция {index + 1}: для {op} нужны values")
+                continue
+            if op == "require" and not values:
+                operator = "exists"
+            level = "preferred" if op in {"prefer", "deprioritize"} else "required"
+            priority = _normalized_text(raw.get("priority"))
+            constraint_weight = CATALOG_PRIORITY_WEIGHTS.get(priority, 1 if level == "required" else .6)
+            missing_policy = _normalized_text(raw.get("missing_policy")).replace(" ", "_")
+            if missing_policy not in CATALOG_MISSING_POLICIES:
+                missing_policy = requested_missing_policies.get(field, "reject" if level == "required" else "allow_with_penalty")
+            existing = next((item for item in intent["constraints"] if item["field"] == field and item["operator"] == operator), None)
+            if existing:
+                for value in values:
+                    if _normalized_text(value) not in {_normalized_text(item) for item in existing["values"]}:
+                        existing["values"].append(value)
+                existing.update({"level": level, "weight": constraint_weight, "missing_policy": missing_policy})
+            else:
+                intent["constraints"].append({
+                    "field": field, "operator": operator, "values": values,
+                    "level": level, "weight": constraint_weight, "missing_policy": missing_policy,
+                })
+        applied.append(normalized)
+    for field, policy in requested_missing_policies.items():
+        related = [constraint for constraint in intent["constraints"] if constraint["field"] == field]
+        if not related:
+            errors.append(f"Политика отсутствующего значения не применена: для поля {field} нет ограничения")
+            applied = [item for item in applied if not (item.get("op") == "set_missing_policy" and item.get("field") == field)]
+            continue
+        for constraint in related:
+            constraint["missing_policy"] = policy
+    return intent, applied, errors
 
 
 def _catalog_search_outcome(raw):
@@ -1509,7 +1754,7 @@ def _merge_refined_catalog_intent(current, refined):
     current = _normalize_catalog_intent(current)
     refined = _normalize_catalog_intent(refined)
     merged = dict(refined)
-    for key in ("item", "product_class", "categories", "synonyms", "search_fields", "ranking", "source_strategy"):
+    for key in ("item", "product_class", "categories", "synonyms", "search_fields", "ranking", "source_strategy", "allowed_sources", "preferred_sources", "rule_scope"):
         if not merged.get(key):
             merged[key] = current.get(key)
     required = []
@@ -1521,6 +1766,15 @@ def _merge_refined_catalog_intent(current, refined):
         seen.add(key)
         required.append(value)
     merged["required"] = required
+    constraints = []
+    seen_constraints = set()
+    for value in [*current.get("constraints", []), *refined.get("constraints", [])]:
+        key = (value.get("field"), value.get("operator"), tuple(_normalized_text(item) for item in value.get("values", [])))
+        if key in seen_constraints:
+            continue
+        seen_constraints.add(key)
+        constraints.append(value)
+    merged["constraints"] = constraints
     return merged
 
 
@@ -1540,6 +1794,31 @@ def _refine_catalog_intent(line, current_intent, search_outcome):
 {json.dumps(search_outcome, ensure_ascii=False)}"""
     result, usage = _ai_gateway_json(prompt, max_tokens=1800)
     return _merge_refined_catalog_intent(current_intent, result), usage
+
+
+def _translate_catalog_feedback(line, current_intent, feedback):
+    prompt = f"""Переведи обратную связь администратора в атомарные команды изменения каталожного поиска.
+Не пересказывай фразу и не создавай новый поисковый план. Верни только JSON вида {{"operations":[{{"op":"команда","field":"поле","values":["значение"]}}]}}.
+Используй исключительно переданный контракт. Одно высказывание может требовать нескольких операций: например, разрешённые и запрещённые значения передаются отдельно. Отрицание никогда не записывай как положительное значение.
+Отсутствующее или не указанное значение задавай только командой set_missing_policy: reject — исключить, allow — оставить на равных, allow_with_penalty — оставить ниже явно подходящих. Не передавай missing, unknown, «не указан» или «без указания» как обычное значение поля.
+Пример: «если пол не указан, оставить ниже» → {{"op":"set_missing_policy","field":"gender","value":"allow_with_penalty"}}.
+
+КОНТРАКТ:
+{json.dumps(catalog_feedback_contract(), ensure_ascii=False)}
+
+ТЕКУЩИЙ ПЛАН:
+{json.dumps(current_intent, ensure_ascii=False)}
+
+ПОЗИЦИЯ:
+{json.dumps(line, ensure_ascii=False)}
+
+ОБРАТНАЯ СВЯЗЬ:
+{feedback}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=1400)
+    operations = result.get("operations") if isinstance(result, dict) else None
+    if not isinstance(operations, list) or not operations:
+        return [], usage, ["LLM не сформировала команды изменения каталога; действующий план сохранён без изменений."]
+    return operations, usage, []
 
 
 def _requirement_list(values):
@@ -2687,7 +2966,7 @@ def apply_verified_source_quote(hypothesis, line, quote, source_name, source_url
     raw["understood_changes"] = [*_short_text_list(raw.get("understood_changes"), limit=7), change]
     production_types = list(ProductionType.objects.filter(is_active=True))
     normalized = _normalize_training_hypothesis(raw, line, production_types, raw.get("matched_example_ids", []))
-    for key in ("catalog_candidates", "catalog_selection", "catalog_intent", "catalog_warning", "catalog_sources", "catalog_attempts", "psodin_calculation", "sources", "usage"):
+    for key in ("catalog_candidates", "catalog_selection", "catalog_intent", "catalog_operations_applied", "catalog_contract_errors", "catalog_warning", "catalog_sources", "catalog_attempts", "psodin_calculation", "sources", "usage"):
         if key in hypothesis:
             normalized[key] = hypothesis[key]
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
@@ -2736,8 +3015,10 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     } for value in examples]
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
-    schema = schema[:-1] + ',"catalog_intent":{"item":"что фактически нужно найти или изготовить","product_class":"совместимое краткое имя типа товара","categories":["наиболее конкретная категория","допустимая категория"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"search_fields":["category","name","description","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["запасной поисковый запрос"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["категория источника"],"query_terms":["запрос источника"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
+    schema = schema[:-1] + ',"catalog_intent":{"item":"что фактически нужно найти или изготовить","product_class":"совместимое краткое имя типа товара","categories":["наиболее конкретная категория","допустимая категория"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"constraints":[{"field":"gender|material|color|price|stock|любое поле атрибута","operator":"in|not_in|contains|not_contains|lte|gte|between|exists","values":["каноническое значение"],"level":"required|preferred|secondary","weight":1,"missing_policy":"reject|allow|allow_with_penalty"}],"search_fields":["category","name","description","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["запасной поисковый запрос"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["категория источника"],"query_terms":["запрос источника"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
+    schema = schema[:-1] + ',"catalog_operations":[{"op":"allow|forbid|require|prefer|deprioritize|ignore|set_priority|add_alias|remove_alias|set_missing_policy|lte|gte|between|source_only|prefer_source|set_scope|remove_rule","field":"поле, если нужно","values":["значение"],"value":"одно значение или missing policy","priority":"critical|high|normal|low|ignore","relation":"higher_than","target_field":"сравниваемое поле"}]}'
     catalog_capabilities = catalog_source_capabilities()
+    catalog_contract = catalog_feedback_contract()
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
@@ -2747,11 +3028,12 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 Значения material_unit, application_unit и logistics_unit в ПОЗИЦИИ — ручные поля текущего расчёта, а не факты из ТЗ. Если используешь их, source_type=manager и source="Введено администратором". Нельзя писать «дано в ТЗ», если цена не находится внутри requirements с явным source.
 Подтверждённые примеры важнее общих предположений. matched_example_ids указывай только для действительно похожих примеров. Без подтверждённого близкого примера confidence не выше 0.55.
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
-Если передана ОБРАТНАЯ СВЯЗЬ, обнови всю гипотезу и запиши в understood_changes краткий структурированный список того, что изменил. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
+Если передана ОБРАТНАЯ СВЯЗЬ, обнови производственную часть гипотезы и запиши в understood_changes краткий структурированный список того, что изменил. Каталожный план целиком не переписывай: переведи каждое изменение поиска в catalog_operations по переданному контракту. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
 Для поиска готового товара заполни catalog_intent как планировщик поиска. Прочитай полный заголовок и требования как менеджер по закупкам: определи фактически требуемое изделие, отдели часть названия товара от его свойств и выбери одну или несколько наиболее конкретных категорий. В составном естественном названии найди целую товарную сущность: общее слово внутри названия не должно подменять более конкретный вид изделия. Не добавляй категорию только потому, что слово встретилось в описании свойства.
 Составь required, preferred и secondary. В required помещай то, что нельзя нарушать, в preferred — желательное, в secondary — второстепенное. Наличие полного тиража делай обязательным только когда из ТЗ или обратной связи следует, что частичная поставка или ожидание недопустимы. weight — относительная важность от 0 до 1 для сравнения внутри соответствующего класса. В ranking укажи, какие требования должны сильнее влиять на итоговый выбор именно для этой позиции, включая цену и точность названия, если они существенны.
-Если администратор изменяет приоритеты обратной связью — например, говорит, что цена важнее состава, цвет важнее названия или наоборот, — полностью перестрой catalog_intent и веса для текущей ситуации. Это прямое указание администратора важнее предыдущей гипотезы. Подтверждённые catalog_intent из похожих примеров используй как опыт, но не как глобальное правило: переноси их только когда условия действительно похожи.
+При первой гипотезе заполни полный catalog_intent. Разрешения, запреты, числовые границы и политику отсутствующего значения записывай в constraints, а не одной фразой с отрицанием. При обратной связи используй только catalog_operations: forbid для «исключить/не показывать/убрать», allow для допустимых значений, require/prefer для обязательного/желательного, ignore для неважного, deprioritize для понижения, set_priority для «важнее/критично/неважно», add_alias/remove_alias для поисковых названий, set_missing_policy для неизвестного значения, lte/gte/between для границ, source_only/prefer_source для поставщиков, set_scope для области применения правила, remove_rule для отмены. Никогда не помещай запрещённое значение в положительное required.
+Подтверждённые catalog_intent из похожих примеров используй как опыт, но не как глобальное правило: переноси их только когда условия действительно похожи.
 В source_strategy учитывай реальные поля каждого источника из переданных возможностей. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не сравнивай числа, цены и остатки и ничего не рассчитывай — это выполнит бэкенд.
 Верни только JSON: {schema}
 
@@ -2774,7 +3056,10 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 {json.dumps(knowledge_sources, ensure_ascii=False)}
 
 ВОЗМОЖНОСТИ КАТАЛОГОВ:
-{json.dumps(catalog_capabilities, ensure_ascii=False)}"""
+{json.dumps(catalog_capabilities, ensure_ascii=False)}
+
+КОНТРАКТ КОМАНД КАТАЛОГА:
+{json.dumps(catalog_contract, ensure_ascii=False)}"""
     ai_started_at = time.perf_counter()
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     ai_seconds = round(time.perf_counter() - ai_started_at, 3)
@@ -2795,7 +3080,19 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     ), None)
     hypothesis = _apply_psodin_calculation(hypothesis, result, line, current=current, feedback=feedback, confirmed=confirmed_psodin)
     raw_intent = result.get("catalog_intent") if isinstance(result.get("catalog_intent"), dict) else {}
-    catalog_intent = _normalize_catalog_intent(raw_intent)
+    raw_operations = result.get("catalog_operations") if isinstance(result.get("catalog_operations"), list) else []
+    current_intent = current.get("catalog_intent") if isinstance(current, dict) and isinstance(current.get("catalog_intent"), dict) else {}
+    if feedback and raw_operations:
+        catalog_intent, applied_operations, contract_errors = _apply_catalog_operations(current_intent, raw_operations)
+    elif feedback:
+        translated_operations, translation_usage, translation_errors = _translate_catalog_feedback(line, current_intent, feedback)
+        catalog_intent, applied_operations, operation_errors = _apply_catalog_operations(current_intent, translated_operations) if translated_operations else (_normalize_catalog_intent(current_intent), [], [])
+        contract_errors = [*translation_errors, *operation_errors]
+        usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (translation_usage.get("prompt_tokens", 0) or 0)
+        usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (translation_usage.get("completion_tokens", 0) or 0)
+    else:
+        catalog_intent = _normalize_catalog_intent(raw_intent)
+        applied_operations, contract_errors = [], []
     catalog_started_at = time.perf_counter()
     if progress_callback:
         progress_callback("catalog")
@@ -2833,6 +3130,14 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
     catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
     hypothesis["catalog_intent"] = catalog_intent
+    hypothesis["catalog_operations_applied"] = applied_operations
+    hypothesis["catalog_contract_errors"] = contract_errors
+    if contract_errors:
+        hypothesis["catalog_warning"] = "Не все команды обратной связи применены: " + " ".join(contract_errors[:3])
+        hypothesis["learning_warnings"] = [
+            *hypothesis.get("learning_warnings", []),
+            "Исправьте неприменённые команды каталога перед подтверждением обучения.",
+        ]
     hypothesis["catalog_candidates"] = catalog_candidates
     hypothesis["catalog_sources"] = catalog_outcome["sources"]
     hypothesis["catalog_attempts"] = catalog_outcome["attempts"]
@@ -2947,7 +3252,7 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     if isinstance(hypothesis, dict) and isinstance(hypothesis.get("catalog_intent"), dict):
         normalized["catalog_intent"] = hypothesis["catalog_intent"]
-    for key in ("catalog_sources", "catalog_attempts"):
+    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors"):
         if isinstance(hypothesis, dict) and key in hypothesis:
             normalized[key] = hypothesis[key]
     existing_sources = hypothesis.get("sources", []) if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list) else []
