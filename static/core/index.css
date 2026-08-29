@@ -1244,7 +1244,7 @@ h1 {
 .training-dialogue__actions button { min-height:34px; padding:7px 11px; font-size:10px; }
 .training-dialogue__status { display:block; padding:7px 0 12px; color:#78828e; font-size:10px; line-height:1.4; }
 .training-dialogue__details { margin-bottom:12px; padding:10px; border-radius:8px; background:#f7f9fa; }
-@media (max-width:700px) { .training-dialogue__summary { grid-template-columns:1fr; } .training-dialogue__summary > b { text-align:left; } .training-catalog-card { grid-template-columns:minmax(0,1fr) auto; } .training-catalog-card img { display:none; } .training-dialogue__feedback > div { display:grid; grid-template-columns:1fr; } .training-dialogue__feedback button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } }
+@media (max-width:700px) { .training-dialogue__summary { grid-template-columns:1fr; } .training-dialogue__summary > b { text-align:left; } .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; } .training-dialogue__feedback > div { display:grid; grid-template-columns:1fr; } .training-dialogue__feedback button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } }
 .tender-production-dialog { display:grid; gap:8px; }
 .tender-production-dialog label { display:grid; gap:4px; }
 .tender-production-dialog label span { font-size:10px; line-height:1.35; }

@@ -754,18 +754,29 @@ def _product_anchors(line):
 
 CATALOG_CLASS_ALIASES = {
     "футболка": ("футболка", "майка", "тенниска", "t shirt", "tshirt"),
+    "лонгслив": ("лонгслив", "лонгсливы", "футболка с длинным рукавом"),
     "жилет": ("жилет", "жилетка", "безрукавка"),
     "поло": ("поло", "футболка поло"),
     "кепка": ("кепка", "бейсболка"),
     "толстовка": ("толстовка", "худи", "свитшот"),
 }
 
+CATALOG_CLASS_SEARCH_TERMS = {
+    **CATALOG_CLASS_ALIASES,
+    "лонгслив": (*CATALOG_CLASS_ALIASES["лонгслив"], "long sleeve", "longsleeve"),
+}
+
 
 def _canonical_catalog_class(value):
     normalized = _normalized(value)
-    for canonical, aliases in CATALOG_CLASS_ALIASES.items():
-        if any(_normalized(alias) in normalized for alias in aliases):
-            return canonical
+    matched = []
+    for canonical, aliases in CATALOG_CLASS_SEARCH_TERMS.items():
+        for alias in aliases:
+            alias_normalized = _normalized(alias)
+            if alias_normalized and alias_normalized in normalized:
+                matched.append((len(alias_normalized), canonical))
+    if matched:
+        return max(matched, key=lambda item: item[0])[1]
     return normalized.split()[0] if normalized else ""
 
 
@@ -875,8 +886,12 @@ def _aggregate_color_variants(products):
 
 def _fit_product(product, line, anchors, quantity):
     matches, mismatches, unknown = [], [], []
-    product_text = _normalized(product.search_text)
-    anchor_hit = next((value for value in anchors if _normalized(value) in product_text), "")
+    type_text = _normalized(" ".join([
+        *(product.category_names if isinstance(product.category_names, list) else []),
+        product.name,
+        product.full_name,
+    ]))
+    anchor_hit = next((value for value in anchors if _normalized(value) in type_text), "")
     if anchor_hit:
         matches.append(f"Тип товара: {anchor_hit}")
     else:
@@ -972,58 +987,87 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
         quantity = 0
-    client = client or OasisClient()
-    categories = _live_category_data(client)
-    category = _live_category_for_intent(categories, intent or {}, line)
-    if not category:
-        return []
-    category_map = {value["id"]: value["path"] or value["name"] for value in categories}
+    categories, category, category_map = [], None, {}
     fields = (
         "id,article,name,full_name,description,article_base,group_id,color_group_id,size,images,colors,"
         "categories,categories_array,brand,attributes,materials,branding,package,price,discount_price,"
         "total_stock,is_on_order,delivery_days,supply_terms,lead,defect,updated_at"
     )
     rows, seen_ids = [], set()
-    # Oasis orders category results independently of relevance. Read bounded
-    # pages instead of ranking only the arbitrary first 500 products.
-    for offset in range(0, 1000, 500):
-        payload = client.get("/v4/products", {
-            "format": "json", "category": category["id"], "limit": 500, "offset": offset,
-            "available": 1, "includeGroupId": 1, "fields": fields,
-        })
-        page = payload.get("items", []) if isinstance(payload, dict) else payload
-        if not isinstance(page, list):
-            raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
-        fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
-        rows.extend(fresh)
-        seen_ids.update(str(value.get("id", "")) for value in fresh)
-        if len(page) < 500 or not fresh:
-            break
-    supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
-    marker = str(uuid.uuid4())
-    pool = [value for value in (
-        _product_from_payload(supplier, raw, category_map, marker)
-        for raw in rows if isinstance(raw, dict)
-    ) if value and value.is_active]
-    pool = _aggregate_color_variants(pool)
-    aliases = CATALOG_CLASS_ALIASES.get(_canonical_catalog_class((intent or {}).get("product_class") or line.get("name", "")), ())
-    if aliases:
-        gifts_query = Q()
-        for alias in aliases:
-            gifts_query |= Q(search_text__icontains=alias)
-        cached_products = CatalogProduct.objects.filter(
-            Q(supplier__code="gifts") & Q(is_active=True) & gifts_query
-        ).order_by("id")[:1500]
-        pool.extend(cached_products)
     canonical_class = _canonical_catalog_class((intent or {}).get("product_class") or line.get("name", ""))
     anchors = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
+    aliases = CATALOG_CLASS_ALIASES.get(canonical_class, (canonical_class,))
+    search_aliases = CATALOG_CLASS_SEARCH_TERMS.get(canonical_class, aliases)
+    text_terms = list(aliases)
+    for value in [
+        line.get("name", ""),
+        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) else []),
+        *((intent or {}).get("hard_constraints", []) if isinstance(intent, dict) else []),
+        *((intent or {}).get("preferences", []) if isinstance(intent, dict) else []),
+        *[item.get("value", "") for item in _requirement_values(line)],
+    ]:
+        text_terms.extend(sorted(_meaningful_tokens(value)))
+    text_terms = list(dict.fromkeys(value for value in text_terms if _text(value, 100)))
+    pool = []
+
+    # Oasis is optional: an API/category failure must not suppress Gifts.
+    try:
+        client = client or OasisClient()
+        categories = _live_category_data(client)
+        category = _live_category_for_intent(categories, intent or {}, line)
+        category_map = {value["id"]: value["path"] or value["name"] for value in categories}
+        # Use the category when available. Otherwise ask Oasis for a bounded
+        # full-text page; final matching is still performed by _fit_product.
+        search_terms = list(search_aliases) + [value for value in text_terms if value not in search_aliases]
+        search_terms = search_terms[:8]
+        for offset in range(0, 1000, 500):
+            params = {
+                "format": "json", "limit": 500, "offset": offset,
+                "available": 1, "includeGroupId": 1, "fields": fields,
+            }
+            if category:
+                params["category"] = category["id"]
+            elif search_terms:
+                params["search"] = " ".join(search_terms)
+            payload = client.get("/v4/products", params)
+            page = payload.get("items", []) if isinstance(payload, dict) else payload
+            if not isinstance(page, list):
+                raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
+            fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
+            rows.extend(fresh)
+            seen_ids.update(str(value.get("id", "")) for value in fresh)
+            if len(page) < 500 or not fresh:
+                break
+        supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
+        marker = str(uuid.uuid4())
+        pool.extend(value for value in (
+            _product_from_payload(supplier, raw, category_map, marker)
+            for raw in rows if isinstance(raw, dict)
+        ) if value and value.is_active)
+        pool = _aggregate_color_variants(pool)
+    except Exception:
+        # The cached supplier is searched below even when Oasis is unavailable.
+        pool = []
+
+    # Gifts is searched independently by words present in its stored name and
+    # description (search_text), regardless of whether Oasis had a category.
+    gifts_query = Q()
+    for term in list(search_aliases) + [value for value in text_terms if value not in search_aliases]:
+        gifts_query |= Q(search_text__icontains=term)
+    cached_products = CatalogProduct.objects.filter(
+        Q(supplier__code="gifts") & Q(is_active=True) & gifts_query
+    ).order_by("id")[:1500]
+    pool.extend(cached_products)
     ranked = []
     for product in pool:
+        if product.total_stock <= 0:
+            continue
         score, matches, mismatches, unknown = _fit_product(product, line, anchors, quantity)
         if "Не совпадает тип товара" in mismatches:
             continue
         ranked.append((score, product, matches, mismatches, unknown))
     ranked.sort(key=lambda value: (
+        0 if quantity <= 0 or value[1].total_stock >= quantity else 1,
         0 if not value[3] else 1,
         -value[0],
         value[1].effective_price is None,
@@ -1039,7 +1083,7 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
         seen_groups.add(group_key)
         price = product.effective_price
         product_url = product.product_url
-        supplier_site = urlparse(product_url or supplier.base_url).netloc.lower()
+        supplier_site = urlparse(product_url or product.supplier.base_url).netloc.lower()
         if supplier_site.startswith("www."):
             supplier_site = supplier_site[4:]
         selected.append({
@@ -1062,7 +1106,7 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             "unknown": unknown,
             "score": round(score, 2),
             "synced_at": timezone.now().isoformat(),
-            "category": category["path"] or category["name"],
+            "category": (category["path"] or category["name"]) if category else "Поиск по названию и описанию",
             "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
             "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
         })

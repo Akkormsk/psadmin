@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_oasis_catalog
+from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _canonical_catalog_class, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
@@ -1516,6 +1516,95 @@ class TenderTests(TestCase):
         candidates = catalog_candidates_for_line(line, limit=2, intent={"product_class": "футболка"}, client=Client())
 
         self.assertEqual([value["supplier_code"] for value in candidates], ["oasis", "gifts"])
+
+    def test_catalog_search_uses_gifts_text_when_oasis_category_is_missing(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="longsleeve-white", article="LS-1",
+            name="Лонгслив унисекс", full_name="Лонгслив унисекс, белый",
+            colors=["белый"], total_stock=100, discount_price=500,
+            search_text="лонгслив унисекс белый хлопок футболка с длинным рукавом",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Брелоки", "path": "categories/accessories"}]
+                return []
+
+        line = {"name": "Лонгслив, унисекс", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]}}
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "long sleeve"}, client=Client())
+
+        self.assertEqual(candidates[0]["external_id"], "longsleeve-white")
+        self.assertEqual(candidates[0]["supplier_code"], "gifts")
+
+    def test_catalog_search_keeps_gifts_when_oasis_is_unavailable(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="shirt", article="S-1", name="Футболка",
+            full_name="Футболка белая", colors=["белый"], total_stock=100,
+            discount_price=500, search_text="футболка белая хлопок",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                raise CatalogSyncError("Oasis недоступен")
+
+        candidates = catalog_candidates_for_line(
+            {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]}},
+            limit=3, intent={"product_class": "футболка"}, client=Client(),
+        )
+
+        self.assertEqual(candidates[0]["external_id"], "shirt")
+        self.assertEqual(candidates[0]["supplier_code"], "gifts")
+
+    def test_catalog_search_excludes_zero_stock_and_ranks_shortage_after_available(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
+                return [
+                    {"id": "available", "article": "A", "group_id": "available", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["хлопок"], "categories": [10], "total_stock": 100, "price": 900},
+                    {"id": "shortage", "article": "S", "group_id": "shortage", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["полиэстер"], "categories": [10], "total_stock": 5, "price": 100},
+                    {"id": "empty", "article": "E", "group_id": "empty", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["хлопок"], "categories": [10], "total_stock": 0, "price": 1},
+                ]
+
+        line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}, {"label": "Цвет", "value": "белый"}]}}
+        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "футболка"}, client=Client())
+
+        self.assertEqual([value["external_id"] for value in candidates], ["available", "shortage"])
+        self.assertTrue(any("Недостаточный остаток" in value for value in candidates[1]["mismatches"]))
+
+    def test_catalog_search_does_not_call_a_shirt_with_long_sleeves_a_longsleeve(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 10, "name": "Одежда", "path": "categories/odezhda"}]
+                return [{
+                    "id": "shirt", "article": "SH-1", "group_id": "shirt",
+                    "name": "Рубашка женская", "full_name": "Рубашка женская с длинным рукавом",
+                    "description": "Футболка с длинным рукавом в описании модели", "categories": [10], "total_stock": 100,
+                    "price": 900,
+                }]
+
+        candidates = catalog_candidates_for_line(
+            {"name": "Лонгслив", "quantity": "10"},
+            limit=3, intent={"product_class": "лонгслив"}, client=Client(),
+        )
+
+        self.assertEqual(candidates, [])
+
+    def test_catalog_class_prefers_the_most_specific_alias(self):
+        self.assertEqual(_canonical_catalog_class("Футболка с длинным рукавом"), "лонгслив")
+        self.assertEqual(_canonical_catalog_class("long sleeve"), "лонгслив")
 
     def test_selected_catalog_product_is_recalculated_on_backend_and_replaces_material_cost(self):
         production_type = ProductionType.objects.create(code="catalog-product", name="Каталожный товар")
