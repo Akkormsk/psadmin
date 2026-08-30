@@ -1746,54 +1746,69 @@ def _catalog_search_outcome(raw):
             "candidates": raw.get("candidates", []) if isinstance(raw.get("candidates"), list) else [],
             "sources": raw.get("sources", {}) if isinstance(raw.get("sources"), dict) else {},
             "attempts": raw.get("attempts", []) if isinstance(raw.get("attempts"), list) else [],
+            "category_usage": raw.get("category_usage", {}) if isinstance(raw.get("category_usage"), dict) else {},
+            "category_errors": raw.get("category_errors", []) if isinstance(raw.get("category_errors"), list) else [],
         }
-    return {"candidates": raw if isinstance(raw, list) else [], "sources": {}, "attempts": []}
+    return {
+        "candidates": raw if isinstance(raw, list) else [], "sources": {}, "attempts": [],
+        "category_usage": {}, "category_errors": [],
+    }
 
 
-def _merge_refined_catalog_intent(current, refined):
-    current = _normalize_catalog_intent(current)
-    refined = _normalize_catalog_intent(refined)
-    merged = dict(refined)
-    for key in ("item", "product_class", "categories", "synonyms", "search_fields", "ranking", "source_strategy", "allowed_sources", "preferred_sources", "rule_scope"):
-        if not merged.get(key):
-            merged[key] = current.get(key)
-    required = []
-    seen = set()
-    for value in [*current.get("required", []), *refined.get("required", [])]:
-        key = (_normalized_text(value.get("label")), _normalized_text(value.get("value")))
-        if key in seen:
-            continue
-        seen.add(key)
-        required.append(value)
-    merged["required"] = required
-    constraints = []
-    seen_constraints = set()
-    for value in [*current.get("constraints", []), *refined.get("constraints", [])]:
-        key = (value.get("field"), value.get("operator"), tuple(_normalized_text(item) for item in value.get("values", [])))
-        if key in seen_constraints:
-            continue
-        seen_constraints.add(key)
-        constraints.append(value)
-    merged["constraints"] = constraints
-    return merged
-
-
-def _refine_catalog_intent(line, current_intent, search_outcome):
-    schema = '{"item":"товар","product_class":"краткий тип","categories":["категория"],"synonyms":["синоним"],"required":[{"label":"обязательное требование","value":"значение","weight":1}],"preferred":[{"label":"желательное требование","value":"значение","weight":0.6}],"secondary":[],"search_fields":["name","category","attributes"],"ranking":[{"criterion":"цена или характеристика","weight":0.7}],"fallback_queries":[],"source_strategy":[{"source":"oasis|gifts","category_terms":[],"query_terms":[],"search_fields":[]}]} '
-    prompt = f"""Первый поиск товара не дал подходящих вариантов. Скорректируй только стратегию каталожного поиска по фактическому ответу источников.
-Обязательные требования из текущего плана нельзя удалять, ослаблять или переносить в preferred/secondary. Можно менять категории, равнозначные названия, запросы источников и важность необязательных критериев. Не придумывай цены, остатки и характеристики.
-Верни только JSON: {schema}
+def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
+    candidates = [value for value in candidates if isinstance(value, dict)][:40]
+    attempted = [value for value in attempted or [] if isinstance(value, dict)][:30]
+    if not candidates:
+        return [], {}, []
+    prompt = f"""Выбери реальные категории поставщиков для поиска товара.
+Категории уже найдены бэкендом в актуальных деревьях Oasis и Gifts. Используй только переданные source и category_id, ничего не придумывай. Можно выбрать несколько категорий у каждого поставщика.
+Конкретный вид товара важнее общего раздела: для «футболка поло» выбирай категорию поло, а не «одежда». Общую категорию выбирай только если среди вариантов нет конкретной. Не повторяй категории из ПРОВЕРЕНО РАНЕЕ.
+Верни только JSON: {{"category_tasks":[{{"source":"oasis|gifts","category_id":"реальный ID","priority":1}}]}}
 
 ПОЗИЦИЯ:
 {json.dumps(line, ensure_ascii=False)}
 
-ТЕКУЩИЙ ПЛАН:
-{json.dumps(current_intent, ensure_ascii=False)}
+ПОИСКОВЫЙ СМЫСЛ:
+{json.dumps(intent, ensure_ascii=False)}
 
-РЕЗУЛЬТАТ ПЕРВОГО ПОИСКА:
-{json.dumps(search_outcome, ensure_ascii=False)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=1800)
-    return _merge_refined_catalog_intent(current_intent, result), usage
+РЕАЛЬНЫЕ КАТЕГОРИИ:
+{json.dumps(candidates, ensure_ascii=False)}
+
+ПРОВЕРЕНО РАНЕЕ:
+{json.dumps(attempted, ensure_ascii=False)}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=900)
+    raw_tasks = result.get("category_tasks") if isinstance(result, dict) else []
+    available = {
+        (_normalized_text(value.get("source")), str(value.get("category_id", ""))): value
+        for value in candidates
+    }
+    used, tasks = set(), []
+    for raw in raw_tasks[:12] if isinstance(raw_tasks, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        key = (_normalized_text(raw.get("source")), str(raw.get("category_id", "")))
+        candidate = available.get(key)
+        if not candidate or key in used:
+            continue
+        try:
+            priority = max(1, min(9, int(raw.get("priority", 1))))
+        except (TypeError, ValueError):
+            priority = 1
+        tasks.append({
+            "source": key[0], "category_id": key[1],
+            "name": candidate.get("name", ""), "path": candidate.get("path", ""),
+            "priority": priority,
+        })
+        used.add(key)
+    if not tasks:
+        best_by_source = {}
+        for candidate in candidates:
+            best_by_source.setdefault(candidate.get("source"), candidate)
+        tasks = [{
+            "source": value.get("source", ""), "category_id": str(value.get("category_id", "")),
+            "name": value.get("name", ""), "path": value.get("path", ""), "priority": 1,
+        } for value in best_by_source.values() if value.get("source") and value.get("category_id")]
+    return tasks[:8], usage, []
 
 
 def _translate_catalog_feedback(line, current_intent, feedback):
@@ -3015,7 +3030,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     } for value in examples]
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
-    schema = schema[:-1] + ',"catalog_intent":{"item":"что фактически нужно найти или изготовить","product_class":"совместимое краткое имя типа товара","categories":["наиболее конкретная категория","допустимая категория"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"constraints":[{"field":"gender|material|color|price|stock|любое поле атрибута","operator":"in|not_in|contains|not_contains|lte|gte|between|exists","values":["каноническое значение"],"level":"required|preferred|secondary","weight":1,"missing_policy":"reject|allow|allow_with_penalty"}],"search_fields":["category","name","description","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["запасной поисковый запрос"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["категория источника"],"query_terms":["запрос источника"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
+    schema = schema[:-1] + ',"catalog_intent":{"item":"цельная товарная сущность без характеристик, например рубашка поло","product_class":"общее название класса товара","categories":["только смысловые подсказки, не реальные категории поставщика"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"constraints":[{"field":"gender|material|color|price|stock|любое поле атрибута","operator":"in|not_in|contains|not_contains|lte|gte|between|exists","values":["каноническое значение"],"level":"required|preferred|secondary","weight":1,"missing_policy":"reject|allow|allow_with_penalty"}],"search_fields":["name","category","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["равнозначное название товара"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["смысловая подсказка"],"query_terms":["цельная товарная сущность или синоним"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
     schema = schema[:-1] + ',"catalog_operations":[{"op":"allow|forbid|require|prefer|deprioritize|ignore|set_priority|add_alias|remove_alias|set_missing_policy|lte|gte|between|source_only|prefer_source|set_scope|remove_rule","field":"поле, если нужно","values":["значение"],"value":"одно значение или missing policy","priority":"critical|high|normal|low|ignore","relation":"higher_than","target_field":"сравниваемое поле"}]}'
     catalog_capabilities = catalog_source_capabilities()
     catalog_contract = catalog_feedback_contract()
@@ -3030,7 +3045,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
 Если передана ОБРАТНАЯ СВЯЗЬ, обнови производственную часть гипотезы и запиши в understood_changes краткий структурированный список того, что изменил. Каталожный план целиком не переписывай: переведи каждое изменение поиска в catalog_operations по переданному контракту. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
 Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
-Для поиска готового товара заполни catalog_intent как планировщик поиска. Прочитай полный заголовок и требования как менеджер по закупкам: определи фактически требуемое изделие, отдели часть названия товара от его свойств и выбери одну или несколько наиболее конкретных категорий. В составном естественном названии найди целую товарную сущность: общее слово внутри названия не должно подменять более конкретный вид изделия. Не добавляй категорию только потому, что слово встретилось в описании свойства.
+Для поиска готового товара заполни catalog_intent как смысловой план, но не придумывай реальные категории поставщиков: после твоего ответа бэкенд отдельно найдёт их в актуальных деревьях Oasis и Gifts и даст тебе выбрать существующие ID. Прочитай полный заголовок и требования как менеджер по закупкам: в item запиши цельную товарную сущность без характеристик, а общее родительское понятие оставь только в product_class или categories как подсказку. Для «футболка поло» item — «рубашка поло», а не «одежда» и не просто «футболка». В составном естественном названии общее слово не должно подменять более конкретный вид изделия.
 Составь required, preferred и secondary. В required помещай то, что нельзя нарушать, в preferred — желательное, в secondary — второстепенное. Наличие полного тиража делай обязательным только когда из ТЗ или обратной связи следует, что частичная поставка или ожидание недопустимы. weight — относительная важность от 0 до 1 для сравнения внутри соответствующего класса. В ranking укажи, какие требования должны сильнее влиять на итоговый выбор именно для этой позиции, включая цену и точность названия, если они существенны.
 При первой гипотезе заполни полный catalog_intent. Разрешения, запреты, числовые границы и политику отсутствующего значения записывай в constraints, а не одной фразой с отрицанием. При обратной связи используй только catalog_operations: forbid для «исключить/не показывать/убрать», allow для допустимых значений, require/prefer для обязательного/желательного, ignore для неважного, deprioritize для понижения, set_priority для «важнее/критично/неважно», add_alias/remove_alias для поисковых названий, set_missing_policy для неизвестного значения, lte/gte/between для границ, source_only/prefer_source для поставщиков, set_scope для области применения правила, remove_rule для отмены. Никогда не помещай запрещённое значение в положительное required.
 Подтверждённые catalog_intent из похожих примеров используй как опыт, но не как глобальное правило: переноси их только когда условия действительно похожи.
@@ -3099,26 +3114,51 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     try:
         catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
             line, limit=3, intent=catalog_intent, include_diagnostics=True,
+            category_selector=_select_catalog_category_tasks,
         ))
         catalog_candidates = catalog_outcome["candidates"]
+        usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (catalog_outcome["category_usage"].get("prompt_tokens", 0) or 0)
+        usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (catalog_outcome["category_usage"].get("completion_tokens", 0) or 0)
         searchable_source_available = any(
             isinstance(value, dict) and value.get("status") == "success"
             for value in catalog_outcome["sources"].values()
         )
         if not catalog_candidates and searchable_source_available:
-            refined_intent, refinement_usage = _refine_catalog_intent(line, catalog_intent, catalog_outcome)
+            attempted_category_tasks = [
+                task for attempt in catalog_outcome["attempts"] if isinstance(attempt, dict)
+                for task in attempt.get("category_tasks", []) if isinstance(task, dict)
+            ]
             second_outcome = _catalog_search_outcome(catalog_candidates_for_line(
-                line, limit=3, intent=refined_intent, include_diagnostics=True,
+                line, limit=3, intent=catalog_intent, include_diagnostics=True,
+                category_selector=_select_catalog_category_tasks,
+                excluded_category_tasks=attempted_category_tasks,
             ))
-            catalog_intent = refined_intent
             catalog_candidates = second_outcome["candidates"]
             catalog_outcome = {
                 "candidates": catalog_candidates,
                 "sources": second_outcome["sources"],
                 "attempts": [*catalog_outcome["attempts"], *second_outcome["attempts"]],
+                "category_usage": second_outcome["category_usage"],
+                "category_errors": [*catalog_outcome["category_errors"], *second_outcome["category_errors"]],
             }
-            usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (refinement_usage.get("prompt_tokens", 0) or 0)
-            usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (refinement_usage.get("completion_tokens", 0) or 0)
+            usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (second_outcome["category_usage"].get("prompt_tokens", 0) or 0)
+            usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (second_outcome["category_usage"].get("completion_tokens", 0) or 0)
+            second_used_full_text = any(
+                attempt.get("mode") == "full_text" for attempt in second_outcome["attempts"] if isinstance(attempt, dict)
+            )
+            if not catalog_candidates and not second_used_full_text:
+                full_text_outcome = _catalog_search_outcome(catalog_candidates_for_line(
+                    line, limit=3, intent=catalog_intent, include_diagnostics=True,
+                    force_full_text=True,
+                ))
+                catalog_candidates = full_text_outcome["candidates"]
+                catalog_outcome = {
+                    "candidates": catalog_candidates,
+                    "sources": full_text_outcome["sources"],
+                    "attempts": [*catalog_outcome["attempts"], *full_text_outcome["attempts"]],
+                    "category_usage": {},
+                    "category_errors": catalog_outcome["category_errors"],
+                }
     except CatalogSyncError as exc:
         catalog_candidates = []
         catalog_outcome = {"candidates": [], "sources": {}, "attempts": []}

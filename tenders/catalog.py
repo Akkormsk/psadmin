@@ -928,6 +928,85 @@ def _live_category_data(client):
     return result
 
 
+def _category_candidates(categories_by_source, line, intent, excluded_tasks=None, limit_per_source=12):
+    intent = intent if isinstance(intent, dict) else {}
+    excluded = {
+        (_normalized(value.get("source")), str(value.get("category_id", "")))
+        for value in excluded_tasks or [] if isinstance(value, dict)
+    }
+    weighted_phrases = []
+    for weight, values in (
+        (6, [intent.get("item")]),
+        (5, [line.get("name") if isinstance(line, dict) else ""]),
+        (5, intent.get("synonyms", []) if isinstance(intent.get("synonyms"), list) else []),
+        (3, [intent.get("product_class")]),
+        (1, intent.get("categories", []) if isinstance(intent.get("categories"), list) else []),
+    ):
+        for value in values:
+            normalized = _normalized(value)
+            if normalized:
+                weighted_phrases.append((weight, normalized))
+
+    generic_tokens = {"товар", "товары", "каталог", "одежда", "текстиль", "сувенир", "сувениры", "продукция"}
+    class_tokens = set(_normalized(intent.get("product_class")).split())
+    token_weights = {}
+    for weight, phrase in weighted_phrases:
+        for token in phrase.split():
+            if len(token) < 3 or token.isdigit():
+                continue
+            token_weights[token] = token_weights.get(token, 0) + weight
+    for token in set(_normalized(intent.get("item")).split()) - class_tokens - generic_tokens:
+        if len(token) >= 3 and not token.isdigit():
+            token_weights[token] = token_weights.get(token, 0) + 8
+
+    def compatible(left, right):
+        if left == right:
+            return True
+        if min(len(left), len(right)) < 5:
+            return False
+        prefix_length = max(4, min(6, len(left) - 1, len(right) - 1))
+        return left[:prefix_length] == right[:prefix_length]
+
+    result = []
+    for source, categories in categories_by_source.items():
+        source_rows = []
+        for category in categories if isinstance(categories, list) else []:
+            category_id = str(category.get("id") or category.get("external_id") or "")
+            if not category_id or (_normalized(source), category_id) in excluded:
+                continue
+            name = _text(category.get("name"), 300)
+            path = _text(category.get("path") or name, 1000)
+            name_tokens = _normalized(name).split()
+            path_tokens = _normalized(path).split()
+            matched_weights = [
+                weight for token, weight in token_weights.items()
+                if any(compatible(token, offered) for offered in [*name_tokens, *path_tokens])
+            ]
+            if not matched_weights:
+                continue
+            depth = path.count("/") + path.count(">")
+            distinctive_matches = sum(
+                weight for token, weight in token_weights.items()
+                if token not in generic_tokens and any(compatible(token, offered) for offered in name_tokens)
+            )
+            exact_bonus = max((
+                weight * 3 for weight, phrase in weighted_phrases
+                if phrase == _normalized(name)
+            ), default=0)
+            generic_penalty = 20 if name_tokens and all(token in generic_tokens for token in name_tokens) else 0
+            score = sum(matched_weights) + distinctive_matches + exact_bonus + min(8, depth * 2) - generic_penalty
+            source_rows.append({
+                "source": _normalized(source),
+                "category_id": category_id,
+                "name": name,
+                "path": path,
+                "specificity": round(score, 3),
+            })
+        source_rows.sort(key=lambda value: (-value["specificity"], -value["path"].count("/"), _normalized(value["path"])))
+        result.extend(source_rows[:max(1, min(30, limit_per_source))])
+    return sorted(result, key=lambda value: (-value["specificity"], value["source"], _normalized(value["path"])))
+
+
 def _live_category_for_intent(categories, intent, line):
     planner_categories = _planner_categories(intent)
     aliases = planner_categories or [_text(line.get("name", ""), 300)]
@@ -1318,13 +1397,17 @@ def _fit_product(product, line, anchors, quantity, intent=None):
     return score, matches, mismatches, unknown
 
 
-def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False):
+def catalog_candidates_for_line(
+    line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
+    category_selector=None, excluded_category_tasks=None, force_full_text=False,
+):
     """Return a relevance-ranked shortlist from live Oasis and cached suppliers."""
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
         quantity = 0
     categories, category, category_map = [], None, {}
+    category_tasks, category_usage, category_errors = [], {}, []
     fields = (
         "id,article,name,full_name,description,article_base,group_id,color_group_id,size,images,colors,"
         "categories,categories_array,brand,attributes,materials,branding,package,price,discount_price,"
@@ -1332,9 +1415,26 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     )
     rows, seen_ids = [], set()
     planner_categories = _planner_categories(intent)
-    aliases = tuple(planner_categories) or (_text(line.get("name", ""), 300),)
-    search_aliases = tuple(dict.fromkeys([*aliases, *((intent or {}).get("synonyms", []) if isinstance(intent, dict) else [])]))
-    anchors = search_aliases
+    semantic_entities = [
+        (intent or {}).get("item", "") if isinstance(intent, dict) else "",
+        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
+        (intent or {}).get("product_class", "") if isinstance(intent, dict) else "",
+        *planner_categories,
+        _text(line.get("name", ""), 300),
+    ]
+    search_aliases = tuple(dict.fromkeys(_text(value, 300) for value in semantic_entities if _text(value, 300)))
+    aliases = tuple(planner_categories) or search_aliases or (_text(line.get("name", ""), 300),)
+    specific_entities = [
+        (intent or {}).get("item", "") if isinstance(intent, dict) else "",
+        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
+        *planner_categories,
+    ]
+    anchors = tuple(dict.fromkeys(_text(value, 300) for value in specific_entities if _text(value, 300)))
+    if not anchors:
+        anchors = tuple(value for value in (
+            (intent or {}).get("product_class", "") if isinstance(intent, dict) else "",
+            _text(line.get("name", ""), 300),
+        ) if _text(value, 300))
     effective_line = _line_with_planner_requirements(line, intent)
     text_terms = list(aliases)
     for value in [
@@ -1362,30 +1462,77 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     try:
         client = client or OasisClient()
         categories = _live_category_data(client)
-        category = _live_category_for_intent(categories, intent or {}, line)
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
+        gifts_categories = list(CatalogCategory.objects.filter(
+            supplier__code="gifts", supplier__is_active=True, is_active=True,
+        ).values("external_id", "name", "path"))
+        category_options = _category_candidates({
+            "oasis": categories,
+            "gifts": gifts_categories,
+        }, line, intent or {}, excluded_tasks=excluded_category_tasks)
+        if category_selector and not force_full_text:
+            try:
+                category_tasks, category_usage, category_errors = category_selector(
+                    line, intent or {}, category_options, excluded_category_tasks or [],
+                )
+            except Exception:
+                logger.exception("Catalog category selection failed; using backend priority")
+                best_by_source = {}
+                for option in category_options:
+                    best_by_source.setdefault(option["source"], option)
+                category_tasks = [
+                    {**option, "priority": 1} for option in best_by_source.values()
+                ]
+                category_errors = [
+                    "Не удалось выбрать категории через LLM; использован серверный приоритет."
+                ]
+            available_tasks = {
+                (value["source"], value["category_id"]): value for value in category_options
+            }
+            category_tasks = [
+                {**available_tasks[(str(value.get("source", "")), str(value.get("category_id", "")))],
+                 "priority": value.get("priority", 1)}
+                for value in category_tasks if isinstance(value, dict)
+                and (str(value.get("source", "")), str(value.get("category_id", ""))) in available_tasks
+            ][:8]
+        elif not force_full_text:
+            category = _live_category_for_intent(categories, intent or {}, line)
+            if category:
+                category_tasks = [{
+                    "source": "oasis", "category_id": category["id"],
+                    "name": category["name"], "path": category["path"], "priority": 1,
+                }]
+        selected_oasis_categories = [
+            next((value for value in categories if value["id"] == task["category_id"]), None)
+            for task in sorted(category_tasks, key=lambda value: value.get("priority", 1))
+            if task.get("source") == "oasis"
+        ]
+        selected_oasis_categories = [value for value in selected_oasis_categories if value]
+        category = selected_oasis_categories[0] if selected_oasis_categories else None
         # Use the category when available. Otherwise ask Oasis for a bounded
         # full-text page; final matching is still performed by _fit_product.
         search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(search_aliases)))
         search_terms = search_terms[:8]
-        for offset in range(0, 1000, 500):
-            params = {
-                "format": "json", "limit": 500, "offset": offset,
-                "available": 1, "includeGroupId": 1, "fields": fields,
-            }
-            if category:
-                params["category"] = category["id"]
-            elif search_terms:
-                params["search"] = " ".join(search_terms)
-            payload = client.get("/v4/products", params)
-            page = payload.get("items", []) if isinstance(payload, dict) else payload
-            if not isinstance(page, list):
-                raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
-            fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
-            rows.extend(fresh)
-            seen_ids.update(str(value.get("id", "")) for value in fresh)
-            if len(page) < 500 or not fresh:
-                break
+        oasis_search_categories = selected_oasis_categories or ([None] if not category_tasks else [])
+        for selected_category in oasis_search_categories:
+            for offset in range(0, 1000, 500):
+                params = {
+                    "format": "json", "limit": 500, "offset": offset,
+                    "available": 1, "includeGroupId": 1, "fields": fields,
+                }
+                if selected_category:
+                    params["category"] = selected_category["id"]
+                elif search_terms:
+                    params["search"] = " ".join(search_terms)
+                payload = client.get("/v4/products", params)
+                page = payload.get("items", []) if isinstance(payload, dict) else payload
+                if not isinstance(page, list):
+                    raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
+                fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
+                rows.extend(fresh)
+                seen_ids.update(str(value.get("id", "")) for value in fresh)
+                if len(page) < 500 or not fresh:
+                    break
         supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
         marker = str(uuid.uuid4())
         pool.extend(value for value in (
@@ -1413,9 +1560,20 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
     for term in gifts_terms:
         gifts_query |= Q(search_text__icontains=term)
     gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
-    cached_products = list(CatalogProduct.objects.filter(
-        Q(supplier__code="gifts") & Q(is_active=True) & gifts_query
-    ).order_by("id")[:1500])
+    selected_gifts_ids = {
+        str(value.get("category_id")) for value in category_tasks if value.get("source") == "gifts"
+    } if category_selector else set()
+    gifts_product_query = Q(supplier__code="gifts") & Q(is_active=True)
+    if not selected_gifts_ids:
+        gifts_product_query &= gifts_query
+    cached_products = list(CatalogProduct.objects.filter(gifts_product_query).order_by("id")[:1500])
+    if selected_gifts_ids:
+        cached_products = [
+            value for value in cached_products
+            if selected_gifts_ids & {str(category_id) for category_id in value.category_ids}
+        ]
+    elif category_selector and category_tasks:
+        cached_products = []
     pool.extend(cached_products)
     source_status["gifts"] = {
         "status": "success" if gifts_supplier_exists else "not_configured",
@@ -1507,7 +1665,11 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             "unknown": unknown,
             "score": round(score, 2),
             "synced_at": timezone.now().isoformat(),
-            "category": (category["path"] or category["name"]) if category else "Поиск по названию и описанию",
+            "category": (
+                product.category_names[0]
+                if isinstance(product.category_names, list) and product.category_names else
+                (category["path"] or category["name"]) if category else "Поиск по названию и описанию"
+            ),
             "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
             "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
         })
@@ -1518,9 +1680,13 @@ def catalog_candidates_for_line(line, limit=3, supplier_code="oasis", intent=Non
             "candidates": selected,
             "sources": source_status,
             "attempts": [{
+                "mode": "full_text" if force_full_text or not category_tasks else "selected_categories",
+                "category_tasks": category_tasks,
                 "categories": planner_categories,
                 "terms": text_terms,
                 "candidate_count": len(selected),
             }],
+            "category_usage": category_usage,
+            "category_errors": category_errors,
         }
     return selected
