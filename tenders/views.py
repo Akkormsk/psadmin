@@ -22,7 +22,7 @@ from openpyxl import load_workbook
 
 from .models import CatalogMatchDecision, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
-from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog
+from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
@@ -51,6 +51,12 @@ def gifts_import_test(request):
         if run is None:
             return JsonResponse({"status": "not_started"})
         return JsonResponse({"status": run.status, "received": run.received_count, "created": run.created_count, "updated": run.updated_count, "error": run.error})
+    if request.GET.get("categories") == "1":
+        try:
+            categories = sync_gifts_categories()
+        except CatalogSyncError as exc:
+            return JsonResponse({"error": str(exc)}, status=502)
+        return JsonResponse({"status": "success", "categories": len(categories)})
     full = request.GET.get("full") == "1"
     if full:
         recent_running = CatalogSyncRun.objects.filter(supplier__code="gifts", status="running", started_at__gte=timezone.now() - timedelta(minutes=15)).exists()

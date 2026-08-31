@@ -373,6 +373,88 @@ def _store_gifts_categories(supplier, categories):
         )
 
 
+def _gifts_category_tree(tree_xml):
+    root = ElementTree.parse(tree_xml).getroot()
+    if root.tag.rsplit("}", 1)[-1].lower() == "error":
+        raise CatalogSyncError(_text(root.text, 5000) or "gifts.ru не вернул карту категорий.")
+
+    records = {}
+
+    def visit(node, nested_parent_id=""):
+        local_name = node.tag.rsplit("}", 1)[-1].lower()
+        child_parent_id = nested_parent_id
+        if local_name == "page":
+            external_id = _text(node.attrib.get("page_id") or _gifts_text(node, "page_id"), 100)
+            name = _text(node.attrib.get("name") or _gifts_text(node, "name"), 300)
+            if external_id and name:
+                parent_external_id = _text(
+                    node.attrib.get("parent_id") or node.attrib.get("parent_page_id")
+                    or _gifts_text(node, "parent_id") or nested_parent_id,
+                    100,
+                )
+                records[external_id] = {
+                    "external_id": external_id,
+                    "parent_external_id": parent_external_id,
+                    "name": name,
+                }
+                child_parent_id = external_id
+        for child in node:
+            visit(child, child_parent_id)
+
+    visit(root)
+    if not records:
+        raise CatalogSyncError("gifts.ru вернул пустую карту категорий.")
+
+    resolved_paths = {}
+
+    def resolve_path(external_id, trail=None):
+        if external_id in resolved_paths:
+            return resolved_paths[external_id]
+        record = records[external_id]
+        parent_id = record["parent_external_id"]
+        trail = set(trail or ())
+        if external_id in trail or not parent_id or parent_id not in records:
+            path = record["name"]
+        else:
+            trail.add(external_id)
+            path = f"{resolve_path(parent_id, trail)} > {record['name']}"
+        resolved_paths[external_id] = path
+        return path
+
+    return [
+        {**record, "path": resolve_path(external_id)}
+        for external_id, record in records.items()
+    ]
+
+
+def sync_gifts_categories(client=None):
+    client = client or GiftsXmlClient()
+    supplier, _ = CatalogSupplier.objects.get_or_create(
+        code="gifts", defaults={"name": "gifts.ru", "base_url": client.base_url},
+    )
+    supplier.base_url = client.base_url
+    supplier.sync_status = "running"
+    supplier.sync_message = "Получаю карту категорий gifts.ru"
+    supplier.save(update_fields=["base_url", "sync_status", "sync_message"])
+    try:
+        with client.open("catalogue/treeWithoutProducts.xml") as tree_xml:
+            categories = _gifts_category_tree(tree_xml)
+        _store_gifts_categories(supplier, categories)
+        supplier.last_synced_at = timezone.now()
+        supplier.sync_status = "success"
+        supplier.sync_message = f"Категорий: {len(categories)}"
+        supplier.save(update_fields=["last_synced_at", "sync_status", "sync_message"])
+        return {
+            value.external_id: value.path or value.name
+            for value in CatalogCategory.objects.filter(supplier=supplier, is_active=True)
+        }
+    except Exception as exc:
+        supplier.sync_status = "failed"
+        supplier.sync_message = _text(exc, 500)
+        supplier.save(update_fields=["sync_status", "sync_message"])
+        raise
+
+
 def sync_gifts_catalog(client=None, category=None, limit=None):
     client = client or GiftsXmlClient()
     supplier, _ = CatalogSupplier.objects.get_or_create(code="gifts", defaults={"name": "gifts.ru", "base_url": client.base_url})

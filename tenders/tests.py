@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_oasis_catalog
+from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
@@ -1644,6 +1644,32 @@ class TenderTests(TestCase):
         self.assertEqual(run.status, "success")
         self.assertEqual(product.total_stock, 12)
         self.assertEqual(product.image_url, "https://files.gifts.ru/reviewer/v.webp")
+
+    def test_gifts_category_sync_uses_category_only_xml_and_preserves_hierarchy(self):
+        class Client:
+            base_url = "https://api2.gifts.ru/export/v2"
+            opened = []
+            xml = """<doct><page page_id='10' name='Одежда'><page page_id='20' name='Поло'><page page_id='30' name='Мужские поло'/></page></page></doct>"""
+
+            def open(self, path):
+                self.opened.append(path)
+                return StringIO(self.xml)
+
+        client = Client()
+        categories = sync_gifts_categories(client)
+
+        self.assertEqual(client.opened, ["catalogue/treeWithoutProducts.xml"])
+        self.assertEqual(categories["20"], "Одежда > Поло")
+        polo = CatalogCategory.objects.get(supplier__code="gifts", external_id="20")
+        self.assertEqual(polo.parent_external_id, "10")
+        self.assertEqual(polo.path, "Одежда > Поло")
+
+        client.xml = """<doct><page page_id='10' name='Текстиль'><page page_id='20' name='Поло'/></page></doct>"""
+        categories = sync_gifts_categories(client)
+
+        self.assertEqual(categories["20"], "Текстиль > Поло")
+        self.assertEqual(CatalogCategory.objects.filter(supplier__code="gifts").count(), 3)
+        self.assertFalse(CatalogCategory.objects.get(supplier__code="gifts", external_id="30").is_active)
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
