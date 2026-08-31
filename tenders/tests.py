@@ -1366,7 +1366,7 @@ class TenderTests(TestCase):
             "reason": "Точное соответствие.",
         }])
         self.assertFalse(errors)
-        self.assertEqual(usage, {})
+        self.assertEqual(usage, {"by_source": {"oasis": {}}})
 
     @patch("tenders.services._ai_gateway_json")
     def test_llm_category_selection_receives_tree_context_and_returns_roles(self, gateway):
@@ -1451,7 +1451,41 @@ class TenderTests(TestCase):
         self.assertEqual(tasks[2]["condition"], {
             "field": "season", "operator": "eq", "value": "winter",
         })
-        self.assertEqual(usage, {"input_tokens": 321, "output_tokens": 123})
+        self.assertEqual(usage["input_tokens"], 321)
+        self.assertEqual(usage["output_tokens"], 123)
+        self.assertEqual(usage["by_source"]["supplier-x"], {
+            "input_tokens": 321, "output_tokens": 123,
+        })
+        self.assertFalse(errors)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_llm_category_selection_calls_each_supplier_tree_independently(self, gateway):
+        def answer(prompt, **kwargs):
+            source = "supplier-a" if '"supplier-a"' in prompt else "supplier-b"
+            return ({"category_tasks": [{
+                "source": source, "category_id": f"{source}-root", "role": "primary",
+                "priority": 1, "reason": "Соответствует сущности.",
+            }]}, {"prompt_tokens": 100, "completion_tokens": 10})
+
+        gateway.side_effect = answer
+        tasks, usage, errors = _select_catalog_category_tasks(
+            {"name": "Товар"}, {"item": "товар"}, [
+                {
+                    "source": "supplier-b", "category_id": "supplier-b-root", "name": "Товар B",
+                    "parent_id": "", "path": "Каталог B > Товар B", "specificity": 1,
+                },
+                {
+                    "source": "supplier-a", "category_id": "supplier-a-root", "name": "Товар A",
+                    "parent_id": "", "path": "Каталог A > Товар A", "specificity": 1,
+                },
+            ],
+        )
+
+        self.assertEqual(gateway.call_count, 2)
+        self.assertEqual({value["source"] for value in tasks}, {"supplier-a", "supplier-b"})
+        self.assertEqual(usage["prompt_tokens"], 200)
+        self.assertEqual(usage["completion_tokens"], 20)
+        self.assertEqual(set(usage["by_source"]), {"supplier-a", "supplier-b"})
         self.assertFalse(errors)
 
     def test_catalog_search_uses_llm_selected_real_category_instead_of_broad_category(self):

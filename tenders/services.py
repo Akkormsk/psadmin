@@ -1757,6 +1757,32 @@ def _catalog_search_outcome(raw):
 
 def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     candidates = [value for value in candidates if isinstance(value, dict)]
+    if not candidates:
+        return [], {}, []
+    tasks, usage, errors = [], {"by_source": {}}, []
+    sources = sorted({_cell_text(value.get("source")).lower() for value in candidates if value.get("source")})
+    for source in sources:
+        source_candidates = [
+            value for value in candidates if _cell_text(value.get("source")).lower() == source
+        ]
+        source_attempted = [
+            value for value in attempted or []
+            if isinstance(value, dict) and _cell_text(value.get("source")).lower() == source
+        ]
+        source_tasks, source_usage, source_errors = _select_catalog_category_tasks_for_source(
+            line, intent, source_candidates, source_attempted,
+        )
+        tasks.extend(source_tasks)
+        usage["by_source"][source] = source_usage
+        for key, value in source_usage.items():
+            if isinstance(value, (int, float)):
+                usage[key] = usage.get(key, 0) + value
+        errors.extend(f"{source}: {error}" for error in source_errors)
+    return tasks, usage, errors
+
+
+def _select_catalog_category_tasks_for_source(line, intent, candidates, attempted=None):
+    candidates = [value for value in candidates if isinstance(value, dict)]
     attempted = [value for value in attempted or [] if isinstance(value, dict)][:30]
     if not candidates:
         return [], {}, []
