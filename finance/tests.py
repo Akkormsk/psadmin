@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -8,6 +9,26 @@ from django.urls import reverse
 from payroll.models import OrderRecord
 
 from .models import FinancialPeriod, KpiTier, ManagerKpiRate, ManagerSettings, PayrollLine
+from .views import _base_salary
+
+
+class PrinterSalaryTests(TestCase):
+    def test_salary_uses_workdays_worked_days_and_leave_rate(self):
+        period = FinancialPeriod.objects.create(code="2026-08")
+        line = PayrollLine.objects.create(
+            period=period,
+            kind=PayrollLine.PRINTER,
+            name="Печатник",
+            fixed_salary=Decimal("90000"),
+            work_shifts=13,
+            leave_shifts=8,
+            leave_shift_rate=Decimal("1000"),
+        )
+
+        self.assertEqual(
+            _base_salary(line, period),
+            Decimal("90000") / Decimal("21") * Decimal("13") + Decimal("8000"),
+        )
 
 
 class CalculationPeriodOptionsTests(TestCase):
