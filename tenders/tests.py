@@ -1366,7 +1366,7 @@ class TenderTests(TestCase):
             "reason": "Точное соответствие.",
         }])
         self.assertFalse(errors)
-        self.assertEqual(usage, {"by_source": {"oasis": {}}})
+        self.assertEqual(usage, {"by_source": {"oasis": {"selection": {}, "audit": {}}}})
 
     @patch("tenders.services._ai_gateway_json")
     def test_llm_category_selection_receives_tree_context_and_returns_roles(self, gateway):
@@ -1453,9 +1453,12 @@ class TenderTests(TestCase):
         self.assertEqual(tasks[2]["condition"], {
             "field": "season", "operator": "eq", "value": "winter",
         })
-        self.assertEqual(usage["input_tokens"], 321)
-        self.assertEqual(usage["output_tokens"], 123)
-        self.assertEqual(usage["by_source"]["supplier-x"], {
+        self.assertEqual(usage["input_tokens"], 642)
+        self.assertEqual(usage["output_tokens"], 246)
+        self.assertEqual(usage["by_source"]["supplier-x"]["selection"], {
+            "input_tokens": 321, "output_tokens": 123,
+        })
+        self.assertEqual(usage["by_source"]["supplier-x"]["audit"], {
             "input_tokens": 321, "output_tokens": 123,
         })
         self.assertFalse(errors)
@@ -1483,10 +1486,10 @@ class TenderTests(TestCase):
             ],
         )
 
-        self.assertEqual(gateway.call_count, 2)
+        self.assertEqual(gateway.call_count, 4)
         self.assertEqual({value["source"] for value in tasks}, {"supplier-a", "supplier-b"})
-        self.assertEqual(usage["prompt_tokens"], 200)
-        self.assertEqual(usage["completion_tokens"], 20)
+        self.assertEqual(usage["prompt_tokens"], 400)
+        self.assertEqual(usage["completion_tokens"], 40)
         self.assertEqual(set(usage["by_source"]), {"supplier-a", "supplier-b"})
         self.assertFalse(errors)
 

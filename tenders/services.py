@@ -1772,13 +1772,45 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
         source_tasks, source_usage, source_errors = _select_catalog_category_tasks_for_source(
             line, intent, source_candidates, source_attempted,
         )
-        tasks.extend(source_tasks)
-        usage["by_source"][source] = source_usage
-        for key, value in source_usage.items():
-            if isinstance(value, (int, float)):
-                usage[key] = usage.get(key, 0) + value
-        errors.extend(f"{source}: {error}" for error in source_errors)
+        audit_candidates = _category_role_audit_candidates(source_candidates, source_tasks)
+        audited_tasks, audit_usage, audit_errors = _select_catalog_category_tasks_for_source(
+            line, intent, audit_candidates, source_attempted,
+        ) if source_tasks else ([], {}, [])
+        tasks.extend(audited_tasks or source_tasks)
+        combined_usage = {"selection": source_usage, "audit": audit_usage}
+        for phase_usage in (source_usage, audit_usage):
+            for key, value in phase_usage.items():
+                if isinstance(value, (int, float)):
+                    combined_usage[key] = combined_usage.get(key, 0) + value
+                    usage[key] = usage.get(key, 0) + value
+        usage["by_source"][source] = combined_usage
+        errors.extend(f"{source}: {error}" for error in [*source_errors, *audit_errors])
     return tasks, usage, errors
+
+
+def _category_role_audit_candidates(candidates, tasks):
+    index = {str(value.get("category_id", "")): value for value in candidates}
+    children_by_parent = {}
+    for value in candidates:
+        parent_id = str(value.get("parent_id") or "")
+        if parent_id:
+            children_by_parent.setdefault(parent_id, []).append(value)
+    selected_ids = {str(value.get("category_id", "")) for value in tasks}
+    relevant_ids = set(selected_ids)
+    for category_id in selected_ids:
+        selected = index.get(category_id)
+        if not selected:
+            continue
+        relevant_ids.update(str(value.get("category_id", "")) for value in children_by_parent.get(category_id, []))
+        parent_id = str(selected.get("parent_id") or "")
+        if parent_id:
+            relevant_ids.add(parent_id)
+            relevant_ids.update(str(value.get("category_id", "")) for value in children_by_parent.get(parent_id, []))
+        while parent_id and parent_id in index:
+            parent_id = str(index[parent_id].get("parent_id") or "")
+            if parent_id:
+                relevant_ids.add(parent_id)
+    return [value for value in candidates if str(value.get("category_id", "")) in relevant_ids]
 
 
 def _select_catalog_category_tasks_for_source(line, intent, candidates, attempted=None):
