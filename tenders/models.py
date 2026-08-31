@@ -298,9 +298,21 @@ class CatalogMatchDecision(models.Model):
 
 
 class TenderEstimate(models.Model):
+    DRAFT = "draft"
+    PENDING = "pending"
+    LOST = "lost"
+    WON = "won"
+    STATUS_CHOICES = (
+        (DRAFT, "Черновик"),
+        (PENDING, "В ожидании"),
+        (LOST, "Проигран"),
+        (WON, "Выигран"),
+    )
+
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
     tender_number = models.CharField("Номер тендера", max_length=100)
     name = models.CharField("Название / комментарий", max_length=300)
+    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))

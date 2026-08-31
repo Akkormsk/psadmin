@@ -794,3 +794,15 @@ def delete_estimate(request, pk):
     estimate.delete()
     messages.success(request, "Просчёт тендера удалён.")
     return redirect("tender_home")
+
+
+@login_required
+@require_POST
+def update_estimate_status(request, pk):
+    estimate = _estimate_for_user(request, pk)
+    status = request.POST.get("status", "")
+    if status not in dict(TenderEstimate.STATUS_CHOICES):
+        return HttpResponse(status=400)
+    estimate.status = status
+    estimate.save(update_fields=("status", "updated_at"))
+    return redirect("tender_home")

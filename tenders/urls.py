@@ -20,5 +20,6 @@ urlpatterns = [
     path("production/confirm/", views.confirm_production_type, name="tender_confirm_production_type"),
     path("production/knowledge/", views.calculator_knowledge_proposal, name="tender_calculator_knowledge_proposal"),
     path("<int:pk>/", views.home, name="tender_estimate"),
+    path("<int:pk>/status/", views.update_estimate_status, name="tender_estimate_status"),
     path("<int:pk>/delete/", views.delete_estimate, name="tender_estimate_delete"),
 ]

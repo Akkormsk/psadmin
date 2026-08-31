@@ -910,7 +910,13 @@ h1 {
 .tender-summary__primary strong { color:#166534; font-size:18px; }
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:#6b7280; }
-.saved-estimate__draft { display:inline-grid; width:16px; height:16px; margin-left:5px; place-items:center; border-radius:50%; background:#fff2cf; color:#9a6500; font-size:10px; font-style:normal; vertical-align:1px; }
+.tender-saved-estimate .saved-estimate__main { display:grid; grid-template-columns:minmax(0,1fr) minmax(140px,.42fr); }
+.saved-estimate__status-form { flex:0 0 160px; }
+.saved-estimate__status { width:100%; min-height:36px; padding:7px 30px 7px 10px; border:1px solid transparent; border-radius:9px; color:#374151; font:inherit; font-size:13px; font-weight:700; cursor:pointer; }
+.saved-estimate__status.is-draft { border-color:#d1d5db; background:#f3f4f6; color:#4b5563; }
+.saved-estimate__status.is-pending { border-color:#f4cf72; background:#fff4cf; color:#8a5b00; }
+.saved-estimate__status.is-lost { border-color:#f0aaaa; background:#fde8e8; color:#a61b1b; }
+.saved-estimate__status.is-won { border-color:#98d5aa; background:#e6f6eb; color:#137333; }
 
 /* Compact two-row tender item. Editable cells are white; calculated cells are tinted. */
 .tender-line { padding:5px 6px; }
@@ -1389,6 +1395,9 @@ h1 {
   .tender-summary > div:first-child { grid-column:1 / -1; }
   .tender-saved-totals { text-align:left; }
   .saved-estimate__main { align-items:flex-start; flex-direction:column; }
+  .tender-saved-estimate { align-items:stretch; flex-wrap:wrap; }
+  .tender-saved-estimate .saved-estimate__main { grid-template-columns:1fr; }
+  .saved-estimate__status-form { flex:1 1 180px; }
   .tender-import-modal .modal { width:calc(100vw - 24px); max-height:calc(100vh - 24px); padding:16px; }
   .tender-import-upload { align-items:stretch; flex-direction:column; }
   .tender-import-controls { grid-template-columns:1fr 1fr; }

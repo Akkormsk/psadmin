@@ -153,6 +153,48 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.document_analysis["technical"]["matched"], 1)
         self.assertEqual(estimate.lines.get().requirements["requirements"][0]["value"], "пластик")
 
+    def test_saved_estimate_list_shows_status_selector_without_draft_exclamation(self):
+        TenderEstimate.objects.create(
+            owner=self.user,
+            tender_number="123",
+            name="Тест",
+            summary_snapshot={"is_incomplete": True, "net_profit": "1000", "roi": "10"},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, 'class="saved-estimate__status is-draft"')
+        self.assertContains(response, '<option value="draft" selected>Черновик</option>', html=True)
+        self.assertContains(response, '<option value="pending">В ожидании</option>', html=True)
+        self.assertContains(response, '<option value="lost">Проигран</option>', html=True)
+        self.assertContains(response, '<option value="won">Выигран</option>', html=True)
+        self.assertNotContains(response, 'class="saved-estimate__draft"')
+
+    def test_user_can_change_own_estimate_status(self):
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="123", name="Тест")
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("tender_estimate_status", args=[estimate.pk]),
+            {"status": "won"},
+        )
+
+        self.assertRedirects(response, reverse("tender_home"))
+        estimate.refresh_from_db()
+        self.assertEqual(estimate.status, "won")
+
+    def test_user_cannot_change_another_users_estimate_status(self):
+        estimate = TenderEstimate.objects.create(owner=self.other, tender_number="777", name="Чужой")
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("tender_estimate_status", args=[estimate.pk]),
+            {"status": "lost"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_user_cannot_see_another_users_estimate(self):
         estimate = TenderEstimate.objects.create(owner=self.other, tender_number="777", name="Чужой")
         self.client.force_login(self.user)
@@ -194,7 +236,8 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.lines.get().name, "Ручка")
         reopened = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
         self.assertContains(reopened, "Ручка")
-        self.assertContains(reopened, "Расчёт не завершён")
+        self.assertContains(reopened, 'class="saved-estimate__status is-draft"')
+        self.assertNotContains(reopened, 'class="saved-estimate__draft"')
 
     def test_partially_filled_line_values_are_preserved_in_draft(self):
         partial = {"name": "", "quantity": "50", "nmck_unit": "", "material_unit": "12.50", "application_unit": "", "logistics_unit": "", "product_url": "", "comment": "Уточнить товар", "requirements": {}}
