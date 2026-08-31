@@ -13,21 +13,32 @@ from .views import _base_salary
 
 
 class PrinterSalaryTests(TestCase):
-    def test_salary_uses_workdays_worked_days_and_leave_rate(self):
+    def test_full_salary_is_paid_when_there_are_no_leave_days(self):
         period = FinancialPeriod.objects.create(code="2026-08")
         line = PayrollLine.objects.create(
             period=period,
             kind=PayrollLine.PRINTER,
             name="Печатник",
             fixed_salary=Decimal("90000"),
-            work_shifts=13,
+            leave_shift_rate=Decimal("1000"),
+        )
+
+        self.assertEqual(_base_salary(line, period), Decimal("90000"))
+
+    def test_leave_days_replace_full_salary_days(self):
+        period = FinancialPeriod.objects.create(code="2026-08")
+        line = PayrollLine.objects.create(
+            period=period,
+            kind=PayrollLine.PRINTER,
+            name="Печатник",
+            fixed_salary=Decimal("90000"),
             leave_shifts=8,
             leave_shift_rate=Decimal("1000"),
         )
 
         self.assertEqual(
             _base_salary(line, period),
-            Decimal("90000") / Decimal("21") * Decimal("13") + Decimal("8000"),
+            Decimal("63714.29"),
         )
 
 

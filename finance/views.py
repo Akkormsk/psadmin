@@ -113,10 +113,10 @@ def _base_salary(line, period):
         workdays_in_month = Decimal(
             sum(1 for day_offset in range(calendar_days) if (first_weekday + day_offset) % 7 < 5)
         )
-        worked_days = Decimal(min(line.work_shifts, int(workdays_in_month)))
         leave_days = Decimal(min(line.leave_shifts, int(workdays_in_month)))
-        worked_part = line.fixed_salary / workdays_in_month * worked_days
-        return worked_part + leave_days * line.leave_shift_rate
+        worked_days = workdays_in_month - leave_days
+        worked_part = line.fixed_salary * worked_days / workdays_in_month
+        return (worked_part + leave_days * line.leave_shift_rate).quantize(Decimal("0.01"))
     return line.work_shifts * line.shift_rate + line.leave_shifts * line.leave_shift_rate
 
 
