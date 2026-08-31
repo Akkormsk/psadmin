@@ -1407,6 +1407,11 @@ class TenderTests(TestCase):
             },
             [
                 {
+                    "source": "supplier-x", "category_id": "winter-helmets", "name": "Зимние каски",
+                    "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Зимние каски",
+                    "specificity": 10,
+                },
+                {
                     "source": "supplier-x", "category_id": "workwear", "name": "Спецодежда",
                     "parent_id": "", "path": "Каталог > Спецодежда", "specificity": 1,
                 },
@@ -1417,11 +1422,6 @@ class TenderTests(TestCase):
                 {
                     "source": "supplier-x", "category_id": "helmets-general", "name": "Защитные каски",
                     "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Защитные каски",
-                    "specificity": 1,
-                },
-                {
-                    "source": "supplier-x", "category_id": "winter-helmets", "name": "Зимние каски",
-                    "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Зимние каски",
                     "specificity": 1,
                 },
             ],
@@ -1440,6 +1440,10 @@ class TenderTests(TestCase):
         self.assertIn("не классифицируй такой parent как fallback", prompt)
         self.assertIn("Обязательная самопроверка", prompt)
         self.assertNotIn("Конкретный вид товара важнее общего раздела", prompt)
+        serialized_nodes = prompt.split("РЕАЛЬНЫЕ УЗЛЫ:\n", 1)[1].split("\n\nПРОВЕРЕНО РАНЕЕ:", 1)[0]
+        self.assertEqual([value[1] for value in json.loads(serialized_nodes)], [
+            "workwear", "protective-headwear", "helmets-general", "winter-helmets",
+        ])
         self.assertEqual([value["role"] for value in tasks], [
             "primary", "equivalent", "conditional", "fallback",
         ])

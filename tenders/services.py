@@ -1776,8 +1776,32 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     category_fields = [
         "source", "category_id", "name", "parent_id", "parent_name", "children", "path",
     ]
+    ordered_candidates = []
+    visited = set()
+
+    def append_branch(value):
+        key = (_cell_text(value.get("source")).lower(), str(value.get("category_id", "")))
+        if key in visited:
+            return
+        visited.add(key)
+        ordered_candidates.append(value)
+        for child in sorted(
+            children_by_parent.get(key, []),
+            key=lambda item: (_normalized_text(item.get("name")), str(item.get("category_id", ""))),
+        ):
+            append_branch(child)
+
+    for source in sorted({_cell_text(value.get("source")).lower() for value in candidates}):
+        source_values = [value for value in candidates if _cell_text(value.get("source")).lower() == source]
+        source_ids = {str(value.get("category_id", "")) for value in source_values}
+        roots = [value for value in source_values if not value.get("parent_id") or str(value.get("parent_id")) not in source_ids]
+        for root in sorted(roots, key=lambda item: (_normalized_text(item.get("name")), str(item.get("category_id", "")))):
+            append_branch(root)
+        for value in source_values:
+            append_branch(value)
+
     compact_categories = []
-    for value in candidates:
+    for value in ordered_candidates:
         source = _cell_text(value.get("source")).lower()
         category_id = str(value.get("category_id", ""))
         parent_id = str(value.get("parent_id") or "")
