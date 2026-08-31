@@ -1439,6 +1439,8 @@ class TenderTests(TestCase):
         self.assertIn("parent может быть primary", prompt)
         self.assertIn("parent шире искомой сущности", prompt)
         self.assertIn("Проверка смыслового охвата", prompt)
+        self.assertIn("сохранять определяющие признаки товарной сущности", prompt)
+        self.assertIn("Fallback выбирай только среди предков", prompt)
         self.assertNotIn("Конкретный вид товара важнее общего раздела", prompt)
         serialized_nodes = prompt.split("РЕАЛЬНЫЕ УЗЛЫ:\n", 1)[1].split("\n\nПРОВЕРЕНО РАНЕЕ:", 1)[0]
         self.assertEqual([value[1] for value in json.loads(serialized_nodes)], [
