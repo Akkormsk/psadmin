@@ -1760,15 +1760,45 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     attempted = [value for value in attempted or [] if isinstance(value, dict)][:30]
     if not candidates:
         return [], {}, []
-    compact_categories = [
-        [value.get("source", ""), str(value.get("category_id", "")), value.get("path") or value.get("name", "")]
-        for value in candidates
+    category_index = {
+        (_normalized_text(value.get("source")), str(value.get("category_id", ""))): value
+        for value in candidates if value.get("source") and value.get("category_id")
+    }
+    children_by_parent = {}
+    for value in candidates:
+        source = _normalized_text(value.get("source"))
+        parent_id = str(value.get("parent_id") or "")
+        if source and parent_id:
+            children_by_parent.setdefault((source, parent_id), []).append(value)
+    category_fields = [
+        "source", "category_id", "name", "parent_id", "parent_name", "children", "path",
     ]
+    compact_categories = []
+    for value in candidates:
+        source = _normalized_text(value.get("source"))
+        category_id = str(value.get("category_id", ""))
+        parent_id = str(value.get("parent_id") or "")
+        parent = category_index.get((source, parent_id))
+        children = sorted(
+            children_by_parent.get((source, category_id), []),
+            key=lambda child: (_normalized_text(child.get("name")), str(child.get("category_id", ""))),
+        )
+        compact_categories.append([
+            source,
+            category_id,
+            value.get("name", ""),
+            parent_id,
+            parent.get("name", "") if parent else "",
+            [[str(child.get("category_id", "")), child.get("name", "")] for child in children],
+            value.get("path") or value.get("name", ""),
+        ])
     prompt = f"""Выбери реальные категории поставщиков для поиска товара.
-Категории уже найдены бэкендом в актуальных деревьях Oasis и Gifts. Используй только переданные source и category_id, ничего не придумывай. Можно выбрать несколько категорий у каждого поставщика.
-Конкретный вид товара важнее общего раздела: для «футболка поло» выбирай категорию поло, а не «одежда». Общую категорию выбирай только если среди вариантов нет конкретной. Не повторяй категории из ПРОВЕРЕНО РАНЕЕ.
+Категории уже найдены бэкендом в актуальных деревьях произвольных поставщиков. Используй только переданные source и category_id, ничего не придумывай. Можно выбрать несколько категорий у каждого поставщика.
+Анализируй смысл товарной сущности и требований ТЗ одновременно с названием узла, его непосредственным parent, непосредственными children и полным path. Глубина, положение parent/leaf и число совпавших слов сами по себе не определяют качество категории. Не используй специальных знаний о структуре конкретного поставщика. Не повторяй категории из ПРОВЕРЕНО РАНЕЕ.
+Классифицируй выбранные узлы: primary — основной наиболее полный по смыслу узел; equivalent — альтернативное представление той же или почти той же товарной сущности; conditional — подходит только при дополнительном условии из ТЗ; fallback — более широкий узел на случай отсутствия результатов в основных.
+Для conditional обязательно верни condition с field, operator и value. Условие должно следовать из ТЗ, а не из предположения.
 Если подходящей категории в карте нет, верни пустой category_tasks: тогда бэкенд выполнит поиск по названию и синонимам. Не подменяй отсутствующую категорию похожим, но другим товаром.
-Верни только JSON: {{"category_tasks":[{{"source":"oasis|gifts","category_id":"реальный ID","priority":1}}]}}
+Верни только JSON: {{"category_tasks":[{{"source":"код из карты","category_id":"реальный ID","role":"primary|equivalent|conditional|fallback","priority":1,"reason":"краткое семантическое обоснование","condition":{{"field":"поле ТЗ","operator":"eq|neq|in|not_in|contains|not_contains|lte|gte|between|exists","value":"значение или массив"}}}}]}}
 
 ПОЗИЦИЯ:
 {json.dumps(line, ensure_ascii=False)}
@@ -1776,7 +1806,10 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
 ПОИСКОВЫЙ СМЫСЛ:
 {json.dumps(intent, ensure_ascii=False)}
 
-РЕАЛЬНЫЕ КАТЕГОРИИ:
+ПОЛЯ УЗЛА:
+{json.dumps(category_fields, ensure_ascii=False)}
+
+РЕАЛЬНЫЕ УЗЛЫ:
 {json.dumps(compact_categories, ensure_ascii=False)}
 
 ПРОВЕРЕНО РАНЕЕ:
@@ -1787,6 +1820,10 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
         (_normalized_text(value.get("source")), str(value.get("category_id", ""))): value
         for value in candidates
     }
+    allowed_roles = {"primary", "equivalent", "conditional", "fallback"}
+    allowed_condition_operators = {
+        "eq", "neq", "in", "not_in", "contains", "not_contains", "lte", "gte", "between", "exists",
+    }
     used, tasks = set(), []
     for raw in raw_tasks[:12] if isinstance(raw_tasks, list) else []:
         if not isinstance(raw, dict):
@@ -1795,25 +1832,29 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
         candidate = available.get(key)
         if not candidate or key in used:
             continue
+        role = _normalized_text(raw.get("role"))
+        if role not in allowed_roles:
+            continue
         try:
             priority = max(1, min(9, int(raw.get("priority", 1))))
         except (TypeError, ValueError):
             priority = 1
-        tasks.append({
+        task = {
             "source": key[0], "category_id": key[1],
             "name": candidate.get("name", ""), "path": candidate.get("path", ""),
-            "priority": priority,
-        })
+            "role": role, "priority": priority, "reason": _cell_text(raw.get("reason"))[:500],
+        }
+        if role == "conditional":
+            raw_condition = raw.get("condition") if isinstance(raw.get("condition"), dict) else {}
+            field = _normalized_text(raw_condition.get("field"))
+            operator = _normalized_text(raw_condition.get("operator"))
+            if not field or operator not in allowed_condition_operators or "value" not in raw_condition:
+                continue
+            task["condition"] = {
+                "field": field, "operator": operator, "value": raw_condition.get("value"),
+            }
+        tasks.append(task)
         used.add(key)
-    if not tasks and (not isinstance(raw_tasks, list) or raw_tasks):
-        best_by_source = {}
-        for candidate in candidates:
-            if candidate.get("specificity", 0) > 0:
-                best_by_source.setdefault(candidate.get("source"), candidate)
-        tasks = [{
-            "source": value.get("source", ""), "category_id": str(value.get("category_id", "")),
-            "name": value.get("name", ""), "path": value.get("path", ""), "priority": 1,
-        } for value in best_by_source.values() if value.get("source") and value.get("category_id")]
     return tasks[:8], usage, []
 
 

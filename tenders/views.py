@@ -20,10 +20,10 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CatalogMatchDecision, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
-from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
+from .catalog import CatalogSyncError, GiftsXmlClient, _complete_category_options, _gifts_text, sync_gifts_catalog, sync_gifts_categories
+from .services import TenderAIError, _resolve_line_match, _select_catalog_category_tasks, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,39 @@ def knowledge_sync(request):
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         return HttpResponse(status=403)
     return JsonResponse(export_knowledge_bundle(include_embeddings=True), json_dumps_params={"ensure_ascii": False})
+
+
+@csrf_exempt
+@require_POST
+def category_selection_test(request, session_id):
+    expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
+    supplied = request.headers.get("Authorization", "")
+    if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
+        return HttpResponse(status=403)
+    session = get_object_or_404(ProductionTrainingSession, pk=session_id)
+    hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+    intent = hypothesis.get("catalog_intent") if isinstance(hypothesis.get("catalog_intent"), dict) else {}
+    line = {"name": session.position_name, "requirements": session.requirements}
+    categories_by_source = {}
+    for category in CatalogCategory.objects.filter(
+        supplier__is_active=True, is_active=True,
+    ).select_related("supplier"):
+        categories_by_source.setdefault(category.supplier.code, []).append({
+            "external_id": category.external_id,
+            "parent_external_id": category.parent_external_id,
+            "name": category.name,
+            "path": category.path,
+        })
+    options = _complete_category_options(categories_by_source, line, intent)
+    tasks, usage, errors = _select_catalog_category_tasks(line, intent, options)
+    return JsonResponse({
+        "session_id": session.pk,
+        "position": session.position_name,
+        "category_counts": {source: len(values) for source, values in categories_by_source.items()},
+        "category_tasks": tasks,
+        "usage": usage,
+        "errors": errors,
+    }, json_dumps_params={"ensure_ascii": False})
 
 
 @require_GET

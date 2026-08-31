@@ -5,6 +5,7 @@ from . import views
 urlpatterns = [
     path("", views.home, name="tender_home"),
     path("knowledge/sync/", views.knowledge_sync, name="tender_knowledge_sync"),
+    path("catalog/category-selection-test/<int:session_id>/", views.category_selection_test, name="tender_category_selection_test"),
     path("catalog/gifts/import-test/", views.gifts_import_test, name="gifts_import_test"),
     path("catalog/gifts/raw-sample/", views.gifts_raw_sample, name="gifts_raw_sample"),
     path("import/preview/", views.import_preview, name="tender_import_preview"),

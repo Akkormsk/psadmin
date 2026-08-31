@@ -1347,8 +1347,8 @@ class TenderTests(TestCase):
     @patch("tenders.services._ai_gateway_json")
     def test_llm_category_selection_accepts_only_real_category_ids(self, gateway):
         gateway.return_value = ({"category_tasks": [
-            {"source": "oasis", "category_id": "invented", "priority": 1},
-            {"source": "oasis", "category_id": "polo", "priority": 1},
+            {"source": "oasis", "category_id": "invented", "role": "primary", "priority": 1, "reason": "Выдуман."},
+            {"source": "oasis", "category_id": "polo", "role": "primary", "priority": 1, "reason": "Точное соответствие."},
         ]}, {})
 
         tasks, usage, errors = _select_catalog_category_tasks(
@@ -1362,10 +1362,85 @@ class TenderTests(TestCase):
 
         self.assertEqual(tasks, [{
             "source": "oasis", "category_id": "polo", "name": "Рубашки поло",
-            "path": "Одежда / Поло", "priority": 1,
+            "path": "Одежда / Поло", "role": "primary", "priority": 1,
+            "reason": "Точное соответствие.",
         }])
         self.assertFalse(errors)
         self.assertEqual(usage, {})
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_llm_category_selection_receives_tree_context_and_returns_roles(self, gateway):
+        captured = {}
+
+        def answer(prompt, **kwargs):
+            captured["prompt"] = prompt
+            return ({"category_tasks": [
+                {
+                    "source": "supplier-x", "category_id": "protective-headwear",
+                    "role": "primary", "priority": 1,
+                    "reason": "Узел полностью соответствует товарной сущности.",
+                },
+                {
+                    "source": "supplier-x", "category_id": "helmets-general",
+                    "role": "equivalent", "priority": 2,
+                    "reason": "Альтернативное представление той же сущности.",
+                },
+                {
+                    "source": "supplier-x", "category_id": "winter-helmets",
+                    "role": "conditional", "priority": 3,
+                    "reason": "Подходит только при требовании зимнего исполнения.",
+                    "condition": {"field": "season", "operator": "eq", "value": "winter"},
+                },
+                {
+                    "source": "supplier-x", "category_id": "workwear",
+                    "role": "fallback", "priority": 4,
+                    "reason": "Более широкий раздел.",
+                },
+            ]}, {"input_tokens": 321, "output_tokens": 123})
+
+        gateway.side_effect = answer
+        tasks, usage, errors = _select_catalog_category_tasks(
+            {"name": "Каска защитная зимняя"},
+            {
+                "item": "защитная каска",
+                "required": [{"label": "Сезон", "value": "зима", "weight": 1}],
+            },
+            [
+                {
+                    "source": "supplier-x", "category_id": "workwear", "name": "Спецодежда",
+                    "parent_id": "", "path": "Каталог > Спецодежда", "specificity": 1,
+                },
+                {
+                    "source": "supplier-x", "category_id": "protective-headwear", "name": "Защита головы",
+                    "parent_id": "workwear", "path": "Каталог > Спецодежда > Защита головы", "specificity": 1,
+                },
+                {
+                    "source": "supplier-x", "category_id": "helmets-general", "name": "Защитные каски",
+                    "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Защитные каски",
+                    "specificity": 1,
+                },
+                {
+                    "source": "supplier-x", "category_id": "winter-helmets", "name": "Зимние каски",
+                    "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Зимние каски",
+                    "specificity": 1,
+                },
+            ],
+        )
+
+        prompt = captured["prompt"]
+        self.assertIn('"parent_id"', prompt)
+        self.assertIn('"parent_name"', prompt)
+        self.assertIn('"children"', prompt)
+        self.assertIn('["helmets-general", "Защитные каски"]', prompt)
+        self.assertNotIn("Конкретный вид товара важнее общего раздела", prompt)
+        self.assertEqual([value["role"] for value in tasks], [
+            "primary", "equivalent", "conditional", "fallback",
+        ])
+        self.assertEqual(tasks[2]["condition"], {
+            "field": "season", "operator": "eq", "value": "winter",
+        })
+        self.assertEqual(usage, {"input_tokens": 321, "output_tokens": 123})
+        self.assertFalse(errors)
 
     def test_catalog_search_uses_llm_selected_real_category_instead_of_broad_category(self):
         requested_categories = []
@@ -1415,6 +1490,7 @@ class TenderTests(TestCase):
 
     def test_llm_category_selector_receives_complete_fixed_map(self):
         seen_category_ids = []
+        seen_parent_ids = {}
 
         class Client:
             base_url = "https://api.oasiscatalog.com"
@@ -1422,13 +1498,15 @@ class TenderTests(TestCase):
             def get(self, path, params=None):
                 if path == "/v4/categories":
                     return [
-                        {"id": "raglan", "name": "Регланы", "path": "odezhda/reglany"},
+                        {"id": "clothes", "name": "Одежда", "path": "odezhda"},
+                        {"id": "raglan", "parent_id": "clothes", "name": "Регланы", "path": "odezhda/reglany"},
                         {"id": "mugs", "name": "Кружки", "path": "posuda/kruzhki"},
                     ]
                 return []
 
         def selector(line, intent, candidates, attempted):
             seen_category_ids.extend(value["category_id"] for value in candidates)
+            seen_parent_ids.update({value["category_id"]: value.get("parent_id", "") for value in candidates})
             return [], {}, []
 
         catalog_candidates_for_line(
@@ -1437,7 +1515,45 @@ class TenderTests(TestCase):
             client=Client(), category_selector=selector,
         )
 
-        self.assertEqual(set(seen_category_ids), {"raglan", "mugs"})
+        self.assertEqual(set(seen_category_ids), {"clothes", "raglan", "mugs"})
+        self.assertEqual(seen_parent_ids["raglan"], "clothes")
+
+    @patch.dict("os.environ", {"KNOWLEDGE_SYNC_TOKEN": "test-token"})
+    @patch("tenders.views._select_catalog_category_tasks")
+    def test_category_selection_test_runs_without_catalogue_product_search(self, selector):
+        supplier = CatalogSupplier.objects.create(
+            code="supplier-x", name="Supplier X", base_url="https://supplier.example",
+        )
+        CatalogCategory.objects.create(
+            supplier=supplier, external_id="root", name="Одежда", path="Каталог > Одежда",
+        )
+        CatalogCategory.objects.create(
+            supplier=supplier, external_id="polo", parent_external_id="root",
+            name="Поло", path="Каталог > Одежда > Поло",
+        )
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user,
+            position_name="Футболка поло унисекс, цвет – белый",
+            requirements={"requirements": [{"label": "Цвет", "value": "белый"}]},
+            current_hypothesis={"catalog_intent": {"item": "рубашка поло"}},
+        )
+        selector.return_value = ([{
+            "source": "supplier-x", "category_id": "polo", "name": "Поло",
+            "path": "Каталог > Одежда > Поло", "role": "primary", "priority": 1,
+            "reason": "Товарная сущность совпадает.",
+        }], {"input_tokens": 100, "output_tokens": 20}, [])
+
+        response = self.client.post(
+            reverse("tender_category_selection_test", args=[session.pk]),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["category_tasks"][0]["role"], "primary")
+        candidates = selector.call_args.args[2]
+        self.assertEqual({value["category_id"] for value in candidates}, {"root", "polo"})
+        self.assertEqual(next(value for value in candidates if value["category_id"] == "polo")["parent_id"], "root")
+        self.assertEqual(CatalogProduct.objects.count(), 0)
 
     def test_catalog_search_returns_nearest_candidate_when_required_density_differs(self):
         class Client:

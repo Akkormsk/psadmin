@@ -1167,6 +1167,7 @@ def _complete_category_options(categories_by_source, line, intent, excluded_task
                 "source": normalized_source,
                 "category_id": category_id,
                 "name": _text(category.get("name"), 300),
+                "parent_id": str(category.get("parent_id") or category.get("parent_external_id") or ""),
                 "path": _text(category.get("path") or category.get("name"), 1000),
                 "specificity": scores.get((normalized_source, category_id), 0),
             })
@@ -1633,7 +1634,7 @@ def catalog_candidates_for_line(
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
         gifts_categories = list(CatalogCategory.objects.filter(
             supplier__code="gifts", supplier__is_active=True, is_active=True,
-        ).values("external_id", "name", "path"))
+        ).values("external_id", "parent_external_id", "name", "path"))
         category_options = _complete_category_options({
             "oasis": categories,
             "gifts": gifts_categories,
