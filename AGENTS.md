@@ -1,5 +1,6 @@
 # Project invariants
 
+- Before changing assistant, catalogue search, ranking, feedback, or calculation behavior, read `docs/assistant_protocol.md`.
 - The production database on Timeweb is the canonical assistant knowledge base.
 - Local automated tests must not connect to or modify production data.
 - Git contains code, migrations, and curated test fixtures, not production database dumps, credentials, customer documents, or supplier exports.

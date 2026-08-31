@@ -1448,8 +1448,8 @@ def catalog_feedback_contract():
         "missing_policies": sorted(CATALOG_MISSING_POLICIES),
         "known_fields": ["product_type", "name", "price", "material", "color", "density", "branding", "stock", "gender", "source"],
         "rules": [
-            "required constraints filter before ranking",
-            "weights never override a required constraint",
+            "required positive constraints define exact fit and rank nearest alternatives below it",
+            "forbidden values and wrong product type filter before ranking",
             "feedback operations patch the current intent and do not replace it",
         ],
     }
@@ -1496,8 +1496,8 @@ def _normalize_catalog_intent(raw):
         for value in values[:8]:
             if not isinstance(value, dict):
                 continue
-            source = _cell_text(value.get("source"))[:80]
-            if not source:
+            source = _normalized_text(value.get("source"))
+            if source not in {"oasis", "gifts"}:
                 continue
             result.append({
                 "source": source,
@@ -1756,13 +1756,18 @@ def _catalog_search_outcome(raw):
 
 
 def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
-    candidates = [value for value in candidates if isinstance(value, dict)][:40]
+    candidates = [value for value in candidates if isinstance(value, dict)]
     attempted = [value for value in attempted or [] if isinstance(value, dict)][:30]
     if not candidates:
         return [], {}, []
+    compact_categories = [
+        [value.get("source", ""), str(value.get("category_id", "")), value.get("path") or value.get("name", "")]
+        for value in candidates
+    ]
     prompt = f"""Выбери реальные категории поставщиков для поиска товара.
 Категории уже найдены бэкендом в актуальных деревьях Oasis и Gifts. Используй только переданные source и category_id, ничего не придумывай. Можно выбрать несколько категорий у каждого поставщика.
 Конкретный вид товара важнее общего раздела: для «футболка поло» выбирай категорию поло, а не «одежда». Общую категорию выбирай только если среди вариантов нет конкретной. Не повторяй категории из ПРОВЕРЕНО РАНЕЕ.
+Если подходящей категории в карте нет, верни пустой category_tasks: тогда бэкенд выполнит поиск по названию и синонимам. Не подменяй отсутствующую категорию похожим, но другим товаром.
 Верни только JSON: {{"category_tasks":[{{"source":"oasis|gifts","category_id":"реальный ID","priority":1}}]}}
 
 ПОЗИЦИЯ:
@@ -1772,7 +1777,7 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
 {json.dumps(intent, ensure_ascii=False)}
 
 РЕАЛЬНЫЕ КАТЕГОРИИ:
-{json.dumps(candidates, ensure_ascii=False)}
+{json.dumps(compact_categories, ensure_ascii=False)}
 
 ПРОВЕРЕНО РАНЕЕ:
 {json.dumps(attempted, ensure_ascii=False)}"""
@@ -1800,10 +1805,11 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
             "priority": priority,
         })
         used.add(key)
-    if not tasks:
+    if not tasks and (not isinstance(raw_tasks, list) or raw_tasks):
         best_by_source = {}
         for candidate in candidates:
-            best_by_source.setdefault(candidate.get("source"), candidate)
+            if candidate.get("specificity", 0) > 0:
+                best_by_source.setdefault(candidate.get("source"), candidate)
         tasks = [{
             "source": value.get("source", ""), "category_id": str(value.get("category_id", "")),
             "name": value.get("name", ""), "path": value.get("path", ""), "priority": 1,
@@ -3049,7 +3055,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 Составь required, preferred и secondary. В required помещай то, что нельзя нарушать, в preferred — желательное, в secondary — второстепенное. Наличие полного тиража делай обязательным только когда из ТЗ или обратной связи следует, что частичная поставка или ожидание недопустимы. weight — относительная важность от 0 до 1 для сравнения внутри соответствующего класса. В ranking укажи, какие требования должны сильнее влиять на итоговый выбор именно для этой позиции, включая цену и точность названия, если они существенны.
 При первой гипотезе заполни полный catalog_intent. Разрешения, запреты, числовые границы и политику отсутствующего значения записывай в constraints, а не одной фразой с отрицанием. При обратной связи используй только catalog_operations: forbid для «исключить/не показывать/убрать», allow для допустимых значений, require/prefer для обязательного/желательного, ignore для неважного, deprioritize для понижения, set_priority для «важнее/критично/неважно», add_alias/remove_alias для поисковых названий, set_missing_policy для неизвестного значения, lte/gte/between для границ, source_only/prefer_source для поставщиков, set_scope для области применения правила, remove_rule для отмены. Никогда не помещай запрещённое значение в положительное required.
 Подтверждённые catalog_intent из похожих примеров используй как опыт, но не как глобальное правило: переноси их только когда условия действительно похожи.
-В source_strategy учитывай реальные поля каждого источника из переданных возможностей. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не сравнивай числа, цены и остатки и ничего не рассчитывай — это выполнит бэкенд.
+В source_strategy используй только источники oasis и gifts. Если источник не подходит, не придумывай другой код. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не создавай расходы с source_type=catalog, не сравнивай числа, цены и остатки и ничего не рассчитывай — актуальный товар и каталожную цену добавит только бэкенд.
 Верни только JSON: {schema}
 
 ПОЗИЦИЯ:
@@ -3087,7 +3093,28 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
             continue
         if value in valid_ids:
             matched_ids.append(value)
-    hypothesis = _normalize_training_hypothesis(result, line, production_types, matched_ids)
+    unverified_catalog_costs = []
+    normalization_result = result
+    has_current_catalog_selection = isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict)
+    if not has_current_catalog_selection and isinstance(result.get("costs"), list):
+        unverified_catalog_costs = [
+            value for value in result["costs"]
+            if isinstance(value, dict) and value.get("source_type") == "catalog"
+        ]
+        if unverified_catalog_costs:
+            normalization_result = {
+                **result,
+                "costs": [
+                    value for value in result["costs"]
+                    if not (isinstance(value, dict) and value.get("source_type") == "catalog")
+                ],
+            }
+    hypothesis = _normalize_training_hypothesis(normalization_result, line, production_types, matched_ids)
+    if unverified_catalog_costs:
+        hypothesis["learning_warnings"] = [
+            *hypothesis.get("learning_warnings", []),
+            "Каталожная цена из ответа LLM исключена: она не подтверждена текущим поиском.",
+        ]
     confirmed_psodin = next((
         route.get("psodin_calculation")
         for example in examples if example.pk in matched_ids
@@ -3108,6 +3135,16 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     else:
         catalog_intent = _normalize_catalog_intent(raw_intent)
         applied_operations, contract_errors = [], []
+    invalid_strategy_sources = sorted({
+        _cell_text(value.get("source"))[:80]
+        for value in raw_intent.get("source_strategy", [])
+        if isinstance(value, dict) and _normalized_text(value.get("source")) not in {"oasis", "gifts"}
+        and _cell_text(value.get("source"))
+    }) if isinstance(raw_intent.get("source_strategy"), list) else []
+    if invalid_strategy_sources:
+        contract_errors.append(
+            "Неподдерживаемые источники поиска отброшены: " + ", ".join(invalid_strategy_sources)
+        )
     catalog_started_at = time.perf_counter()
     if progress_callback:
         progress_callback("catalog")

@@ -1140,6 +1140,20 @@ class TenderTests(TestCase):
         self.assertEqual(result[0]["colors"], ["фиолетовый"])
         self.assertEqual(result[0]["image_url"], "https://files.gifts.ru/reviewer/webp/test.webp")
 
+    def test_gifts_parser_keeps_category_map_without_category_filter(self):
+        product_xml = StringIO("""<doct><product product_id="v1"><name>Лонгслив</name><code>LS-1</code></product></doct>""")
+        tree_xml = StringIO("""<doct><page page_id="10" name="Одежда / Футболки с длинным рукавом"><product product="v1" page="10"/></page></doct>""")
+
+        rows, categories = parse_gifts_catalog(product_xml, tree_xml, include_categories=True)
+
+        self.assertEqual(rows[0]["category_ids"], ["10"])
+        self.assertEqual(rows[0]["category_names"], ["Одежда / Футболки с длинным рукавом"])
+        self.assertEqual(categories, [{
+            "external_id": "10", "parent_external_id": "",
+            "name": "Одежда / Футболки с длинным рукавом",
+            "path": "Одежда / Футболки с длинным рукавом",
+        }])
+
     def test_gifts_parser_uses_primary_catalog_image(self):
         product_xml = StringIO("""<doct><product product_id="93294"><code>26728.60</code><name>Жилет Kama, белый</name><super_big_image src="reviewer/webp/26/6728.60_1_500.webp?v=2"/></product></doct>""")
         tree_xml = StringIO("<doct/>")
@@ -1399,6 +1413,67 @@ class TenderTests(TestCase):
         self.assertEqual(result["attempts"][0]["category_tasks"][0]["category_id"], "polo")
         self.assertEqual(seen_category_candidates[0]["category_id"], "polo")
 
+    def test_llm_category_selector_receives_complete_fixed_map(self):
+        seen_category_ids = []
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [
+                        {"id": "raglan", "name": "Регланы", "path": "odezhda/reglany"},
+                        {"id": "mugs", "name": "Кружки", "path": "posuda/kruzhki"},
+                    ]
+                return []
+
+        def selector(line, intent, candidates, attempted):
+            seen_category_ids.extend(value["category_id"] for value in candidates)
+            return [], {}, []
+
+        catalog_candidates_for_line(
+            {"name": "Лонгслив", "quantity": 10},
+            intent={"item": "лонгслив", "synonyms": ["футболка с длинным рукавом"]},
+            client=Client(), category_selector=selector,
+        )
+
+        self.assertEqual(set(seen_category_ids), {"raglan", "mugs"})
+
+    def test_catalog_search_returns_nearest_candidate_when_required_density_differs(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": "long", "name": "Лонгсливы", "path": "odezhda/longslivy"}]
+                return [{
+                    "id": "near", "article": "LS-1", "group_id": "long-1",
+                    "name": "Футболка с длинным рукавом", "full_name": "Футболка с длинным рукавом белая",
+                    "categories": ["long"], "colors": ["белый"],
+                    "materials": ["хлопок 100%, плотность 190 г/м2"],
+                    "total_stock": 100, "price": 700,
+                }]
+
+        result = catalog_candidates_for_line(
+            {"name": "Лонгслив", "quantity": 50, "requirements": {"requirements": [
+                {"label": "Цвет", "value": "белый"},
+                {"label": "Плотность", "value": "141 г/м2"},
+            ]}},
+            intent={
+                "item": "лонгслив", "synonyms": ["футболка с длинным рукавом"],
+                "required": [{"label": "Плотность", "value": "141 г/м2", "weight": 1}],
+                "constraints": [{
+                    "field": "density", "operator": "gte", "values": ["141"],
+                    "level": "required", "weight": 1, "missing_policy": "reject",
+                }],
+            },
+            client=Client(),
+        )
+
+        self.assertEqual(result[0]["external_id"], "near")
+        self.assertEqual(result[0]["fit"], "partial")
+        self.assertTrue(any("Плотность" in value for value in result[0]["unknown"]))
+
     def test_catalog_search_falls_back_to_server_category_priority_when_selector_fails(self):
         requested_categories = []
 
@@ -1462,6 +1537,42 @@ class TenderTests(TestCase):
         )
 
         self.assertEqual([value["external_id"] for value in result], ["travel-mug"])
+
+    def test_selected_gifts_category_is_filtered_before_candidate_limit(self):
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
+        CatalogCategory.objects.create(
+            supplier=gifts, external_id="long-sleeve", name="Лонгсливы",
+            path="Одежда / Футболки с длинным рукавом",
+        )
+        CatalogProduct.objects.bulk_create([
+            CatalogProduct(
+                supplier=gifts, external_id=f"other-{index}", name="Кружка",
+                category_ids=["mugs"], total_stock=10, search_text="кружка",
+            )
+            for index in range(1501)
+        ])
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="wanted-long-sleeve", article="LS-1",
+            name="Лонгслив унисекс", category_ids=["long-sleeve"],
+            total_stock=100, discount_price=700, search_text="лонгслив унисекс",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                return []
+
+        def selector(line, intent, candidates, attempted):
+            return [{"source": "gifts", "category_id": "long-sleeve", "priority": 1}], {}, []
+
+        result = catalog_candidates_for_line(
+            {"name": "Лонгслив", "quantity": 10},
+            intent={"item": "лонгслив", "synonyms": ["футболка с длинным рукавом"]},
+            client=Client(), category_selector=selector,
+        )
+
+        self.assertEqual([value["external_id"] for value in result], ["wanted-long-sleeve"])
 
     def test_catalog_search_combines_cached_gifts_with_oasis_by_relevance(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
@@ -1905,6 +2016,30 @@ class TenderTests(TestCase):
         self.assertEqual(result["product_type"], "textile_merch")
         self.assertEqual(result["catalog_candidates"], [])
         self.assertIn("Oasis", result["catalog_warning"])
+
+    @patch("tenders.catalog.catalog_candidates_for_line", return_value=[])
+    @patch("tenders.services._ai_gateway_json")
+    def test_llm_catalog_price_is_not_used_without_current_catalog_candidate(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "textile_merch", "summary": "Лонгслив", "confidence": .8,
+            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
+            "costs": [{
+                "process_name": "Закупка готового изделия", "category": "material",
+                "name": "Старый товар из обучения", "amount_total": 38000,
+                "source": "gifts.ru", "source_type": "catalog",
+                "recipe": {"method": "unit_rate", "inputs": {"unit_rate": 760}},
+            }],
+            "questions": [], "assumptions": [], "matched_example_ids": [1], "understood_changes": [],
+            "catalog_intent": {"item": "лонгслив"},
+        }, {})
+
+        result = build_training_hypothesis(
+            {"name": "Лонгслив", "quantity": 50, "requirements": {"requirements": []}},
+        )
+
+        self.assertFalse(any(value.get("source_type") == "catalog" for value in result["costs"]))
+        self.assertEqual(result["totals"]["material_unit"], "0.00")
+        self.assertTrue(any("текущим поиском" in value for value in result["learning_warnings"]))
 
     def test_catalog_search_does_not_repeat_color_variants_as_alternatives(self):
         class Client:

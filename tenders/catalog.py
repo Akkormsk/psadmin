@@ -13,9 +13,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
-from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -250,23 +249,45 @@ def _gifts_image_url(image_src):
     return f"https://files.gifts.ru/{relative}"
 
 
-def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, limit=None, filters_xml=None):
+def _gifts_tree_index(tree_xml):
+    categories, products = [], {}
+    for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
+        if page.tag.rsplit("}", 1)[-1] != "page":
+            continue
+        page_id = _text(page.attrib.get("page_id") or _gifts_text(page, "page_id"), 100)
+        page_name = _text(page.attrib.get("name") or _gifts_text(page, "name"), 300)
+        if page_id and page_name:
+            categories.append({
+                "external_id": page_id,
+                "parent_external_id": _text(
+                    page.attrib.get("parent_id") or page.attrib.get("parent_page_id")
+                    or _gifts_text(page, "parent_id"), 100,
+                ),
+                "name": page_name,
+                "path": page_name,
+            })
+            for product in page.iter():
+                if product.tag.rsplit("}", 1)[-1] != "product":
+                    continue
+                product_id = product.attrib.get("product") or _gifts_text(product, "product") or _text(product.text, 500)
+                if product_id:
+                    products.setdefault(str(product_id), []).append(page_id)
+        page.clear()
+    return categories, products
+
+
+def parse_gifts_catalog(
+    product_xml, tree_xml, stock_xml=None, category=None, limit=None, filters_xml=None,
+    include_categories=False,
+):
     category = _normalized(category) if category else ""
     filter_colors = _gifts_filter_colors(filters_xml)
-    category_ids = {}
-    if category:
-        for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
-            if page.tag.rsplit("}", 1)[-1] != "page":
-                continue
-            page_name = _gifts_text(page, "name")
-            if category in _normalized(page_name):
-                for product in page.iter():
-                    if product.tag.rsplit("}", 1)[-1] != "product":
-                        continue
-                    product_id = product.attrib.get("product") or _gifts_text(product, "product") or _text(product.text, 500)
-                    if product_id:
-                        category_ids[str(product_id)] = page_name
-            page.clear()
+    categories, product_categories = _gifts_tree_index(tree_xml)
+    category_names = {value["external_id"]: value["path"] for value in categories}
+    allowed_product_ids = {
+        product_id for product_id, category_ids in product_categories.items()
+        if any(category in _normalized(category_names.get(category_id)) for category_id in category_ids)
+    } if category else set()
 
     stocks = {}
     if stock_xml is not None:
@@ -287,7 +308,7 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         if product.tag.rsplit("}", 1)[-1] != "product":
             continue
         product_id = product.attrib.get("product_id") or _gifts_text(product, "product_id")
-        if not product_id or (category and str(product_id) not in category_ids):
+        if not product_id or (category and str(product_id) not in allowed_product_ids):
             product.clear()
             continue
         stock = stocks.get(str(product_id))
@@ -312,11 +333,12 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         price = _decimal(price_node.text if price_node is not None else None)
         stock_free = _integer(stock.get("free")) if stock is not None else 0
         dealer_price = _decimal(stock.get("dealerprice")) if stock is not None else None
-        category_name = category_ids.get(str(product_id), "")
-        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, category_name, description, *colors, *name_colors])))[:20_000]
+        product_category_ids = product_categories.get(str(product_id), [])
+        product_category_names = [category_names[value] for value in product_category_ids if value in category_names]
+        search_text = _normalized(" ".join(filter(None, [name, article, material, size, brand, *product_category_names, description, *colors, *name_colors])))[:20_000]
         result.append({
             "external_id": _text(str(product_id), 100), "article": article, "name": name, "full_name": name,
-            "description": description, "category_ids": [], "category_names": [category_name] if category_name else [],
+            "description": description, "category_ids": product_category_ids[:50], "category_names": product_category_names[:50],
             "brand": brand, "size": size, "materials": [material] if material else [], "colors": colors, "attributes": [],
             "branding": [], "package": [], "price": price, "discount_price": dealer_price, "total_stock": stock_free,
             "stock_moscow": stock_free, "stock_remote": 0, "stock_transit": _integer(stock.get("inwayfree")) if stock is not None else 0,
@@ -329,7 +351,26 @@ def parse_gifts_catalog(product_xml, tree_xml, stock_xml=None, category=None, li
         product.clear()
         if limit and len(result) >= limit:
             break
-    return result
+    return (result, categories) if include_categories else result
+
+
+def _store_gifts_categories(supplier, categories):
+    objects = [CatalogCategory(
+        supplier=supplier,
+        external_id=value["external_id"],
+        parent_external_id=value.get("parent_external_id", ""),
+        name=value["name"],
+        path=value.get("path", ""),
+        is_active=True,
+    ) for value in categories if value.get("external_id") and value.get("name")]
+    if not objects:
+        return
+    with transaction.atomic():
+        CatalogCategory.objects.filter(supplier=supplier).update(is_active=False)
+        CatalogCategory.objects.bulk_create(
+            objects, update_conflicts=True, unique_fields=["supplier", "external_id"],
+            update_fields=["parent_external_id", "name", "path", "is_active"],
+        )
 
 
 def sync_gifts_catalog(client=None, category=None, limit=None):
@@ -346,7 +387,11 @@ def sync_gifts_catalog(client=None, category=None, limit=None):
                 rows = parse_gifts_catalog(product_xml, io.BytesIO(b"<root />"), category=category, limit=limit, filters_xml=filters_xml)
         else:
             with client.open("catalogue/product.xml") as product_xml, client.open("catalogue/tree.xml") as tree_xml, client.open("catalogue/stock.xml") as stock_xml, client.open("catalogue/filters.xml") as filters_xml:
-                rows = parse_gifts_catalog(product_xml, tree_xml, stock_xml, category=category, filters_xml=filters_xml)
+                rows, categories = parse_gifts_catalog(
+                    product_xml, tree_xml, stock_xml, category=category,
+                    filters_xml=filters_xml, include_categories=True,
+                )
+                _store_gifts_categories(supplier, categories)
         marker = str(uuid.uuid4())
         created_count = updated_count = 0
         batch_size = 500
@@ -534,8 +579,18 @@ def _sync_categories(client, supplier):
             is_active=True,
         ))
     if objects:
-        CatalogCategory.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=["parent_external_id", "name", "path", "is_active"])
+        with transaction.atomic():
+            CatalogCategory.objects.filter(supplier=supplier).update(is_active=False)
+            CatalogCategory.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=["parent_external_id", "name", "path", "is_active"])
     return {value.external_id: value.path or value.name for value in CatalogCategory.objects.filter(supplier=supplier, is_active=True)}
+
+
+def sync_oasis_categories(client=None):
+    client = client or OasisClient()
+    supplier, _ = CatalogSupplier.objects.get_or_create(
+        code="oasis", defaults={"name": "Oasis", "base_url": client.base_url},
+    )
+    return _sync_categories(client, supplier)
 
 
 def _apply_stock_page(supplier, rows):
@@ -910,22 +965,23 @@ def _planner_source_terms(intent, source_code):
     return result[:16]
 
 
-def _live_category_data(client):
-    cached = cache.get("oasis-live-categories-v1")
-    if isinstance(cached, list) and cached:
-        return cached
-    payload = client.get("/v4/categories", {"format": "json"})
-    items = payload.get("items", []) if isinstance(payload, dict) else payload
-    if not isinstance(items, list):
-        raise CatalogSyncError("Oasis вернул неожиданный формат категорий.")
-    result = [{
-        "id": str(item.get("id")),
-        "parent_id": str(item.get("parent_id") or ""),
-        "name": _text(item.get("name"), 300),
-        "path": _text(item.get("path") or item.get("name"), 1000),
-    } for item in items if isinstance(item, dict) and item.get("id") not in (None, "")]
-    cache.set("oasis-live-categories-v1", result, 6 * 60 * 60)
-    return result
+def _oasis_category_snapshot(client):
+    supplier = CatalogSupplier.objects.filter(code="oasis", is_active=True).first()
+    categories = list(CatalogCategory.objects.filter(
+        supplier=supplier, is_active=True,
+    ).values("external_id", "parent_external_id", "name", "path")) if supplier else []
+    if not categories:
+        sync_oasis_categories(client)
+        supplier = CatalogSupplier.objects.get(code="oasis")
+        categories = list(CatalogCategory.objects.filter(
+            supplier=supplier, is_active=True,
+        ).values("external_id", "parent_external_id", "name", "path"))
+    return [{
+        "id": value["external_id"],
+        "parent_id": value["parent_external_id"],
+        "name": value["name"],
+        "path": value["path"] or value["name"],
+    } for value in categories]
 
 
 def _category_candidates(categories_by_source, line, intent, excluded_tasks=None, limit_per_source=12):
@@ -1005,6 +1061,36 @@ def _category_candidates(categories_by_source, line, intent, excluded_tasks=None
         source_rows.sort(key=lambda value: (-value["specificity"], -value["path"].count("/"), _normalized(value["path"])))
         result.extend(source_rows[:max(1, min(30, limit_per_source))])
     return sorted(result, key=lambda value: (-value["specificity"], value["source"], _normalized(value["path"])))
+
+
+def _complete_category_options(categories_by_source, line, intent, excluded_tasks=None):
+    excluded = {
+        (_normalized(value.get("source")), str(value.get("category_id", "")))
+        for value in excluded_tasks or [] if isinstance(value, dict)
+    }
+    ranked = _category_candidates(
+        categories_by_source, line, intent, excluded_tasks=excluded_tasks, limit_per_source=10_000,
+    )
+    scores = {
+        (value["source"], value["category_id"]): value["specificity"] for value in ranked
+    }
+    result = []
+    for source, categories in categories_by_source.items():
+        normalized_source = _normalized(source)
+        for category in categories if isinstance(categories, list) else []:
+            category_id = str(category.get("id") or category.get("external_id") or "")
+            if not category_id or (normalized_source, category_id) in excluded:
+                continue
+            result.append({
+                "source": normalized_source,
+                "category_id": category_id,
+                "name": _text(category.get("name"), 300),
+                "path": _text(category.get("path") or category.get("name"), 1000),
+                "specificity": scores.get((normalized_source, category_id), 0),
+            })
+    return sorted(result, key=lambda value: (
+        -value["specificity"], value["source"], _normalized(value["path"]), value["category_id"],
+    ))
 
 
 def _live_category_for_intent(categories, intent, line):
@@ -1461,12 +1547,12 @@ def catalog_candidates_for_line(
     # Oasis is optional: an API/category failure must not suppress Gifts.
     try:
         client = client or OasisClient()
-        categories = _live_category_data(client)
+        categories = _oasis_category_snapshot(client)
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
         gifts_categories = list(CatalogCategory.objects.filter(
             supplier__code="gifts", supplier__is_active=True, is_active=True,
         ).values("external_id", "name", "path"))
-        category_options = _category_candidates({
+        category_options = _complete_category_options({
             "oasis": categories,
             "gifts": gifts_categories,
         }, line, intent or {}, excluded_tasks=excluded_category_tasks)
@@ -1566,14 +1652,24 @@ def catalog_candidates_for_line(
     gifts_product_query = Q(supplier__code="gifts") & Q(is_active=True)
     if not selected_gifts_ids:
         gifts_product_query &= gifts_query
-    cached_products = list(CatalogProduct.objects.filter(gifts_product_query).order_by("id")[:1500])
     if selected_gifts_ids:
-        cached_products = [
-            value for value in cached_products
-            if selected_gifts_ids & {str(category_id) for category_id in value.category_ids}
-        ]
+        gifts_products = CatalogProduct.objects.filter(gifts_product_query).order_by("id")
+        if connection.features.supports_json_field_contains:
+            category_query = Q()
+            for category_id in selected_gifts_ids:
+                category_query |= Q(category_ids__contains=[category_id])
+            cached_products = list(gifts_products.filter(category_query)[:1500])
+        else:
+            cached_products = []
+            for value in gifts_products.iterator(chunk_size=1000):
+                if selected_gifts_ids & {str(category_id) for category_id in value.category_ids}:
+                    cached_products.append(value)
+                    if len(cached_products) >= 1500:
+                        break
     elif category_selector and category_tasks:
         cached_products = []
+    else:
+        cached_products = list(CatalogProduct.objects.filter(gifts_product_query).order_by("id")[:1500])
     pool.extend(cached_products)
     source_status["gifts"] = {
         "status": "success" if gifts_supplier_exists else "not_configured",
@@ -1581,30 +1677,44 @@ def catalog_candidates_for_line(
         "received": len(cached_products),
     }
     ranked = []
+    rejections = {
+        "out_of_stock": 0, "source": 0, "product_type": 0, "forbidden": 0,
+    }
     allowed_source_values = intent.get("allowed_sources", []) if isinstance(intent, dict) and isinstance(intent.get("allowed_sources"), list) else []
     allowed_sources = {_normalized(value) for value in allowed_source_values if _normalized(value)}
     for product in pool:
         if product.total_stock <= 0:
+            rejections["out_of_stock"] += 1
             continue
         if allowed_sources and not ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & allowed_sources):
+            rejections["source"] += 1
             continue
         score, matches, mismatches, unknown = _fit_product(product, effective_line, anchors, quantity, intent=intent)
         if "Не совпадает тип товара" in mismatches:
+            rejections["product_type"] += 1
             continue
-        hard_mismatches = _required_mismatches(mismatches, intent)
         constraint_matches, constraint_mismatches, constraint_unknown, constraint_hard = _evaluate_structured_constraints(product, intent)
-        if hard_mismatches or constraint_hard:
+        exclusion_constraints = [
+            value for value in intent.get("constraints", [])
+            if isinstance(value, dict) and _normalized(value.get("operator")).replace(" ", "_") in {"not_in", "not_contains"}
+        ] if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []
+        _, _, _, exclusion_hard = _evaluate_structured_constraints(
+            product, {"constraints": exclusion_constraints},
+        )
+        if exclusion_hard:
+            rejections["forbidden"] += 1
             continue
         matches.extend(constraint_matches)
         mismatches.extend(constraint_mismatches)
         unknown.extend(constraint_unknown)
         score += _catalog_parameter_score(constraint_matches, constraint_mismatches, constraint_unknown, _planner_weight_map(intent))
+        required_violation = bool(_required_mismatches(mismatches, intent) or constraint_hard)
         name_score = SequenceMatcher(
             None,
             _normalized(line.get("name", "")),
             _normalized(product.full_name or product.name),
         ).ratio()
-        ranked.append((score, name_score, product, matches, mismatches, unknown))
+        ranked.append((score, name_score, product, matches, mismatches, unknown, required_violation))
     price_weight = _ranking_weight(intent, "цена", "стоимость")
     name_weight = _ranking_weight(intent, "название", "наименование", "модель")
     prices = [value[2].effective_price for value in ranked if value[2].effective_price is not None]
@@ -1627,6 +1737,7 @@ def catalog_candidates_for_line(
         return score + price_score * price_weight
 
     ranked.sort(key=lambda value: (
+        value[6],
         -total_score(value),
         value[2].effective_price is None,
         value[2].effective_price if value[2].effective_price is not None else Decimal("Infinity"),
@@ -1634,8 +1745,10 @@ def catalog_candidates_for_line(
         _normalized(value[2].full_name or value[2].name),
         _normalized(value[2].article),
     ))
+    required_compliant = [value for value in ranked if not value[6]]
+    display_ranked = required_compliant or ranked
     selected, seen_groups = [], set()
-    for score, name_score, product, matches, mismatches, unknown in ranked:
+    for score, name_score, product, matches, mismatches, unknown, _ in display_ranked:
         group_key = product.group_id or product.external_id
         if group_key in seen_groups:
             continue
@@ -1684,6 +1797,10 @@ def catalog_candidates_for_line(
                 "category_tasks": category_tasks,
                 "categories": planner_categories,
                 "terms": text_terms,
+                "pool_count": len(pool),
+                "rejections": rejections,
+                "exact_count": sum(not value[4] and not value[5] for value in ranked),
+                "partial_count": sum(bool(value[4] or value[5]) for value in ranked),
                 "candidate_count": len(selected),
             }],
             "category_usage": category_usage,
