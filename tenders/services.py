@@ -1759,191 +1759,135 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     candidates = [value for value in candidates if isinstance(value, dict)]
     if not candidates:
         return [], {}, []
-    tasks, usage, errors = [], {"by_source": {}}, []
-    sources = sorted({_cell_text(value.get("source")).lower() for value in candidates if value.get("source")})
-    for source in sources:
-        source_candidates = [
-            value for value in candidates if _cell_text(value.get("source")).lower() == source
-        ]
-        source_attempted = [
-            value for value in attempted or []
-            if isinstance(value, dict) and _cell_text(value.get("source")).lower() == source
-        ]
-        source_tasks, source_usage, source_errors = _select_catalog_category_tasks_for_source(
-            line, intent, source_candidates, source_attempted,
+    attempted_keys = {
+        (_cell_text(value.get("source")).lower(), str(value.get("category_id", "")))
+        for value in attempted or [] if isinstance(value, dict)
+    }
+    available_candidates = [
+        value for value in candidates
+        if (_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))) not in attempted_keys
+    ]
+    from .catalog import _category_retrieval, _expand_category_graph
+
+    usage = {
+        "prompt_tokens": 0, "completion_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+        "llm_calls": 0, "semantic_attempts": 1, "retry_used": False,
+    }
+    errors = []
+    retrieval_attempts = []
+
+    def add_usage(value):
+        usage["llm_calls"] += 1
+        for key in ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens"):
+            amount = value.get(key, 0) if isinstance(value, dict) else 0
+            usage[key] += amount if isinstance(amount, (int, float)) else 0
+
+    def retrieve(search_terms=None):
+        seeds, diagnostics = _category_retrieval(
+            available_candidates, line, intent, search_terms=search_terms,
         )
-        audit_candidates = _category_role_audit_candidates(source_candidates, source_tasks)
-        audited_tasks, audit_usage, audit_errors = _select_catalog_category_tasks_for_source(
-            line, intent, audit_candidates, source_attempted,
-        ) if source_tasks else ([], {}, [])
-        tasks.extend(audited_tasks or source_tasks)
-        combined_usage = {"selection": source_usage, "audit": audit_usage}
-        for phase_usage in (source_usage, audit_usage):
-            for key, value in phase_usage.items():
-                if isinstance(value, (int, float)):
-                    combined_usage[key] = combined_usage.get(key, 0) + value
-                    usage[key] = usage.get(key, 0) + value
-        usage["by_source"][source] = combined_usage
-        errors.extend(f"{source}: {error}" for error in [*source_errors, *audit_errors])
+        fragment = _expand_category_graph(available_candidates, seeds)
+        by_source = {}
+        for value in fragment:
+            by_source[value["source"]] = by_source.get(value["source"], 0) + 1
+        diagnostics.update({"fragment_count": len(fragment), "by_source": by_source})
+        retrieval_attempts.append(diagnostics)
+        return diagnostics["representation"], fragment
+
+    representation, fragment = retrieve()
+    tasks = []
+    if fragment:
+        tasks, selection_usage = _select_catalog_categories_from_fragment(line, intent, representation, fragment)
+        add_usage(selection_usage)
+
+    if not fragment or not tasks:
+        corrected_terms, retry_usage = _refine_catalog_category_terms(
+            line, intent, representation, len(fragment), bool(tasks),
+        )
+        add_usage(retry_usage)
+        usage["retry_used"] = True
+        usage["semantic_attempts"] = 2
+        if corrected_terms:
+            representation, fragment = retrieve(search_terms=corrected_terms)
+            if fragment:
+                tasks, selection_usage = _select_catalog_categories_from_fragment(
+                    line, intent, representation, fragment,
+                )
+                add_usage(selection_usage)
+
+    usage["semantic_representation"] = representation
+    usage["retrieval"] = retrieval_attempts[-1]
+    usage["retrieval_attempts"] = retrieval_attempts
     return tasks, usage, errors
 
 
-def _category_role_audit_candidates(candidates, tasks):
-    index = {str(value.get("category_id", "")): value for value in candidates}
-    children_by_parent = {}
-    for value in candidates:
-        parent_id = str(value.get("parent_id") or "")
-        if parent_id:
-            children_by_parent.setdefault(parent_id, []).append(value)
-    selected_ids = {str(value.get("category_id", "")) for value in tasks}
-    relevant_ids = set(selected_ids)
-    for category_id in selected_ids:
-        selected = index.get(category_id)
-        if not selected:
-            continue
-        relevant_ids.update(str(value.get("category_id", "")) for value in children_by_parent.get(category_id, []))
-        parent_id = str(selected.get("parent_id") or "")
-        if parent_id:
-            relevant_ids.add(parent_id)
-            relevant_ids.update(str(value.get("category_id", "")) for value in children_by_parent.get(parent_id, []))
-        while parent_id and parent_id in index:
-            parent_id = str(index[parent_id].get("parent_id") or "")
-            if parent_id:
-                relevant_ids.add(parent_id)
-    return [value for value in candidates if str(value.get("category_id", "")) in relevant_ids]
-
-
-def _select_catalog_category_tasks_for_source(line, intent, candidates, attempted=None):
-    candidates = [value for value in candidates if isinstance(value, dict)]
-    attempted = [value for value in attempted or [] if isinstance(value, dict)][:30]
-    if not candidates:
-        return [], {}, []
-    def compact_json(value):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-    category_index = {
-        (_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))): value
-        for value in candidates if value.get("source") and value.get("category_id")
+def _select_catalog_categories_from_fragment(line, intent, representation, fragment):
+    compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    requirements = {
+        key: intent.get(key, [])
+        for key in ("required", "preferred", "constraints")
+        if isinstance(intent, dict) and isinstance(intent.get(key), list)
     }
-    children_by_parent = {}
-    for value in candidates:
-        source = _cell_text(value.get("source")).lower()
-        parent_id = str(value.get("parent_id") or "")
-        if source and parent_id:
-            children_by_parent.setdefault((source, parent_id), []).append(value)
-    category_fields = [
-        "source", "category_id", "name", "parent_id", "parent_name", "children", "path",
-    ]
-    ordered_candidates = []
-    visited = set()
+    prompt = f"""Выбери реальные категории для поиска товара среди переданного локального фрагмента каталогов.
+Финальное решение принимай по смыслу товарной сущности, требованиям ТЗ, названию узла, parent, children и path. Retrieval score не является доказательством правильности и не передаётся тебе. Поставщики равноправны: выбери подходящие категории каждого источника, если они есть.
+Используй только переданные source и category_id. Можно вернуть несколько категорий. Если подходящей категории нет, верни пустой список; не выбирай лучшее из плохих.
+Верни только JSON: {{"categories":[{{"source":"код источника","category_id":"реальный ID","priority":1}}]}}
 
-    def append_branch(value):
-        key = (_cell_text(value.get("source")).lower(), str(value.get("category_id", "")))
-        if key in visited:
-            return
-        visited.add(key)
-        ordered_candidates.append(value)
-        for child in sorted(
-            children_by_parent.get(key, []),
-            key=lambda item: (_normalized_text(item.get("name")), str(item.get("category_id", ""))),
-        ):
-            append_branch(child)
+ТОВАРНАЯ СУЩНОСТЬ И ПОИСКОВЫЕ ТЕРМИНЫ:
+{compact(representation)}
 
-    for source in sorted({_cell_text(value.get("source")).lower() for value in candidates}):
-        source_values = [value for value in candidates if _cell_text(value.get("source")).lower() == source]
-        source_ids = {str(value.get("category_id", "")) for value in source_values}
-        roots = [value for value in source_values if not value.get("parent_id") or str(value.get("parent_id")) not in source_ids]
-        for root in sorted(roots, key=lambda item: (_normalized_text(item.get("name")), str(item.get("category_id", "")))):
-            append_branch(root)
-        for value in source_values:
-            append_branch(value)
-
-    compact_categories = []
-    for value in ordered_candidates:
-        source = _cell_text(value.get("source")).lower()
-        category_id = str(value.get("category_id", ""))
-        parent_id = str(value.get("parent_id") or "")
-        parent = category_index.get((source, parent_id))
-        children = sorted(
-            children_by_parent.get((source, category_id), []),
-            key=lambda child: (_normalized_text(child.get("name")), str(child.get("category_id", ""))),
-        )
-        compact_categories.append([
-            source,
-            category_id,
-            value.get("name", ""),
-            parent_id,
-            parent.get("name", "") if parent else "",
-            [[str(child.get("category_id", "")), child.get("name", "")] for child in children],
-            value.get("path") or value.get("name", ""),
-        ])
-    prompt = f"""Выбери реальные категории поставщиков для поиска товара.
-Категории уже найдены бэкендом в актуальных деревьях произвольных поставщиков. Используй только переданные source и category_id, ничего не придумывай. Можно выбрать несколько категорий у каждого поставщика.
-Анализируй смысл товарной сущности и требований ТЗ одновременно с названием узла, его непосредственным parent, непосредственными children и полным path. Глубина, положение parent/leaf и число совпавших слов сами по себе не определяют качество категории. Не используй специальных знаний о структуре конкретного поставщика. Не повторяй категории из ПРОВЕРЕНО РАНЕЕ.
-Проанализируй каждый source независимо. Если подходящие ветки есть в нескольких источниках, верни категории каждого из них и не останавливайся после первого primary. Внутри каждого source верни все обоснованные роли, а не только один лучший ID.
-Классифицируй выбранные узлы: primary — основной наиболее полный по смыслу узел; equivalent — альтернативное представление той же или почти той же товарной сущности; conditional — подходит только при дополнительном условии из ТЗ; fallback — более широкий узел на случай отсутствия результатов в основных.
-Если название узла добавляет отдельную характеристику или ограничение к товарной сущности, такой узел не может быть equivalent. Он может быть conditional только когда это ограничение подтверждено ТЗ; иначе не выбирай его. Для conditional обязательно верни condition с field, operator и value.
-Проверка смыслового охвата: сравни предполагаемый primary с parent и всеми непосредственными children. Если children обозначают разные типы товаров, parent шире искомой сущности и должен быть fallback при наличии точного узла. Если все children являются только вариантами одной искомой сущности, parent может быть primary независимо от глубины и краткости названия. Узел с тем же товарным смыслом без дополнительного ограничения может быть equivalent; витринные или коммерческие слова сами по себе не делают его другой товарной сущностью.
-Equivalent обязан сохранять определяющие признаки товарной сущности: узел более общего класса или другого вида товара не equivalent только из-за общих слов. Fallback выбирай только среди предков primary/equivalent в этой же ветке; категория из другой ветки не является fallback, даже если она кажется похожей.
-Если подходящей категории в карте нет, верни пустой category_tasks: тогда бэкенд выполнит поиск по названию и синонимам. Не подменяй отсутствующую категорию похожим, но другим товаром.
-Верни только JSON: {{"category_tasks":[{{"source":"код из карты","category_id":"реальный ID","role":"primary|equivalent|conditional|fallback","priority":1,"reason":"краткое семантическое обоснование","condition":{{"field":"поле ТЗ","operator":"eq|neq|in|not_in|contains|not_contains|lte|gte|between|exists","value":"значение или массив"}}}}]}}
-
-ПОЗИЦИЯ:
-{compact_json(line)}
-
-ПОИСКОВЫЙ СМЫСЛ:
-{compact_json(intent)}
-
-ПОЛЯ УЗЛА:
-{compact_json(category_fields)}
+ТРЕБОВАНИЯ ТЗ:
+{compact(requirements)}
 
 РЕАЛЬНЫЕ УЗЛЫ:
-{compact_json(compact_categories)}
-
-ПРОВЕРЕНО РАНЕЕ:
-{compact_json(attempted)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=900)
-    raw_tasks = result.get("category_tasks") if isinstance(result, dict) else []
+{compact(fragment)}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=700)
+    raw_categories = result.get("categories") if isinstance(result, dict) else []
     available = {
         (_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))): value
-        for value in candidates
+        for value in fragment
     }
-    allowed_roles = {"primary", "equivalent", "conditional", "fallback"}
-    allowed_condition_operators = {
-        "eq", "neq", "in", "not_in", "contains", "not_contains", "lte", "gte", "between", "exists",
-    }
-    used, tasks = set(), []
-    for raw in raw_tasks[:12] if isinstance(raw_tasks, list) else []:
+    tasks, used = [], set()
+    for raw in raw_categories[:12] if isinstance(raw_categories, list) else []:
         if not isinstance(raw, dict):
             continue
         key = (_cell_text(raw.get("source")).lower(), str(raw.get("category_id", "")))
         candidate = available.get(key)
         if not candidate or key in used:
             continue
-        role = _normalized_text(raw.get("role"))
-        if role not in allowed_roles:
-            continue
         try:
             priority = max(1, min(9, int(raw.get("priority", 1))))
         except (TypeError, ValueError):
             priority = 1
-        task = {
-            "source": key[0], "category_id": key[1],
-            "name": candidate.get("name", ""), "path": candidate.get("path", ""),
-            "role": role, "priority": priority, "reason": _cell_text(raw.get("reason"))[:500],
-        }
-        if role == "conditional":
-            raw_condition = raw.get("condition") if isinstance(raw.get("condition"), dict) else {}
-            field = _normalized_text(raw_condition.get("field"))
-            operator = _normalized_text(raw_condition.get("operator"))
-            if not field or operator not in allowed_condition_operators or "value" not in raw_condition:
-                continue
-            task["condition"] = {
-                "field": field, "operator": operator, "value": raw_condition.get("value"),
-            }
-        tasks.append(task)
+        tasks.append({
+            "source": key[0], "category_id": key[1], "name": candidate.get("name", ""),
+            "path": candidate.get("path", ""), "priority": priority,
+        })
         used.add(key)
-    return tasks[:8], usage, []
+    return tasks[:8], usage
+
+
+def _refine_catalog_category_terms(line, intent, representation, candidate_count, selected):
+    compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    prompt = f"""Скорректируй поисковые термины для одной повторной попытки найти категорию товара.
+Backend уже выполнил retrieval реальных категорий, но подходящая категория не выбрана. Не выбирай category_id и не придумывай поставщиков. Верни только синонимичные или альтернативные названия той же товарной сущности, не расширяя её до общего product_class.
+Верни только JSON: {{"search_terms":["термин"]}}
+
+ПОЗИЦИЯ:
+{compact(line)}
+
+ИСХОДНЫЙ СМЫСЛ:
+{compact({"item": intent.get("item", "") if isinstance(intent, dict) else "", "representation": representation})}
+
+ДИАГНОСТИКА:
+{compact({"candidate_nodes": candidate_count, "category_selected": selected})}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=300)
+    terms = []
+    for value in result.get("search_terms", []) if isinstance(result, dict) and isinstance(result.get("search_terms"), list) else []:
+        value = _cell_text(value)[:300]
+        if value and _normalized_text(value) not in {_normalized_text(term) for term in terms}:
+            terms.append(value)
+    return terms[:20], usage
 
 
 def _translate_catalog_feedback(line, current_intent, feedback):
@@ -2593,13 +2537,16 @@ def _embedding_model():
     return os.getenv("TIMEWEB_EMBEDDING_MODEL", "openai/text-embedding-3-small").strip()
 
 
-def _embedding_vector(text, model=None):
+def _embedding_vectors(texts, model=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = model or _embedding_model()
     if not api_key:
         raise TenderAIError("AI Gateway ещё не настроен для смыслового поиска.")
-    payload = json.dumps({"model": model, "input": _cell_text(text)[:12_000]}, ensure_ascii=False).encode("utf-8")
+    inputs = [_cell_text(text)[:12_000] for text in texts]
+    if not inputs:
+        return []
+    payload = json.dumps({"model": model, "input": inputs}, ensure_ascii=False).encode("utf-8")
     request = Request(
         f"{base_url}/embeddings", data=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST",
@@ -2607,12 +2554,17 @@ def _embedding_vector(text, model=None):
     try:
         with urlopen(request, timeout=45) as response:
             result = json.loads(response.read().decode("utf-8"))
-        vector = result["data"][0]["embedding"]
-        if not isinstance(vector, list) or not vector:
+        rows = sorted(result["data"], key=lambda value: value.get("index", 0))
+        vectors = [value["embedding"] for value in rows]
+        if len(vectors) != len(inputs) or any(not isinstance(vector, list) or not vector for vector in vectors):
             raise ValueError
-        return [float(value) for value in vector]
+        return [[float(value) for value in vector] for vector in vectors]
     except (HTTPError, URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise TenderAIError("Не удалось построить смысловой индекс.") from exc
+
+
+def _embedding_vector(text, model=None):
+    return _embedding_vectors([text], model=model)[0]
 
 
 def _training_example_embedding_text(example):

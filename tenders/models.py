@@ -171,6 +171,10 @@ class CatalogCategory(models.Model):
     parent_external_id = models.CharField("Родительский ID", max_length=100, blank=True)
     name = models.CharField("Категория", max_length=300)
     path = models.CharField("Полный путь", max_length=1000, blank=True)
+    embedding = models.JSONField("Смысловой индекс", default=list, blank=True)
+    embedding_model = models.CharField("Модель смыслового индекса", max_length=100, blank=True)
+    embedding_text_hash = models.CharField("Хеш смыслового представления", max_length=64, blank=True)
+    embedding_updated_at = models.DateTimeField("Индекс обновлён", null=True, blank=True)
     is_active = models.BooleanField("Активна", default=True)
 
     class Meta:

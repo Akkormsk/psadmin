@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -371,6 +372,54 @@ def _store_gifts_categories(supplier, categories):
             objects, update_conflicts=True, unique_fields=["supplier", "external_id"],
             update_fields=["parent_external_id", "name", "path", "is_active"],
         )
+    _refresh_category_embeddings(supplier)
+
+
+def _category_embedding_text(category, names_by_id):
+    parent_name = names_by_id.get(category.parent_external_id, "")
+    return " | ".join(filter(None, [
+        category.name,
+        f"Родитель: {parent_name}" if parent_name else "",
+        f"Путь: {category.path}" if category.path else "",
+    ]))
+
+
+def _refresh_category_embeddings(supplier):
+    from .services import TenderAIError, _embedding_model, _embedding_vectors, _embeddings_enabled
+
+    if not _embeddings_enabled():
+        return 0
+    categories = list(CatalogCategory.objects.filter(supplier=supplier, is_active=True))
+    names_by_id = {value.external_id: value.name for value in categories}
+    model = _embedding_model()
+    pending = []
+    for category in categories:
+        text = _category_embedding_text(category, names_by_id)
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if category.embedding and category.embedding_model == model and category.embedding_text_hash == text_hash:
+            continue
+        pending.append((category, text, text_hash))
+    updated = []
+    try:
+        for offset in range(0, len(pending), 64):
+            batch = pending[offset:offset + 64]
+            vectors = _embedding_vectors([text for _, text, _ in batch], model=model)
+            for (category, _, text_hash), vector in zip(batch, vectors):
+                category.embedding = vector
+                category.embedding_model = model
+                category.embedding_text_hash = text_hash
+                category.embedding_updated_at = timezone.now()
+                updated.append(category)
+    except TenderAIError:
+        logger.warning("Could not refresh category embeddings for supplier %s", supplier.code)
+        return 0
+    if updated:
+        CatalogCategory.objects.bulk_update(
+            updated,
+            ["embedding", "embedding_model", "embedding_text_hash", "embedding_updated_at"],
+            batch_size=200,
+        )
+    return len(updated)
 
 
 def _gifts_category_tree(tree_xml):
@@ -664,6 +713,7 @@ def _sync_categories(client, supplier):
         with transaction.atomic():
             CatalogCategory.objects.filter(supplier=supplier).update(is_active=False)
             CatalogCategory.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=["parent_external_id", "name", "path", "is_active"])
+        _refresh_category_embeddings(supplier)
     return {value.external_id: value.path or value.name for value in CatalogCategory.objects.filter(supplier=supplier, is_active=True)}
 
 
@@ -1051,18 +1101,20 @@ def _oasis_category_snapshot(client):
     supplier = CatalogSupplier.objects.filter(code="oasis", is_active=True).first()
     categories = list(CatalogCategory.objects.filter(
         supplier=supplier, is_active=True,
-    ).values("external_id", "parent_external_id", "name", "path")) if supplier else []
+    ).values("external_id", "parent_external_id", "name", "path", "embedding", "embedding_model")) if supplier else []
     if not categories:
         sync_oasis_categories(client)
         supplier = CatalogSupplier.objects.get(code="oasis")
         categories = list(CatalogCategory.objects.filter(
             supplier=supplier, is_active=True,
-        ).values("external_id", "parent_external_id", "name", "path"))
+        ).values("external_id", "parent_external_id", "name", "path", "embedding", "embedding_model"))
     return [{
         "id": value["external_id"],
         "parent_id": value["parent_external_id"],
         "name": value["name"],
         "path": value["path"] or value["name"],
+        "embedding": value["embedding"],
+        "embedding_model": value["embedding_model"],
     } for value in categories]
 
 
@@ -1171,10 +1223,202 @@ def _complete_category_options(categories_by_source, line, intent, excluded_task
                 "parent_id": str(category.get("parent_id") or category.get("parent_external_id") or ""),
                 "path": _text(category.get("path") or category.get("name"), 1000),
                 "specificity": scores.get((normalized_source, category_id), 0),
+                "embedding": category.get("embedding") if isinstance(category.get("embedding"), list) else [],
+                "embedding_model": _text(category.get("embedding_model"), 100),
             })
     return sorted(result, key=lambda value: (
         -value["specificity"], value["source"], _normalized(value["path"]), value["category_id"],
     ))
+
+
+def _category_search_representation(line, intent, search_terms=None):
+    intent = intent if isinstance(intent, dict) else {}
+    item = _text(intent.get("item"), 300)
+    primary_terms = []
+
+    def add_term(value):
+        value = _text(value, 300)
+        if value and _normalized(value) not in {_normalized(term) for term in primary_terms}:
+            primary_terms.append(value)
+
+    if search_terms is None:
+        add_term(item)
+        for value in intent.get("synonyms", []) if isinstance(intent.get("synonyms"), list) else []:
+            add_term(value)
+        for query in intent.get("fallback_queries", []) if isinstance(intent.get("fallback_queries"), list) else []:
+            if isinstance(query, dict):
+                for value in query.get("terms", []) if isinstance(query.get("terms"), list) else []:
+                    add_term(value)
+    else:
+        for value in search_terms:
+            add_term(value)
+
+    category_hints = [
+        _text(value, 300)
+        for value in (intent.get("categories", []) if isinstance(intent.get("categories"), list) else [])
+        if _text(value, 300)
+    ]
+    requirement_terms = []
+    for group in ("required", "preferred"):
+        for value in intent.get(group, []) if isinstance(intent.get(group), list) else []:
+            if isinstance(value, dict) and _text(value.get("value"), 300):
+                requirement_terms.append(_text(value.get("value"), 300))
+    for constraint in intent.get("constraints", []) if isinstance(intent.get("constraints"), list) else []:
+        if not isinstance(constraint, dict):
+            continue
+        for value in constraint.get("values", []) if isinstance(constraint.get("values"), list) else []:
+            if _text(value, 300):
+                requirement_terms.append(_text(value, 300))
+    return {
+        "item": item,
+        "search_terms": primary_terms[:20],
+        "product_class": _text(intent.get("product_class"), 300),
+        "category_hints": list(dict.fromkeys(category_hints))[:10],
+        "requirement_terms": list(dict.fromkeys(requirement_terms))[:20],
+    }
+
+
+def _category_text_match(term, name, path):
+    term = _normalized(term)
+    name = _normalized(name)
+    path = _normalized(path)
+    if not term:
+        return 0
+    if term == name:
+        return 1
+    if term in name or name in term:
+        return .88
+    if term in path:
+        return .68
+    term_tokens = {value for value in term.split() if len(value) >= 3}
+    offered_tokens = {value for value in f"{name} {path}".split() if len(value) >= 3}
+    matched_tokens = sum(
+        any(
+            required == offered
+            or (min(len(required), len(offered)) >= 5 and required[:4] == offered[:4])
+            for offered in offered_tokens
+        )
+        for required in term_tokens
+    )
+    overlap = matched_tokens / len(term_tokens) if term_tokens else 0
+    fuzzy = SequenceMatcher(None, term, name).ratio()
+    return max(overlap * .72, fuzzy * .55 if fuzzy >= .55 else 0)
+
+
+def _category_retrieval(categories, line, intent, search_terms=None, limit=48):
+    representation = _category_search_representation(line, intent, search_terms=search_terms)
+    model = ""
+    query_embedding = []
+    try:
+        from .services import TenderAIError, _cosine_similarity, _embedding_model, _embedding_vector, _embeddings_enabled
+
+        model = _embedding_model()
+        has_embeddings = any(
+            value.get("embedding_model") == model and isinstance(value.get("embedding"), list) and value.get("embedding")
+            for value in categories
+        )
+        if _embeddings_enabled() and has_embeddings and representation["search_terms"]:
+            from django.core.cache import cache
+
+            embedding_text = " | ".join(representation["search_terms"])
+            cache_key = f"category-query-embedding:{model}:{hashlib.sha256(embedding_text.encode('utf-8')).hexdigest()}"
+            query_embedding = cache.get(cache_key) or []
+            if not query_embedding:
+                query_embedding = _embedding_vector(embedding_text, model=model)
+                cache.set(cache_key, query_embedding, 24 * 60 * 60)
+    except TenderAIError:
+        query_embedding = []
+
+    weighted_terms = [
+        *[(value, 1 if index == 0 else .9) for index, value in enumerate(representation["search_terms"])],
+        *[(value, .3) for value in representation["category_hints"]],
+        *[(value, .2) for value in representation["requirement_terms"]],
+    ]
+    if representation["product_class"]:
+        weighted_terms.append((representation["product_class"], .15))
+    ranked = []
+    for category in categories:
+        source = _text(category.get("source"), 50).lower()
+        category_id = str(category.get("category_id", ""))
+        if not source or not category_id:
+            continue
+        matches = [weight * _category_text_match(term, category.get("name", ""), category.get("path", "")) for term, weight in weighted_terms]
+        lexical_score = max(matches, default=0) + sum(sorted(matches, reverse=True)[1:4]) * .12
+        semantic_score = 0
+        embedding = category.get("embedding")
+        if query_embedding and category.get("embedding_model") == model and isinstance(embedding, list):
+            semantic_score = max(0, _cosine_similarity(query_embedding, embedding))
+        score = lexical_score + semantic_score * .45
+        if score >= .12:
+            ranked.append({**category, "retrieval_score": round(score, 6)})
+    ranked.sort(key=lambda value: (-value["retrieval_score"], value["source"], _normalized(value.get("path"))))
+
+    leaders = {}
+    for value in ranked:
+        leaders.setdefault(value["source"], value)
+    selected = sorted(leaders.values(), key=lambda value: (-value["retrieval_score"], value["source"]))[:limit]
+    selected_keys = {(value["source"], value["category_id"]) for value in selected}
+    for value in ranked:
+        key = (value["source"], value["category_id"])
+        if key in selected_keys:
+            continue
+        selected.append(value)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            break
+    selected.sort(key=lambda value: (-value["retrieval_score"], value["source"], _normalized(value.get("path"))))
+    return selected, {
+        "considered_count": len(categories),
+        "candidate_count": len(selected),
+        "represented_sources": sorted({value["source"] for value in selected}),
+        "semantic_embedding_used": bool(query_embedding),
+        "representation": representation,
+    }
+
+
+def _expand_category_graph(categories, seeds, limit=120):
+    index = {(value.get("source"), str(value.get("category_id", ""))): value for value in categories}
+    children_by_parent = {}
+    for value in categories:
+        parent_id = str(value.get("parent_id") or "")
+        if parent_id:
+            children_by_parent.setdefault((value.get("source"), parent_id), []).append(value)
+    selected = {}
+
+    def include(value):
+        if not value or len(selected) >= limit:
+            return
+        key = (value.get("source"), str(value.get("category_id", "")))
+        if key[0] and key[1]:
+            selected.setdefault(key, value)
+
+    for seed in seeds:
+        include(seed)
+    for seed in seeds:
+        key = (seed.get("source"), str(seed.get("category_id", "")))
+        parent_id = str(seed.get("parent_id") or "")
+        include(index.get((key[0], parent_id)))
+        children = sorted(
+            children_by_parent.get(key, []),
+            key=lambda value: (_normalized(value.get("name")), str(value.get("category_id", ""))),
+        )[:24]
+        for child in children:
+            include(child)
+
+    selected_keys = set(selected)
+    result = []
+    for key, value in sorted(selected.items(), key=lambda item: (item[0][0], _normalized(item[1].get("path")), item[0][1])):
+        child_ids = [
+            str(child.get("category_id", ""))
+            for child in children_by_parent.get(key, [])
+            if (key[0], str(child.get("category_id", ""))) in selected_keys
+        ]
+        result.append({
+            "source": key[0], "category_id": key[1], "name": value.get("name", ""),
+            "parent_id": str(value.get("parent_id") or ""), "child_ids": child_ids,
+            "path": value.get("path") or value.get("name", ""),
+        })
+    return result
 
 
 def _live_category_for_intent(categories, intent, line):
@@ -1635,7 +1879,7 @@ def catalog_candidates_for_line(
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
         gifts_categories = list(CatalogCategory.objects.filter(
             supplier__code="gifts", supplier__is_active=True, is_active=True,
-        ).values("external_id", "parent_external_id", "name", "path"))
+        ).values("external_id", "parent_external_id", "name", "path", "embedding", "embedding_model"))
         category_options = _complete_category_options({
             "oasis": categories,
             "gifts": gifts_categories,

@@ -60,6 +60,8 @@ def category_selection_test(request, session_id):
             "parent_external_id": category.parent_external_id,
             "name": category.name,
             "path": category.path,
+            "embedding": category.embedding,
+            "embedding_model": category.embedding_model,
         })
     options = _complete_category_options(categories_by_source, line, intent)
     tasks, usage, errors = _select_catalog_category_tasks(line, intent, options)

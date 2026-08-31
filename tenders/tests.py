@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
+from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, _category_retrieval, _expand_category_graph, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
@@ -1344,11 +1344,62 @@ class TenderTests(TestCase):
             value["specificity"] for value in candidates if value["category_id"] == "vip"
         ))
 
+    def test_category_retrieval_uses_item_before_product_class_and_preserves_sources(self):
+        categories = [
+            {
+                "source": "large", "category_id": f"mug-{index}", "name": f"Кружки {index}",
+                "parent_id": "", "path": f"Посуда > Кружки {index}",
+            }
+            for index in range(80)
+        ] + [
+            {
+                "source": "large", "category_id": "polo-large", "name": "Рубашки поло",
+                "parent_id": "", "path": "Одежда > Рубашки поло",
+            },
+            {
+                "source": "large", "category_id": "shirts", "name": "Футболки",
+                "parent_id": "", "path": "Одежда > Футболки",
+            },
+            {
+                "source": "small", "category_id": "polo-small", "name": "Polo shirts",
+                "parent_id": "", "path": "Textile > Polo shirts",
+            },
+        ]
+
+        seeds, diagnostics = _category_retrieval(
+            categories,
+            {"name": "Поло унисекс"},
+            {"item": "поло", "synonyms": ["рубашка поло", "polo shirt"], "product_class": "футболка"},
+        )
+
+        self.assertEqual({value["source"] for value in seeds}, {"large", "small"})
+        self.assertIn("polo-large", {value["category_id"] for value in seeds})
+        self.assertIn("polo-small", {value["category_id"] for value in seeds})
+        large_ids = [value["category_id"] for value in seeds if value["source"] == "large"]
+        self.assertLess(large_ids.index("polo-large"), large_ids.index("shirts") if "shirts" in large_ids else len(large_ids))
+        self.assertEqual(diagnostics["considered_count"], len(categories))
+
+    def test_category_graph_expansion_is_local_and_deduplicated(self):
+        categories = [
+            {"source": "supplier", "category_id": "root", "name": "Одежда", "parent_id": "", "path": "Одежда"},
+            {"source": "supplier", "category_id": "polo", "name": "Поло", "parent_id": "root", "path": "Одежда > Поло"},
+            {"source": "supplier", "category_id": "male", "name": "Мужские поло", "parent_id": "polo", "path": "Одежда > Поло > Мужские"},
+            {"source": "supplier", "category_id": "female", "name": "Женские поло", "parent_id": "polo", "path": "Одежда > Поло > Женские"},
+            {"source": "supplier", "category_id": "mugs", "name": "Кружки", "parent_id": "", "path": "Посуда > Кружки"},
+        ]
+
+        fragment = _expand_category_graph(categories, [{**categories[1], "retrieval_score": 1}])
+
+        self.assertEqual({value["category_id"] for value in fragment}, {"root", "polo", "male", "female"})
+        self.assertEqual(len(fragment), len({(value["source"], value["category_id"]) for value in fragment}))
+        polo = next(value for value in fragment if value["category_id"] == "polo")
+        self.assertEqual(set(polo["child_ids"]), {"male", "female"})
+
     @patch("tenders.services._ai_gateway_json")
     def test_llm_category_selection_accepts_only_real_category_ids(self, gateway):
-        gateway.return_value = ({"category_tasks": [
-            {"source": "oasis", "category_id": "invented", "role": "primary", "priority": 1, "reason": "Выдуман."},
-            {"source": "oasis", "category_id": "polo", "role": "primary", "priority": 1, "reason": "Точное соответствие."},
+        gateway.return_value = ({"categories": [
+            {"source": "oasis", "category_id": "invented", "priority": 1},
+            {"source": "oasis", "category_id": "polo", "priority": 1},
         ]}, {})
 
         tasks, usage, errors = _select_catalog_category_tasks(
@@ -1362,40 +1413,21 @@ class TenderTests(TestCase):
 
         self.assertEqual(tasks, [{
             "source": "oasis", "category_id": "polo", "name": "Рубашки поло",
-            "path": "Одежда / Поло", "role": "primary", "priority": 1,
-            "reason": "Точное соответствие.",
+            "path": "Одежда / Поло", "priority": 1,
         }])
         self.assertFalse(errors)
-        self.assertEqual(usage, {"by_source": {"oasis": {"selection": {}, "audit": {}}}})
+        self.assertEqual(usage["llm_calls"], 1)
+        self.assertFalse(usage["retry_used"])
 
     @patch("tenders.services._ai_gateway_json")
-    def test_llm_category_selection_receives_tree_context_and_returns_roles(self, gateway):
+    def test_llm_category_selection_receives_one_compact_multi_source_fragment(self, gateway):
         captured = {}
 
         def answer(prompt, **kwargs):
             captured["prompt"] = prompt
-            return ({"category_tasks": [
-                {
-                    "source": "supplier-x", "category_id": "protective-headwear",
-                    "role": "primary", "priority": 1,
-                    "reason": "Узел полностью соответствует товарной сущности.",
-                },
-                {
-                    "source": "supplier-x", "category_id": "helmets-general",
-                    "role": "equivalent", "priority": 2,
-                    "reason": "Альтернативное представление той же сущности.",
-                },
-                {
-                    "source": "supplier-x", "category_id": "winter-helmets",
-                    "role": "conditional", "priority": 3,
-                    "reason": "Подходит только при требовании зимнего исполнения.",
-                    "condition": {"field": "season", "operator": "eq", "value": "winter"},
-                },
-                {
-                    "source": "supplier-x", "category_id": "workwear",
-                    "role": "fallback", "priority": 4,
-                    "reason": "Более широкий раздел.",
-                },
+            return ({"categories": [
+                {"source": "supplier-x", "category_id": "protective-headwear", "priority": 1},
+                {"source": "supplier-y", "category_id": "helmets", "priority": 1},
             ]}, {"input_tokens": 321, "output_tokens": 123})
 
         gateway.side_effect = answer
@@ -1424,73 +1456,51 @@ class TenderTests(TestCase):
                     "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Защитные каски",
                     "specificity": 1,
                 },
+                {
+                    "source": "supplier-y", "category_id": "helmets", "name": "Каски",
+                    "parent_id": "", "path": "Защита > Каски", "specificity": 8,
+                },
             ],
         )
 
         prompt = captured["prompt"]
         self.assertIn('"parent_id"', prompt)
-        self.assertIn('"parent_name"', prompt)
-        self.assertIn('"children"', prompt)
-        self.assertIn('["helmets-general","Защитные каски"]', prompt)
-        self.assertIn("каждый source независимо", prompt)
-        self.assertIn("не останавливайся после первого primary", prompt)
-        self.assertIn("добавляет отдельную характеристику или ограничение", prompt)
-        self.assertIn("не может быть equivalent", prompt)
-        self.assertIn("parent может быть primary", prompt)
-        self.assertIn("parent шире искомой сущности", prompt)
-        self.assertIn("Проверка смыслового охвата", prompt)
-        self.assertIn("сохранять определяющие признаки товарной сущности", prompt)
-        self.assertIn("Fallback выбирай только среди предков", prompt)
-        self.assertNotIn("Конкретный вид товара важнее общего раздела", prompt)
-        serialized_nodes = prompt.split("РЕАЛЬНЫЕ УЗЛЫ:\n", 1)[1].split("\n\nПРОВЕРЕНО РАНЕЕ:", 1)[0]
-        self.assertEqual([value[1] for value in json.loads(serialized_nodes)], [
-            "workwear", "protective-headwear", "helmets-general", "winter-helmets",
-        ])
-        self.assertEqual([value["role"] for value in tasks], [
-            "primary", "equivalent", "conditional", "fallback",
-        ])
-        self.assertTrue(all(value["source"] == "supplier-x" for value in tasks))
-        self.assertEqual(tasks[2]["condition"], {
-            "field": "season", "operator": "eq", "value": "winter",
-        })
-        self.assertEqual(usage["input_tokens"], 642)
-        self.assertEqual(usage["output_tokens"], 246)
-        self.assertEqual(usage["by_source"]["supplier-x"]["selection"], {
-            "input_tokens": 321, "output_tokens": 123,
-        })
-        self.assertEqual(usage["by_source"]["supplier-x"]["audit"], {
-            "input_tokens": 321, "output_tokens": 123,
-        })
+        self.assertIn('"child_ids"', prompt)
+        self.assertIn('"supplier-x"', prompt)
+        self.assertIn('"supplier-y"', prompt)
+        self.assertNotIn('primary', prompt)
+        self.assertNotIn('equivalent', prompt)
+        self.assertNotIn('condition', prompt)
+        self.assertEqual(gateway.call_count, 1)
+        self.assertEqual({value["source"] for value in tasks}, {"supplier-x", "supplier-y"})
+        self.assertEqual(usage["input_tokens"], 321)
+        self.assertEqual(usage["output_tokens"], 123)
+        self.assertEqual(usage["llm_calls"], 1)
         self.assertFalse(errors)
 
     @patch("tenders.services._ai_gateway_json")
-    def test_llm_category_selection_calls_each_supplier_tree_independently(self, gateway):
-        def answer(prompt, **kwargs):
-            source = "supplier-a" if '"supplier-a"' in prompt else "supplier-b"
-            return ({"category_tasks": [{
-                "source": source, "category_id": f"{source}-root", "role": "primary",
-                "priority": 1, "reason": "Соответствует сущности.",
-            }]}, {"prompt_tokens": 100, "completion_tokens": 10})
-
-        gateway.side_effect = answer
+    def test_llm_category_selection_retries_terms_only_after_empty_selection(self, gateway):
+        gateway.side_effect = [
+            ({"categories": []}, {"prompt_tokens": 100, "completion_tokens": 10}),
+            ({"search_terms": ["защитный шлем", "каска"]}, {"prompt_tokens": 40, "completion_tokens": 8}),
+            ({"categories": [{"source": "supplier-a", "category_id": "helmet", "priority": 1}]}, {"prompt_tokens": 120, "completion_tokens": 10}),
+        ]
         tasks, usage, errors = _select_catalog_category_tasks(
-            {"name": "Товар"}, {"item": "товар"}, [
+            {"name": "Защитная каска"}, {"item": "каска"}, [
                 {
-                    "source": "supplier-b", "category_id": "supplier-b-root", "name": "Товар B",
-                    "parent_id": "", "path": "Каталог B > Товар B", "specificity": 1,
-                },
-                {
-                    "source": "supplier-a", "category_id": "supplier-a-root", "name": "Товар A",
+                    "source": "supplier-a", "category_id": "helmet", "name": "Защитные шлемы и каски",
                     "parent_id": "", "path": "Каталог A > Товар A", "specificity": 1,
                 },
             ],
         )
 
-        self.assertEqual(gateway.call_count, 4)
-        self.assertEqual({value["source"] for value in tasks}, {"supplier-a", "supplier-b"})
-        self.assertEqual(usage["prompt_tokens"], 400)
-        self.assertEqual(usage["completion_tokens"], 40)
-        self.assertEqual(set(usage["by_source"]), {"supplier-a", "supplier-b"})
+        self.assertEqual(gateway.call_count, 3)
+        self.assertEqual(tasks[0]["category_id"], "helmet")
+        self.assertEqual(usage["prompt_tokens"], 260)
+        self.assertEqual(usage["completion_tokens"], 28)
+        self.assertEqual(usage["llm_calls"], 3)
+        self.assertEqual(usage["semantic_attempts"], 2)
+        self.assertTrue(usage["retry_used"])
         self.assertFalse(errors)
 
     def test_catalog_search_uses_llm_selected_real_category_instead_of_broad_category(self):
@@ -1590,9 +1600,13 @@ class TenderTests(TestCase):
         )
         selector.return_value = ([{
             "source": "supplier-x", "category_id": "polo", "name": "Поло",
-            "path": "Каталог > Одежда > Поло", "role": "primary", "priority": 1,
-            "reason": "Товарная сущность совпадает.",
-        }], {"input_tokens": 100, "output_tokens": 20}, [])
+            "path": "Каталог > Одежда > Поло", "priority": 1,
+        }], {
+            "input_tokens": 100, "output_tokens": 20, "llm_calls": 1,
+            "semantic_attempts": 1, "retry_used": False,
+            "semantic_representation": {"item": "рубашка поло", "search_terms": ["рубашка поло"]},
+            "retrieval": {"considered_count": 2, "candidate_count": 1, "fragment_count": 2, "by_source": {"supplier-x": 2}},
+        }, [])
 
         response = self.client.post(
             reverse("tender_category_selection_test", args=[session.pk]),
@@ -1600,7 +1614,8 @@ class TenderTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["category_tasks"][0]["role"], "primary")
+        self.assertEqual(response.json()["category_tasks"][0]["category_id"], "polo")
+        self.assertEqual(response.json()["usage"]["llm_calls"], 1)
         candidates = selector.call_args.args[2]
         self.assertEqual({value["category_id"] for value in candidates}, {"root", "polo"})
         self.assertEqual(next(value for value in candidates if value["category_id"] == "polo")["parent_id"], "root")
@@ -1837,6 +1852,39 @@ class TenderTests(TestCase):
         self.assertEqual(categories["20"], "Текстиль > Поло")
         self.assertEqual(CatalogCategory.objects.filter(supplier__code="gifts").count(), 3)
         self.assertFalse(CatalogCategory.objects.get(supplier__code="gifts", external_id="30").is_active)
+
+    @patch.dict("os.environ", {"TIMEWEB_EMBEDDINGS_ENABLED": "1", "TIMEWEB_EMBEDDING_MODEL": "test-embedding"})
+    @patch("tenders.services._embedding_vectors")
+    def test_category_sync_embeds_only_missing_or_changed_semantic_text(self, embedding_vectors):
+        embedding_vectors.side_effect = lambda texts, model=None: [
+            [float(index + 1), 1.0] for index, _ in enumerate(texts)
+        ]
+
+        class Client:
+            base_url = "https://api2.gifts.ru/export/v2"
+            xml = """<doct><page page_id='10' name='Одежда'><page page_id='20' name='Поло'/></page></doct>"""
+
+            def open(self, path):
+                return StringIO(self.xml)
+
+        client = Client()
+        sync_gifts_categories(client)
+        first_call_count = embedding_vectors.call_count
+        polo = CatalogCategory.objects.get(supplier__code="gifts", external_id="20")
+
+        self.assertTrue(polo.embedding)
+        self.assertEqual(polo.embedding_model, "test-embedding")
+        self.assertTrue(polo.embedding_text_hash)
+        self.assertEqual(first_call_count, 1)
+
+        sync_gifts_categories(client)
+        self.assertEqual(embedding_vectors.call_count, first_call_count)
+
+        client.xml = """<doct><page page_id='10' name='Одежда'><page page_id='20' name='Рубашки поло'/></page></doct>"""
+        sync_gifts_categories(client)
+
+        self.assertEqual(embedding_vectors.call_count, first_call_count + 1)
+        self.assertEqual(len(embedding_vectors.call_args.args[0]), 1)
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
