@@ -1437,6 +1437,7 @@ class TenderTests(TestCase):
         self.assertIn("добавляет отдельную характеристику или ограничение", prompt)
         self.assertIn("не может быть equivalent", prompt)
         self.assertIn("parent может быть primary", prompt)
+        self.assertIn("не классифицируй такой parent как fallback", prompt)
         self.assertNotIn("Конкретный вид товара важнее общего раздела", prompt)
         self.assertEqual([value["role"] for value in tasks], [
             "primary", "equivalent", "conditional", "fallback",
