@@ -1431,11 +1431,14 @@ class TenderTests(TestCase):
         self.assertIn('"parent_id"', prompt)
         self.assertIn('"parent_name"', prompt)
         self.assertIn('"children"', prompt)
-        self.assertIn('["helmets-general", "Защитные каски"]', prompt)
+        self.assertIn('["helmets-general","Защитные каски"]', prompt)
+        self.assertIn("каждый source независимо", prompt)
+        self.assertIn("не останавливайся после первого primary", prompt)
         self.assertNotIn("Конкретный вид товара важнее общего раздела", prompt)
         self.assertEqual([value["role"] for value in tasks], [
             "primary", "equivalent", "conditional", "fallback",
         ])
+        self.assertTrue(all(value["source"] == "supplier-x" for value in tasks))
         self.assertEqual(tasks[2]["condition"], {
             "field": "season", "operator": "eq", "value": "winter",
         })

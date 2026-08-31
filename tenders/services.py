@@ -1760,13 +1760,16 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     attempted = [value for value in attempted or [] if isinstance(value, dict)][:30]
     if not candidates:
         return [], {}, []
+    def compact_json(value):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
     category_index = {
-        (_normalized_text(value.get("source")), str(value.get("category_id", ""))): value
+        (_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))): value
         for value in candidates if value.get("source") and value.get("category_id")
     }
     children_by_parent = {}
     for value in candidates:
-        source = _normalized_text(value.get("source"))
+        source = _cell_text(value.get("source")).lower()
         parent_id = str(value.get("parent_id") or "")
         if source and parent_id:
             children_by_parent.setdefault((source, parent_id), []).append(value)
@@ -1775,7 +1778,7 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     ]
     compact_categories = []
     for value in candidates:
-        source = _normalized_text(value.get("source"))
+        source = _cell_text(value.get("source")).lower()
         category_id = str(value.get("category_id", ""))
         parent_id = str(value.get("parent_id") or "")
         parent = category_index.get((source, parent_id))
@@ -1795,29 +1798,30 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     prompt = f"""Выбери реальные категории поставщиков для поиска товара.
 Категории уже найдены бэкендом в актуальных деревьях произвольных поставщиков. Используй только переданные source и category_id, ничего не придумывай. Можно выбрать несколько категорий у каждого поставщика.
 Анализируй смысл товарной сущности и требований ТЗ одновременно с названием узла, его непосредственным parent, непосредственными children и полным path. Глубина, положение parent/leaf и число совпавших слов сами по себе не определяют качество категории. Не используй специальных знаний о структуре конкретного поставщика. Не повторяй категории из ПРОВЕРЕНО РАНЕЕ.
+Проанализируй каждый source независимо. Если подходящие ветки есть в нескольких источниках, верни категории каждого из них и не останавливайся после первого primary. Внутри каждого source верни все обоснованные роли, а не только один лучший ID.
 Классифицируй выбранные узлы: primary — основной наиболее полный по смыслу узел; equivalent — альтернативное представление той же или почти той же товарной сущности; conditional — подходит только при дополнительном условии из ТЗ; fallback — более широкий узел на случай отсутствия результатов в основных.
 Для conditional обязательно верни condition с field, operator и value. Условие должно следовать из ТЗ, а не из предположения.
 Если подходящей категории в карте нет, верни пустой category_tasks: тогда бэкенд выполнит поиск по названию и синонимам. Не подменяй отсутствующую категорию похожим, но другим товаром.
 Верни только JSON: {{"category_tasks":[{{"source":"код из карты","category_id":"реальный ID","role":"primary|equivalent|conditional|fallback","priority":1,"reason":"краткое семантическое обоснование","condition":{{"field":"поле ТЗ","operator":"eq|neq|in|not_in|contains|not_contains|lte|gte|between|exists","value":"значение или массив"}}}}]}}
 
 ПОЗИЦИЯ:
-{json.dumps(line, ensure_ascii=False)}
+{compact_json(line)}
 
 ПОИСКОВЫЙ СМЫСЛ:
-{json.dumps(intent, ensure_ascii=False)}
+{compact_json(intent)}
 
 ПОЛЯ УЗЛА:
-{json.dumps(category_fields, ensure_ascii=False)}
+{compact_json(category_fields)}
 
 РЕАЛЬНЫЕ УЗЛЫ:
-{json.dumps(compact_categories, ensure_ascii=False)}
+{compact_json(compact_categories)}
 
 ПРОВЕРЕНО РАНЕЕ:
-{json.dumps(attempted, ensure_ascii=False)}"""
+{compact_json(attempted)}"""
     result, usage = _ai_gateway_json(prompt, max_tokens=900)
     raw_tasks = result.get("category_tasks") if isinstance(result, dict) else []
     available = {
-        (_normalized_text(value.get("source")), str(value.get("category_id", ""))): value
+        (_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))): value
         for value in candidates
     }
     allowed_roles = {"primary", "equivalent", "conditional", "fallback"}
@@ -1828,7 +1832,7 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     for raw in raw_tasks[:12] if isinstance(raw_tasks, list) else []:
         if not isinstance(raw, dict):
             continue
-        key = (_normalized_text(raw.get("source")), str(raw.get("category_id", "")))
+        key = (_cell_text(raw.get("source")).lower(), str(raw.get("category_id", "")))
         candidate = available.get(key)
         if not candidate or key in used:
             continue

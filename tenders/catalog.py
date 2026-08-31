@@ -1069,7 +1069,7 @@ def _oasis_category_snapshot(client):
 def _category_candidates(categories_by_source, line, intent, excluded_tasks=None, limit_per_source=12):
     intent = intent if isinstance(intent, dict) else {}
     excluded = {
-        (_normalized(value.get("source")), str(value.get("category_id", "")))
+        (_text(value.get("source"), 50).lower(), str(value.get("category_id", "")))
         for value in excluded_tasks or [] if isinstance(value, dict)
     }
     weighted_phrases = []
@@ -1110,7 +1110,8 @@ def _category_candidates(categories_by_source, line, intent, excluded_tasks=None
         source_rows = []
         for category in categories if isinstance(categories, list) else []:
             category_id = str(category.get("id") or category.get("external_id") or "")
-            if not category_id or (_normalized(source), category_id) in excluded:
+            source_code = _text(source, 50).lower()
+            if not category_id or (source_code, category_id) in excluded:
                 continue
             name = _text(category.get("name"), 300)
             path = _text(category.get("path") or name, 1000)
@@ -1134,7 +1135,7 @@ def _category_candidates(categories_by_source, line, intent, excluded_tasks=None
             generic_penalty = 20 if name_tokens and all(token in generic_tokens for token in name_tokens) else 0
             score = sum(matched_weights) + distinctive_matches + exact_bonus + min(8, depth * 2) - generic_penalty
             source_rows.append({
-                "source": _normalized(source),
+                "source": source_code,
                 "category_id": category_id,
                 "name": name,
                 "path": path,
@@ -1147,7 +1148,7 @@ def _category_candidates(categories_by_source, line, intent, excluded_tasks=None
 
 def _complete_category_options(categories_by_source, line, intent, excluded_tasks=None):
     excluded = {
-        (_normalized(value.get("source")), str(value.get("category_id", "")))
+        (_text(value.get("source"), 50).lower(), str(value.get("category_id", "")))
         for value in excluded_tasks or [] if isinstance(value, dict)
     }
     ranked = _category_candidates(
@@ -1158,7 +1159,7 @@ def _complete_category_options(categories_by_source, line, intent, excluded_task
     }
     result = []
     for source, categories in categories_by_source.items():
-        normalized_source = _normalized(source)
+        normalized_source = _text(source, 50).lower()
         for category in categories if isinstance(categories, list) else []:
             category_id = str(category.get("id") or category.get("external_id") or "")
             if not category_id or (normalized_source, category_id) in excluded:
