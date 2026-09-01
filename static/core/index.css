@@ -911,12 +911,17 @@ h1 {
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:#6b7280; }
 .tender-saved-estimate .saved-estimate__main { display:grid; grid-template-columns:minmax(0,1fr) minmax(140px,.42fr); }
-.saved-estimate__status-form { flex:0 0 160px; }
-.saved-estimate__status { width:100%; min-height:36px; padding:7px 30px 7px 10px; border:1px solid transparent; border-radius:9px; color:#374151; font:inherit; font-size:13px; font-weight:700; cursor:pointer; }
-.saved-estimate__status.is-draft { border-color:#d1d5db; background:#f3f4f6; color:#4b5563; }
-.saved-estimate__status.is-pending { border-color:#f4cf72; background:#fff4cf; color:#8a5b00; }
-.saved-estimate__status.is-lost { border-color:#f0aaaa; background:#fde8e8; color:#a61b1b; }
-.saved-estimate__status.is-won { border-color:#98d5aa; background:#e6f6eb; color:#137333; }
+.saved-estimate__status-form { position:relative; display:flex; align-items:center; flex:0 0 160px; min-height:36px; box-sizing:border-box; border:1px solid #e1e5ea; border-radius:10px; background:#fff; transition:border-color .16s ease,box-shadow .16s ease,opacity .16s ease; }
+.saved-estimate__status-form::before { content:""; position:absolute; left:11px; width:7px; height:7px; border-radius:50%; background:#9ca3af; pointer-events:none; }
+.saved-estimate__status-form::after { content:""; position:absolute; right:12px; top:50%; width:6px; height:6px; border-right:1.5px solid #8a929e; border-bottom:1.5px solid #8a929e; transform:translateY(-65%) rotate(45deg); pointer-events:none; }
+.saved-estimate__status-form:hover { border-color:#cdd3da; }
+.saved-estimate__status-form:focus-within { border-color:#aeb7c2; box-shadow:0 0 0 3px rgba(107,114,128,.09); }
+.saved-estimate__status-form.is-pending::before { background:#d1a334; }
+.saved-estimate__status-form.is-lost::before { background:#cf7373; }
+.saved-estimate__status-form.is-won::before { background:#5c9b70; }
+.saved-estimate__status-form.is-saving { opacity:.58; }
+.saved-estimate__status-form.is-error { border-color:#d9a0a0; }
+.saved-estimate__status { width:100%; min-height:34px; box-sizing:border-box; padding:7px 28px 7px 27px; border:0; outline:0; appearance:none; background:transparent; color:#4b5563; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
 
 /* Compact two-row tender item. Editable cells are white; calculated cells are tinted. */
 .tender-line { padding:5px 6px; }

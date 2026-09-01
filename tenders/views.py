@@ -804,5 +804,7 @@ def update_estimate_status(request, pk):
     if status not in dict(TenderEstimate.STATUS_CHOICES):
         return HttpResponse(status=400)
     estimate.status = status
-    estimate.save(update_fields=("status", "updated_at"))
+    estimate.save(update_fields=("status",))
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse({"status": status, "label": estimate.get_status_display()})
     return redirect("tender_home")

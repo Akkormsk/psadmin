@@ -164,7 +164,9 @@ class TenderTests(TestCase):
 
         response = self.client.get(reverse("tender_home"))
 
-        self.assertContains(response, 'class="saved-estimate__status is-draft"')
+        self.assertContains(response, 'class="saved-estimate__status-form is-draft"')
+        self.assertContains(response, 'data-estimate-status-form')
+        self.assertNotContains(response, 'onchange="this.form.submit()"')
         self.assertContains(response, '<option value="draft" selected>Черновик</option>', html=True)
         self.assertContains(response, '<option value="pending">В ожидании</option>', html=True)
         self.assertContains(response, '<option value="lost">Проигран</option>', html=True)
@@ -173,16 +175,20 @@ class TenderTests(TestCase):
 
     def test_user_can_change_own_estimate_status(self):
         estimate = TenderEstimate.objects.create(owner=self.user, tender_number="123", name="Тест")
+        updated_at = estimate.updated_at
         self.client.force_login(self.user)
 
         response = self.client.post(
             reverse("tender_estimate_status", args=[estimate.pk]),
             {"status": "won"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
         )
 
-        self.assertRedirects(response, reverse("tender_home"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "won")
         estimate.refresh_from_db()
         self.assertEqual(estimate.status, "won")
+        self.assertEqual(estimate.updated_at, updated_at)
 
     def test_user_cannot_change_another_users_estimate_status(self):
         estimate = TenderEstimate.objects.create(owner=self.other, tender_number="777", name="Чужой")
@@ -236,7 +242,7 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.lines.get().name, "Ручка")
         reopened = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
         self.assertContains(reopened, "Ручка")
-        self.assertContains(reopened, 'class="saved-estimate__status is-draft"')
+        self.assertContains(reopened, 'class="saved-estimate__status-form is-draft"')
         self.assertNotContains(reopened, 'class="saved-estimate__draft"')
 
     def test_partially_filled_line_values_are_preserved_in_draft(self):
