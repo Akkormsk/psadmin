@@ -169,6 +169,7 @@ class TenderTests(TestCase):
         self.assertNotContains(response, 'onchange="this.form.submit()"')
         self.assertContains(response, '<option value="draft" selected>Черновик</option>', html=True)
         self.assertContains(response, '<option value="pending">В ожидании</option>', html=True)
+        self.assertContains(response, '<option value="not_participated">Не участвовали</option>', html=True)
         self.assertContains(response, '<option value="lost">Проигран</option>', html=True)
         self.assertContains(response, '<option value="won">Выигран</option>', html=True)
         self.assertNotContains(response, 'class="saved-estimate__draft"')
@@ -186,9 +187,42 @@ class TenderTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "won")
+        self.assertTrue(response.json()["requires_result"])
         estimate.refresh_from_db()
         self.assertEqual(estimate.status, "won")
         self.assertEqual(estimate.updated_at, updated_at)
+
+    def test_result_note_is_shown_for_finished_tender_and_saved(self):
+        estimate = TenderEstimate.objects.create(
+            owner=self.user,
+            tender_number="123",
+            name="Тест",
+            status=TenderEstimate.LOST,
+            result_notes="Победитель снизился на 30%.",
+        )
+        self.client.force_login(self.user)
+
+        opened = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
+
+        self.assertContains(opened, 'data-tender-result')
+        self.assertContains(opened, "Победитель снизился на 30%.")
+        self.assertNotContains(opened, 'data-tender-result hidden')
+
+        response = self.client.post(
+            reverse("tender_estimate", args=[estimate.pk]),
+            {
+                "tender_number": "123",
+                "name": "Тест",
+                "reduction_percent": "20",
+                "russia_delivery": "0",
+                "result_notes": "Проиграли: победитель снизился на 30%.",
+                "lines_json": json.dumps(self.payload),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        estimate.refresh_from_db()
+        self.assertEqual(estimate.result_notes, "Проиграли: победитель снизился на 30%.")
 
     def test_user_cannot_change_another_users_estimate_status(self):
         estimate = TenderEstimate.objects.create(owner=self.other, tender_number="777", name="Чужой")

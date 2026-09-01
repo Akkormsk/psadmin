@@ -708,6 +708,7 @@ def home(request, pk=None):
         "name": estimate.name if estimate else "",
         "reduction_percent": estimate.reduction_percent if estimate else Decimal("30.00"),
         "russia_delivery": estimate.russia_delivery if estimate else Decimal("0.00"),
+        "result_notes": estimate.result_notes if estimate else "",
         "owner_id": estimate.owner_id if estimate else request.user.id,
     }
     if request.method == "POST":
@@ -716,6 +717,7 @@ def home(request, pk=None):
             "name": request.POST.get("name", ""),
             "reduction_percent": request.POST.get("reduction_percent", "30"),
             "russia_delivery": request.POST.get("russia_delivery", "0"),
+            "result_notes": request.POST.get("result_notes", ""),
             "owner_id": request.POST.get("owner_id") or request.user.id,
         }
         try:
@@ -763,6 +765,7 @@ def home(request, pk=None):
             estimate.name = name[:300]
             estimate.reduction_percent = reduction_percent
             estimate.russia_delivery = russia_delivery
+            estimate.result_notes = request.POST.get("result_notes", "").strip()[:5000]
             estimate.vat_rate_snapshot = settings.vat_rate
             estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
             estimate.summary_snapshot["is_incomplete"] = not calculation_complete
@@ -806,5 +809,9 @@ def update_estimate_status(request, pk):
     estimate.status = status
     estimate.save(update_fields=("status",))
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({"status": status, "label": estimate.get_status_display()})
+        return JsonResponse({
+            "status": status,
+            "label": estimate.get_status_display(),
+            "requires_result": status in {TenderEstimate.LOST, TenderEstimate.WON},
+        })
     return redirect("tender_home")

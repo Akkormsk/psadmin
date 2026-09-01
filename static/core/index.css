@@ -908,6 +908,11 @@ h1 {
 .tender-summary strong { white-space:nowrap; }
 .tender-summary__primary { background:#eaf5ee !important; }
 .tender-summary__primary strong { color:#166534; font-size:18px; }
+.tender-result-note { margin-top:14px; padding:14px 16px; border:1px solid #e1e5ea; border-radius:11px; background:#fafbfc; }
+.tender-result-note label { display:grid; gap:6px; color:#374151; font-size:13px; font-weight:700; }
+.tender-result-note textarea { width:100%; min-height:72px; box-sizing:border-box; resize:vertical; padding:10px 12px; border:1px solid #d7dce2; border-radius:9px; background:#fff; color:#1f2937; font:inherit; font-weight:400; }
+.tender-result-note textarea:focus { border-color:#aeb7c2; outline:0; box-shadow:0 0 0 3px rgba(107,114,128,.09); }
+.tender-result-note small { color:#7b8491; font-size:11px; font-weight:400; }
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:#6b7280; }
 .tender-saved-estimate .saved-estimate__main { display:grid; grid-template-columns:minmax(0,1fr) minmax(140px,.42fr); }
@@ -917,6 +922,7 @@ h1 {
 .saved-estimate__status-form:hover { border-color:#cdd3da; }
 .saved-estimate__status-form:focus-within { border-color:#aeb7c2; box-shadow:0 0 0 3px rgba(107,114,128,.09); }
 .saved-estimate__status-form.is-pending::before { background:#d1a334; }
+.saved-estimate__status-form.is-not_participated::before { background:#b96868; }
 .saved-estimate__status-form.is-lost::before { background:#cf7373; }
 .saved-estimate__status-form.is-won::before { background:#5c9b70; }
 .saved-estimate__status-form.is-saving { opacity:.58; }
