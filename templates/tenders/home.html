@@ -150,11 +150,12 @@ const select=form.querySelector('select');
 form.addEventListener('submit',event=>event.preventDefault());
 select.addEventListener('change',async()=>{
 const previous=form.dataset.status,status=select.value;
+const data=new FormData(form);
 form.classList.remove(`is-${previous}`,'is-error');
 form.classList.add(`is-${status}`,'is-saving');
 select.disabled=true;
 try{
-const response=await fetch(form.action,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'},body:new FormData(form)});
+const response=await fetch(form.action,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'},body:data});
 if(!response.ok)throw new Error();
 const result=await response.json();
 form.dataset.status=result.status;

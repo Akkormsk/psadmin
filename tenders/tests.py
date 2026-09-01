@@ -167,6 +167,8 @@ class TenderTests(TestCase):
         self.assertContains(response, 'class="saved-estimate__status-form is-draft"')
         self.assertContains(response, 'data-estimate-status-form')
         self.assertNotContains(response, 'onchange="this.form.submit()"')
+        self.assertContains(response, 'const data=new FormData(form);')
+        self.assertContains(response, 'body:data')
         self.assertContains(response, '<option value="draft" selected>Черновик</option>', html=True)
         self.assertContains(response, '<option value="pending">В ожидании</option>', html=True)
         self.assertContains(response, '<option value="not_participated">Не участвовали</option>', html=True)
