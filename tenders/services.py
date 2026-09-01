@@ -1772,15 +1772,20 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
     usage = {
         "prompt_tokens": 0, "completion_tokens": 0, "input_tokens": 0, "output_tokens": 0,
         "llm_calls": 0, "semantic_attempts": 1, "retry_used": False,
+        "selector_llm_calls": 0, "verifier_llm_calls": 0, "retry_llm_calls": 0,
     }
     errors = []
     retrieval_attempts = []
+    verification_attempts = []
 
-    def add_usage(value):
+    def add_usage(value, phase):
         usage["llm_calls"] += 1
+        usage[f"{phase}_llm_calls"] += 1
         for key in ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens"):
             amount = value.get(key, 0) if isinstance(value, dict) else 0
             usage[key] += amount if isinstance(amount, (int, float)) else 0
+            phase_key = f"{phase}_{key}"
+            usage[phase_key] = usage.get(phase_key, 0) + (amount if isinstance(amount, (int, float)) else 0)
 
     def retrieve(search_terms=None):
         seeds, diagnostics = _category_retrieval(
@@ -1796,28 +1801,58 @@ def _select_catalog_category_tasks(line, intent, candidates, attempted=None):
 
     representation, fragment = retrieve()
     tasks = []
+    selected_tasks = []
     if fragment:
-        tasks, selection_usage = _select_catalog_categories_from_fragment(line, intent, representation, fragment)
-        add_usage(selection_usage)
+        selected_tasks, selection_usage = _select_catalog_categories_from_fragment(line, intent, representation, fragment)
+        add_usage(selection_usage, "selector")
+        tasks = selected_tasks
+        if selected_tasks:
+            tasks, verifier_usage, decisions = _verify_catalog_category_tasks(
+                representation.get("item") or intent.get("item") or line.get("name"), selected_tasks,
+            )
+            add_usage(verifier_usage, "verifier")
+            verification_attempts.append({
+                "before": selected_tasks, "after": tasks,
+                "decisions": [
+                    {"source": source, "category_id": category_id, "keep": keep}
+                    for (source, category_id), keep in decisions.items()
+                ],
+            })
 
-    if not fragment or not tasks:
+    if not fragment or not selected_tasks:
         corrected_terms, retry_usage = _refine_catalog_category_terms(
             line, intent, representation, len(fragment), bool(tasks),
         )
-        add_usage(retry_usage)
+        add_usage(retry_usage, "retry")
         usage["retry_used"] = True
         usage["semantic_attempts"] = 2
         if corrected_terms:
             representation, fragment = retrieve(search_terms=corrected_terms)
             if fragment:
-                tasks, selection_usage = _select_catalog_categories_from_fragment(
+                selected_tasks, selection_usage = _select_catalog_categories_from_fragment(
                     line, intent, representation, fragment,
                 )
-                add_usage(selection_usage)
+                add_usage(selection_usage, "selector")
+                tasks = selected_tasks
+                if selected_tasks:
+                    tasks, verifier_usage, decisions = _verify_catalog_category_tasks(
+                        representation.get("item") or intent.get("item") or line.get("name"), selected_tasks,
+                    )
+                    add_usage(verifier_usage, "verifier")
+                    verification_attempts.append({
+                        "before": selected_tasks, "after": tasks,
+                        "decisions": [
+                            {"source": source, "category_id": category_id, "keep": keep}
+                            for (source, category_id), keep in decisions.items()
+                        ],
+                    })
 
     usage["semantic_representation"] = representation
     usage["retrieval"] = retrieval_attempts[-1]
     usage["retrieval_attempts"] = retrieval_attempts
+    usage["verification_attempts"] = verification_attempts
+    usage["selector_categories"] = verification_attempts[-1]["before"] if verification_attempts else []
+    usage["verified_categories"] = tasks
     return tasks, usage, errors
 
 
@@ -1830,8 +1865,8 @@ def _select_catalog_categories_from_fragment(line, intent, representation, fragm
     }
     prompt = f"""Выбери реальные категории для поиска товара среди переданного локального фрагмента каталогов.
 Финальное решение принимай по смыслу товарной сущности, требованиям ТЗ, названию узла, parent, children и path. Retrieval score не является доказательством правильности и не передаётся тебе. Поставщики равноправны: выбери подходящие категории каждого источника, если они есть.
-Выбирай узел, только если искомый тип товара является самостоятельным основным объектом товаров этой категории. Не выбирай узел, если искомый предмет является только компонентом другого составного товара, принадлежностью или аксессуаром для другого основного объекта либо просто семантически связанным упоминанием. Совпадения слова в name или path недостаточно: определи основную товарную сущность категории целиком.
-Сохраняй полноту поиска: можно выбрать несколько узлов одного источника, если каждый действительно может содержать самостоятельные товары искомого типа. Широкий parent допустим, если он сам представляет искомый товарный тип и может дать дополнительные релевантные SKU. Не используй глубину дерева, leaf/child, длину или специфичность названия как признак качества и не удаляй parent только из-за наличия более узкого child. Проверяй каждый источник независимо: подходящая категория одного поставщика не заменяет подходящую категорию другого.
+Верни минимальный достаточный набор категорий, содержащих именно сам искомый товар. Для каждого узла задай вопрос: «Содержит ли эта категория сам искомый товар?» Если нет — не выбирай её. Не выбирай категории аксессуаров, упаковки, услуг, смежных товарных групп и общие категории «на заказ», когда в том же источнике уже есть точная категория искомого товара.
+Если точный узел уже обеспечивает поиск товарной сущности, не добавляй его широкий parent и почти одинаковые узлы того же источника без причины. Оставляй несколько узлов одного источника только когда каждый из них действительно расширяет полезный пул того же товара, не добавляя посторонние типы. Проверяй каждый источник независимо: точная категория одного поставщика не заменяет точную категорию другого. При сомнении лучше вернуть меньше категорий, чем загрязнить поиск нерелевантными ветками.
 Используй только переданные source и category_id. Если подходящей категории нет, верни пустой список; не выбирай лучшее из плохих.
 Верни только JSON: {{"categories":[{{"source":"код источника","category_id":"реальный ID","priority":1}}]}}
 
@@ -1867,6 +1902,39 @@ def _select_catalog_categories_from_fragment(line, intent, representation, fragm
         })
         used.add(key)
     return tasks[:8], usage
+
+
+def _verify_catalog_category_tasks(item, tasks):
+    compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    categories = [{
+        "source": _cell_text(value.get("source")).lower(),
+        "category_id": str(value.get("category_id", "")),
+        "name": _cell_text(value.get("name")),
+        "path": _cell_text(value.get("path")),
+    } for value in tasks if isinstance(value, dict)]
+    prompt = f"""SEMANTIC VERIFIER
+Проверь только уже выбранные категории. Для каждой реши, продаётся ли в ней искомый тип товара как самостоятельный товар.
+keep=false ставь только когда искомый предмет является частью другого составного товара, аксессуаром или принадлежностью к другой сущности либо категория относится к другому товарному типу.
+Ширина категории, её глубина, parent/child и наличие более узкой категории не являются причиной для удаления. Если категория может продавать сам искомый тип товара или ты не уверен, ставь keep=true.
+Не ищи и не добавляй категории. Верни решение для переданных пар source + category_id только в JSON: {{"categories":[{{"source":"...","category_id":"...","keep":true}}]}}
+
+ВХОД:
+{compact({"item": _cell_text(item), "categories": categories})}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=500)
+    available = {(value["source"], value["category_id"]) for value in categories}
+    decisions = {}
+    raw_categories = result.get("categories") if isinstance(result, dict) else []
+    for raw in raw_categories if isinstance(raw_categories, list) else []:
+        if not isinstance(raw, dict) or not isinstance(raw.get("keep"), bool):
+            continue
+        key = (_cell_text(raw.get("source")).lower(), str(raw.get("category_id", "")))
+        if key in available:
+            decisions[key] = raw["keep"]
+    kept = [
+        value for value in tasks
+        if decisions.get((_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))), True)
+    ]
+    return kept, usage, decisions
 
 
 def _refine_catalog_category_terms(line, intent, representation, candidate_count, selected):

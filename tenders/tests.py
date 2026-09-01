@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, _category_retrieval, _expand_category_graph, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
+from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, _verify_catalog_category_tasks, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -1446,10 +1446,15 @@ class TenderTests(TestCase):
 
     @patch("tenders.services._ai_gateway_json")
     def test_llm_category_selection_accepts_only_real_category_ids(self, gateway):
-        gateway.return_value = ({"categories": [
-            {"source": "oasis", "category_id": "invented", "priority": 1},
-            {"source": "oasis", "category_id": "polo", "priority": 1},
-        ]}, {})
+        gateway.side_effect = [
+            ({"categories": [
+                {"source": "oasis", "category_id": "invented", "priority": 1},
+                {"source": "oasis", "category_id": "polo", "priority": 1},
+            ]}, {}),
+            ({"categories": [
+                {"source": "oasis", "category_id": "polo", "keep": True},
+            ]}, {}),
+        ]
 
         tasks, usage, errors = _select_catalog_category_tasks(
             {"name": "Футболка поло"},
@@ -1465,7 +1470,9 @@ class TenderTests(TestCase):
             "path": "Одежда / Поло", "priority": 1,
         }])
         self.assertFalse(errors)
-        self.assertEqual(usage["llm_calls"], 1)
+        self.assertEqual(usage["llm_calls"], 2)
+        self.assertEqual(usage["selector_llm_calls"], 1)
+        self.assertEqual(usage["verifier_llm_calls"], 1)
         self.assertFalse(usage["retry_used"])
 
     @patch("tenders.services._ai_gateway_json")
@@ -1473,7 +1480,13 @@ class TenderTests(TestCase):
         captured = {}
 
         def answer(prompt, **kwargs):
-            captured["prompt"] = prompt
+            if "SEMANTIC VERIFIER" in prompt:
+                captured["verifier_prompt"] = prompt
+                return ({"categories": [
+                    {"source": "supplier-x", "category_id": "protective-headwear", "keep": True},
+                    {"source": "supplier-y", "category_id": "helmets", "keep": True},
+                ]}, {"input_tokens": 45, "output_tokens": 10})
+            captured["selector_prompt"] = prompt
             return ({"categories": [
                 {"source": "supplier-x", "category_id": "protective-headwear", "priority": 1},
                 {"source": "supplier-y", "category_id": "helmets", "priority": 1},
@@ -1512,24 +1525,70 @@ class TenderTests(TestCase):
             ],
         )
 
-        prompt = captured["prompt"]
+        prompt = captured["selector_prompt"]
         self.assertIn('"parent_id"', prompt)
         self.assertIn('"child_ids"', prompt)
         self.assertIn('"supplier-x"', prompt)
         self.assertIn('"supplier-y"', prompt)
-        self.assertIn("самостоятельным основным объектом", prompt)
-        self.assertIn("только компонентом другого составного товара", prompt)
-        self.assertIn("Не используй глубину дерева", prompt)
-        self.assertNotIn("минимальный достаточный набор", prompt)
-        self.assertNotIn("лучше вернуть меньше категорий", prompt)
+        self.assertIn("минимальный достаточный набор", prompt)
+        self.assertIn("лучше вернуть меньше категорий", prompt)
         self.assertNotIn('primary', prompt)
         self.assertNotIn('equivalent', prompt)
         self.assertNotIn('condition', prompt)
-        self.assertEqual(gateway.call_count, 1)
+        verifier_prompt = captured["verifier_prompt"]
+        self.assertIn('"item":"защитная каска"', verifier_prompt)
+        self.assertNotIn('"parent_id"', verifier_prompt)
+        self.assertNotIn('"child_ids"', verifier_prompt)
+        self.assertNotIn('"priority"', verifier_prompt)
+        self.assertNotIn("Сезон", verifier_prompt)
+        self.assertEqual(gateway.call_count, 2)
         self.assertEqual({value["source"] for value in tasks}, {"supplier-x", "supplier-y"})
-        self.assertEqual(usage["input_tokens"], 321)
-        self.assertEqual(usage["output_tokens"], 123)
-        self.assertEqual(usage["llm_calls"], 1)
+        self.assertEqual(usage["input_tokens"], 366)
+        self.assertEqual(usage["output_tokens"], 133)
+        self.assertEqual(usage["selector_input_tokens"], 321)
+        self.assertEqual(usage["verifier_input_tokens"], 45)
+        self.assertEqual(usage["llm_calls"], 2)
+        self.assertFalse(errors)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_category_verifier_removes_only_explicit_rejections_and_defaults_to_keep(self, gateway):
+        gateway.return_value = ({"categories": [
+            {"source": "gifts", "category_id": "mugs", "keep": True},
+            {"source": "gifts", "category_id": "sets", "keep": False},
+            {"source": "gifts", "category_id": "invented", "keep": False},
+        ]}, {"prompt_tokens": 50, "completion_tokens": 12})
+        tasks = [
+            {"source": "gifts", "category_id": "mugs", "name": "Кружки", "path": "Посуда > Кружки", "priority": 1},
+            {"source": "gifts", "category_id": "sets", "name": "Подарочные наборы", "path": "Наборы > С кружками", "priority": 1},
+            {"source": "gifts", "category_id": "tableware", "name": "Посуда", "path": "Посуда", "priority": 1},
+        ]
+
+        kept, usage, decisions = _verify_catalog_category_tasks("кружка", tasks)
+
+        self.assertEqual([value["category_id"] for value in kept], ["mugs", "tableware"])
+        self.assertEqual(usage["prompt_tokens"], 50)
+        self.assertEqual(decisions[("gifts", "sets")], False)
+        prompt = gateway.call_args.args[0]
+        self.assertIn("SEMANTIC VERIFIER", prompt)
+        self.assertNotIn('"priority"', prompt)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_category_verifier_does_not_trigger_semantic_retry(self, gateway):
+        gateway.side_effect = [
+            ({"categories": [{"source": "supplier", "category_id": "accessories", "priority": 1}]}, {}),
+            ({"categories": [{"source": "supplier", "category_id": "accessories", "keep": False}]}, {}),
+        ]
+
+        tasks, usage, errors = _select_catalog_category_tasks(
+            {"name": "Кружка"}, {"item": "кружка"}, [{
+                "source": "supplier", "category_id": "accessories", "name": "Для кружек",
+                "parent_id": "", "path": "Упаковка > Для кружек", "specificity": 1,
+            }],
+        )
+
+        self.assertEqual(tasks, [])
+        self.assertEqual(gateway.call_count, 2)
+        self.assertFalse(usage["retry_used"])
         self.assertFalse(errors)
 
     @patch("tenders.services._ai_gateway_json")
@@ -1538,6 +1597,7 @@ class TenderTests(TestCase):
             ({"categories": []}, {"prompt_tokens": 100, "completion_tokens": 10}),
             ({"search_terms": ["защитный шлем", "каска"]}, {"prompt_tokens": 40, "completion_tokens": 8}),
             ({"categories": [{"source": "supplier-a", "category_id": "helmet", "priority": 1}]}, {"prompt_tokens": 120, "completion_tokens": 10}),
+            ({"categories": [{"source": "supplier-a", "category_id": "helmet", "keep": True}]}, {"prompt_tokens": 30, "completion_tokens": 5}),
         ]
         tasks, usage, errors = _select_catalog_category_tasks(
             {"name": "Защитная каска"}, {"item": "каска"}, [
@@ -1548,11 +1608,13 @@ class TenderTests(TestCase):
             ],
         )
 
-        self.assertEqual(gateway.call_count, 3)
+        self.assertEqual(gateway.call_count, 4)
         self.assertEqual(tasks[0]["category_id"], "helmet")
-        self.assertEqual(usage["prompt_tokens"], 260)
-        self.assertEqual(usage["completion_tokens"], 28)
-        self.assertEqual(usage["llm_calls"], 3)
+        self.assertEqual(usage["prompt_tokens"], 290)
+        self.assertEqual(usage["completion_tokens"], 33)
+        self.assertEqual(usage["llm_calls"], 4)
+        self.assertEqual(usage["selector_llm_calls"], 2)
+        self.assertEqual(usage["verifier_llm_calls"], 1)
         self.assertEqual(usage["semantic_attempts"], 2)
         self.assertTrue(usage["retry_used"])
         self.assertFalse(errors)
