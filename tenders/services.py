@@ -1455,7 +1455,7 @@ def catalog_feedback_contract():
     }
 
 
-def _normalize_catalog_intent(raw):
+def _normalize_catalog_intent(raw, preserve_internal=False):
     """Keep the LLM catalogue planner structured while preserving legacy fields."""
     raw = raw if isinstance(raw, dict) else {}
 
@@ -1543,7 +1543,7 @@ def _normalize_catalog_intent(raw):
     product_class = _cell_text(raw.get("product_class"))[:100]
     if item and not categories:
         categories = [item]
-    return {
+    result = {
         "item": item,
         "product_class": product_class,
         "categories": categories,
@@ -1566,10 +1566,13 @@ def _normalize_catalog_intent(raw):
         "hard_constraints": text_list(raw.get("hard_constraints"), limit=12),
         "preferences": text_list(raw.get("preferences"), limit=8),
     }
+    if preserve_internal and raw.get("_source_only_confirmed") is True:
+        result["_source_only_confirmed"] = True
+    return result
 
 
 def _apply_catalog_operations(current, operations):
-    intent = _normalize_catalog_intent(current)
+    intent = _normalize_catalog_intent(current, preserve_internal=True)
     applied, errors = [], []
     if not isinstance(operations, list):
         return intent, applied, ["catalog_operations должен быть списком"]
@@ -1656,6 +1659,8 @@ def _apply_catalog_operations(current, operations):
                 intent["rule_scope"] = values[:12]
             else:
                 intent["allowed_sources" if op == "source_only" else "preferred_sources"] = values[:8]
+                if op == "source_only":
+                    intent["_source_only_confirmed"] = True
         elif op == "set_priority":
             if not field:
                 errors.append(f"Операция {index + 1}: для set_priority нужен field")
@@ -1681,6 +1686,9 @@ def _apply_catalog_operations(current, operations):
             intent["ranking"] = [item for item in intent["ranking"] if _catalog_field(item.get("criterion")) != field]
             for group in ("required", "preferred", "secondary"):
                 intent[group] = [item for item in intent[group] if _catalog_field(item.get("label")) != field]
+            if op == "remove_rule" and field == "source":
+                intent["allowed_sources"] = []
+                intent.pop("_source_only_confirmed", None)
             if op == "ignore":
                 set_ranking(field, 0)
         elif op == "set_missing_policy":
@@ -3279,7 +3287,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         catalog_intent, applied_operations, contract_errors = _apply_catalog_operations(current_intent, raw_operations)
     elif feedback:
         translated_operations, translation_usage, translation_errors = _translate_catalog_feedback(line, current_intent, feedback)
-        catalog_intent, applied_operations, operation_errors = _apply_catalog_operations(current_intent, translated_operations) if translated_operations else (_normalize_catalog_intent(current_intent), [], [])
+        catalog_intent, applied_operations, operation_errors = _apply_catalog_operations(current_intent, translated_operations) if translated_operations else (_normalize_catalog_intent(current_intent, preserve_internal=True), [], [])
         contract_errors = [*translation_errors, *operation_errors]
         usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (translation_usage.get("prompt_tokens", 0) or 0)
         usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (translation_usage.get("completion_tokens", 0) or 0)

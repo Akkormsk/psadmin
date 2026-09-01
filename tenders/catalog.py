@@ -2143,6 +2143,14 @@ def _fit_product(product, line, anchors, quantity, intent=None):
         else:
             mismatches.append(f"{display_label} не совпадает: требуется {value}; в каталоге {', '.join(offered_values)}")
 
+    if quantity > 0:
+        if product.total_stock >= quantity:
+            matches.append(f"Остаток достаточен: {product.total_stock} шт.")
+        elif product.is_on_order:
+            mismatches.append(f"На складе {product.total_stock} из {quantity} шт.; товар доступен только под заказ")
+        else:
+            mismatches.append(f"Недостаточный остаток: {product.total_stock} из {quantity} шт.")
+
     size_quantities = _requested_size_quantities(line)
     if size_quantities:
         stock_by_size = {}
@@ -2156,18 +2164,95 @@ def _fit_product(product, line, anchors, quantity, intent=None):
                 matches.append(f"Размер {size}: доступно {available} шт., требуется {needed} шт.")
             else:
                 mismatches.append(f"Размер {size}: доступно {available} из {needed} шт.")
-    elif quantity > 0:
-        if product.total_stock >= quantity:
-            matches.append(f"Остаток достаточен: {product.total_stock} шт.")
-        elif product.is_on_order:
-            mismatches.append(f"На складе {product.total_stock} из {quantity} шт.; товар доступен только под заказ")
-        else:
-            mismatches.append(f"Недостаточный остаток: {product.total_stock} из {quantity} шт.")
 
     score = _catalog_parameter_score(matches, mismatches, unknown, _planner_weight_map(intent))
     if name_color_match:
         score += 8
     return score, matches, mismatches, unknown
+
+
+def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent):
+    score, matches, mismatches, unknown = _fit_product(
+        product, effective_line, anchors, quantity, intent=intent,
+    )
+    hard_reasons, hard_codes, partial_reasons = [], [], []
+    if "Не совпадает тип товара" in mismatches:
+        hard_reasons.append("Не совпадает тип товара")
+        hard_codes.append("product_type")
+    if quantity > 0 and product.total_stock < quantity:
+        hard_reasons.append(f"Недостаточный общий остаток: требуется {quantity}, доступно {product.total_stock}")
+        hard_codes.append("insufficient_total_stock")
+
+    allowed_sources = {
+        _normalized(value) for value in intent.get("allowed_sources", [])
+        if _normalized(value)
+    } if isinstance(intent, dict) and intent.get("_source_only_confirmed") else set()
+    if allowed_sources and not ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & allowed_sources):
+        hard_reasons.append("Источник запрещён подтверждённым правилом source_only")
+        hard_codes.append("source")
+
+    requirement_keys = {_requirement_identity(value) for value in _product_requirement_values(effective_line)}
+    constraint_matches, constraint_mismatches, constraint_unknown, _ = _evaluate_structured_constraints(
+        product, intent, requirement_keys=requirement_keys,
+    )
+    matches.extend(constraint_matches)
+    mismatches.extend(constraint_mismatches)
+    unknown.extend(constraint_unknown)
+
+    for constraint in _deduplicated_structured_constraints(intent):
+        single_matches, single_mismatches, _, _ = _evaluate_structured_constraints(
+            product, {"constraints": [constraint]},
+        )
+        if single_matches or not single_mismatches:
+            continue
+        operator = _normalized(constraint.get("operator")).replace(" ", "_")
+        level = _normalized(constraint.get("level"))
+        missing_policy = _normalized(constraint.get("missing_policy")).replace(" ", "_")
+        field = _criterion_key(constraint.get("field"))
+        offered = _constraint_product_values(product, field)
+        if operator in {"not_in", "not_contains"}:
+            hard_reasons.extend(single_mismatches)
+            hard_codes.append("forbidden")
+        elif not offered and level == "required" and missing_policy == "reject":
+            hard_reasons.extend(single_mismatches)
+            hard_codes.append("missing_required")
+        elif level == "required":
+            partial_reasons.extend(single_mismatches)
+
+    required_fields = {
+        _requirement_field(value.get("label")) for value in _product_requirement_values(line)
+    } | {
+        _criterion_key(value.get("label"))
+        for value in _planner_requirements(intent) if value.get("group") == "required"
+    }
+    for mismatch in mismatches:
+        if mismatch in hard_reasons or mismatch.startswith(("Недостаточный остаток", "На складе")):
+            continue
+        if mismatch.startswith("Размер ") or _criterion_key(mismatch) in required_fields:
+            partial_reasons.append(mismatch)
+
+    hard_reasons = list(dict.fromkeys(hard_reasons))
+    partial_reasons = list(dict.fromkeys(partial_reasons))
+    if hard_reasons:
+        status = "rejected"
+        reasons = hard_reasons
+    elif partial_reasons:
+        status = "partial_eligible"
+        reasons = partial_reasons
+    else:
+        status = "exact_eligible"
+        reasons = []
+    return {
+        "status": status,
+        "reasons": reasons,
+        "hard_codes": list(dict.fromkeys(hard_codes)),
+        "score": score + _catalog_parameter_score(
+            constraint_matches, constraint_mismatches, constraint_unknown, _planner_weight_map(intent),
+        ),
+        "matches": list(dict.fromkeys(matches)),
+        "mismatches": list(dict.fromkeys(mismatches)),
+        "unknown": list(dict.fromkeys(unknown)),
+    }
 
 
 def catalog_candidates_for_line(
@@ -2367,46 +2452,46 @@ def catalog_candidates_for_line(
     }
     ranked = []
     rejections = {
-        "out_of_stock": 0, "source": 0, "product_type": 0, "forbidden": 0,
+        "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
+        "product_type": 0, "forbidden": 0, "missing_required": 0,
     }
-    allowed_source_values = intent.get("allowed_sources", []) if isinstance(intent, dict) and isinstance(intent.get("allowed_sources"), list) else []
-    allowed_sources = {_normalized(value) for value in allowed_source_values if _normalized(value)}
+    eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
+    rejection_reasons, partial_reasons = {}, {}
     for product in pool:
         if product.total_stock <= 0:
             rejections["out_of_stock"] += 1
+            eligibility_counts["rejected"] += 1
+            rejection_reasons["Нулевой остаток"] = rejection_reasons.get("Нулевой остаток", 0) + 1
             continue
-        if allowed_sources and not ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & allowed_sources):
-            rejections["source"] += 1
-            continue
-        score, matches, mismatches, unknown = _fit_product(product, effective_line, anchors, quantity, intent=intent)
-        if "Не совпадает тип товара" in mismatches:
-            rejections["product_type"] += 1
-            continue
-        requirement_keys = {_requirement_identity(value) for value in _product_requirement_values(effective_line)}
-        constraint_matches, constraint_mismatches, constraint_unknown, constraint_hard = _evaluate_structured_constraints(
-            product, intent, requirement_keys=requirement_keys,
+        eligibility = _catalog_product_eligibility(
+            product, line, effective_line, anchors, quantity, intent,
         )
-        exclusion_constraints = [
-            value for value in intent.get("constraints", [])
-            if isinstance(value, dict) and _normalized(value.get("operator")).replace(" ", "_") in {"not_in", "not_contains"}
-        ] if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []
-        _, _, _, exclusion_hard = _evaluate_structured_constraints(
-            product, {"constraints": exclusion_constraints},
-        )
-        if exclusion_hard:
-            rejections["forbidden"] += 1
+        if eligibility["status"] == "rejected":
+            eligibility_counts["rejected"] += 1
+            for code in eligibility["hard_codes"]:
+                if code in rejections:
+                    rejections[code] += 1
+            for reason in eligibility["reasons"]:
+                label = (
+                    "Недостаточный общий остаток" if reason.startswith("Недостаточный общий остаток")
+                    else reason
+                )
+                rejection_reasons[label] = rejection_reasons.get(label, 0) + 1
             continue
-        matches.extend(constraint_matches)
-        mismatches.extend(constraint_mismatches)
-        unknown.extend(constraint_unknown)
-        score += _catalog_parameter_score(constraint_matches, constraint_mismatches, constraint_unknown, _planner_weight_map(intent))
-        required_violation = bool(_required_mismatches(mismatches, intent) or constraint_hard)
+        eligibility_counts[eligibility["status"]] += 1
+        if eligibility["status"] == "partial_eligible":
+            for reason in eligibility["reasons"]:
+                partial_reasons[reason] = partial_reasons.get(reason, 0) + 1
         name_score = SequenceMatcher(
             None,
             _normalized(line.get("name", "")),
             _normalized(product.full_name or product.name),
         ).ratio()
-        ranked.append((score, name_score, product, matches, mismatches, unknown, required_violation))
+        ranked.append((
+            eligibility["score"], name_score, product,
+            eligibility["matches"], eligibility["mismatches"], eligibility["unknown"],
+            eligibility["status"] == "partial_eligible", eligibility["status"], eligibility["reasons"],
+        ))
     price_weight = _ranking_weight(intent, "цена", "стоимость")
     name_weight = _ranking_weight(intent, "название", "наименование", "модель")
     prices = [value[2].effective_price for value in ranked if value[2].effective_price is not None]
@@ -2437,10 +2522,9 @@ def catalog_candidates_for_line(
         _normalized(value[2].full_name or value[2].name),
         _normalized(value[2].article),
     ))
-    required_compliant = [value for value in ranked if not value[6]]
-    display_ranked = required_compliant or ranked
+    display_ranked = ranked
     selected, seen_groups = [], set()
-    for score, name_score, product, matches, mismatches, unknown, _ in display_ranked:
+    for score, name_score, product, matches, mismatches, unknown, _, eligibility_status, eligibility_reasons in display_ranked:
         group_key = product.group_id or product.external_id
         if group_key in seen_groups:
             continue
@@ -2471,6 +2555,8 @@ def catalog_candidates_for_line(
             "matches": matches,
             "mismatches": mismatches,
             "unknown": unknown,
+            "eligibility": eligibility_status,
+            "eligibility_reasons": eligibility_reasons,
             "score": round(score, 2),
             "synced_at": timezone.now().isoformat(),
             "category": (
@@ -2498,8 +2584,11 @@ def catalog_candidates_for_line(
                 "terms": text_terms,
                 "pool_count": len(pool),
                 "rejections": rejections,
-                "exact_count": sum(not value[4] and not value[5] for value in ranked),
-                "partial_count": sum(bool(value[4] or value[5]) for value in ranked),
+                "eligibility_counts": eligibility_counts,
+                "rejection_reasons": rejection_reasons,
+                "partial_reasons": partial_reasons,
+                "exact_count": eligibility_counts["exact_eligible"],
+                "partial_count": eligibility_counts["partial_eligible"],
                 "candidate_count": len(selected),
             }],
             "category_usage": category_usage,

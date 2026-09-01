@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from calculator.models import CalculatorSettings, PriceItem
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, _category_retrieval, _expand_category_graph, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, _verify_catalog_category_tasks, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
+from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, _verify_catalog_category_tasks, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -1798,6 +1798,7 @@ class TenderTests(TestCase):
                     "name": "Футболка с длинным рукавом", "full_name": "Футболка с длинным рукавом белая",
                     "categories": ["long"], "colors": ["белый"],
                     "materials": ["хлопок 100%, плотность 190 г/м2"],
+                    "attributes": [{"name": "Плотность", "value": "190 г/м²"}],
                     "total_stock": 100, "price": 700,
                 }]
 
@@ -1819,7 +1820,8 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["external_id"], "near")
         self.assertEqual(result[0]["fit"], "partial")
-        self.assertTrue(any("Плотность" in value for value in result[0]["unknown"]))
+        self.assertEqual(result[0]["eligibility"], "partial_eligible")
+        self.assertTrue(any("Плотность" in value for value in result[0]["mismatches"]))
 
     def test_catalog_search_falls_back_to_server_category_priority_when_selector_fails(self):
         requested_categories = []
@@ -2285,12 +2287,23 @@ class TenderTests(TestCase):
         self.assertEqual(len(applied), len(operations))
         self.assertEqual(updated["synonyms"], ["футболка поло"])
         self.assertEqual(updated["allowed_sources"], ["oasis"])
+        self.assertIs(updated["_source_only_confirmed"], True)
         self.assertEqual(updated["preferred_sources"], ["gifts"])
         self.assertEqual(updated["rule_scope"], ["одежда", "текстиль"])
         self.assertFalse(any(value["field"] == "branding" for value in updated["constraints"]))
         self.assertEqual(applied[9], {
             "op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty",
         })
+
+    def test_catalog_intent_does_not_trust_llm_source_only_marker(self):
+        normalized = _normalize_catalog_intent({
+            "item": "поло",
+            "allowed_sources": ["oasis"],
+            "_source_only_confirmed": True,
+        })
+
+        self.assertEqual(normalized["allowed_sources"], ["oasis"])
+        self.assertNotIn("_source_only_confirmed", normalized)
 
     def test_catalog_contract_compiles_deprioritized_missing_value_to_missing_policy(self):
         updated, applied, errors = _apply_catalog_operations({"categories": ["поло"]}, [
@@ -2584,6 +2597,40 @@ class TenderTests(TestCase):
         self.assertFalse(any(value["field"] == "density" for value in result["normalized_requirements"]))
         self.assertTrue(any(value.startswith("Материал:") for value in result["matches"]))
         self.assertTrue(any(value.startswith("Цвет:") for value in result["matches"]))
+        self.assertEqual(result["eligibility"], "exact_eligible")
+
+    def test_real_white_polo_group_is_partial_when_one_requested_size_is_short(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 3072, "name": "Футболки поло оптом", "path": "categories/tekstil/polo/polo"}]
+                return [
+                    {
+                        "id": f"1-000042293-{size}", "article": f"873106{size}",
+                        "group_id": "1-000042293-model", "color_group_id": "1-000042293",
+                        "name": "Рубашка поло, белая", "full_name": "Рубашка поло, белая",
+                        "size": size, "colors": ["белый"], "price": "1411.24",
+                        "total_stock": stock, "categories": [3072],
+                    }
+                    for size, stock in (
+                        ("XS", 423), ("S", 493), ("M", 1907), ("L", 1561), ("XL", 1334),
+                        ("2XL", 916), ("3XL", 369), ("4XL", 268), ("5XL", 202),
+                    )
+                ]
+
+        candidate = catalog_candidates_for_line(
+            {"name": "Белое поло", "quantity": 600, "requirements": {"requirements": [
+                {"label": "Цвет", "value": "белый"},
+                {"label": "Размерная раскладка", "value": "S — 500; M — 100"},
+            ]}},
+            limit=1, intent={"item": "поло"}, client=Client(),
+        )[0]
+
+        self.assertEqual(candidate["eligibility"], "partial_eligible")
+        self.assertIn("Размер S: доступно 493 из 500 шт.", candidate["eligibility_reasons"])
+        self.assertTrue(any(value == "Остаток достаточен: 7473 шт." for value in candidate["matches"]))
 
     def test_color_group_preserves_variants_and_checks_explicit_size_quantities(self):
         class Client:
@@ -2622,7 +2669,8 @@ class TenderTests(TestCase):
         ])
         self.assertTrue(any("Размер S" in value and "5 шт." in value for value in with_sizes["matches"]))
         self.assertTrue(any("Размер M" in value and "4 из 5" in value for value in with_sizes["mismatches"]))
-        self.assertFalse(any(value.startswith("Остаток достаточен") for value in with_sizes["matches"]))
+        self.assertEqual(with_sizes["eligibility"], "partial_eligible")
+        self.assertTrue(any(value.startswith("Остаток достаточен") for value in with_sizes["matches"]))
 
         without_sizes = catalog_candidates_for_line(
             {"name": "Белое поло", "quantity": 29, "requirements": {"requirements": [
@@ -2631,7 +2679,140 @@ class TenderTests(TestCase):
             limit=1, intent={"item": "поло"}, client=Client(),
         )[0]
         self.assertTrue(any(value == "Остаток достаточен: 29 шт." for value in without_sizes["matches"]))
+        self.assertEqual(without_sizes["eligibility"], "exact_eligible")
         self.assertFalse(any("Размер " in value for value in without_sizes["matches"] + without_sizes["mismatches"] + without_sizes["unknown"]))
+
+    def test_catalog_eligibility_rejects_insufficient_color_group_total_stock(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 3072, "name": "Поло", "path": "categories/tekstil/polo"}]
+                return [
+                    {
+                        "id": f"white-{size}", "article": f"W-{size}", "group_id": "polo",
+                        "color_group_id": "polo-white", "name": "Поло", "full_name": "Поло белое",
+                        "size": size, "colors": ["белый"], "price": 500, "total_stock": stock,
+                        "categories": [3072],
+                    }
+                    for size, stock in (("S", 5), ("M", 15))
+                ]
+
+        result = catalog_candidates_for_line(
+            {"name": "Белое поло", "quantity": 50, "requirements": {"requirements": [
+                {"label": "Цвет", "value": "белый"},
+            ]}},
+            limit=3, intent={"item": "поло"}, client=Client(), include_diagnostics=True,
+        )
+
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["attempts"][0]["eligibility_counts"]["rejected"], 1)
+        self.assertEqual(result["attempts"][0]["rejection_reasons"]["Недостаточный общий остаток"], 1)
+
+    def test_catalog_eligibility_keeps_positive_required_mismatch_but_rejects_prohibition(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 3072, "name": "Поло", "path": "categories/tekstil/polo"}]
+                return [
+                    {
+                        "id": "male-poly", "article": "MP", "group_id": "male-poly", "name": "Поло мужское",
+                        "full_name": "Поло мужское, белое", "materials": ["полиэстер"], "colors": ["белый"],
+                        "price": 400, "total_stock": 100, "categories": [3072],
+                    },
+                    {
+                        "id": "female-cotton", "article": "FC", "group_id": "female-cotton", "name": "Поло женское",
+                        "full_name": "Поло женское, белое", "materials": ["хлопок"], "colors": ["белый"],
+                        "price": 400, "total_stock": 100, "categories": [3072],
+                    },
+                ]
+
+        result = catalog_candidates_for_line(
+            {"name": "Белое поло", "quantity": 20, "requirements": {"requirements": [
+                {"label": "Материал", "value": "хлопок"},
+                {"label": "Цвет", "value": "белый"},
+            ]}},
+            limit=3,
+            intent={
+                "item": "поло",
+                "required": [{"label": "Материал", "value": "хлопок", "weight": 1}],
+                "constraints": [{
+                    "field": "gender", "operator": "not_in", "values": ["female"],
+                    "level": "required", "missing_policy": "allow",
+                }],
+            },
+            client=Client(), include_diagnostics=True,
+        )
+
+        self.assertEqual([value["external_id"] for value in result["candidates"]], ["male-poly"])
+        self.assertEqual(result["candidates"][0]["eligibility"], "partial_eligible")
+        self.assertTrue(any("Материал не совпадает" in value for value in result["candidates"][0]["eligibility_reasons"]))
+        self.assertEqual(result["attempts"][0]["eligibility_counts"]["rejected"], 1)
+
+    def test_catalog_eligibility_applies_missing_policy_without_penalty(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 20, "name": "Кружки", "path": "categories/posuda/kruzhki"}]
+                return [{
+                    "id": "mug", "article": "M", "group_id": "mug", "name": "Кружка",
+                    "full_name": "Кружка белая", "colors": ["белый"], "price": 300,
+                    "total_stock": 100, "categories": [20],
+                }]
+
+        def outcome(policy):
+            return catalog_candidates_for_line(
+                {"name": "Кружка", "quantity": 10, "requirements": {"requirements": [
+                    {"label": "Плотность", "value": "не менее 180 г/м²"},
+                ]}},
+                limit=1,
+                intent={"item": "кружка", "constraints": [{
+                    "field": "density", "operator": "gte", "values": ["180"],
+                    "level": "required", "missing_policy": policy,
+                }]},
+                client=Client(), include_diagnostics=True,
+            )
+
+        rejected = outcome("reject")
+        allowed = outcome("allow")
+        allowed_with_penalty = outcome("allow_with_penalty")
+
+        self.assertEqual(rejected["candidates"], [])
+        self.assertEqual(rejected["attempts"][0]["eligibility_counts"]["rejected"], 1)
+        self.assertEqual(allowed["candidates"][0]["eligibility"], "exact_eligible")
+        self.assertEqual(allowed_with_penalty["candidates"][0]["eligibility"], "exact_eligible")
+        self.assertTrue(allowed_with_penalty["candidates"][0]["unknown"])
+
+    def test_catalog_eligibility_enforces_source_only_only_after_confirmed_operation(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 20, "name": "Кружки", "path": "categories/posuda/kruzhki"}]
+                return [{
+                    "id": "mug", "article": "M", "group_id": "mug", "name": "Кружка",
+                    "full_name": "Кружка", "price": 300, "total_stock": 100, "categories": [20],
+                }]
+
+        line = {"name": "Кружка", "quantity": 10}
+        llm_only = catalog_candidates_for_line(
+            line, limit=1, intent={"item": "кружка", "allowed_sources": ["gifts"]}, client=Client(),
+        )
+        confirmed = catalog_candidates_for_line(
+            line, limit=1,
+            intent={"item": "кружка", "allowed_sources": ["gifts"], "_source_only_confirmed": True},
+            client=Client(), include_diagnostics=True,
+        )
+
+        self.assertEqual(llm_only[0]["eligibility"], "exact_eligible")
+        self.assertEqual(confirmed["candidates"], [])
+        self.assertEqual(confirmed["attempts"][0]["rejections"]["source"], 1)
 
     def test_catalog_search_uses_name_shade_as_soft_hint_with_explicit_parent_color(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
@@ -2740,7 +2921,7 @@ class TenderTests(TestCase):
 
         self.assertEqual([value["external_id"] for value in candidates], ["polo"])
 
-    def test_catalog_search_excludes_product_that_breaks_llm_required_constraint(self):
+    def test_catalog_search_marks_product_that_breaks_positive_required_constraint_partial(self):
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -2769,7 +2950,8 @@ class TenderTests(TestCase):
 
         candidates = catalog_candidates_for_line(line, limit=3, intent=intent, client=Client())
 
-        self.assertEqual([value["external_id"] for value in candidates], ["cotton"])
+        self.assertEqual([value["external_id"] for value in candidates], ["cotton", "cheap-polyester"])
+        self.assertEqual([value["eligibility"] for value in candidates], ["exact_eligible", "partial_eligible"])
 
     def test_catalog_constraints_exclude_forbidden_value_and_read_fact_from_name_or_attribute(self):
         class Client:
@@ -2809,7 +2991,7 @@ class TenderTests(TestCase):
         self.assertEqual(sum("Пол" in value for value in candidates[0]["matches"]), 1)
         self.assertTrue(any("Пол не указан" in value for value in candidates[1]["unknown"]))
 
-    def test_catalog_constraints_apply_numeric_limits_before_ranking(self):
+    def test_catalog_positive_numeric_constraints_keep_nearest_alternatives_partial(self):
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -2830,7 +3012,9 @@ class TenderTests(TestCase):
 
         candidates = catalog_candidates_for_line({"name": "Поло", "quantity": 100}, limit=10, intent=intent, client=Client())
 
-        self.assertEqual([value["external_id"] for value in candidates], ["valid"])
+        self.assertEqual([value["external_id"] for value in candidates], ["valid", "thin", "expensive"])
+        self.assertEqual(candidates[0]["eligibility"], "exact_eligible")
+        self.assertTrue(all(value["eligibility"] == "partial_eligible" for value in candidates[1:]))
 
     def test_catalog_search_can_prioritize_price_over_preferred_material(self):
         class Client:
@@ -3016,7 +3200,7 @@ class TenderTests(TestCase):
         self.assertEqual(candidates[0]["external_id"], "shirt")
         self.assertEqual(candidates[0]["supplier_code"], "gifts")
 
-    def test_catalog_search_excludes_zero_stock_and_ranks_shortage_after_available(self):
+    def test_catalog_search_rejects_zero_stock_and_total_stock_shortage(self):
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -3032,8 +3216,8 @@ class TenderTests(TestCase):
         line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}, {"label": "Цвет", "value": "белый"}]}}
         candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "футболка"}, client=Client())
 
-        self.assertEqual([value["external_id"] for value in candidates], ["available", "shortage"])
-        self.assertTrue(any("Недостаточный остаток" in value for value in candidates[1]["mismatches"]))
+        self.assertEqual([value["external_id"] for value in candidates], ["available"])
+        self.assertEqual(candidates[0]["eligibility"], "exact_eligible")
 
     def test_catalog_search_does_not_call_a_shirt_with_long_sleeves_a_longsleeve(self):
         class Client:
