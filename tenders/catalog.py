@@ -252,28 +252,42 @@ def _gifts_image_url(image_src):
 
 def _gifts_tree_index(tree_xml):
     categories, products = [], {}
-    for _, page in ElementTree.iterparse(tree_xml, events=("end",)):
-        if page.tag.rsplit("}", 1)[-1] != "page":
+    for _, node in ElementTree.iterparse(tree_xml, events=("end",)):
+        node_name = node.tag.rsplit("}", 1)[-1]
+        if node_name == "product":
+            product_id = node.attrib.get("product") or _gifts_text(node, "product") or _text(node.text, 500)
+            page_id = node.attrib.get("page") or _gifts_text(node, "page")
+            if product_id and page_id:
+                category_ids = products.setdefault(str(product_id), [])
+                if str(page_id) not in category_ids:
+                    category_ids.append(str(page_id))
+                node.clear()
             continue
-        page_id = _text(page.attrib.get("page_id") or _gifts_text(page, "page_id"), 100)
-        page_name = _text(page.attrib.get("name") or _gifts_text(page, "name"), 300)
+        if node_name != "page":
+            continue
+        page_id = _text(node.attrib.get("page_id") or _gifts_text(node, "page_id"), 100)
+        page_name = _text(node.attrib.get("name") or _gifts_text(node, "name"), 300)
         if page_id and page_name:
             categories.append({
                 "external_id": page_id,
                 "parent_external_id": _text(
-                    page.attrib.get("parent_id") or page.attrib.get("parent_page_id")
-                    or _gifts_text(page, "parent_id"), 100,
+                    node.attrib.get("parent_id") or node.attrib.get("parent_page_id")
+                    or _gifts_text(node, "parent_id"), 100,
                 ),
                 "name": page_name,
                 "path": page_name,
             })
-            for product in page.iter():
+            for product in node.iter():
                 if product.tag.rsplit("}", 1)[-1] != "product":
                     continue
                 product_id = product.attrib.get("product") or _gifts_text(product, "product") or _text(product.text, 500)
                 if product_id:
-                    products.setdefault(str(product_id), []).append(page_id)
-        page.clear()
+                    category_ids = products.setdefault(str(product_id), [])
+                    if page_id not in category_ids:
+                        category_ids.append(page_id)
+            node.clear()
+        elif list(node):
+            node.clear()
     return categories, products
 
 

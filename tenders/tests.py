@@ -1239,6 +1239,19 @@ class TenderTests(TestCase):
             "path": "Одежда / Футболки с длинным рукавом",
         }])
 
+    def test_gifts_parser_reads_flat_product_page_links(self):
+        product_xml = StringIO("""<doct><product><product_id>111501</product_id><code>PU422001</code><name>Рубашка поло</name></product></doct>""")
+        tree_xml = StringIO("""
+            <doct><page>
+                <page><page_id>1105688</page_id><name>Футболки поло</name></page>
+                <product><page>1105688</page><product>111501</product></product>
+            </page></doct>
+        """)
+
+        rows = parse_gifts_catalog(product_xml, tree_xml)
+
+        self.assertEqual(rows[0]["category_ids"], ["1105688"])
+
     def test_gifts_parser_uses_primary_catalog_image(self):
         product_xml = StringIO("""<doct><product product_id="93294"><code>26728.60</code><name>Жилет Kama, белый</name><super_big_image src="reviewer/webp/26/6728.60_1_500.webp?v=2"/></product></doct>""")
         tree_xml = StringIO("<doct/>")
