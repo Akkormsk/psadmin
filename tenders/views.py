@@ -152,6 +152,20 @@ def gifts_raw_sample(request):
                 product.clear()
                 if products.keys() >= articles:
                     break
+        product_ids = {
+            _gifts_text(ElementTree.fromstring(value), "product_id")
+            for value in products.values()
+        }
+        tree_context = {}
+        with client.open("catalogue/tree.xml") as tree_xml:
+            tree_raw = tree_xml.read()
+            for product_id in product_ids:
+                marker = product_id.encode()
+                offset = tree_raw.find(marker)
+                if offset >= 0:
+                    tree_context[product_id] = tree_raw[max(0, offset - 500):offset + 500].decode(
+                        "utf-8", errors="replace",
+                    )
         stocks = {}
         with client.open("catalogue/stock.xml") as stock_xml:
             for _, stock in ElementTree.iterparse(stock_xml, events=("end",)):
@@ -167,7 +181,7 @@ def gifts_raw_sample(request):
             filter_type = filters_raw[:200000]
     except CatalogSyncError as exc:
         return JsonResponse({"error": str(exc)}, status=502)
-    return JsonResponse({"products": products, "stocks": stocks, "color_filtertype": filter_type, "missing": sorted(articles - products.keys())}, json_dumps_params={"ensure_ascii": False})
+    return JsonResponse({"products": products, "tree_context": tree_context, "stocks": stocks, "color_filtertype": filter_type, "missing": sorted(articles - products.keys())}, json_dumps_params={"ensure_ascii": False})
 
 def _document_upload_error(upload):
     if upload is None:
