@@ -2540,6 +2540,99 @@ class TenderTests(TestCase):
         self.assertEqual(client.offsets, [0, 500, 1000])
         self.assertEqual(outcome["sources"]["oasis"]["received"], 1001)
 
+    def test_catalog_comparison_normalizes_and_deduplicates_volume_requirements(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 20, "name": "Кружки", "path": "categories/posuda/kruzhki"}]
+                return [{
+                    "id": "mug", "article": "MUG-400", "group_id": "mug", "name": "Кружка Depansar",
+                    "full_name": "Кружка Depansar с пробковым дном, черная", "materials": ["керамика", "пробка"],
+                    "colors": ["черный"], "attributes": [{"name": "Объем, мл", "value": "400"}],
+                    "price": "500", "total_stock": 100, "categories": [20],
+                }]
+
+        line = {"name": "Кружка", "quantity": 10, "requirements": {"requirements": [
+            {"label": "Объём", "value": "400 мл"},
+            {"label": "Объем", "value": "400 см³"},
+            {"label": "Материал", "value": "керамика"},
+            {"label": "Цвет", "value": "черный"},
+            {"label": "Индивидуальная упаковка: плотность", "value": "не менее 300 г/м²"},
+        ]}}
+        result = catalog_candidates_for_line(
+            line, limit=1,
+            intent={
+                "item": "кружка",
+                "required": [{"label": "Плотность", "value": "190 г/м²", "weight": 1}],
+                "constraints": [
+                    {"field": "volume", "operator": "eq", "values": ["400 ml"], "level": "required"},
+                    {"field": "volume", "operator": "eq", "values": ["400 куб. см"], "level": "required"},
+                ],
+            },
+            client=Client(),
+        )[0]
+
+        volume_requirements = [value for value in result["normalized_requirements"] if value["field"] == "volume"]
+        volume_product_values = [value for value in result["normalized_product_values"] if value["field"] == "volume"]
+        self.assertEqual(volume_requirements, [{"field": "volume", "operator": "eq", "value": "400", "unit": "ml"}])
+        self.assertEqual(volume_product_values, [{"field": "volume", "value": "400", "unit": "ml"}])
+        self.assertEqual(sum(value.startswith("Объём:") for value in result["matches"]), 1)
+        self.assertFalse(any("Объём" in value for value in result["mismatches"] + result["unknown"]))
+        self.assertFalse(any("Плотность" in value for value in result["matches"] + result["mismatches"] + result["unknown"]))
+        self.assertFalse(any(value["field"] == "density" for value in result["normalized_requirements"]))
+        self.assertTrue(any(value.startswith("Материал:") for value in result["matches"]))
+        self.assertTrue(any(value.startswith("Цвет:") for value in result["matches"]))
+
+    def test_color_group_preserves_variants_and_checks_explicit_size_quantities(self):
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 3072, "name": "Футболки поло оптом", "path": "categories/tekstil/polo/polo"}]
+                return [
+                    {
+                        "id": product_id, "article": article, "group_id": "helios", "color_group_id": "helios-white",
+                        "name": "Мужское поло Helios", "full_name": "Мужское поло Helios, белое", "size": size,
+                        "colors": ["белый"], "price": price, "total_stock": stock, "categories": [3072],
+                    }
+                    for product_id, article, size, stock, price in (
+                        ("helios-s", "H-S", "S", 5, "500"),
+                        ("helios-m", "H-M", "M", 4, "510"),
+                        ("helios-l", "H-L", "L", 20, "520"),
+                    )
+                ]
+
+        with_sizes = catalog_candidates_for_line(
+            {"name": "Белое поло", "quantity": 10, "requirements": {"requirements": [
+                {"label": "Цвет", "value": "белый"},
+                {"label": "Размерный ряд", "value": "S — 5 шт.; M — 5 шт."},
+            ]}},
+            limit=1, intent={"item": "поло"}, client=Client(),
+        )[0]
+
+        self.assertEqual(with_sizes["color_group_id"], "helios-white")
+        self.assertEqual(with_sizes["stock"], 29)
+        self.assertEqual(with_sizes["variants"], [
+            {"size": "S", "product_id": "helios-s", "article": "H-S", "stock": 5, "price": "500.00"},
+            {"size": "M", "product_id": "helios-m", "article": "H-M", "stock": 4, "price": "510.00"},
+            {"size": "L", "product_id": "helios-l", "article": "H-L", "stock": 20, "price": "520.00"},
+        ])
+        self.assertTrue(any("Размер S" in value and "5 шт." in value for value in with_sizes["matches"]))
+        self.assertTrue(any("Размер M" in value and "4 из 5" in value for value in with_sizes["mismatches"]))
+        self.assertFalse(any(value.startswith("Остаток достаточен") for value in with_sizes["matches"]))
+
+        without_sizes = catalog_candidates_for_line(
+            {"name": "Белое поло", "quantity": 29, "requirements": {"requirements": [
+                {"label": "Цвет", "value": "белый"},
+            ]}},
+            limit=1, intent={"item": "поло"}, client=Client(),
+        )[0]
+        self.assertTrue(any(value == "Остаток достаточен: 29 шт." for value in without_sizes["matches"]))
+        self.assertFalse(any("Размер " in value for value in without_sizes["matches"] + without_sizes["mismatches"] + without_sizes["unknown"]))
+
     def test_catalog_search_uses_name_shade_as_soft_hint_with_explicit_parent_color(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
         CatalogProduct.objects.create(

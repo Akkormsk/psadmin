@@ -827,18 +827,133 @@ BRANDING_ALIASES = {
 
 
 def _normalized(value):
-    return re.sub(r"[^a-zа-я0-9%²≥≤]+", " ", _text(value, 20_000).lower().replace("ё", "е")).strip()
+    return re.sub(r"[^a-zа-я0-9%²³≥≤]+", " ", _text(value, 20_000).lower().replace("ё", "е")).strip()
+
+
+REQUIREMENT_FIELD_MARKERS = (
+    ("volume", ("объем", "вместимост")),
+    ("material", ("материал", "состав")),
+    ("color", ("цвет", "оттен")),
+    ("density", ("плотност",)),
+    ("size", ("размер",)),
+    ("mass", ("масса", "вес")),
+    ("length", ("длина",)),
+    ("width", ("ширина",)),
+    ("height", ("высота",)),
+    ("diameter", ("диаметр",)),
+    ("thickness", ("толщина",)),
+)
+
+MEASUREMENT_UNITS = {
+    "volume": "ml",
+    "mass": "g",
+    "length": "mm",
+    "width": "mm",
+    "height": "mm",
+    "diameter": "mm",
+    "thickness": "mm",
+    "density": "g/m²",
+}
+
+
+def _requirement_field(label):
+    normalized = _normalized(label)
+    return next((field for field, markers in REQUIREMENT_FIELD_MARKERS if any(marker in normalized for marker in markers)), normalized)
+
+
+def _decimal_text(value):
+    normalized = format(value, "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    return normalized or "0"
+
+
+def _normalized_measurement(field, label, value):
+    if field not in MEASUREMENT_UNITS:
+        return None
+    raw = f"{_text(label, 300)} {_text(value, 1000)}".lower().replace("ё", "е")
+    match = re.search(r"-?\d+(?:[.,]\d+)?", raw.replace(" ", ""))
+    if not match:
+        return None
+    try:
+        number = Decimal(match.group(0).replace(",", "."))
+    except InvalidOperation:
+        return None
+
+    factor = Decimal("1")
+    if field == "volume":
+        if re.search(r"(?:^|[^a-zа-я])(л|l|литр(?:а|ов)?)(?:$|[^a-zа-я])", raw) and not re.search(r"(?:мл|ml)", raw):
+            factor = Decimal("1000")
+    elif field == "mass":
+        if re.search(r"(?:кг|kg|килограмм)", raw):
+            factor = Decimal("1000")
+        elif re.search(r"(?:мг|mg|миллиграмм)", raw):
+            factor = Decimal("0.001")
+    elif field in {"length", "width", "height", "diameter", "thickness"}:
+        if re.search(r"(?:^|[^a-zа-я])(см|cm)(?:$|[^a-zа-я])", raw):
+            factor = Decimal("10")
+        elif re.search(r"(?:^|[^a-zа-я])(м|m|метр(?:а|ов)?)(?:$|[^a-zа-я])", raw) and not re.search(r"(?:мм|mm)", raw):
+            factor = Decimal("1000")
+    return {
+        "field": field,
+        "value": _decimal_text(number * factor),
+        "unit": MEASUREMENT_UNITS[field],
+    }
+
+
+def _normalized_requirement(requirement):
+    label = _text(requirement.get("label"), 300)
+    value = _text(requirement.get("value"), 1000)
+    field = _requirement_field(label)
+    measurement = _normalized_measurement(field, label, value)
+    scope = _requirement_scope(label)
+    if measurement:
+        result = {**measurement, "operator": "eq"}
+    else:
+        result = {"field": field, "operator": "eq", "value": _normalized(value), "unit": ""}
+    if scope:
+        result["scope"] = scope
+    return result
+
+
+def _requirement_scope(label):
+    prefix, separator, suffix = _text(label, 300).partition(":")
+    if not separator or not _normalized(prefix) or not _normalized(suffix):
+        return ""
+    suffix_field = _requirement_field(suffix)
+    prefix_field = _requirement_field(prefix)
+    return _normalized(prefix) if suffix_field and suffix_field != prefix_field else ""
+
+
+def _requirement_identity(requirement):
+    normalized = _normalized_requirement(requirement)
+    return normalized["field"], normalized["operator"], normalized["value"], normalized["unit"], normalized.get("scope", "")
 
 
 def _requirement_values(line):
     requirements = line.get("requirements") if isinstance(line, dict) else {}
     if isinstance(requirements, dict):
         requirements = requirements.get("requirements", [])
-    return [value for value in requirements if isinstance(value, dict)] if isinstance(requirements, list) else []
+    if not isinstance(requirements, list):
+        return []
+    result, seen = [], set()
+    for value in requirements:
+        if not isinstance(value, dict):
+            continue
+        key = _requirement_identity(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _product_requirement_values(line):
+    return [value for value in _requirement_values(line) if not _requirement_scope(value.get("label"))]
 
 
 def _constraint_text(line, label_marker):
-    return " ".join(_text(value.get("value"), 1000) for value in _requirement_values(line) if label_marker in _normalized(value.get("label")))
+    return " ".join(_text(value.get("value"), 1000) for value in _product_requirement_values(line) if label_marker in _normalized(value.get("label")))
 
 
 def _meaningful_tokens(value):
@@ -1000,9 +1115,15 @@ def _planner_requirements(intent):
 def _line_with_planner_requirements(line, intent):
     existing = _requirement_values(line)
     requirements = list(existing)
-    seen = {(_normalized(value.get("label")), _normalized(value.get("value"))) for value in existing}
+    seen = {_requirement_identity(value) for value in existing}
+    existing_fields = {_requirement_field(value.get("label")) for value in _product_requirement_values(line)}
+    line_name = _normalized(line.get("name") if isinstance(line, dict) else "")
     for value in _planner_requirements(intent):
-        key = (_normalized(value["label"]), _normalized(value["value"]))
+        field = _requirement_field(value["label"])
+        field_markers = next((markers for key, markers in REQUIREMENT_FIELD_MARKERS if key == field), ())
+        if existing and field not in existing_fields and not any(marker in line_name for marker in field_markers):
+            continue
+        key = _requirement_identity(value)
         if key in seen:
             continue
         requirements.append({"label": value["label"], "value": value["value"]})
@@ -1022,6 +1143,14 @@ def _criterion_key(value):
         ("product_type", ("тип товара", "категор", "вид изделия")),
         ("material", ("материал", "состав", "сырье")),
         ("color", ("цвет", "оттен")),
+        ("volume", ("volume", "объем", "вместимост")),
+        ("mass", ("mass", "масса", "вес")),
+        ("length", ("length", "длина")),
+        ("width", ("width", "ширина")),
+        ("height", ("height", "высота")),
+        ("diameter", ("diameter", "диаметр")),
+        ("thickness", ("thickness", "толщина")),
+        ("size", ("size", "размер")),
         ("density", ("плотност",)),
         ("branding", ("нанес", "вышив", "гравиров", "печать", "логотип")),
         ("stock", ("остаток", "налич", "тираж", "количеств", "склад")),
@@ -1546,6 +1675,13 @@ def _aggregate_color_variants(products):
         representative = next((value for value in variants if value.external_id == family_id), variants[0])
         variant_ids = [value.external_id for value in variants]
         prices = [value.effective_price for value in variants if value.effective_price is not None]
+        variant_details = [{
+            "size": _product_sizes(value)[0] if _product_sizes(value) else "",
+            "product_id": value.external_id,
+            "article": value.article,
+            "stock": max(0, value.total_stock),
+            "price": str(value.effective_price.quantize(Decimal("0.01"))) if value.effective_price is not None else None,
+        } for value in variants]
         sizes = []
         for value in variants:
             for size in _product_sizes(value):
@@ -1563,6 +1699,7 @@ def _aggregate_color_variants(products):
             **(representative.raw_data if isinstance(representative.raw_data, dict) else {}),
             "variant_ids": variant_ids,
             "sizes": sizes,
+            "variants": variant_details,
         }
         result.append(representative)
     return result
@@ -1571,7 +1708,9 @@ def _aggregate_color_variants(products):
 CONSTRAINT_FIELD_LABELS = {
     "gender": "Пол", "material": "Материал", "color": "Цвет", "density": "Плотность",
     "branding": "Нанесение", "stock": "Остаток", "price": "Цена", "name": "Название",
-    "product_type": "Тип товара", "source": "Поставщик",
+    "product_type": "Тип товара", "source": "Поставщик", "volume": "Объём", "mass": "Масса",
+    "length": "Длина", "width": "Ширина", "height": "Высота", "diameter": "Диаметр",
+    "thickness": "Толщина", "size": "Размер",
 }
 
 
@@ -1608,7 +1747,10 @@ def _constraint_product_values(product, field):
         return product.branding if isinstance(product.branding, list) and product.branding else related
     if field == "density":
         value = _product_density(product)
-        return [value] if value is not None else []
+        return [f"{_decimal_text(value)} {MEASUREMENT_UNITS[field]}"] if value is not None else []
+    if field in MEASUREMENT_UNITS:
+        values = _measurement_values_for_product(product, field)
+        return [f"{value['value']} {value['unit']}" for value in values]
     if field == "stock":
         return [product.total_stock]
     if field == "price":
@@ -1625,6 +1767,15 @@ def _constraint_product_values(product, field):
 def _constraint_expected_values(field, values):
     if field == "gender":
         return [value for value in (_canonical_gender(item) for item in values) if value]
+    if field in MEASUREMENT_UNITS:
+        result = []
+        for value in values:
+            normalized = _normalized_measurement(field, field, value)
+            if normalized:
+                canonical = f"{normalized['value']} {normalized['unit']}"
+                if canonical not in result:
+                    result.append(canonical)
+        return result
     return values
 
 
@@ -1643,14 +1794,56 @@ def _constraint_number(value):
 def _constraint_values_match(field, expected, offered):
     if field == "gender":
         return _canonical_gender(expected) == _canonical_gender(offered)
+    if field in MEASUREMENT_UNITS:
+        left = _normalized_measurement(field, field, expected)
+        right = _normalized_measurement(field, field, offered)
+        return bool(left and right and left["unit"] == right["unit"] and left["value"] == right["value"])
     return _values_compatible(expected, offered)
 
 
-def _evaluate_structured_constraints(product, intent):
+def _deduplicated_structured_constraints(intent):
+    values = intent.get("constraints", []) if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []
+    result, seen = [], set()
+    for constraint in values:
+        if not isinstance(constraint, dict):
+            continue
+        field = _criterion_key(constraint.get("field"))
+        operator = _normalized(constraint.get("operator")).replace(" ", "_")
+        expected = _constraint_expected_values(
+            field,
+            constraint.get("values", []) if isinstance(constraint.get("values"), list) else [],
+        )
+        key = field, operator, tuple(expected), _normalized(constraint.get("level")), _normalized(constraint.get("missing_policy"))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(constraint)
+    return result
+
+
+def _structured_constraint_requirement_keys(constraint):
+    field = _criterion_key(constraint.get("field"))
+    operator = _normalized(constraint.get("operator")).replace(" ", "_")
+    if operator not in {"eq", "in", "contains"}:
+        return set()
+    values = constraint.get("values", []) if isinstance(constraint.get("values"), list) else []
+    keys = set()
+    for value in values:
+        measurement = _normalized_measurement(field, field, value)
+        if measurement:
+            keys.add((field, "eq", measurement["value"], measurement["unit"], ""))
+        else:
+            keys.add((field, "eq", _normalized(value), "", ""))
+    return keys
+
+
+def _evaluate_structured_constraints(product, intent, requirement_keys=None):
     matches, mismatches, unknown, hard_mismatches = [], [], [], []
-    constraints = intent.get("constraints", []) if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []
+    constraints = _deduplicated_structured_constraints(intent)
     for constraint in constraints:
         if not isinstance(constraint, dict):
+            continue
+        if _structured_constraint_requirement_keys(constraint) & set(requirement_keys or ()):
             continue
         field = _criterion_key(constraint.get("field"))
         operator = _normalized(constraint.get("operator")).replace(" ", "_")
@@ -1672,7 +1865,7 @@ def _evaluate_structured_constraints(product, intent):
         valid = False
         if operator == "exists":
             valid = True
-        elif operator in {"in", "contains"}:
+        elif operator in {"eq", "in", "contains"}:
             valid = any(_constraint_values_match(field, wanted, actual) for wanted in expected for actual in offered)
         elif operator in {"not_in", "not_contains"}:
             valid = not any(_constraint_values_match(field, wanted, actual) for wanted in expected for actual in offered)
@@ -1703,6 +1896,141 @@ def _evaluate_structured_constraints(product, intent):
         list(dict.fromkeys(unknown)),
         list(dict.fromkeys(hard_mismatches)),
     )
+
+
+REQUIREMENT_DISPLAY_LABELS = {
+    "volume": "Объём",
+    "mass": "Масса",
+    "length": "Длина",
+    "width": "Ширина",
+    "height": "Высота",
+    "diameter": "Диаметр",
+    "thickness": "Толщина",
+    "size": "Размер",
+}
+
+
+def _normalized_size(value):
+    return re.sub(r"\s+", "", _text(value, 100).upper().replace("Х", "X"))
+
+
+def _requested_size_quantities(line):
+    result = {}
+    for requirement in _product_requirement_values(line):
+        if _requirement_field(requirement.get("label")) != "size":
+            continue
+        value = _text(requirement.get("value"), 2000)
+        for match in re.finditer(r"(?<!\w)([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9./-]{0,11})\s*[—–:=]\s*(\d+)\s*(?:шт\.?\b)?", value):
+            size = _normalized_size(match.group(1))
+            quantity = int(match.group(2))
+            if size and quantity > 0:
+                result[size] = result.get(size, 0) + quantity
+    return result
+
+
+def _product_variants(product):
+    if isinstance(product.raw_data, dict) and isinstance(product.raw_data.get("variants"), list):
+        return [value for value in product.raw_data["variants"] if isinstance(value, dict)]
+    sizes = _product_sizes(product)
+    return [{
+        "size": sizes[0] if sizes else "",
+        "product_id": product.external_id,
+        "article": product.article,
+        "stock": max(0, product.total_stock),
+        "price": str(product.effective_price.quantize(Decimal("0.01"))) if product.effective_price is not None else None,
+    }]
+
+
+def _measurement_values_for_product(product, field):
+    if field == "density":
+        density = _product_density(product)
+        return [{"field": field, "value": _decimal_text(density), "unit": MEASUREMENT_UNITS[field]}] if density is not None else []
+    result = []
+    for attribute in product.attributes if isinstance(product.attributes, list) else []:
+        if not isinstance(attribute, dict) or _requirement_field(attribute.get("name")) != field:
+            continue
+        normalized = _normalized_measurement(field, attribute.get("name"), attribute.get("value"))
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def _normalized_comparison_values(product, line, quantity, intent=None):
+    requirements, product_values = [], []
+    size_quantities = _requested_size_quantities(line)
+    requirement_keys = {_requirement_identity(value) for value in _product_requirement_values(line)}
+    for requirement in _product_requirement_values(line):
+        normalized = _normalized_requirement(requirement)
+        field = normalized["field"]
+        if field == "size" and size_quantities:
+            continue
+        if normalized not in requirements:
+            requirements.append(normalized)
+        if field in MEASUREMENT_UNITS:
+            offered = _measurement_values_for_product(product, field)
+        elif field == "material":
+            offered = [{"field": field, "value": _normalized(value), "unit": ""} for value in product.materials]
+        elif field == "color":
+            offered = [{"field": field, "value": _normalized(value), "unit": ""} for value in product.colors]
+        else:
+            offered = []
+            for attribute in product.attributes if isinstance(product.attributes, list) else []:
+                if isinstance(attribute, dict) and _requirement_field(attribute.get("name")) == field:
+                    offered.append({"field": field, "value": _normalized(attribute.get("value")), "unit": ""})
+        for value in offered:
+            if value not in product_values:
+                product_values.append(value)
+    for constraint in _deduplicated_structured_constraints(intent):
+        if _structured_constraint_requirement_keys(constraint) & requirement_keys:
+            continue
+        field = _criterion_key(constraint.get("field"))
+        operator = _normalized(constraint.get("operator")).replace(" ", "_")
+        expected = _constraint_expected_values(
+            field,
+            constraint.get("values", []) if isinstance(constraint.get("values"), list) else [],
+        )
+        normalized_expected = []
+        for value in expected:
+            measurement = _normalized_measurement(field, field, value)
+            normalized_expected.append({
+                "value": measurement["value"] if measurement else _normalized(value),
+                "unit": measurement["unit"] if measurement else "",
+            })
+        record = {"field": field, "operator": operator, "values": normalized_expected}
+        if record not in requirements:
+            requirements.append(record)
+        offered_values = _constraint_product_values(product, field)
+        for value in offered_values:
+            measurement = _normalized_measurement(field, field, value)
+            product_record = {
+                "field": field,
+                "value": measurement["value"] if measurement else _normalized(value),
+                "unit": measurement["unit"] if measurement else "",
+            }
+            if product_record not in product_values:
+                product_values.append(product_record)
+    if size_quantities:
+        requirements.append({
+            "field": "size_stock", "operator": "gte",
+            "values": [{"size": size, "quantity": needed} for size, needed in size_quantities.items()],
+            "unit": "pcs",
+        })
+        product_values.append({"field": "size_stock", "variants": _product_variants(product), "unit": "pcs"})
+    elif quantity > 0:
+        requirements.append({"field": "stock", "operator": "gte", "value": str(quantity), "unit": "pcs"})
+        product_values.append({"field": "stock", "value": str(product.total_stock), "unit": "pcs"})
+    return requirements, product_values
+
+
+def _requirement_matches_attribute(field, requirement, attribute):
+    required_measurement = _normalized_measurement(field, requirement.get("label"), requirement.get("value"))
+    offered_measurement = _normalized_measurement(field, attribute.get("name"), attribute.get("value"))
+    if required_measurement and offered_measurement:
+        return (
+            required_measurement["unit"] == offered_measurement["unit"]
+            and required_measurement["value"] == offered_measurement["value"]
+        )
+    return _values_compatible(requirement.get("value"), attribute.get("value"))
 
 
 def _fit_product(product, line, anchors, quantity, intent=None):
@@ -1783,12 +2111,12 @@ def _fit_product(product, line, anchors, quantity, intent=None):
         else:
             unknown.append(f"Не указана совместимость с нанесением: {method}")
 
-    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж")
+    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер")
     product_attributes = [
         attribute for attribute in product.attributes
         if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
     ] if isinstance(product.attributes, list) else []
-    for requirement in _requirement_values(line):
+    for requirement in _product_requirement_values(line):
         label = _text(requirement.get("label"), 300)
         value = _text(requirement.get("value"), 1000)
         label_normalized = _normalized(label)
@@ -1797,21 +2125,38 @@ def _fit_product(product, line, anchors, quantity, intent=None):
         if any(marker in label_normalized for marker in ("коммент", "примеч")):
             continue
         label_tokens = _meaningful_tokens(label_normalized)
+        field = _requirement_field(label)
         related = [
             attribute for attribute in product_attributes
-            if label_tokens and any(token in _normalized(attribute.get("name")) for token in label_tokens)
+            if (
+                field and field == _requirement_field(attribute.get("name"))
+                or label_tokens and any(token in _normalized(attribute.get("name")) for token in label_tokens)
+            )
         ]
-        display_label = label.rstrip(":")
+        display_label = REQUIREMENT_DISPLAY_LABELS.get(field, label.rstrip(":"))
         if not related:
             unknown.append(f"{display_label} не указан в каталоге")
             continue
         offered_values = [_text(attribute.get("value"), 1000) for attribute in related]
-        if any(_values_compatible(value, offered) for offered in offered_values):
+        if any(_requirement_matches_attribute(field, requirement, attribute) for attribute in related):
             matches.append(f"{display_label}: {', '.join(offered_values)}")
         else:
             mismatches.append(f"{display_label} не совпадает: требуется {value}; в каталоге {', '.join(offered_values)}")
 
-    if quantity > 0:
+    size_quantities = _requested_size_quantities(line)
+    if size_quantities:
+        stock_by_size = {}
+        for variant in _product_variants(product):
+            size = _normalized_size(variant.get("size"))
+            if size:
+                stock_by_size[size] = stock_by_size.get(size, 0) + max(0, _integer(variant.get("stock")))
+        for size, needed in size_quantities.items():
+            available = stock_by_size.get(size, 0)
+            if available >= needed:
+                matches.append(f"Размер {size}: доступно {available} шт., требуется {needed} шт.")
+            else:
+                mismatches.append(f"Размер {size}: доступно {available} из {needed} шт.")
+    elif quantity > 0:
         if product.total_stock >= quantity:
             matches.append(f"Остаток достаточен: {product.total_stock} шт.")
         elif product.is_on_order:
@@ -2037,7 +2382,10 @@ def catalog_candidates_for_line(
         if "Не совпадает тип товара" in mismatches:
             rejections["product_type"] += 1
             continue
-        constraint_matches, constraint_mismatches, constraint_unknown, constraint_hard = _evaluate_structured_constraints(product, intent)
+        requirement_keys = {_requirement_identity(value) for value in _product_requirement_values(effective_line)}
+        constraint_matches, constraint_mismatches, constraint_unknown, constraint_hard = _evaluate_structured_constraints(
+            product, intent, requirement_keys=requirement_keys,
+        )
         exclusion_constraints = [
             value for value in intent.get("constraints", [])
             if isinstance(value, dict) and _normalized(value.get("operator")).replace(" ", "_") in {"not_in", "not_contains"}
@@ -2102,6 +2450,9 @@ def catalog_candidates_for_line(
         supplier_site = urlparse(product_url or product.supplier.base_url).netloc.lower()
         if supplier_site.startswith("www."):
             supplier_site = supplier_site[4:]
+        normalized_requirements, normalized_product_values = _normalized_comparison_values(
+            product, effective_line, quantity, intent=intent,
+        )
         selected.append({
             "id": product.external_id,
             "supplier_code": product.supplier.code,
@@ -2129,6 +2480,10 @@ def catalog_candidates_for_line(
             ),
             "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
             "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
+            "color_group_id": product.color_group_id or product.external_id,
+            "variants": _product_variants(product),
+            "normalized_requirements": normalized_requirements,
+            "normalized_product_values": normalized_product_values,
         })
         if len(selected) >= max(1, min(10, limit)):
             break
