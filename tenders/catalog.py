@@ -1943,7 +1943,8 @@ def catalog_candidates_for_line(
         search_terms = search_terms[:8]
         oasis_search_categories = selected_oasis_categories or ([None] if not category_tasks else [])
         for selected_category in oasis_search_categories:
-            for offset in range(0, 1000, 500):
+            offset = 0
+            while True:
                 params = {
                     "format": "json", "limit": 500, "offset": offset,
                     "available": 1, "includeGroupId": 1, "fields": fields,
@@ -1961,6 +1962,7 @@ def catalog_candidates_for_line(
                 seen_ids.update(str(value.get("id", "")) for value in fresh)
                 if len(page) < 500 or not fresh:
                     break
+                offset += len(page)
         supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
         marker = str(uuid.uuid4())
         pool.extend(value for value in (

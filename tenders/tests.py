@@ -2501,6 +2501,45 @@ class TenderTests(TestCase):
         self.assertEqual(candidates[0]["supplier_site"], "oasiscatalog.com")
         self.assertTrue(any("семейство: lime" in value for value in candidates[0]["matches"]))
 
+    def test_catalog_search_reads_oasis_pages_past_first_thousand_products(self):
+        target = {
+            "id": "target", "article": "POLO-TARGET", "group_id": "target", "color_group_id": "target",
+            "name": "Футболка поло", "full_name": "Футболка поло",
+            "price": "500", "total_stock": 100, "categories": [3072],
+        }
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def __init__(self):
+                self.offsets = []
+
+            def get(self, path, params=None):
+                if path == "/v4/categories":
+                    return [{"id": 3072, "name": "Футболки поло оптом", "path": "categories/tekstil/polo/polo"}]
+                self.offsets.append(params["offset"])
+                if params["offset"] < 1000:
+                    return [{
+                        "id": f"dummy-{params['offset'] + index}",
+                        "article": f"D-{params['offset'] + index}",
+                        "group_id": f"dummy-{params['offset'] + index}",
+                        "name": "Футболка поло", "full_name": "Футболка поло",
+                        "price": "500", "total_stock": 100, "categories": [3072],
+                    } for index in range(500)]
+                if params["offset"] == 1000:
+                    return [target]
+                return []
+
+        client = Client()
+
+        outcome = catalog_candidates_for_line(
+            {"name": "Футболка поло", "quantity": 10},
+            limit=3, intent={"item": "поло"}, client=client, include_diagnostics=True,
+        )
+
+        self.assertEqual(client.offsets, [0, 500, 1000])
+        self.assertEqual(outcome["sources"]["oasis"]["received"], 1001)
+
     def test_catalog_search_uses_name_shade_as_soft_hint_with_explicit_parent_color(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
         CatalogProduct.objects.create(
