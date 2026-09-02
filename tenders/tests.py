@@ -674,9 +674,8 @@ class TenderTests(TestCase):
         self.assertEqual(exact_sra3["ups"], 4)
         self.assertEqual(exact_sra3["sheets"], 4635)
 
-    @patch("tenders.views.build_training_hypothesis")
-    def test_production_route_preview_uses_current_position(self, analyze):
-        analyze.return_value = {"stage": "training_dialogue", "product_type": "digital_sheet", "confidence": .4, "route": {"name": "Под ключ", "steps": ["Изготовление"]}, "costs": [], "totals": {}}
+    @patch("tenders.views._submit_training_hypothesis")
+    def test_production_route_preview_starts_background_job(self, submit):
         self.client.force_login(self.user)
 
         self.user.is_superuser = True
@@ -685,11 +684,27 @@ class TenderTests(TestCase):
 
         response = self.client.post(reverse("tender_production_route_preview"), {"line_json": json.dumps({"name": "Блокнот А5", "quantity": 300, "requirements": {}})})
 
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "processing")
+        session = ProductionTrainingSession.objects.get(pk=response.json()["session_id"])
+        submit.assert_called_once_with(session.pk, {"name": "Блокнот А5", "quantity": 300, "requirements": {}})
+
+    def test_production_route_job_returns_finished_hypothesis(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user,
+            position_name="Блокнот А5",
+            current_hypothesis={"stage": "training_dialogue", "route": {"name": "Готово"}},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_production_route_status", args=[session.pk]))
+
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["product_type"], "digital_sheet")
-        self.assertTrue(response.json()["session_id"])
-        analyze.assert_called_once()
-        self.assertEqual(analyze.call_args.args[0]["name"], "Блокнот А5")
+        self.assertEqual(response.json()["route"]["name"], "Готово")
+        self.assertEqual(response.json()["session_id"], session.pk)
 
     def test_manager_cannot_start_ai_calculation(self):
         self.client.force_login(self.user)

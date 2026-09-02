@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
@@ -13,6 +14,7 @@ from xml.etree import ElementTree
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.db import close_old_connections
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -30,6 +32,37 @@ logger = logging.getLogger(__name__)
 
 
 SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
+
+
+def _build_training_hypothesis_job(session_id, line):
+    close_old_connections()
+    try:
+        hypothesis = build_training_hypothesis(line)
+        hypothesis["session_id"] = session_id
+        session = ProductionTrainingSession.objects.get(pk=session_id)
+        session.current_hypothesis = hypothesis
+        session.save(update_fields=["current_hypothesis", "updated_at"])
+        ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
+    except TenderAIError as exc:
+        ProductionTrainingSession.objects.filter(pk=session_id).update(
+            current_hypothesis={"status": "error", "error": str(exc)}
+        )
+    except Exception:
+        logger.exception("Unexpected background production hypothesis error")
+        ProductionTrainingSession.objects.filter(pk=session_id).update(
+            current_hypothesis={"status": "error", "error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}
+        )
+    finally:
+        close_old_connections()
+
+
+def _submit_training_hypothesis(session_id, line):
+    threading.Thread(
+        target=_build_training_hypothesis_job,
+        args=(session_id, line),
+        name=f"production-hypothesis-{session_id}",
+        daemon=True,
+    ).start()
 
 
 def knowledge_sync(request):
@@ -320,22 +353,28 @@ def production_route_preview(request):
             raise ValueError
     except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({"error": "Сначала заполните позицию и примените требования ТЗ."}, status=400)
-    try:
-        hypothesis = build_training_hypothesis(line)
-        session = ProductionTrainingSession.objects.create(
-            created_by=request.user,
-            position_name=str(line.get("name", ""))[:500],
-            requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
-            current_hypothesis=hypothesis,
-        )
-        ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
-        hypothesis["session_id"] = session.pk
-        return JsonResponse(hypothesis)
-    except TenderAIError as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    except Exception:
-        logger.exception("Unexpected production hypothesis error")
-        return JsonResponse({"error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}, status=400)
+    session = ProductionTrainingSession.objects.create(
+        created_by=request.user,
+        position_name=str(line.get("name", ""))[:500],
+        requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
+        current_hypothesis={"status": "processing"},
+    )
+    _submit_training_hypothesis(session.pk, line)
+    return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+
+
+@login_required
+@require_GET
+def production_route_status(request, session_id):
+    session = get_object_or_404(ProductionTrainingSession, pk=session_id, created_by=request.user)
+    hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+    if hypothesis.get("status") == "processing":
+        return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+    if hypothesis.get("status") == "error":
+        return JsonResponse({"error": hypothesis.get("error") or "Не удалось построить расчёт."}, status=400)
+    result = dict(hypothesis)
+    result["session_id"] = session.pk
+    return JsonResponse(result)
 
 
 @login_required
