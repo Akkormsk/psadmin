@@ -9,6 +9,18 @@ from django.urls import reverse
 from .models import Profile
 
 
+class HealthCheckTests(TestCase):
+    def test_private_timeweb_health_check_does_not_require_public_host(self):
+        response = self.client.get("/", HTTP_HOST="172.18.0.5:8000", REMOTE_ADDR="172.18.0.1")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_unknown_public_host_is_still_rejected(self):
+        response = self.client.get("/", HTTP_HOST="untrusted.example", REMOTE_ADDR="203.0.113.10")
+
+        self.assertEqual(response.status_code, 400)
+
+
 class LogoutTests(TestCase):
     def test_user_can_log_out_from_the_main_page(self):
         user = get_user_model().objects.create_user(
