@@ -3232,6 +3232,11 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
     knowledge_sources = _knowledge_sources_for_line(line)
+    # A revision refines a plan that already committed to its matched examples;
+    # re-sending the other ten only inflates the prompt.
+    prior_matched = set(current.get("matched_example_ids", [])) if isinstance(current, dict) else set()
+    if feedback and prior_matched:
+        examples = [value for value in examples if value.pk in prior_matched] or examples[:3]
     example_payload = [{
         "id": value.pk,
         "position": value.position_name,
