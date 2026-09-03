@@ -674,7 +674,7 @@ class TenderTests(TestCase):
         self.assertEqual(exact_sra3["ups"], 4)
         self.assertEqual(exact_sra3["sheets"], 4635)
 
-    @patch("tenders.views._submit_training_hypothesis")
+    @patch("tenders.views._submit_assistant_job")
     def test_production_route_preview_starts_background_job(self, submit):
         self.client.force_login(self.user)
 
@@ -687,7 +687,23 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["status"], "processing")
         session = ProductionTrainingSession.objects.get(pk=response.json()["session_id"])
-        submit.assert_called_once_with(session.pk, {"name": "Блокнот А5", "quantity": 300, "requirements": {}})
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args[0][0], session.pk)
+
+    @patch("tenders.views._submit_assistant_job")
+    def test_production_route_preview_reuses_a_running_session(self, submit):
+        self.client.force_login(self.user)
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        line = {"line_json": json.dumps({"name": "Блокнот А5", "quantity": 300, "requirements": {}})}
+
+        first = self.client.post(reverse("tender_production_route_preview"), line)
+        second = self.client.post(reverse("tender_production_route_preview"), line)
+
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(first.json()["session_id"], second.json()["session_id"])
+        self.assertEqual(ProductionTrainingSession.objects.count(), 1)
+        submit.assert_called_once()
 
     def test_production_route_job_returns_finished_hypothesis(self):
         self.user.is_superuser = True

@@ -1,3 +1,4 @@
+import atexit
 import hmac
 import json
 import logging
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -35,10 +37,20 @@ logger = logging.getLogger(__name__)
 SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
 
 
-def _build_training_hypothesis_job(session_id, line):
+# A tender worker process must never spawn an unbounded number of hypothesis
+# threads: each one holds a full supplier catalogue in memory, and repeated
+# "Повторить" clicks used to exhaust RAM. All assistant jobs share one small pool,
+# and a session already being processed is never queued twice.
+_ASSISTANT_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="assistant-job")
+_ASSISTANT_INFLIGHT = set()
+_ASSISTANT_INFLIGHT_LOCK = threading.Lock()
+atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
+
+
+def _run_assistant_job(session_id, build):
     close_old_connections()
     try:
-        hypothesis = build_training_hypothesis(line)
+        hypothesis = build()
         hypothesis["session_id"] = session_id
         session = ProductionTrainingSession.objects.get(pk=session_id)
         session.current_hypothesis = hypothesis
@@ -49,21 +61,23 @@ def _build_training_hypothesis_job(session_id, line):
             current_hypothesis={"status": "error", "error": str(exc)}
         )
     except Exception:
-        logger.exception("Unexpected background production hypothesis error")
+        logger.exception("Unexpected background assistant job error")
         ProductionTrainingSession.objects.filter(pk=session_id).update(
             current_hypothesis={"status": "error", "error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}
         )
     finally:
+        with _ASSISTANT_INFLIGHT_LOCK:
+            _ASSISTANT_INFLIGHT.discard(session_id)
         close_old_connections()
 
 
-def _submit_training_hypothesis(session_id, line):
-    threading.Thread(
-        target=_build_training_hypothesis_job,
-        args=(session_id, line),
-        name=f"production-hypothesis-{session_id}",
-        daemon=True,
-    ).start()
+def _submit_assistant_job(session_id, build):
+    """Queue build() for a session unless that session is already being processed."""
+    with _ASSISTANT_INFLIGHT_LOCK:
+        if session_id in _ASSISTANT_INFLIGHT:
+            return
+        _ASSISTANT_INFLIGHT.add(session_id)
+    _ASSISTANT_EXECUTOR.submit(_run_assistant_job, session_id, build)
 
 
 def knowledge_sync(request):
@@ -379,13 +393,23 @@ def production_route_preview(request):
             raise ValueError
     except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({"error": "Сначала заполните позицию и примените требования ТЗ."}, status=400)
+    position_name = str(line.get("name", ""))[:500]
+    running = ProductionTrainingSession.objects.filter(
+        created_by=request.user,
+        position_name=position_name,
+        is_confirmed=False,
+        current_hypothesis__status="processing",
+        updated_at__gte=timezone.now() - timedelta(minutes=10),
+    ).order_by("-updated_at").first()
+    if running is not None:
+        return JsonResponse({"status": "processing", "session_id": running.pk}, status=202)
     session = ProductionTrainingSession.objects.create(
         created_by=request.user,
-        position_name=str(line.get("name", ""))[:500],
+        position_name=position_name,
         requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
         current_hypothesis={"status": "processing"},
     )
-    _submit_training_hypothesis(session.pk, line)
+    _submit_assistant_job(session.pk, lambda: build_training_hypothesis(line))
     return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
 
 
