@@ -2145,7 +2145,7 @@ class TenderTests(TestCase):
     def test_route_without_finished_good_skips_the_catalogue(self, gateway, catalog_search):
         gateway.return_value = ({
             "product_type": "digital_sheet", "summary": "Блокнот", "confidence": .6, "facts": [],
-            "route": {"reason": "Печать в цифровой типографии под ключ", "needs_finished_good": False,
+            "route": {"reason": "Печать в цифровой типографии под ключ",
                       "processes": [{"name": "Цифровая типография под ключ"}]},
             "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
             "catalog_intent": {"item": "блокнот"},
@@ -2154,16 +2154,20 @@ class TenderTests(TestCase):
         result = build_training_hypothesis({"name": "Блокнот А5", "quantity": 300, "requirements": {"requirements": []}})
 
         catalog_search.assert_not_called()
-        self.assertEqual(result["catalog_skipped"], "route_needs_no_finished_good")
+        self.assertEqual(result["catalog_skipped"], "route_has_no_finished_good")
         self.assertEqual(result["catalog_candidates"], [])
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
-    def test_finished_good_route_still_searches_the_catalogue(self, gateway, catalog_search):
+    def test_mixed_route_with_finished_good_still_searches_the_catalogue(self, gateway, catalog_search):
         gateway.return_value = ({
             "product_type": "textile_merch", "summary": "Поло", "confidence": .6, "facts": [],
-            "route": {"reason": "Закупка готового изделия с нанесением", "needs_finished_good": True,
-                      "processes": [{"name": "Закупка готового изделия"}, {"name": "Нанесение"}]},
+            "route": {"reason": "Закупка готового изделия, нанесение у подрядчика, упаковка в типографии",
+                      "processes": [
+                          {"name": "Закупка готового изделия"},
+                          {"name": "Нанесение"},
+                          {"name": "Цифровая типография"},
+                      ]},
             "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
             "catalog_intent": {"item": "рубашка поло"},
         }, {})
