@@ -2932,6 +2932,11 @@ class TenderTests(TestCase):
         self.assertTrue(any("Механизм" in value for value in candidates[0]["matches"]))
 
     def test_catalog_search_uses_llm_specific_categories_instead_of_generic_class(self):
+        products = [
+            {"id": "shirt", "article": "S", "group_id": "shirt", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "categories": [10], "total_stock": 100, "price": "500"},
+            {"id": "polo", "article": "P", "group_id": "polo", "name": "Футболка поло", "full_name": "Футболка поло белая", "colors": ["белый"], "categories": [11], "total_stock": 100, "price": "600"},
+        ]
+
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -2941,9 +2946,10 @@ class TenderTests(TestCase):
                         {"id": 10, "name": "Футболки", "path": "categories/textile/tshirts"},
                         {"id": 11, "name": "Поло", "path": "categories/textile/polo"},
                     ]
+                category = (params or {}).get("category")
                 return [
-                    {"id": "shirt", "article": "S", "group_id": "shirt", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "categories": [10], "total_stock": 100, "price": "500"},
-                    {"id": "polo", "article": "P", "group_id": "polo", "name": "Футболка поло", "full_name": "Футболка поло белая", "colors": ["белый"], "categories": [11], "total_stock": 100, "price": "600"},
+                    value for value in products
+                    if category is None or str(category) in {str(item) for item in value["categories"]}
                 ]
 
         line = {"name": "Футболка поло унисекс", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]}}
