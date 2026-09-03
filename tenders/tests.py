@@ -2217,67 +2217,28 @@ class TenderTests(TestCase):
             "selected_categories", "full_text",
         ])
 
-    @patch("tenders.catalog.catalog_candidates_for_line", return_value=[])
-    @patch("tenders.services._ai_gateway_json")
-    def test_feedback_can_rebuild_catalog_ranking_weights(self, gateway, catalog_search):
-        gateway.return_value = ({
-            "product_type": "textile_merch", "summary": "Промо-футболка", "confidence": .7,
-            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
-            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [],
-            "understood_changes": ["Цена важнее состава, цвет обязателен"],
-            "catalog_intent": {
-                "item": "футболка", "categories": ["футболка"],
-                "required": [{"label": "Цвет", "value": "синий", "weight": 1}],
-                "preferred": [{"label": "Состав", "value": "хлопок", "weight": .2}],
-                "secondary": [],
-                "ranking": [{"criterion": "цена", "weight": 1}, {"criterion": "состав", "weight": .2}],
-            },
-            "catalog_operations": [
-                {"op": "set_priority", "field": "price", "priority": "critical"},
-                {"op": "set_priority", "field": "material", "priority": "low"},
-                {"op": "require", "field": "color", "values": ["синий"]},
-                {"op": "prefer", "field": "material", "values": ["хлопок"], "priority": "low"},
-            ],
-        }, {})
-
-        result = build_training_hypothesis(
-            {"name": "Промо-футболка", "quantity": 1000, "requirements": {"requirements": []}},
-            current={"catalog_intent": {"categories": ["футболка"], "ranking": [{"criterion": "состав", "weight": 1}]}},
-            feedback="Для этого промо-тиража цена важнее состава, но синий цвет обязателен.",
-        )
-
-        weights = {value["criterion"]: value["weight"] for value in result["catalog_intent"]["ranking"]}
-        self.assertEqual(weights, {"price": 1.0, "material": .3})
-        constraints = {(value["field"], value["level"]): value for value in result["catalog_intent"]["constraints"]}
-        self.assertEqual(constraints[("color", "required")]["values"], ["синий"])
-        self.assertEqual(constraints[("material", "preferred")]["weight"], .3)
-
     def test_catalog_feedback_operations_patch_existing_plan_without_losing_rules(self):
         current = {
             "categories": ["поло"], "synonyms": ["рубашка поло"],
             "required": [
-                {"label": "Цвет", "value": "белый", "weight": 1},
-                {"label": "Пол", "value": "мужской или унисекс, исключить женский", "weight": 1},
+                {"label": "Цвет", "value": "белый"},
+                {"label": "Пол", "value": "мужской или унисекс, исключить женский"},
             ],
-            "ranking": [{"criterion": "состав", "weight": .6}],
         }
         operations = [
             {"op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty"},
             {"op": "forbid", "field": "gender", "values": ["female"]},
             {"op": "add_alias", "values": ["футболка поло"]},
-            {"op": "set_priority", "field": "price", "relation": "higher_than", "target_field": "material"},
         ]
 
         updated, applied, errors = _apply_catalog_operations(current, operations)
 
         self.assertFalse(errors)
-        self.assertEqual(len(applied), 4)
+        self.assertEqual(len(applied), 3)
         self.assertEqual([value["label"] for value in updated["required"]], ["Цвет"])
         self.assertEqual(updated["synonyms"], ["рубашка поло", "футболка поло"])
         self.assertEqual(updated["constraints"][0]["operator"], "not_in")
         self.assertEqual(updated["constraints"][0]["missing_policy"], "allow_with_penalty")
-        weights = {value["criterion"]: value["weight"] for value in updated["ranking"]}
-        self.assertGreater(weights["price"], weights["состав"])
 
     def test_catalog_contract_rejects_unknown_operation_instead_of_silently_applying_it(self):
         updated, applied, errors = _apply_catalog_operations(
@@ -2297,7 +2258,6 @@ class TenderTests(TestCase):
             {"op": "prefer", "field": "material", "values": ["хлопок"]},
             {"op": "deprioritize", "field": "material", "values": ["полиэстер"]},
             {"op": "ignore", "field": "name"},
-            {"op": "set_priority", "field": "price", "priority": "high"},
             {"op": "add_alias", "values": ["футболка поло"]},
             {"op": "remove_alias", "values": ["старая категория"]},
             {"op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty"},
@@ -2305,7 +2265,6 @@ class TenderTests(TestCase):
             {"op": "gte", "field": "stock", "values": ["100"]},
             {"op": "between", "field": "density", "values": ["180", "220"]},
             {"op": "source_only", "values": ["oasis"]},
-            {"op": "prefer_source", "values": ["gifts"]},
             {"op": "set_scope", "values": ["одежда", "текстиль"]},
             {"op": "remove_rule", "field": "branding"},
         ]
@@ -2319,10 +2278,9 @@ class TenderTests(TestCase):
         self.assertEqual(updated["synonyms"], ["футболка поло"])
         self.assertEqual(updated["allowed_sources"], ["oasis"])
         self.assertIs(updated["_source_only_confirmed"], True)
-        self.assertEqual(updated["preferred_sources"], ["gifts"])
         self.assertEqual(updated["rule_scope"], ["одежда", "текстиль"])
         self.assertFalse(any(value["field"] == "branding" for value in updated["constraints"]))
-        self.assertEqual(applied[9], {
+        self.assertEqual(applied[8], {
             "op": "set_missing_policy", "field": "gender", "value": "allow_with_penalty",
         })
 
@@ -2421,16 +2379,15 @@ class TenderTests(TestCase):
         self.assertTrue(result["learning_warnings"])
 
     @patch("tenders.views.refresh_training_example_embedding", return_value=True)
-    def test_confirmed_feedback_weights_are_saved_with_training_example(self, refresh_embedding):
+    def test_confirmed_catalog_intent_is_saved_with_training_example(self, refresh_embedding):
         self.user.is_superuser = True
         self.user.save(update_fields=["is_superuser"])
         self.client.force_login(self.user)
         production_type = ProductionType.objects.create(code="catalog-feedback", name="Каталожный товар")
         intent = {
             "categories": ["футболка"],
-            "required": [{"label": "Цвет", "value": "синий", "weight": 1}],
-            "preferred": [{"label": "Состав", "value": "хлопок", "weight": .2}],
-            "ranking": [{"criterion": "цена", "weight": 1}, {"criterion": "состав", "weight": .2}],
+            "required": [{"label": "Цвет", "value": "синий"}],
+            "preferred": [{"label": "Состав", "value": "хлопок"}],
         }
         session = ProductionTrainingSession.objects.create(
             created_by=self.user,
@@ -2449,7 +2406,8 @@ class TenderTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         example = ProductionTrainingExample.objects.get(pk=response.json()["example_id"])
-        self.assertEqual(example.routes[0]["catalog_intent"]["ranking"], intent["ranking"])
+        self.assertEqual(example.routes[0]["catalog_intent"]["required"], intent["required"])
+        self.assertEqual(example.routes[0]["catalog_intent"]["preferred"], intent["preferred"])
 
     @patch("tenders.catalog.catalog_candidates_for_line", side_effect=ValueError("broken external row"))
     @patch("tenders.services._ai_gateway_json")

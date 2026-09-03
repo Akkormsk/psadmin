@@ -1091,8 +1091,7 @@ def _planner_requirements(intent):
     if not isinstance(intent, dict):
         return []
     result = []
-    defaults = (("required", 1), ("preferred", .6), ("secondary", .3))
-    for key, default_weight in defaults:
+    for key in ("required", "preferred"):
         values = intent.get(key)
         if not isinstance(values, list):
             continue
@@ -1100,15 +1099,8 @@ def _planner_requirements(intent):
             if not isinstance(value, dict):
                 continue
             label, item_value = _text(value.get("label"), 300), _text(value.get("value"), 1000)
-            if not label or not item_value:
-                continue
-            try:
-                weight = float(value.get("weight", default_weight))
-            except (TypeError, ValueError):
-                weight = default_weight
-            if weight > 1:
-                weight /= 100
-            result.append({"label": label, "value": item_value, "weight": max(0, min(1, weight)), "group": key})
+            if label and item_value:
+                result.append({"label": label, "value": item_value, "group": key})
     return result
 
 
