@@ -961,6 +961,64 @@ def _meaningful_tokens(value):
     return {token for token in _normalized(value).split() if len(token) >= 3 and token not in ignored and not token.isdigit()}
 
 
+_MATERIAL_SYNONYMS = (
+    {"спанбонд", "спанбонда", "спанбонде", "нетканый", "нетканого", "нетканое", "нетканая", "полипропилен", "полипропиленовый"},
+    {"хлопок", "хлопка", "хлопковый", "хлопковая", "хлопчатобумажный", "cotton"},
+    {"полиэстер", "полиэстера", "полиэфир", "polyester"},
+)
+
+
+def _expand_material_tokens(tokens):
+    expanded = set(tokens)
+    for group in _MATERIAL_SYNONYMS:
+        if tokens & group:
+            expanded |= group
+    return expanded
+
+
+def _required_gender(line):
+    text = _normalized(" ".join([
+        _constraint_text(line, "пол"), _constraint_text(line, "гендер"), _text(line.get("name", ""), 300),
+    ]))
+    if "унисекс" in text:
+        return "унисекс"
+    if "женск" in text:
+        return "женский"
+    if "мужск" in text:
+        return "мужской"
+    return ""
+
+
+def _product_gender(product):
+    text = _normalized(" ".join([
+        product.name or "", product.full_name or "",
+        *_attribute_values(product, ("пол", "гендер", "половой")),
+    ]))
+    if "унисекс" in text:
+        return "унисекс"
+    if "женск" in text:
+        return "женский"
+    if "мужск" in text:
+        return "мужской"
+    return ""
+
+
+def _shares_product_token(phrases, text):
+    """True when a meaningful word from any phrase also appears (as a stem) in text."""
+    text_tokens = _meaningful_tokens(text)
+    for phrase in phrases:
+        for token in _meaningful_tokens(phrase):
+            if len(token) < 4:
+                continue
+            for other in text_tokens:
+                if token == other:
+                    return True
+                short, long = sorted((token, other), key=len)
+                if len(short) >= 4 and long.startswith(short):
+                    return True
+    return False
+
+
 def _entity_phrase_matches(required, offered):
     required_tokens = _normalized(required).split()
     offered_tokens = _normalized(offered).split()
@@ -1942,7 +2000,8 @@ def _requirement_matches_attribute(field, requirement, attribute):
     return _values_compatible(requirement.get("value"), attribute.get("value"))
 
 
-def _fit_product(product, line, anchors, quantity, intent=None, from_selected_category=False):
+def _fit_product(product, line, anchors, quantity, intent=None, from_selected_category=False, name_anchors=()):
+    name_anchors = name_anchors or anchors
     matches, mismatches, unknown = [], [], []
     type_text = _normalized(" ".join([
         *(product.category_names if isinstance(product.category_names, list) else []),
@@ -1952,9 +2011,11 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
     anchor_hit = next((value for value in anchors if _entity_phrase_matches(value, type_text)), "")
     if anchor_hit:
         matches.append(f"Тип товара: {anchor_hit}")
-    elif from_selected_category:
-        # The category was picked for this search, so the type is probably right
-        # even when the name does not echo the planned item ("шарф" vs "палантин").
+    elif from_selected_category and _shares_product_token(name_anchors, type_text):
+        # The category was picked for this search and the name shares a word with
+        # the planned item ("снуд" in a "шарфы" node) — trust it over an exact
+        # phrase miss. A card with nothing in common (напульсник for бафф) is
+        # still the wrong type.
         unknown.append("Тип товара не подтверждён по названию")
     else:
         mismatches.append("Не совпадает тип товара")
@@ -1964,8 +2025,9 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
     material_values = product.materials if isinstance(product.materials, list) and product.materials else _attribute_values(product, ("материал", "состав"))
     product_materials = _meaningful_tokens(" ".join(material_values))
     if material_tokens:
-        if material_tokens & product_materials:
-            matches.append(f"Материал: {', '.join(sorted(material_tokens & product_materials))}")
+        material_overlap = _expand_material_tokens(material_tokens) & _expand_material_tokens(product_materials)
+        if material_overlap:
+            matches.append(f"Материал: {', '.join(sorted(material_tokens & product_materials) or material_overlap)}")
         elif product_materials:
             mismatches.append(f"Материал не совпадает: требуется {material_text}; в каталоге {', '.join(material_values)}")
         else:
@@ -2028,7 +2090,16 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
         else:
             unknown.append(f"Не указана совместимость с нанесением: {method}")
 
-    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер")
+    required_gender = _required_gender(line)
+    product_gender = _product_gender(product) if required_gender else ""
+    if required_gender and product_gender and not (
+        product_gender == required_gender
+        or product_gender == "унисекс"
+        or (required_gender == "унисекс" and product_gender == "мужской")
+    ):
+        mismatches.append(f"Пол не совпадает: требуется {required_gender}; товар {product_gender}")
+
+    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер", "пол", "гендер")
     product_attributes = [
         attribute for attribute in product.attributes
         if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
@@ -2085,10 +2156,10 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
     return matches, mismatches, unknown
 
 
-def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, from_selected_category=False):
+def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, from_selected_category=False, name_anchors=()):
     matches, mismatches, unknown = _fit_product(
         product, effective_line, anchors, quantity, intent=intent,
-        from_selected_category=from_selected_category,
+        from_selected_category=from_selected_category, name_anchors=name_anchors,
     )
     hard_reasons, hard_codes, partial_reasons = [], [], []
     if "Не совпадает тип товара" in mismatches:
@@ -2212,6 +2283,10 @@ def catalog_candidates_for_line(
             (intent or {}).get("product_class", "") if isinstance(intent, dict) else "",
             _text(line.get("name", ""), 300),
         ) if _text(value, 300))
+    name_anchors = tuple(dict.fromkeys(_text(value, 300) for value in [
+        (intent or {}).get("item", "") if isinstance(intent, dict) else "",
+        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
+    ] if _text(value, 300))) or anchors
     effective_line = _line_with_planner_requirements(line, intent)
     text_terms = list(aliases)
     for value in [
@@ -2385,7 +2460,7 @@ def catalog_candidates_for_line(
             continue
         eligibility = _catalog_product_eligibility(
             product, line, effective_line, anchors, quantity, intent,
-            from_selected_category=from_selected_category,
+            from_selected_category=from_selected_category, name_anchors=name_anchors,
         )
         if eligibility["status"] == "rejected":
             eligibility_counts["rejected"] += 1
