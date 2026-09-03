@@ -3196,6 +3196,32 @@ def _lean_current_for_prompt(current):
     return lean
 
 
+def _example_route_for_prompt(route):
+    """Confirmed example route stripped to its transferable rule.
+
+    The full route carries the previous product card, its search plan and the
+    prose calculation trace — thousands of tokens the model does not need to
+    recognise a pattern. The backend still reads the untrimmed example for
+    psodin settings once matched_example_ids points at it.
+    """
+    if not isinstance(route, dict):
+        return {}
+    costs = route.get("costs") if isinstance(route.get("costs"), list) else []
+    return {
+        "name": route.get("name", ""),
+        "reason": _cell_text(route.get("reason"))[:300],
+        "processes": [
+            {"name": value.get("name"), "details": value.get("details", [])[:3]}
+            for value in route.get("processes", []) if isinstance(value, dict)
+        ] if isinstance(route.get("processes"), list) else route.get("steps", []),
+        "costs": [
+            {key: value.get(key) for key in ("category", "process_name", "name", "amount_total", "basis", "recipe")}
+            for value in costs if isinstance(value, dict)
+        ],
+        "psodin_calculation": route.get("psodin_calculation") or {},
+    }
+
+
 def build_training_hypothesis(line, current=None, feedback="", progress_callback=None):
     started_at = time.perf_counter()
     if progress_callback:
@@ -3211,7 +3237,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         "position": value.position_name,
         "type": value.production_type.code,
         "features": value.features,
-        "approved_route": value.routes[0] if value.routes else {},
+        "approved_route": _example_route_for_prompt(value.routes[0] if value.routes else {}),
     } for value in examples]
     schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
