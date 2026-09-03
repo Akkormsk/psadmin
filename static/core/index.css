@@ -1065,7 +1065,7 @@ h1 {
 .tender-production-result { position:relative; }
 .tender-production-result.is-loading { min-height:180px; pointer-events:none; user-select:none; }
 .tender-production-result.is-loading::before { content:''; position:absolute; inset:0; z-index:20; border-radius:10px; background:rgba(255,255,255,.72); backdrop-filter:blur(1.5px); }
-.tender-production-result.is-loading::after { content:attr(data-loading-label); position:fixed; top:50%; right:235px; z-index:21; max-width:270px; padding:10px 13px; border:1px solid #dbe8df; border-radius:10px; background:rgba(255,255,255,.96); color:#356044; box-shadow:0 8px 24px rgba(15,23,42,.12); font-size:11px; font-weight:700; text-align:center; transform:translate(50%,-50%); }
+.tender-production-result.is-loading::after { content:attr(data-loading-label); position:sticky; bottom:16px; z-index:21; display:block; width:fit-content; max-width:270px; margin:16px auto 0; padding:10px 13px; border:1px solid #dbe8df; border-radius:10px; background:rgba(255,255,255,.96); color:#356044; box-shadow:0 8px 24px rgba(15,23,42,.12); font-size:11px; font-weight:700; text-align:center; }
 .ai-route-button { display:inline-flex; flex:0 0 auto; align-items:center; justify-content:center; gap:5px; min-height:32px; padding:6px 11px; border:1px solid #73bd8c; border-radius:9px; background:#edf8f1; color:#176b3a; cursor:pointer; font:inherit; font-size:10px; font-weight:700; white-space:nowrap; box-shadow:0 2px 7px rgb(22 101 52 / 10%); transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease; }
 .ai-route-button::before { content:'✦'; color:#16a34a; font-size:11px; }
 .is-loading-button::before { content:''; width:11px; height:11px; box-sizing:border-box; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:tender-button-spin .7s linear infinite; }
@@ -1317,7 +1317,7 @@ h1 {
   .tender-production-header { position:fixed; top:auto; right:0; bottom:0; left:0; z-index:1810; margin:0; padding:10px 16px max(10px,env(safe-area-inset-bottom)); border-top:1px solid #dfe7e2; border-bottom:0; box-shadow:0 -8px 24px rgba(15,23,42,.12); }
   .tender-production-heading { display:none; }
   .tender-route-totals { margin:0 auto 0 0; }
-  .tender-production-result.is-loading::after { right:50%; }
+  .tender-production-result.is-loading::after { bottom:84px; }
   .container > .back-link { min-height: 30px; margin: 0 0 12px; align-items: center; }
   .app-home .container { padding-top: 54px; }
   .grid { grid-template-columns: 1fr; gap: 16px; }
