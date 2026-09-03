@@ -3048,7 +3048,7 @@ class TenderTests(TestCase):
         self.assertEqual(candidates[0]["eligibility"], "exact_eligible")
         self.assertTrue(all(value["eligibility"] == "partial_eligible" for value in candidates[1:]))
 
-    def test_catalog_search_can_prioritize_price_over_preferred_material(self):
+    def test_cheaper_product_does_not_outrank_a_closer_match(self):
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -3068,16 +3068,14 @@ class TenderTests(TestCase):
                     },
                 ]
 
-        line = {"name": "Футболка", "quantity": 10, "requirements": {"requirements": []}}
-        intent = {
-            "categories": ["футболка"],
-            "preferred": [{"label": "Материал", "value": "хлопок", "weight": .2}],
-            "ranking": [{"criterion": "цена", "weight": 1}],
-        }
+        line = {"name": "Футболка", "quantity": 10, "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}]}}
+        intent = {"categories": ["футболка"], "required": [{"label": "Материал", "value": "хлопок"}]}
 
         candidates = catalog_candidates_for_line(line, limit=2, intent=intent, client=Client())
 
-        self.assertEqual([value["external_id"] for value in candidates], ["cheap-polyester", "cotton"])
+        # The cotton shirt matches the material; the cheaper polyester one does
+        # not, so price never lets it climb above.
+        self.assertEqual([value["external_id"] for value in candidates], ["cotton", "cheap-polyester"])
 
     def test_catalog_search_returns_source_diagnostics_instead_of_hiding_oasis_failure(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")

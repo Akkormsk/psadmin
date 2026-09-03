@@ -2485,49 +2485,28 @@ def catalog_candidates_for_line(
         if eligibility["status"] == "partial_eligible":
             for reason in eligibility["reasons"]:
                 partial_reasons[reason] = partial_reasons.get(reason, 0) + 1
-        name_score = SequenceMatcher(
-            None,
-            _normalized(line.get("name", "")),
-            _normalized(product.full_name or product.name),
-        ).ratio()
+        mismatches = eligibility["mismatches"]
+        unknown = [value for value in eligibility["unknown"] if value not in mismatches]
         ranked.append((
-            eligibility["score"], name_score, product,
-            eligibility["matches"], eligibility["mismatches"], eligibility["unknown"],
+            product, eligibility["matches"], mismatches, unknown,
             eligibility["status"] == "partial_eligible", eligibility["status"], eligibility["reasons"],
         ))
-    price_weight = _ranking_weight(intent, "цена", "стоимость")
-    name_weight = _ranking_weight(intent, "название", "наименование", "модель")
-    prices = [value[2].effective_price for value in ranked if value[2].effective_price is not None]
-    minimum_price = min(prices) if prices else None
-    maximum_price = max(prices) if prices else None
-    preferred_source_values = intent.get("preferred_sources", []) if isinstance(intent, dict) and isinstance(intent.get("preferred_sources"), list) else []
-    preferred_sources = {_normalized(value) for value in preferred_source_values if _normalized(value)}
 
-    def total_score(value):
-        relevance_score, product = value[0], value[2]
-        score = relevance_score + value[1] * 100 * name_weight
-        if preferred_sources and ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & preferred_sources):
-            score += 20
-        if not price_weight or product.effective_price is None or minimum_price is None:
-            return score
-        if maximum_price == minimum_price:
-            price_score = 100
-        else:
-            price_score = float((maximum_price - product.effective_price) / (maximum_price - minimum_price)) * 100
-        return score + price_score * price_weight
-
+    # A product's place is simply how far it is from the requirements: fewest
+    # mismatches first, then fewest unknowns, then the cheaper one. No weights,
+    # no supplier bonus, no name similarity.
     ranked.sort(key=lambda value: (
-        value[6],
-        -total_score(value),
-        value[2].effective_price is None,
-        value[2].effective_price if value[2].effective_price is not None else Decimal("Infinity"),
-        -value[1],
-        _normalized(value[2].full_name or value[2].name),
-        _normalized(value[2].article),
+        value[4],
+        len(value[2]),
+        len(value[3]),
+        value[0].effective_price is None,
+        value[0].effective_price if value[0].effective_price is not None else Decimal("Infinity"),
+        _normalized(value[0].full_name or value[0].name),
+        _normalized(value[0].article),
     ))
     display_ranked = ranked
     selected, seen_groups = [], set()
-    for score, name_score, product, matches, mismatches, unknown, _, eligibility_status, eligibility_reasons in display_ranked:
+    for product, matches, mismatches, unknown, _, eligibility_status, eligibility_reasons in display_ranked:
         group_key = product.group_id or product.external_id
         if group_key in seen_groups:
             continue
@@ -2560,7 +2539,6 @@ def catalog_candidates_for_line(
             "unknown": unknown,
             "eligibility": eligibility_status,
             "eligibility_reasons": eligibility_reasons,
-            "score": round(score, 2),
             "synced_at": timezone.now().isoformat(),
             "category": (
                 product.category_names[0]
