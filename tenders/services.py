@@ -3174,18 +3174,38 @@ def _attach_memory_preview(hypothesis):
     return hypothesis
 
 
+def _lean_current_for_prompt(current):
+    """Trim a prior hypothesis to the fields the model needs to refine the plan.
+
+    Product cards and search diagnostics add thousands of prompt tokens on every
+    revision without helping the model rework the route or the catalog intent.
+    """
+    if not isinstance(current, dict):
+        return {}
+    keep = (
+        "product_type", "summary", "confidence", "facts", "route", "costs",
+        "questions", "assumptions", "matched_example_ids", "understood_changes",
+        "catalog_intent", "psodin_calculation",
+    )
+    lean = {key: current[key] for key in keep if key in current}
+    selection = current.get("catalog_selection")
+    if isinstance(selection, dict):
+        lean["catalog_selection"] = {
+            key: selection.get(key) for key in ("name", "article", "price", "fit", "supplier_name")
+        }
+    return lean
+
+
 def build_training_hypothesis(line, current=None, feedback="", progress_callback=None):
     started_at = time.perf_counter()
     if progress_callback:
-        progress_callback("ai")
+        progress_callback("cases")
     from .models import ProductionType
     from .catalog import CatalogSyncError, catalog_candidates_for_line, catalog_source_capabilities
 
     production_types = list(ProductionType.objects.filter(is_active=True))
     examples = _training_examples_for_line(line)
     knowledge_sources = _knowledge_sources_for_line(line)
-    if progress_callback:
-        progress_callback("cases")
     example_payload = [{
         "id": value.pk,
         "position": value.position_name,
@@ -3221,7 +3241,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 {json.dumps(line, ensure_ascii=False)}
 
 ТЕКУЩАЯ ГИПОТЕЗА:
-{json.dumps(current or {}, ensure_ascii=False)}
+{json.dumps(_lean_current_for_prompt(current), ensure_ascii=False)}
 
 ОБРАТНАЯ СВЯЗЬ АДМИНИСТРАТОРА:
 {feedback or 'нет — это первая гипотеза'}
@@ -3241,6 +3261,8 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 КОНТРАКТ КОМАНД КАТАЛОГА:
 {json.dumps(catalog_contract, ensure_ascii=False)}"""
     ai_started_at = time.perf_counter()
+    if progress_callback:
+        progress_callback("ai")
     result, usage = _ai_gateway_json(prompt, max_tokens=3600)
     ai_seconds = round(time.perf_counter() - ai_started_at, 3)
     valid_ids = {value.pk for value in examples}
