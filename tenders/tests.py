@@ -61,7 +61,7 @@ class TenderTests(TestCase):
 
         self.assertContains(response, "catalogSourceStatusHtml")
         self.assertContains(response, "Каталог временно недоступен")
-        self.assertContains(response, "Поиск выполнен повторно")
+        self.assertContains(response, "выполнен поиск по названию и описанию")
 
     def test_assistant_calculation_has_sticky_totals_and_scoped_loading_state(self):
         self.client.force_login(self.user)
