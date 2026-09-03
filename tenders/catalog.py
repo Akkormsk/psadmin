@@ -2033,7 +2033,7 @@ def _requirement_matches_attribute(field, requirement, attribute):
     return _values_compatible(requirement.get("value"), attribute.get("value"))
 
 
-def _fit_product(product, line, anchors, quantity, intent=None):
+def _fit_product(product, line, anchors, quantity, intent=None, from_selected_category=False):
     matches, mismatches, unknown = [], [], []
     type_text = _normalized(" ".join([
         *(product.category_names if isinstance(product.category_names, list) else []),
@@ -2043,6 +2043,10 @@ def _fit_product(product, line, anchors, quantity, intent=None):
     anchor_hit = next((value for value in anchors if _entity_phrase_matches(value, type_text)), "")
     if anchor_hit:
         matches.append(f"Тип товара: {anchor_hit}")
+    elif from_selected_category:
+        # The category was picked for this search, so the type is probably right
+        # even when the name does not echo the planned item ("шарф" vs "палантин").
+        unknown.append("Тип товара не подтверждён по названию")
     else:
         mismatches.append("Не совпадает тип товара")
 
@@ -2171,9 +2175,10 @@ def _fit_product(product, line, anchors, quantity, intent=None):
     return score, matches, mismatches, unknown
 
 
-def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent):
+def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, from_selected_category=False):
     score, matches, mismatches, unknown = _fit_product(
         product, effective_line, anchors, quantity, intent=intent,
+        from_selected_category=from_selected_category,
     )
     hard_reasons, hard_codes, partial_reasons = [], [], []
     if "Не совпадает тип товара" in mismatches:
@@ -2454,6 +2459,7 @@ def catalog_candidates_for_line(
         "received": len(cached_products),
     }
     ranked = []
+    from_selected_category = bool(category_tasks) and not force_full_text
     rejections = {
         "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
         "product_type": 0, "forbidden": 0, "missing_required": 0,
@@ -2468,6 +2474,7 @@ def catalog_candidates_for_line(
             continue
         eligibility = _catalog_product_eligibility(
             product, line, effective_line, anchors, quantity, intent,
+            from_selected_category=from_selected_category,
         )
         if eligibility["status"] == "rejected":
             eligibility_counts["rejected"] += 1
