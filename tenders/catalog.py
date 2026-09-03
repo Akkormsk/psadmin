@@ -1160,58 +1160,6 @@ def _criterion_key(value):
     return next((key for key, markers in groups if any(marker in normalized for marker in markers)), normalized)
 
 
-def _planner_weight_map(intent):
-    result = {}
-    for value in intent.get("ranking", []) if isinstance(intent, dict) and isinstance(intent.get("ranking"), list) else []:
-        if not isinstance(value, dict):
-            continue
-        criterion = _criterion_key(value.get("criterion"))
-        try:
-            weight = float(value.get("weight", 0))
-        except (TypeError, ValueError):
-            continue
-        if weight > 1:
-            weight /= 100
-        if criterion:
-            result[criterion] = max(0, min(1, weight))
-    for value in _planner_requirements(intent):
-        label = _criterion_key(value["label"])
-        if label:
-            result[label] = value["weight"]
-    for value in intent.get("constraints", []) if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []:
-        if not isinstance(value, dict):
-            continue
-        label = _criterion_key(value.get("field"))
-        try:
-            weight = float(value.get("weight", 1))
-        except (TypeError, ValueError):
-            weight = 1
-        if label:
-            result[label] = max(0, min(1, weight))
-    return result
-
-
-def _ranking_weight(intent, *markers):
-    if not isinstance(intent, dict) or not isinstance(intent.get("ranking"), list):
-        return 0
-    normalized_markers = tuple(_normalized(value) for value in markers if _normalized(value))
-    weights = []
-    for value in intent["ranking"]:
-        if not isinstance(value, dict):
-            continue
-        criterion = _normalized(value.get("criterion"))
-        if not criterion or not any(marker in criterion for marker in normalized_markers):
-            continue
-        try:
-            weight = float(value.get("weight", 0))
-        except (TypeError, ValueError):
-            continue
-        if weight > 1:
-            weight /= 100
-        weights.append(max(0, min(1, weight)))
-    return max(weights, default=0)
-
-
 def _required_mismatches(mismatches, intent):
     required_labels = {
         _criterion_key(value["label"])
@@ -1615,37 +1563,6 @@ def _values_compatible(required, offered):
         and (required_token.startswith(offered_token[:4]) or offered_token.startswith(required_token[:4]))
         for required_token in required_tokens
         for offered_token in offered_tokens
-    )
-
-
-def _catalog_parameter_weight(value, planner_weights=None):
-    normalized = _normalized(value)
-    criterion = _criterion_key(value)
-    if criterion in (planner_weights or {}):
-        return max(1, round(100 * planner_weights[criterion]))
-    for label, weight in (planner_weights or {}).items():
-        if label and (label in normalized or normalized.startswith(label)):
-            return max(1, round(100 * weight))
-    if "тип товара" in normalized:
-        return 100
-    if "материал" in normalized or "состав" in normalized:
-        return 40
-    if "цвет" in normalized:
-        return 40
-    if "плотност" in normalized:
-        return 30
-    if "нанес" in normalized or "гравиров" in normalized or "печать" in normalized:
-        return 25
-    if "остаток" in normalized:
-        return 15
-    return 35
-
-
-def _catalog_parameter_score(matches, mismatches, unknown, planner_weights=None):
-    return (
-        sum(_catalog_parameter_weight(value, planner_weights) for value in matches)
-        - sum(_catalog_parameter_weight(value, planner_weights) for value in mismatches)
-        - sum(max(8, _catalog_parameter_weight(value, planner_weights) // 3) for value in unknown)
     )
 
 
@@ -2173,14 +2090,11 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
             else:
                 mismatches.append(f"Размер {size}: доступно {available} из {needed} шт.")
 
-    score = _catalog_parameter_score(matches, mismatches, unknown, _planner_weight_map(intent))
-    if name_color_match:
-        score += 8
-    return score, matches, mismatches, unknown
+    return matches, mismatches, unknown
 
 
 def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, from_selected_category=False):
-    score, matches, mismatches, unknown = _fit_product(
+    matches, mismatches, unknown = _fit_product(
         product, effective_line, anchors, quantity, intent=intent,
         from_selected_category=from_selected_category,
     )
@@ -2256,9 +2170,6 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
         "status": status,
         "reasons": reasons,
         "hard_codes": list(dict.fromkeys(hard_codes)),
-        "score": score + _catalog_parameter_score(
-            constraint_matches, constraint_mismatches, constraint_unknown, _planner_weight_map(intent),
-        ),
         "matches": list(dict.fromkeys(matches)),
         "mismatches": list(dict.fromkeys(mismatches)),
         "unknown": list(dict.fromkeys(unknown)),
