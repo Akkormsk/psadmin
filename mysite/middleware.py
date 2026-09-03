@@ -11,7 +11,8 @@ class InternalHealthCheckMiddleware:
         host = request.META.get("HTTP_HOST", "").split(":", 1)[0]
         remote = request.META.get("REMOTE_ADDR", "")
         try:
-            if ip_address(host).is_private and ip_address(remote).is_private:
+            host_ip = ip_address(host)
+            if host_ip.is_private and not host_ip.is_loopback and ip_address(remote).is_private:
                 return HttpResponse("ok")
         except ValueError:
             pass

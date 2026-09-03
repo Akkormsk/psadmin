@@ -20,6 +20,11 @@ class HealthCheckTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_loopback_request_is_handled_normally(self):
+        response = self.client.get("/", HTTP_HOST="127.0.0.1", REMOTE_ADDR="127.0.0.1")
+
+        self.assertNotEqual(response.content, b"ok")
+
 
 class LogoutTests(TestCase):
     def test_user_can_log_out_from_the_main_page(self):

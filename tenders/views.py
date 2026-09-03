@@ -46,24 +46,37 @@ _ASSISTANT_INFLIGHT = set()
 _ASSISTANT_INFLIGHT_LOCK = threading.Lock()
 atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
 
+_STAGE_LABELS = {
+    "cases": "Подбираю похожие подтверждённые примеры…",
+    "ai": "Строю гипотезу маршрута…",
+    "catalog": "Ищу и ранжирую товары поставщиков…",
+    "finalizing": "Формирую результат…",
+}
 
-def _run_assistant_job(session_id, build):
+
+def _record_stage(session_id, stage):
+    ProductionTrainingSession.objects.filter(pk=session_id).update(current_hypothesis={
+        "status": "processing", "stage": stage,
+        "stage_label": _STAGE_LABELS.get(stage, "Идёт расчёт…"),
+    })
+
+
+def _run_assistant_job(session_id, work, fallback):
     close_old_connections()
     try:
-        hypothesis = build()
-        hypothesis["session_id"] = session_id
         session = ProductionTrainingSession.objects.get(pk=session_id)
+        hypothesis = work(session)
+        hypothesis["session_id"] = session_id
         session.current_hypothesis = hypothesis
-        session.save(update_fields=["current_hypothesis", "updated_at"])
-        ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
+        session.save()
     except TenderAIError as exc:
         ProductionTrainingSession.objects.filter(pk=session_id).update(
-            current_hypothesis={"status": "error", "error": str(exc)}
+            current_hypothesis={**fallback, "status": "error", "error": str(exc)}
         )
     except Exception:
         logger.exception("Unexpected background assistant job error")
         ProductionTrainingSession.objects.filter(pk=session_id).update(
-            current_hypothesis={"status": "error", "error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}
+            current_hypothesis={**fallback, "status": "error", "error": "Не удалось построить расчёт. Подробная причина записана в журнал приложения."}
         )
     finally:
         with _ASSISTANT_INFLIGHT_LOCK:
@@ -71,13 +84,17 @@ def _run_assistant_job(session_id, build):
         close_old_connections()
 
 
-def _submit_assistant_job(session_id, build):
-    """Queue build() for a session unless that session is already being processed."""
+def _submit_assistant_job(session_id, work, fallback=None):
+    """Queue work(session) unless that session is already being processed.
+
+    ``fallback`` is the hypothesis to keep (marked as errored) if the job fails,
+    so a failed revision does not wipe a good previous result.
+    """
     with _ASSISTANT_INFLIGHT_LOCK:
         if session_id in _ASSISTANT_INFLIGHT:
             return
         _ASSISTANT_INFLIGHT.add(session_id)
-    _ASSISTANT_EXECUTOR.submit(_run_assistant_job, session_id, build)
+    _ASSISTANT_EXECUTOR.submit(_run_assistant_job, session_id, work, fallback or {})
 
 
 def knowledge_sync(request):
@@ -409,7 +426,13 @@ def production_route_preview(request):
         requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
         current_hypothesis={"status": "processing"},
     )
-    _submit_assistant_job(session.pk, lambda: build_training_hypothesis(line))
+
+    def work(session):
+        hypothesis = build_training_hypothesis(line, progress_callback=lambda stage: _record_stage(session.pk, stage))
+        ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
+        return hypothesis
+
+    _submit_assistant_job(session.pk, work)
     return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
 
 
@@ -419,7 +442,10 @@ def production_route_status(request, session_id):
     session = get_object_or_404(ProductionTrainingSession, pk=session_id, created_by=request.user)
     hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
     if hypothesis.get("status") == "processing":
-        return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+        return JsonResponse({
+            "status": "processing", "session_id": session.pk,
+            "stage_label": hypothesis.get("stage_label", ""),
+        }, status=202)
     if hypothesis.get("status") == "error":
         return JsonResponse({"error": hypothesis.get("error") or "Не удалось построить расчёт."}, status=400)
     result = dict(hypothesis)
@@ -441,24 +467,25 @@ def revise_production_hypothesis(request):
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
-    try:
-        hypothesis = build_training_hypothesis(line, current=session.current_hypothesis, feedback=feedback)
-        hypothesis["session_id"] = session.pk
+    prior = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+
+    def work(session):
+        hypothesis = build_training_hypothesis(
+            line, current=prior, feedback=feedback,
+            progress_callback=lambda stage: _record_stage(session.pk, stage),
+        )
         session.position_name = str(line.get("name", ""))[:500]
         session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
-        session.current_hypothesis = hypothesis
-        session.save(update_fields=["position_name", "requirements", "current_hypothesis", "updated_at"])
         ProductionTrainingTurn.objects.create(
-            session=session,
-            feedback=feedback,
-            understood_changes=hypothesis.get("understood_changes", []),
-            hypothesis=hypothesis,
+            session=session, feedback=feedback,
+            understood_changes=hypothesis.get("understood_changes", []), hypothesis=hypothesis,
         )
-        return JsonResponse(hypothesis)
-    except TenderAIError as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    except Exception:
-        return JsonResponse({"error": "Не удалось учесть исправление. Попробуйте ещё раз."}, status=400)
+        return hypothesis
+
+    session.current_hypothesis = {**prior, "status": "processing"}
+    session.save(update_fields=["current_hypothesis", "updated_at"])
+    _submit_assistant_job(session.pk, work, fallback=prior)
+    return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
 
 
 @login_required

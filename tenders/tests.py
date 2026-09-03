@@ -13,6 +13,7 @@ from docx import Document
 from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
+from . import views as tender_views
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, _category_retrieval, _expand_category_graph, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, _verify_catalog_category_tasks, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
@@ -762,9 +763,10 @@ class TenderTests(TestCase):
         self.client.force_login(self.user)
         payload = {"session_id": session.pk, "line": {"name": "Папка", "quantity": 100, "requirements": {}}, "feedback": "Считать у подрядчика под ключ"}
 
-        response = self.client.post(reverse("tender_revise_production_hypothesis"), {"payload": json.dumps(payload)})
+        with patch.object(tender_views._ASSISTANT_EXECUTOR, "submit", new=lambda fn, *args: fn(*args)):
+            response = self.client.post(reverse("tender_revise_production_hypothesis"), {"payload": json.dumps(payload)})
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         session.refresh_from_db()
         self.assertEqual(session.current_hypothesis["route"]["name"], "Подрядчик под ключ")
         turn = ProductionTrainingTurn.objects.get(session=session)
