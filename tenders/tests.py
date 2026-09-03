@@ -2142,6 +2142,40 @@ class TenderTests(TestCase):
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
+    def test_route_without_finished_good_skips_the_catalogue(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "digital_sheet", "summary": "Блокнот", "confidence": .6, "facts": [],
+            "route": {"reason": "Печать в цифровой типографии под ключ", "needs_finished_good": False,
+                      "processes": [{"name": "Цифровая типография под ключ"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+            "catalog_intent": {"item": "блокнот"},
+        }, {})
+
+        result = build_training_hypothesis({"name": "Блокнот А5", "quantity": 300, "requirements": {"requirements": []}})
+
+        catalog_search.assert_not_called()
+        self.assertEqual(result["catalog_skipped"], "route_needs_no_finished_good")
+        self.assertEqual(result["catalog_candidates"], [])
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_finished_good_route_still_searches_the_catalogue(self, gateway, catalog_search):
+        gateway.return_value = ({
+            "product_type": "textile_merch", "summary": "Поло", "confidence": .6, "facts": [],
+            "route": {"reason": "Закупка готового изделия с нанесением", "needs_finished_good": True,
+                      "processes": [{"name": "Закупка готового изделия"}, {"name": "Нанесение"}]},
+            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
+            "catalog_intent": {"item": "рубашка поло"},
+        }, {})
+        catalog_search.return_value = {"candidates": [], "sources": {}, "attempts": []}
+
+        result = build_training_hypothesis({"name": "Поло", "quantity": 50, "requirements": {"requirements": []}})
+
+        catalog_search.assert_called()
+        self.assertNotIn("catalog_skipped", result)
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
     def test_empty_category_search_falls_back_to_full_text(self, gateway, catalog_search):
         gateway.return_value = ({
             "product_type": "textile_merch", "summary": "Термокружка", "confidence": .6,

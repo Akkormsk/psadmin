@@ -3068,6 +3068,10 @@ def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
             "steps": process_names,
             "processes": processes,
             "is_turnkey": len(processes) == 1 and "под ключ" in processes[0]["name"].lower().replace("ё", "е"),
+            "needs_finished_good": (
+                bool(route["needs_finished_good"]) if isinstance(route.get("needs_finished_good"), bool)
+                else any(_canonical_process_name(name) == "Закупка готового изделия" for name in process_names)
+            ),
         },
         "costs": costs,
         "totals": {
@@ -3244,7 +3248,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         "features": value.features,
         "approved_route": _example_route_for_prompt(value.routes[0] if value.routes else {}),
     } for value in examples]
-    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
+    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","needs_finished_good":true,"processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
     schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
     schema = schema[:-1] + ',"catalog_intent":{"item":"цельная товарная сущность без характеристик, например рубашка поло","product_class":"общее название класса товара","categories":["только смысловые подсказки, не реальные категории поставщика"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение","weight":1}],"preferred":[{"label":"желательная характеристика","value":"значение","weight":0.6}],"secondary":[{"label":"второстепенная характеристика","value":"значение","weight":0.3}],"constraints":[{"field":"gender|material|color|price|stock|любое поле атрибута","operator":"in|not_in|contains|not_contains|lte|gte|between|exists","values":["каноническое значение"],"level":"required|preferred|secondary","weight":1,"missing_policy":"reject|allow|allow_with_penalty"}],"search_fields":["name","category","attributes"],"ranking":[{"criterion":"что сравнивать","weight":1}],"fallback_queries":[{"terms":["равнозначное название товара"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["смысловая подсказка"],"query_terms":["цельная товарная сущность или синоним"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
     schema = schema[:-1] + ',"catalog_operations":[{"op":"allow|forbid|require|prefer|deprioritize|ignore|set_priority|add_alias|remove_alias|set_missing_policy|lte|gte|between|source_only|prefer_source|set_scope|remove_rule","field":"поле, если нужно","values":["значение"],"value":"одно значение или missing policy","priority":"critical|high|normal|low|ignore","relation":"higher_than","target_field":"сравниваемое поле"}]}'
@@ -3253,6 +3257,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
 Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
 «Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
+route.needs_finished_good = true только если маршрут включает закупку готового бланкового изделия (сувенирного или промо-товара) — как есть или для последующего нанесения. Для полиграфии, изготовления под ключ у подрядчика и маршрутов только с закупкой материала ставь false: каталоги готовой продукции для них не нужны.
 Не выдумывай цены. В costs добавляй только цену, явно указанную в подтверждённых примерах, текущей гипотезе или обратной связи администратора. amount_total — сумма статьи на весь тираж. Если цены нет, оставь её вопросом, а не нулевой выдуманной статьёй.
 Для каждой статьи costs дай проверяемый след расчёта. В source укажи конкретный источник, в basis — итоговую формулу, а в calculation_steps — максимально подробную арифметику по шагам: исходную единицу и цену, раскладку/выход, требуемое количество с отходами, операции, скидки и итог. В adaptation объясни, как цена источника приведена к текущему тиражу, формату и характеристикам. Для калькулятора перечисли материалы и операции отдельно. Для истории или поставщика укажи исходный кейс/товар и все коэффициенты пересчёта. Не придумывай отсутствующие детали: если подробного основания нет, прямо напиши это в adaptation и задай вопрос администратору.
 Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. Скидки, наценки и фиксированные поправки передавай только в recipe.modifiers в порядке применения. Никогда не меняй amount_total самостоятельно из-за скидки: сервер пересчитает сумму и сам сформирует объяснение. amount_total должен соответствовать recipe.
@@ -3357,46 +3362,53 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         contract_errors.append(
             "Неподдерживаемые источники поиска отброшены: " + ", ".join(invalid_strategy_sources)
         )
-    catalog_started_at = time.perf_counter()
-    if progress_callback:
-        progress_callback("catalog")
-    try:
-        catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
+    def _search_catalog():
+        outcome = _catalog_search_outcome(catalog_candidates_for_line(
             line, limit=3, intent=catalog_intent, include_diagnostics=True,
             category_selector=_select_catalog_category_tasks,
         ))
-        catalog_candidates = catalog_outcome["candidates"]
-        usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (catalog_outcome["category_usage"].get("prompt_tokens", 0) or 0)
-        usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (catalog_outcome["category_usage"].get("completion_tokens", 0) or 0)
+        usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (outcome["category_usage"].get("prompt_tokens", 0) or 0)
+        usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (outcome["category_usage"].get("completion_tokens", 0) or 0)
         searchable_source_available = any(
             isinstance(value, dict) and value.get("status") == "success"
-            for value in catalog_outcome["sources"].values()
+            for value in outcome["sources"].values()
         )
         first_used_full_text = any(
-            attempt.get("mode") == "full_text" for attempt in catalog_outcome["attempts"] if isinstance(attempt, dict)
+            attempt.get("mode") == "full_text" for attempt in outcome["attempts"] if isinstance(attempt, dict)
         )
-        if not catalog_candidates and searchable_source_available and not first_used_full_text:
+        if not outcome["candidates"] and searchable_source_available and not first_used_full_text:
             full_text_outcome = _catalog_search_outcome(catalog_candidates_for_line(
                 line, limit=3, intent=catalog_intent, include_diagnostics=True,
                 force_full_text=True,
             ))
-            catalog_candidates = full_text_outcome["candidates"]
-            catalog_outcome = {
-                "candidates": catalog_candidates,
+            outcome = {
+                "candidates": full_text_outcome["candidates"],
                 "sources": full_text_outcome["sources"],
-                "attempts": [*catalog_outcome["attempts"], *full_text_outcome["attempts"]],
-                "category_usage": catalog_outcome["category_usage"],
-                "category_errors": [*catalog_outcome["category_errors"], *full_text_outcome["category_errors"]],
+                "attempts": [*outcome["attempts"], *full_text_outcome["attempts"]],
+                "category_usage": outcome["category_usage"],
+                "category_errors": [*outcome["category_errors"], *full_text_outcome["category_errors"]],
             }
-    except CatalogSyncError as exc:
-        catalog_candidates = []
-        catalog_outcome = {"candidates": [], "sources": {}, "attempts": []}
-        hypothesis["catalog_warning"] = str(exc)[:300]
-    except Exception:
-        logger.exception("Unexpected catalog failure while building a training hypothesis")
-        catalog_candidates = []
-        catalog_outcome = {"candidates": [], "sources": {}, "attempts": []}
-        hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
+        return outcome
+
+    catalog_started_at = time.perf_counter()
+    needs_finished_good = hypothesis.get("route", {}).get("needs_finished_good", True)
+    catalog_candidates = []
+    catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": []}
+    if not needs_finished_good:
+        # Polygraphy and turnkey routes never buy a blank finished good; skip
+        # both supplier catalogues instead of ranking irrelevant merch.
+        hypothesis["catalog_skipped"] = "route_needs_no_finished_good"
+    else:
+        if progress_callback:
+            progress_callback("catalog")
+        try:
+            catalog_outcome = _search_catalog()
+            catalog_candidates = catalog_outcome["candidates"]
+        except CatalogSyncError as exc:
+            hypothesis["catalog_warning"] = str(exc)[:300]
+        except Exception:
+            logger.exception("Unexpected catalog failure while building a training hypothesis")
+            hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
     catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
     hypothesis["catalog_intent"] = catalog_intent
     hypothesis["catalog_operations_applied"] = applied_operations
