@@ -2082,6 +2082,10 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
             offered_family = _color_family(product_color_text)
             if name_color_match and required_family and offered_family and COLOR_PARENTS.get(required_family) == offered_family:
                 matches.append(f"Цвет: {', '.join(color_values)} (оттенок в названии: {', '.join(name_color_values)})")
+            elif required_family and offered_family and not name_color_match:
+                # Both colours are known and belong to different families
+                # (white asked, red offered). Confident enough to drop the card.
+                mismatches.append(f"Цвет не подходит: требуется {color_text}; в каталоге {', '.join(color_values)}")
             elif _meaningful_tokens(product_color_text):
                 mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(color_values)}")
             else:
@@ -2184,6 +2188,10 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
     if "Не совпадает тип товара" in mismatches:
         hard_reasons.append("Не совпадает тип товара")
         hard_codes.append("product_type")
+    colour_reason = next((value for value in mismatches if value.startswith("Цвет не подходит")), "")
+    if colour_reason:
+        hard_reasons.append(colour_reason)
+        hard_codes.append("colour")
     if quantity > 0 and product.total_stock < quantity:
         hard_reasons.append(f"Недостаточный общий остаток: требуется {quantity}, доступно {product.total_stock}")
         hard_codes.append("insufficient_total_stock")
@@ -2462,7 +2470,7 @@ def catalog_candidates_for_line(
     from_selected_category = bool(category_tasks) and not force_full_text
     rejections = {
         "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
-        "product_type": 0, "forbidden": 0, "missing_required": 0,
+        "product_type": 0, "colour": 0, "forbidden": 0, "missing_required": 0,
     }
     eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
     rejection_reasons, partial_reasons = {}, {}
