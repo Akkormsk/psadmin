@@ -2255,6 +2255,12 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
     }
 
 
+# A well-scoped category never holds this many SKUs; the ceiling only stops a
+# too-broad category (or a bare full-text query) from crawling Oasis for minutes
+# at the client's 1s-per-page rate limit.
+_OASIS_PAGE_CEILING = 12
+
+
 def catalog_candidates_for_line(
     line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
     category_selector=None, excluded_category_tasks=None, force_full_text=False,
@@ -2374,7 +2380,7 @@ def catalog_candidates_for_line(
         oasis_search_categories = selected_oasis_categories or ([None] if not category_tasks else [])
         for selected_category in oasis_search_categories:
             offset = 0
-            while True:
+            for _ in range(_OASIS_PAGE_CEILING):
                 params = {
                     "format": "json", "limit": 500, "offset": offset,
                     "available": 1, "includeGroupId": 1, "fields": fields,
