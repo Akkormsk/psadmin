@@ -2775,8 +2775,9 @@ class TenderTests(TestCase):
         allowed = outcome("allow")
         allowed_with_penalty = outcome("allow_with_penalty")
 
-        self.assertEqual(rejected["candidates"], [])
-        self.assertEqual(rejected["attempts"][0]["eligibility_counts"]["rejected"], 1)
+        # A missing required characteristic no longer removes the product:
+        # "reject" now only surfaces the gap and ranks it as a partial match.
+        self.assertEqual(rejected["candidates"][0]["eligibility"], "partial_eligible")
         self.assertEqual(allowed["candidates"][0]["eligibility"], "exact_eligible")
         self.assertEqual(allowed_with_penalty["candidates"][0]["eligibility"], "exact_eligible")
         self.assertTrue(allowed_with_penalty["candidates"][0]["unknown"])

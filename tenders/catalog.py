@@ -2207,16 +2207,13 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
             continue
         operator = _normalized(constraint.get("operator")).replace(" ", "_")
         level = _normalized(constraint.get("level"))
-        missing_policy = _normalized(constraint.get("missing_policy")).replace(" ", "_")
-        field = _criterion_key(constraint.get("field"))
-        offered = _constraint_product_values(product, field)
         if operator in {"not_in", "not_contains"}:
             hard_reasons.extend(single_mismatches)
             hard_codes.append("forbidden")
-        elif not offered and level == "required" and missing_policy == "reject":
-            hard_reasons.extend(single_mismatches)
-            hard_codes.append("missing_required")
         elif level == "required":
+            # A required technical characteristic the catalogue does not answer
+            # (or answers differently) keeps the product as a ranked alternative;
+            # only wrong type, wrong colour, stock and explicit bans remove it.
             partial_reasons.extend(single_mismatches)
 
     required_fields = {
