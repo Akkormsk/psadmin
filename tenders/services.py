@@ -756,7 +756,7 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, timeout=90, network_attempts=3):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
@@ -781,9 +781,9 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
         request = Request(f"{base_url}/chat/completions", data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
         response_data = None
         last_network_error = None
-        for network_attempt in range(3):
+        for network_attempt in range(network_attempts):
             try:
-                with urlopen(request, timeout=90) as response:
+                with urlopen(request, timeout=timeout) as response:
                     response_data = json.loads(response.read().decode("utf-8"))
                 break
             except HTTPError as exc:
@@ -796,10 +796,10 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
                 last_network_error = exc
             except (URLError, TimeoutError, ConnectionError, OSError, json.JSONDecodeError) as exc:
                 last_network_error = exc
-            if network_attempt < 2:
+            if network_attempt < network_attempts - 1:
                 time.sleep(1 + network_attempt * 2)
         if response_data is None:
-            raise TenderAIError("AI Gateway не ответил после трёх попыток. Попробуйте позже.") from last_network_error
+            raise TenderAIError("AI Gateway не ответил после нескольких попыток. Попробуйте позже.") from last_network_error
         usage = response_data.get("usage", {})
         total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
         total_usage["completion_tokens"] += usage.get("completion_tokens", 0) or 0
@@ -1886,7 +1886,7 @@ def _select_catalog_categories_from_fragment(line, intent, representation, fragm
 
 РЕАЛЬНЫЕ УЗЛЫ:
 {compact(fragment)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=700)
+    result, usage = _ai_gateway_json(prompt, max_tokens=700, timeout=45, network_attempts=2)
     raw_categories = result.get("categories") if isinstance(result, dict) else []
     available = {
         (_cell_text(value.get("source")).lower(), str(value.get("category_id", ""))): value
@@ -1928,7 +1928,7 @@ keep=false ставь только когда искомый предмет яв
 
 ВХОД:
 {compact({"item": _cell_text(item), "categories": categories})}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=500)
+    result, usage = _ai_gateway_json(prompt, max_tokens=500, timeout=45, network_attempts=2)
     available = {(value["source"], value["category_id"]) for value in categories}
     decisions = {}
     raw_categories = result.get("categories") if isinstance(result, dict) else []
@@ -1959,7 +1959,7 @@ Backend уже выполнил retrieval реальных категорий, �
 
 ДИАГНОСТИКА:
 {compact({"candidate_nodes": candidate_count, "category_selected": selected})}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=300)
+    result, usage = _ai_gateway_json(prompt, max_tokens=300, timeout=45, network_attempts=2)
     terms = []
     for value in result.get("search_terms", []) if isinstance(result, dict) and isinstance(result.get("search_terms"), list) else []:
         value = _cell_text(value)[:300]
@@ -1986,7 +1986,7 @@ def _translate_catalog_feedback(line, current_intent, feedback):
 
 ОБРАТНАЯ СВЯЗЬ:
 {feedback}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=1400)
+    result, usage = _ai_gateway_json(prompt, max_tokens=1400, timeout=45, network_attempts=2)
     operations = result.get("operations") if isinstance(result, dict) else None
     if not isinstance(operations, list) or not operations:
         return [], usage, ["LLM не сформировала команды изменения каталога; действующий план сохранён без изменений."]
@@ -3294,7 +3294,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     ai_started_at = time.perf_counter()
     if progress_callback:
         progress_callback("ai")
-    result, usage = _ai_gateway_json(prompt, max_tokens=3600)
+    result, usage = _ai_gateway_json(prompt, max_tokens=3600, timeout=60, network_attempts=2)
     ai_seconds = round(time.perf_counter() - ai_started_at, 3)
     valid_ids = {value.pk for value in examples}
     matched_ids = []
