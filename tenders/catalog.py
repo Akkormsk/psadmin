@@ -2317,43 +2317,18 @@ def catalog_candidates_for_line(
         category_map = {value["id"]: value["path"] or value["name"] for value in categories}
         gifts_categories = list(CatalogCategory.objects.filter(
             supplier__code="gifts", supplier__is_active=True, is_active=True,
-        ).values("external_id", "parent_external_id", "name", "path", "embedding", "embedding_model"))
-        category_options = _complete_category_options({
-            "oasis": categories,
-            "gifts": gifts_categories,
-        }, line, intent or {}, excluded_tasks=excluded_category_tasks)
-        if category_selector and not force_full_text:
-            try:
-                category_tasks, category_usage, category_errors = category_selector(
-                    line, intent or {}, category_options, excluded_category_tasks or [],
-                )
-            except Exception:
-                logger.exception("Catalog category selection failed; using backend priority")
-                best_by_source = {}
-                for option in category_options:
-                    best_by_source.setdefault(option["source"], option)
-                category_tasks = [
-                    {**option, "priority": 1} for option in best_by_source.values()
-                ]
-                category_errors = [
-                    "Не удалось выбрать категории через LLM; использован серверный приоритет."
-                ]
-            available_tasks = {
-                (value["source"], value["category_id"]): value for value in category_options
-            }
+        ).values("external_id", "parent_external_id", "name", "path"))
+        # Best keyword-matched categories per source — no LLM. Full-text search
+        # over item + synonyms (below) covers anything the trees misname.
+        if not force_full_text:
+            per_source = {}
+            for option in _category_candidates({"oasis": categories, "gifts": gifts_categories}, line, intent or {}):
+                per_source.setdefault(option["source"], []).append(option)
             category_tasks = [
-                {**available_tasks[(str(value.get("source", "")), str(value.get("category_id", "")))],
-                 "priority": value.get("priority", 1)}
-                for value in category_tasks if isinstance(value, dict)
-                and (str(value.get("source", "")), str(value.get("category_id", ""))) in available_tasks
-            ][:8]
-        elif not force_full_text:
-            category = _live_category_for_intent(categories, intent or {}, line)
-            if category:
-                category_tasks = [{
-                    "source": "oasis", "category_id": category["id"],
-                    "name": category["name"], "path": category["path"], "priority": 1,
-                }]
+                {**option, "priority": index + 1}
+                for options in per_source.values()
+                for index, option in enumerate(options[:2])
+            ]
         selected_oasis_categories = [
             next((value for value in categories if value["id"] == task["category_id"]), None)
             for task in sorted(category_tasks, key=lambda value: value.get("priority", 1))
@@ -2361,11 +2336,10 @@ def catalog_candidates_for_line(
         ]
         selected_oasis_categories = [value for value in selected_oasis_categories if value]
         category = selected_oasis_categories[0] if selected_oasis_categories else None
-        # Use the category when available. Otherwise ask Oasis for a bounded
-        # full-text page; final matching is still performed by _fit_product.
-        search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(search_aliases)))
-        search_terms = search_terms[:8]
-        oasis_search_categories = selected_oasis_categories or ([None] if not category_tasks else [])
+        # Prefer the keyword-matched Oasis categories; fall back to a full-text
+        # page only when the keyword scorer found no Oasis node.
+        search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(name_anchors)))[:6]
+        oasis_search_categories = selected_oasis_categories or [None]
         for selected_category in oasis_search_categories:
             offset = 0
             for _ in range(_OASIS_PAGE_CEILING):
@@ -2407,37 +2381,35 @@ def catalog_candidates_for_line(
         }
         pool = []
 
-    # Gifts is searched independently by words present in its stored name and
-    # description (search_text), regardless of whether Oasis had a category.
+    # Gifts: full-text over the stored name/description (like typing into
+    # gifts.ru) plus the products of the keyword-matched Gifts categories.
     gifts_query = Q()
-    gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(search_aliases)))
+    gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(name_anchors)))
     for term in gifts_terms:
         gifts_query |= Q(search_text__icontains=term)
     gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
     selected_gifts_ids = {
         str(value.get("category_id")) for value in category_tasks if value.get("source") == "gifts"
-    } if category_selector else set()
-    gifts_product_query = Q(supplier__code="gifts") & Q(is_active=True)
-    if not selected_gifts_ids:
-        gifts_product_query &= gifts_query
+    }
+    base = CatalogProduct.objects.filter(supplier__code="gifts", is_active=True)
+    cached, seen_gifts = [], set()
     if selected_gifts_ids:
-        gifts_products = CatalogProduct.objects.filter(gifts_product_query).order_by("id")
         if connection.features.supports_json_field_contains:
             category_query = Q()
             for category_id in selected_gifts_ids:
                 category_query |= Q(category_ids__contains=[category_id])
-            cached_products = list(gifts_products.filter(category_query)[:1500])
+            cached.extend(base.filter(category_query).order_by("id")[:1500])
         else:
-            cached_products = []
-            for value in gifts_products.iterator(chunk_size=1000):
-                if selected_gifts_ids & {str(category_id) for category_id in value.category_ids}:
-                    cached_products.append(value)
-                    if len(cached_products) >= 1500:
+            for value in base.order_by("id").iterator(chunk_size=1000):
+                if selected_gifts_ids & {str(cid) for cid in value.category_ids}:
+                    cached.append(value)
+                    if len(cached) >= 1500:
                         break
-    elif category_selector and category_tasks:
-        cached_products = []
-    else:
-        cached_products = list(CatalogProduct.objects.filter(gifts_product_query).order_by("id")[:1500])
+        seen_gifts = {value.pk for value in cached}
+    # Full-text over name/description only when the keyword categories are thin.
+    if gifts_terms and len(cached) < 40:
+        cached.extend(value for value in base.filter(gifts_query).order_by("id")[:1200] if value.pk not in seen_gifts)
+    cached_products = cached
     pool.extend(cached_products)
     source_status["gifts"] = {
         "status": "success" if gifts_supplier_exists else "not_configured",
@@ -2445,7 +2417,14 @@ def catalog_candidates_for_line(
         "received": len(cached_products),
     }
     ranked = []
-    from_selected_category = bool(category_tasks) and not force_full_text
+    # A product counts as "from a selected category" when it actually belongs to
+    # one of the keyword-matched categories — full-text hits get the strict type
+    # check so a plain t-shirt cannot pass as a polo.
+    selected_category_ids = {str(task["category_id"]) for task in category_tasks}
+    for product in pool:
+        product._from_selected_category = bool(
+            selected_category_ids & {str(cid) for cid in (product.category_ids or [])}
+        )
     rejections = {
         "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
         "product_type": 0, "colour": 0, "forbidden": 0, "missing_required": 0,
@@ -2460,7 +2439,7 @@ def catalog_candidates_for_line(
             continue
         eligibility = _catalog_product_eligibility(
             product, line, effective_line, anchors, quantity, intent,
-            from_selected_category=from_selected_category, name_anchors=name_anchors,
+            from_selected_category=product._from_selected_category, name_anchors=name_anchors,
         )
         if eligibility["status"] == "rejected":
             eligibility_counts["rejected"] += 1

@@ -3310,32 +3310,12 @@ item — самое короткое узнаваемое название то�
             "Неподдерживаемые источники поиска отброшены: " + ", ".join(invalid_strategy_sources)
         )
     def _search_catalog():
-        outcome = _catalog_search_outcome(catalog_candidates_for_line(
-            line, limit=3, intent=catalog_intent, include_diagnostics=True,
-            category_selector=_select_catalog_category_tasks,
+        # Product search is a plain catalogue lookup by item name + synonyms
+        # (full text) combined with the best keyword-matched category — like
+        # browsing oasiscatalog.com / gifts.ru. No LLM in this step.
+        return _catalog_search_outcome(catalog_candidates_for_line(
+            line, limit=10, intent=catalog_intent, include_diagnostics=True,
         ))
-        usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (outcome["category_usage"].get("prompt_tokens", 0) or 0)
-        usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (outcome["category_usage"].get("completion_tokens", 0) or 0)
-        searchable_source_available = any(
-            isinstance(value, dict) and value.get("status") == "success"
-            for value in outcome["sources"].values()
-        )
-        first_used_full_text = any(
-            attempt.get("mode") == "full_text" for attempt in outcome["attempts"] if isinstance(attempt, dict)
-        )
-        if not outcome["candidates"] and searchable_source_available and not first_used_full_text:
-            full_text_outcome = _catalog_search_outcome(catalog_candidates_for_line(
-                line, limit=3, intent=catalog_intent, include_diagnostics=True,
-                force_full_text=True,
-            ))
-            outcome = {
-                "candidates": full_text_outcome["candidates"],
-                "sources": full_text_outcome["sources"],
-                "attempts": [*outcome["attempts"], *full_text_outcome["attempts"]],
-                "category_usage": outcome["category_usage"],
-                "category_errors": [*outcome["category_errors"], *full_text_outcome["category_errors"]],
-            }
-        return outcome
 
     catalog_started_at = time.perf_counter()
     # The catalogues only matter when the route actually buys a finished blank
