@@ -2140,8 +2140,8 @@ class TenderTests(TestCase):
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
-    def test_empty_catalog_result_retries_with_untried_real_categories(self, gateway, catalog_search):
-        initial = {
+    def test_empty_category_search_falls_back_to_full_text(self, gateway, catalog_search):
+        gateway.return_value = ({
             "product_type": "textile_merch", "summary": "Термокружка", "confidence": .6,
             "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
             "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
@@ -2150,71 +2150,31 @@ class TenderTests(TestCase):
                 "required": [{"label": "Объём", "value": "500 мл", "weight": 1}],
                 "preferred": [], "secondary": [], "ranking": [],
             },
-        }
-        gateway.return_value = (initial, {})
+        }, {})
+        sources = {"oasis": {"status": "success", "message": "", "received": 20}, "gifts": {"status": "success", "message": "", "received": 10}}
         catalog_search.side_effect = [
-            {
-                "candidates": [],
-                "sources": {"oasis": {"status": "success", "message": "", "received": 20}, "gifts": {"status": "success", "message": "", "received": 10}},
-                "attempts": [{
-                    "mode": "selected_categories", "candidate_count": 0,
-                    "category_tasks": [{"source": "oasis", "category_id": "mugs"}],
-                }],
-            },
+            {"candidates": [], "sources": sources, "attempts": [{
+                "mode": "selected_categories", "candidate_count": 0,
+                "category_tasks": [{"source": "oasis", "category_id": "mugs"}],
+            }]},
             {
                 "candidates": [{
                     "id": "mug", "external_id": "mug", "supplier_code": "gifts", "supplier_name": "gifts.ru",
                     "article": "M-1", "name": "Термокружка", "price": None, "stock": 20, "url": "",
                     "fit": "partial", "matches": ["Тип товара: термокружка"], "mismatches": [], "unknown": ["Объём не указан"],
                 }],
-                "sources": {"oasis": {"status": "success", "message": "", "received": 20}, "gifts": {"status": "success", "message": "", "received": 10}},
-                "attempts": [{
-                    "mode": "selected_categories", "candidate_count": 1,
-                    "category_tasks": [{"source": "gifts", "category_id": "vacuum-mugs"}],
-                }],
+                "sources": sources,
+                "attempts": [{"mode": "full_text", "candidate_count": 1, "category_tasks": []}],
             },
         ]
 
         result = build_training_hypothesis({"name": "Термокружка 500 мл", "quantity": 10, "requirements": {"requirements": []}})
 
         self.assertEqual(catalog_search.call_count, 2)
-        self.assertEqual(result["catalog_candidates"][0]["id"], "mug")
-        self.assertEqual(result["catalog_intent"]["required"][0]["label"], "Объём")
-        self.assertEqual(len(result["catalog_attempts"]), 2)
-        self.assertEqual(catalog_search.call_args.kwargs["excluded_category_tasks"], [
-            {"source": "oasis", "category_id": "mugs"},
-        ])
-
-    @patch("tenders.catalog.catalog_candidates_for_line")
-    @patch("tenders.services._ai_gateway_json")
-    def test_empty_category_attempts_finish_with_full_text_search(self, gateway, catalog_search):
-        gateway.return_value = ({
-            "product_type": "textile_merch", "summary": "Поло", "confidence": .6,
-            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
-            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
-            "catalog_intent": {"item": "рубашка поло", "categories": ["поло"]},
-        }, {})
-        source_status = {"oasis": {"status": "success", "message": "", "received": 20}}
-        catalog_search.side_effect = [
-            {"candidates": [], "sources": source_status, "attempts": [{
-                "mode": "selected_categories", "category_tasks": [{"source": "oasis", "category_id": "polo-1"}],
-            }]},
-            {"candidates": [], "sources": source_status, "attempts": [{
-                "mode": "selected_categories", "category_tasks": [{"source": "oasis", "category_id": "polo-2"}],
-            }]},
-            {"candidates": [], "sources": source_status, "attempts": [{
-                "mode": "full_text", "category_tasks": [],
-            }]},
-        ]
-
-        result = build_training_hypothesis(
-            {"name": "Футболка поло", "quantity": 10, "requirements": {"requirements": []}},
-        )
-
-        self.assertEqual(catalog_search.call_count, 3)
         self.assertTrue(catalog_search.call_args.kwargs["force_full_text"])
+        self.assertEqual(result["catalog_candidates"][0]["id"], "mug")
         self.assertEqual([attempt["mode"] for attempt in result["catalog_attempts"]], [
-            "selected_categories", "selected_categories", "full_text",
+            "selected_categories", "full_text",
         ])
 
     @patch("tenders.catalog.catalog_candidates_for_line", return_value=[])

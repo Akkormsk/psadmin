@@ -3319,42 +3319,22 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
             isinstance(value, dict) and value.get("status") == "success"
             for value in catalog_outcome["sources"].values()
         )
-        if not catalog_candidates and searchable_source_available:
-            attempted_category_tasks = [
-                task for attempt in catalog_outcome["attempts"] if isinstance(attempt, dict)
-                for task in attempt.get("category_tasks", []) if isinstance(task, dict)
-            ]
-            second_outcome = _catalog_search_outcome(catalog_candidates_for_line(
+        first_used_full_text = any(
+            attempt.get("mode") == "full_text" for attempt in catalog_outcome["attempts"] if isinstance(attempt, dict)
+        )
+        if not catalog_candidates and searchable_source_available and not first_used_full_text:
+            full_text_outcome = _catalog_search_outcome(catalog_candidates_for_line(
                 line, limit=3, intent=catalog_intent, include_diagnostics=True,
-                category_selector=_select_catalog_category_tasks,
-                excluded_category_tasks=attempted_category_tasks,
+                force_full_text=True,
             ))
-            catalog_candidates = second_outcome["candidates"]
+            catalog_candidates = full_text_outcome["candidates"]
             catalog_outcome = {
                 "candidates": catalog_candidates,
-                "sources": second_outcome["sources"],
-                "attempts": [*catalog_outcome["attempts"], *second_outcome["attempts"]],
-                "category_usage": second_outcome["category_usage"],
-                "category_errors": [*catalog_outcome["category_errors"], *second_outcome["category_errors"]],
+                "sources": full_text_outcome["sources"],
+                "attempts": [*catalog_outcome["attempts"], *full_text_outcome["attempts"]],
+                "category_usage": catalog_outcome["category_usage"],
+                "category_errors": [*catalog_outcome["category_errors"], *full_text_outcome["category_errors"]],
             }
-            usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (second_outcome["category_usage"].get("prompt_tokens", 0) or 0)
-            usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (second_outcome["category_usage"].get("completion_tokens", 0) or 0)
-            second_used_full_text = any(
-                attempt.get("mode") == "full_text" for attempt in second_outcome["attempts"] if isinstance(attempt, dict)
-            )
-            if not catalog_candidates and not second_used_full_text:
-                full_text_outcome = _catalog_search_outcome(catalog_candidates_for_line(
-                    line, limit=3, intent=catalog_intent, include_diagnostics=True,
-                    force_full_text=True,
-                ))
-                catalog_candidates = full_text_outcome["candidates"]
-                catalog_outcome = {
-                    "candidates": catalog_candidates,
-                    "sources": full_text_outcome["sources"],
-                    "attempts": [*catalog_outcome["attempts"], *full_text_outcome["attempts"]],
-                    "category_usage": {},
-                    "category_errors": catalog_outcome["category_errors"],
-                }
     except CatalogSyncError as exc:
         catalog_candidates = []
         catalog_outcome = {"candidates": [], "sources": {}, "attempts": []}
