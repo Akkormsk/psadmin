@@ -10,3 +10,7 @@ psadmin-local-export-*.json
 runserver*.log
 staticfiles/
 .idea/
+tenders/assistant_knowledge.json
+sample_tenders/
+gifts_instructions.md
+psadmin-local-export-catalog.json

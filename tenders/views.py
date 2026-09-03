@@ -13,14 +13,15 @@ from xml.etree import ElementTree
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpResponse, JsonResponse
+from django.core import serializers
+from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CatalogCategory, CatalogMatchDecision, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .catalog import CatalogSyncError, GiftsXmlClient, _complete_category_options, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _resolve_line_match, _select_catalog_category_tasks, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
@@ -38,6 +39,31 @@ def knowledge_sync(request):
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         return HttpResponse(status=403)
     return JsonResponse(export_knowledge_bundle(include_embeddings=True), json_dumps_params={"ensure_ascii": False})
+
+
+@require_GET
+def catalog_sync(request):
+    expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
+    supplied = request.headers.get("Authorization", "")
+    if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
+        return HttpResponse(status=403)
+
+    def dump():
+        querysets = (
+            CatalogSupplier.objects.all(),
+            CatalogCategory.objects.order_by("pk").iterator(),
+            CatalogProduct.objects.order_by("pk").iterator(),
+        )
+        yield "["
+        first = True
+        for queryset in querysets:
+            for instance in queryset:
+                fragment = serializers.serialize("json", [instance])[1:-1]
+                yield fragment if first else "," + fragment
+                first = False
+        yield "]"
+
+    return StreamingHttpResponse(dump(), content_type="application/json")
 
 
 @csrf_exempt
