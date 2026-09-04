@@ -15,8 +15,8 @@ from openpyxl import Workbook
 from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderSettings
-from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, _category_retrieval, _expand_category_graph, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_catalog_category_tasks, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, _verify_catalog_category_tasks, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
+from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
+from .services import _VisibleTextParser, _apply_catalog_operations, _apply_psodin_calculation, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_production_route, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, classify_production_type, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
 
 class TenderTests(TestCase):
@@ -1475,235 +1475,8 @@ class TenderTests(TestCase):
             value["specificity"] for value in candidates if value["category_id"] == "vip"
         ))
 
-    def test_category_retrieval_uses_item_before_product_class_and_preserves_sources(self):
-        categories = [
-            {
-                "source": "large", "category_id": f"mug-{index}", "name": f"Кружки {index}",
-                "parent_id": "", "path": f"Посуда > Кружки {index}",
-            }
-            for index in range(80)
-        ] + [
-            {
-                "source": "large", "category_id": "polo-large", "name": "Рубашки поло",
-                "parent_id": "", "path": "Одежда > Рубашки поло",
-            },
-            {
-                "source": "large", "category_id": "shirts", "name": "Футболки",
-                "parent_id": "", "path": "Одежда > Футболки",
-            },
-            {
-                "source": "small", "category_id": "polo-small", "name": "Polo shirts",
-                "parent_id": "", "path": "Textile > Polo shirts",
-            },
-        ]
-
-        seeds, diagnostics = _category_retrieval(
-            categories,
-            {"name": "Поло унисекс"},
-            {"item": "поло", "synonyms": ["рубашка поло", "polo shirt"], "product_class": "футболка"},
-        )
-
-        self.assertEqual({value["source"] for value in seeds}, {"large", "small"})
-        self.assertIn("polo-large", {value["category_id"] for value in seeds})
-        self.assertIn("polo-small", {value["category_id"] for value in seeds})
-        large_ids = [value["category_id"] for value in seeds if value["source"] == "large"]
-        self.assertLess(large_ids.index("polo-large"), large_ids.index("shirts") if "shirts" in large_ids else len(large_ids))
-        self.assertEqual(diagnostics["considered_count"], len(categories))
-
-    def test_category_graph_expansion_is_local_and_deduplicated(self):
-        categories = [
-            {"source": "supplier", "category_id": "root", "name": "Одежда", "parent_id": "", "path": "Одежда"},
-            {"source": "supplier", "category_id": "polo", "name": "Поло", "parent_id": "root", "path": "Одежда > Поло"},
-            {"source": "supplier", "category_id": "male", "name": "Мужские поло", "parent_id": "polo", "path": "Одежда > Поло > Мужские"},
-            {"source": "supplier", "category_id": "female", "name": "Женские поло", "parent_id": "polo", "path": "Одежда > Поло > Женские"},
-            {"source": "supplier", "category_id": "mugs", "name": "Кружки", "parent_id": "", "path": "Посуда > Кружки"},
-        ]
-
-        fragment = _expand_category_graph(categories, [{**categories[1], "retrieval_score": 1}])
-
-        self.assertEqual({value["category_id"] for value in fragment}, {"root", "polo", "male", "female"})
-        self.assertEqual(len(fragment), len({(value["source"], value["category_id"]) for value in fragment}))
-        polo = next(value for value in fragment if value["category_id"] == "polo")
-        self.assertEqual(set(polo["child_ids"]), {"male", "female"})
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_llm_category_selection_accepts_only_real_category_ids(self, gateway):
-        gateway.side_effect = [
-            ({"categories": [
-                {"source": "oasis", "category_id": "invented", "priority": 1},
-                {"source": "oasis", "category_id": "polo", "priority": 1},
-            ]}, {}),
-            ({"categories": [
-                {"source": "oasis", "category_id": "polo", "keep": True},
-            ]}, {}),
-        ]
-
-        tasks, usage, errors = _select_catalog_category_tasks(
-            {"name": "Футболка поло"},
-            {"item": "рубашка поло"},
-            [
-                {"source": "oasis", "category_id": "polo", "name": "Рубашки поло", "path": "Одежда / Поло", "specificity": 1},
-                {"source": "oasis", "category_id": "shirts", "name": "Футболки", "path": "Одежда / Футболки", "specificity": .5},
-            ],
-        )
-
-        self.assertEqual(tasks, [{
-            "source": "oasis", "category_id": "polo", "name": "Рубашки поло",
-            "path": "Одежда / Поло", "priority": 1,
-        }])
-        self.assertFalse(errors)
-        self.assertEqual(usage["llm_calls"], 2)
-        self.assertEqual(usage["selector_llm_calls"], 1)
-        self.assertEqual(usage["verifier_llm_calls"], 1)
-        self.assertFalse(usage["retry_used"])
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_llm_category_selection_receives_one_compact_multi_source_fragment(self, gateway):
-        captured = {}
-
-        def answer(prompt, **kwargs):
-            if "SEMANTIC VERIFIER" in prompt:
-                captured["verifier_prompt"] = prompt
-                return ({"categories": [
-                    {"source": "supplier-x", "category_id": "protective-headwear", "keep": True},
-                    {"source": "supplier-y", "category_id": "helmets", "keep": True},
-                ]}, {"input_tokens": 45, "output_tokens": 10})
-            captured["selector_prompt"] = prompt
-            return ({"categories": [
-                {"source": "supplier-x", "category_id": "protective-headwear", "priority": 1},
-                {"source": "supplier-y", "category_id": "helmets", "priority": 1},
-            ]}, {"input_tokens": 321, "output_tokens": 123})
-
-        gateway.side_effect = answer
-        tasks, usage, errors = _select_catalog_category_tasks(
-            {"name": "Каска защитная зимняя"},
-            {
-                "item": "защитная каска",
-                "required": [{"label": "Сезон", "value": "зима", "weight": 1}],
-            },
-            [
-                {
-                    "source": "supplier-x", "category_id": "winter-helmets", "name": "Зимние каски",
-                    "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Зимние каски",
-                    "specificity": 10,
-                },
-                {
-                    "source": "supplier-x", "category_id": "workwear", "name": "Спецодежда",
-                    "parent_id": "", "path": "Каталог > Спецодежда", "specificity": 1,
-                },
-                {
-                    "source": "supplier-x", "category_id": "protective-headwear", "name": "Защита головы",
-                    "parent_id": "workwear", "path": "Каталог > Спецодежда > Защита головы", "specificity": 1,
-                },
-                {
-                    "source": "supplier-x", "category_id": "helmets-general", "name": "Защитные каски",
-                    "parent_id": "protective-headwear", "path": "Каталог > Спецодежда > Защита головы > Защитные каски",
-                    "specificity": 1,
-                },
-                {
-                    "source": "supplier-y", "category_id": "helmets", "name": "Каски",
-                    "parent_id": "", "path": "Защита > Каски", "specificity": 8,
-                },
-            ],
-        )
-
-        prompt = captured["selector_prompt"]
-        self.assertIn('"parent_id"', prompt)
-        self.assertIn('"child_ids"', prompt)
-        self.assertIn('"supplier-x"', prompt)
-        self.assertIn('"supplier-y"', prompt)
-        self.assertIn("минимальный достаточный набор", prompt)
-        self.assertIn("лучше вернуть меньше категорий", prompt)
-        self.assertNotIn('primary', prompt)
-        self.assertNotIn('equivalent', prompt)
-        self.assertNotIn('condition', prompt)
-        verifier_prompt = captured["verifier_prompt"]
-        self.assertIn('"item":"защитная каска"', verifier_prompt)
-        self.assertNotIn('"parent_id"', verifier_prompt)
-        self.assertNotIn('"child_ids"', verifier_prompt)
-        self.assertNotIn('"priority"', verifier_prompt)
-        self.assertNotIn("Сезон", verifier_prompt)
-        self.assertEqual(gateway.call_count, 2)
-        self.assertEqual({value["source"] for value in tasks}, {"supplier-x", "supplier-y"})
-        self.assertEqual(usage["input_tokens"], 366)
-        self.assertEqual(usage["output_tokens"], 133)
-        self.assertEqual(usage["selector_input_tokens"], 321)
-        self.assertEqual(usage["verifier_input_tokens"], 45)
-        self.assertEqual(usage["llm_calls"], 2)
-        self.assertFalse(errors)
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_category_verifier_removes_only_explicit_rejections_and_defaults_to_keep(self, gateway):
-        gateway.return_value = ({"categories": [
-            {"source": "gifts", "category_id": "mugs", "keep": True},
-            {"source": "gifts", "category_id": "sets", "keep": False},
-            {"source": "gifts", "category_id": "invented", "keep": False},
-        ]}, {"prompt_tokens": 50, "completion_tokens": 12})
-        tasks = [
-            {"source": "gifts", "category_id": "mugs", "name": "Кружки", "path": "Посуда > Кружки", "priority": 1},
-            {"source": "gifts", "category_id": "sets", "name": "Подарочные наборы", "path": "Наборы > С кружками", "priority": 1},
-            {"source": "gifts", "category_id": "tableware", "name": "Посуда", "path": "Посуда", "priority": 1},
-        ]
-
-        kept, usage, decisions = _verify_catalog_category_tasks("кружка", tasks)
-
-        self.assertEqual([value["category_id"] for value in kept], ["mugs", "tableware"])
-        self.assertEqual(usage["prompt_tokens"], 50)
-        self.assertEqual(decisions[("gifts", "sets")], False)
-        prompt = gateway.call_args.args[0]
-        self.assertIn("SEMANTIC VERIFIER", prompt)
-        self.assertNotIn('"priority"', prompt)
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_category_verifier_does_not_trigger_semantic_retry(self, gateway):
-        gateway.side_effect = [
-            ({"categories": [{"source": "supplier", "category_id": "accessories", "priority": 1}]}, {}),
-            ({"categories": [{"source": "supplier", "category_id": "accessories", "keep": False}]}, {}),
-        ]
-
-        tasks, usage, errors = _select_catalog_category_tasks(
-            {"name": "Кружка"}, {"item": "кружка"}, [{
-                "source": "supplier", "category_id": "accessories", "name": "Для кружек",
-                "parent_id": "", "path": "Упаковка > Для кружек", "specificity": 1,
-            }],
-        )
-
-        self.assertEqual(tasks, [])
-        self.assertEqual(gateway.call_count, 2)
-        self.assertFalse(usage["retry_used"])
-        self.assertFalse(errors)
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_llm_category_selection_retries_terms_only_after_empty_selection(self, gateway):
-        gateway.side_effect = [
-            ({"categories": []}, {"prompt_tokens": 100, "completion_tokens": 10}),
-            ({"search_terms": ["защитный шлем", "каска"]}, {"prompt_tokens": 40, "completion_tokens": 8}),
-            ({"categories": [{"source": "supplier-a", "category_id": "helmet", "priority": 1}]}, {"prompt_tokens": 120, "completion_tokens": 10}),
-            ({"categories": [{"source": "supplier-a", "category_id": "helmet", "keep": True}]}, {"prompt_tokens": 30, "completion_tokens": 5}),
-        ]
-        tasks, usage, errors = _select_catalog_category_tasks(
-            {"name": "Защитная каска"}, {"item": "каска"}, [
-                {
-                    "source": "supplier-a", "category_id": "helmet", "name": "Защитные шлемы и каски",
-                    "parent_id": "", "path": "Каталог A > Товар A", "specificity": 1,
-                },
-            ],
-        )
-
-        self.assertEqual(gateway.call_count, 4)
-        self.assertEqual(tasks[0]["category_id"], "helmet")
-        self.assertEqual(usage["prompt_tokens"], 290)
-        self.assertEqual(usage["completion_tokens"], 33)
-        self.assertEqual(usage["llm_calls"], 4)
-        self.assertEqual(usage["selector_llm_calls"], 2)
-        self.assertEqual(usage["verifier_llm_calls"], 1)
-        self.assertEqual(usage["semantic_attempts"], 2)
-        self.assertTrue(usage["retry_used"])
-        self.assertFalse(errors)
-
-    def test_catalog_search_uses_llm_selected_real_category_instead_of_broad_category(self):
+    def test_catalog_search_prefers_the_specific_keyword_matched_category(self):
         requested_categories = []
-        seen_category_candidates = []
 
         class Client:
             base_url = "https://api.oasiscatalog.com"
@@ -1728,10 +1501,6 @@ class TenderTests(TestCase):
                     "name": "Варежки", "categories": ["vip"], "total_stock": 100, "price": 100,
                 }]
 
-        def selector(line, intent, candidates, attempted):
-            seen_category_candidates.extend(candidates)
-            return [{"source": "oasis", "category_id": "polo", "priority": 1}], {}, []
-
         result = catalog_candidates_for_line(
             {"name": "Футболка поло унисекс", "quantity": 10, "requirements": {"requirements": []}},
             limit=3,
@@ -1739,85 +1508,12 @@ class TenderTests(TestCase):
                 "item": "рубашка поло", "product_class": "футболка",
                 "categories": ["одежда", "футболки"], "synonyms": ["футболка поло"],
             },
-            client=Client(), category_selector=selector, include_diagnostics=True,
+            client=Client(), include_diagnostics=True,
         )
 
-        self.assertEqual(requested_categories, ["polo"])
+        self.assertEqual(requested_categories[0], "polo")
         self.assertEqual(result["candidates"][0]["external_id"], "right")
         self.assertEqual(result["attempts"][0]["category_tasks"][0]["category_id"], "polo")
-        self.assertEqual(seen_category_candidates[0]["category_id"], "polo")
-
-    def test_llm_category_selector_receives_complete_fixed_map(self):
-        seen_category_ids = []
-        seen_parent_ids = {}
-
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                if path == "/v4/categories":
-                    return [
-                        {"id": "clothes", "name": "Одежда", "path": "odezhda"},
-                        {"id": "raglan", "parent_id": "clothes", "name": "Регланы", "path": "odezhda/reglany"},
-                        {"id": "mugs", "name": "Кружки", "path": "posuda/kruzhki"},
-                    ]
-                return []
-
-        def selector(line, intent, candidates, attempted):
-            seen_category_ids.extend(value["category_id"] for value in candidates)
-            seen_parent_ids.update({value["category_id"]: value.get("parent_id", "") for value in candidates})
-            return [], {}, []
-
-        catalog_candidates_for_line(
-            {"name": "Лонгслив", "quantity": 10},
-            intent={"item": "лонгслив", "synonyms": ["футболка с длинным рукавом"]},
-            client=Client(), category_selector=selector,
-        )
-
-        self.assertEqual(set(seen_category_ids), {"clothes", "raglan", "mugs"})
-        self.assertEqual(seen_parent_ids["raglan"], "clothes")
-
-    @patch.dict("os.environ", {"KNOWLEDGE_SYNC_TOKEN": "test-token"})
-    @patch("tenders.views._select_catalog_category_tasks")
-    def test_category_selection_test_runs_without_catalogue_product_search(self, selector):
-        supplier = CatalogSupplier.objects.create(
-            code="supplier-x", name="Supplier X", base_url="https://supplier.example",
-        )
-        CatalogCategory.objects.create(
-            supplier=supplier, external_id="root", name="Одежда", path="Каталог > Одежда",
-        )
-        CatalogCategory.objects.create(
-            supplier=supplier, external_id="polo", parent_external_id="root",
-            name="Поло", path="Каталог > Одежда > Поло",
-        )
-        session = ProductionTrainingSession.objects.create(
-            created_by=self.user,
-            position_name="Футболка поло унисекс, цвет – белый",
-            requirements={"requirements": [{"label": "Цвет", "value": "белый"}]},
-            current_hypothesis={"catalog_intent": {"item": "рубашка поло"}},
-        )
-        selector.return_value = ([{
-            "source": "supplier-x", "category_id": "polo", "name": "Поло",
-            "path": "Каталог > Одежда > Поло", "priority": 1,
-        }], {
-            "input_tokens": 100, "output_tokens": 20, "llm_calls": 1,
-            "semantic_attempts": 1, "retry_used": False,
-            "semantic_representation": {"item": "рубашка поло", "search_terms": ["рубашка поло"]},
-            "retrieval": {"considered_count": 2, "candidate_count": 1, "fragment_count": 2, "by_source": {"supplier-x": 2}},
-        }, [])
-
-        response = self.client.post(
-            reverse("tender_category_selection_test", args=[session.pk]),
-            HTTP_AUTHORIZATION="Bearer test-token",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["category_tasks"][0]["category_id"], "polo")
-        self.assertEqual(response.json()["usage"]["llm_calls"], 1)
-        candidates = selector.call_args.args[2]
-        self.assertEqual({value["category_id"] for value in candidates}, {"root", "polo"})
-        self.assertEqual(next(value for value in candidates if value["category_id"] == "polo")["parent_id"], "root")
-        self.assertEqual(CatalogProduct.objects.count(), 0)
 
     def test_catalog_search_returns_nearest_candidate_when_required_density_differs(self):
         class Client:
@@ -1856,7 +1552,7 @@ class TenderTests(TestCase):
         self.assertEqual(result[0]["eligibility"], "partial_eligible")
         self.assertTrue(any("Плотность" in value for value in result[0]["mismatches"]))
 
-    def test_catalog_search_falls_back_to_server_category_priority_when_selector_fails(self):
+    def test_catalog_search_picks_the_category_without_any_llm_call(self):
         requested_categories = []
 
         class Client:
@@ -1876,21 +1572,18 @@ class TenderTests(TestCase):
                     "total_stock": 100, "price": 500,
                 }]
 
-        def broken_selector(*args):
-            raise RuntimeError("LLM unavailable")
-
         result = catalog_candidates_for_line(
             {"name": "Футболка поло унисекс", "quantity": 10, "requirements": {"requirements": []}},
             intent={
                 "item": "рубашка поло", "product_class": "футболка",
                 "categories": ["одежда"], "synonyms": ["футболка поло"],
             },
-            client=Client(), category_selector=broken_selector, include_diagnostics=True,
+            client=Client(), include_diagnostics=True,
         )
 
-        self.assertEqual(requested_categories, ["polo"])
+        self.assertEqual(requested_categories[0], "polo")
         self.assertEqual(result["candidates"][0]["external_id"], "right")
-        self.assertTrue(result["category_errors"])
+        self.assertEqual(result["category_errors"], [])
 
     def test_selected_gifts_category_does_not_depend_on_cached_search_text(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
@@ -1909,13 +1602,10 @@ class TenderTests(TestCase):
             def get(self, path, params=None):
                 return []
 
-        def selector(line, intent, candidates, attempted):
-            return [{"source": "gifts", "category_id": "vacuum", "priority": 1}], {}, []
-
         result = catalog_candidates_for_line(
             {"name": "Термокружка", "quantity": 10},
             intent={"item": "термокружка", "categories": ["термокружки"]},
-            client=Client(), category_selector=selector,
+            client=Client(),
         )
 
         self.assertEqual([value["external_id"] for value in result], ["travel-mug"])
@@ -1945,13 +1635,10 @@ class TenderTests(TestCase):
             def get(self, path, params=None):
                 return []
 
-        def selector(line, intent, candidates, attempted):
-            return [{"source": "gifts", "category_id": "long-sleeve", "priority": 1}], {}, []
-
         result = catalog_candidates_for_line(
             {"name": "Лонгслив", "quantity": 10},
             intent={"item": "лонгслив", "synonyms": ["футболка с длинным рукавом"]},
-            client=Client(), category_selector=selector,
+            client=Client(),
         )
 
         self.assertEqual([value["external_id"] for value in result], ["wanted-long-sleeve"])
@@ -2177,45 +1864,6 @@ class TenderTests(TestCase):
 
         catalog_search.assert_called()
         self.assertNotIn("catalog_skipped", result)
-
-    @patch("tenders.catalog.catalog_candidates_for_line")
-    @patch("tenders.services._ai_gateway_json")
-    def test_empty_category_search_falls_back_to_full_text(self, gateway, catalog_search):
-        gateway.return_value = ({
-            "product_type": "textile_merch", "summary": "Термокружка", "confidence": .6,
-            "facts": [], "route": {"reason": "Готовое изделие", "processes": [{"name": "Закупка готового изделия"}]},
-            "costs": [], "questions": [], "assumptions": [], "matched_example_ids": [], "understood_changes": [],
-            "catalog_intent": {
-                "item": "термокружка", "categories": ["термокружка"],
-                "required": [{"label": "Объём", "value": "500 мл", "weight": 1}],
-                "preferred": [], "secondary": [], "ranking": [],
-            },
-        }, {})
-        sources = {"oasis": {"status": "success", "message": "", "received": 20}, "gifts": {"status": "success", "message": "", "received": 10}}
-        catalog_search.side_effect = [
-            {"candidates": [], "sources": sources, "attempts": [{
-                "mode": "selected_categories", "candidate_count": 0,
-                "category_tasks": [{"source": "oasis", "category_id": "mugs"}],
-            }]},
-            {
-                "candidates": [{
-                    "id": "mug", "external_id": "mug", "supplier_code": "gifts", "supplier_name": "gifts.ru",
-                    "article": "M-1", "name": "Термокружка", "price": None, "stock": 20, "url": "",
-                    "fit": "partial", "matches": ["Тип товара: термокружка"], "mismatches": [], "unknown": ["Объём не указан"],
-                }],
-                "sources": sources,
-                "attempts": [{"mode": "full_text", "candidate_count": 1, "category_tasks": []}],
-            },
-        ]
-
-        result = build_training_hypothesis({"name": "Термокружка 500 мл", "quantity": 10, "requirements": {"requirements": []}})
-
-        self.assertEqual(catalog_search.call_count, 2)
-        self.assertTrue(catalog_search.call_args.kwargs["force_full_text"])
-        self.assertEqual(result["catalog_candidates"][0]["id"], "mug")
-        self.assertEqual([attempt["mode"] for attempt in result["catalog_attempts"]], [
-            "selected_categories", "full_text",
-        ])
 
     def test_catalog_feedback_operations_patch_existing_plan_without_losing_rules(self):
         current = {
