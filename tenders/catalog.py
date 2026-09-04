@@ -2010,11 +2010,21 @@ def _local_catalog_pool(supplier_code, selected_category_ids, terms, thin_thresh
                 category_query |= Q(category_ids__contains=[category_id])
             cached.extend(base.filter(category_query).order_by("id")[:category_limit])
         else:
-            for value in base.order_by("id").iterator(chunk_size=1000):
-                if selected_category_ids & {str(cid) for cid in value.category_ids}:
-                    cached.append(value)
-                    if len(cached) >= category_limit:
+            # SQLite has no JSON-containment lookup (Postgres does, and takes
+            # the branch above). Scanning the full table is still needed, but
+            # scan only id+category_ids — a few bytes each — instead of full
+            # rows (search_text/description/attributes run to tens of KB each
+            # and were being deserialised for every one of 30k+ products on
+            # every search). Fetch full rows only for the ones that match.
+            matched_ids = []
+            for pk, category_ids in base.order_by("id").values_list("id", "category_ids").iterator(chunk_size=2000):
+                if selected_category_ids & {str(cid) for cid in (category_ids or [])}:
+                    matched_ids.append(pk)
+                    if len(matched_ids) >= category_limit:
                         break
+            if matched_ids:
+                by_pk = {value.pk: value for value in base.filter(pk__in=matched_ids)}
+                cached.extend(by_pk[pk] for pk in matched_ids if pk in by_pk)
         seen = {value.pk for value in cached}
     if terms and len(cached) < thin_threshold:
         text_query = Q()
