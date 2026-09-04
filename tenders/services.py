@@ -663,8 +663,10 @@ def _pdf_page_count(upload):
     return page_count
 
 
-def _scan_pdf_images(upload, start_page=0, page_limit=None):
-    """Render scanned PDF pages in memory for multimodal recognition."""
+def _scan_pdf_images(upload, start_page=0, page_limit=None, max_side=AI_SCAN_MAX_SIDE, quality=92):
+    """Render scanned PDF pages in memory for multimodal recognition. max_side
+    and quality are lowered by _ai_gateway_json after a 413 from the gateway —
+    a page-heavy or high-resolution scan otherwise fails recognition outright."""
     upload.seek(0)
     document = pdfium.PdfDocument(upload.read())
     page_count = len(document)
@@ -684,9 +686,9 @@ def _scan_pdf_images(upload, start_page=0, page_limit=None):
         # before the bounded thumbnail instead of enlarging a blurry raster.
         bitmap = page.render(scale=3)
         image = bitmap.to_pil().convert("RGB")
-        image.thumbnail((AI_SCAN_MAX_SIDE, AI_SCAN_MAX_SIDE))
+        image.thumbnail((max_side, max_side))
         output = BytesIO()
-        image.save(output, format="JPEG", quality=92, optimize=True)
+        image.save(output, format="JPEG", quality=quality, optimize=True)
         images.append(base64.b64encode(output.getvalue()).decode("ascii"))
         bitmap.close()
         page.close()
@@ -762,31 +764,50 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
     model = os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
     if not api_key:
         raise TenderAIError("AI Gateway ещё не настроен.")
-    user_content = prompt
-    if scan_ocr or image_data_urls:
-        user_content = [{"type": "text", "text": prompt}]
+    has_images = bool(scan_ocr or image_data_urls)
+
+    def build_user_content(max_side, quality):
+        if not has_images:
+            return prompt
+        content = [{"type": "text", "text": prompt}]
         if scan_ocr:
-            user_content.extend({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}", "detail": "high"}} for image in _scan_pdf_images(upload))
+            content.extend(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}", "detail": "high"}}
+                for image in _scan_pdf_images(upload, max_side=max_side, quality=quality)
+            )
         if image_data_urls:
-            user_content.extend({"type": "image_url", "image_url": {"url": image, "detail": "high"}} for image in image_data_urls)
+            content.extend({"type": "image_url", "image_url": {"url": image, "detail": "high"}} for image in image_data_urls)
+        return content
+
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     for attempt in range(2):
-        messages = [
-            {"role": "system", "content": "Ты точно анализируешь документы и таблицы. Отвечай только валидным JSON без markdown."},
-            {"role": "user", "content": user_content},
-        ]
+        system_content = "Ты точно анализируешь документы и таблицы. Отвечай только валидным JSON без markdown."
         if attempt:
-            messages[0]["content"] += " Предыдущая попытка содержала синтаксическую ошибку. Особенно тщательно проверь кавычки, запятые и закрывающие скобки."
-        payload = json.dumps({"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}, ensure_ascii=False).encode("utf-8")
-        request = Request(f"{base_url}/chat/completions", data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
+            system_content += " Предыдущая попытка содержала синтаксическую ошибку. Особенно тщательно проверь кавычки, запятые и закрывающие скобки."
+        image_max_side, image_quality = AI_SCAN_MAX_SIDE, 92
+        user_content = build_user_content(image_max_side, image_quality)
         response_data = None
         last_network_error = None
-        for network_attempt in range(network_attempts):
+        network_attempt = 0
+        while network_attempt < network_attempts:
+            payload = json.dumps({
+                "model": model, "temperature": 0, "max_tokens": max_tokens,
+                "messages": [{"role": "system", "content": system_content}, {"role": "user", "content": user_content}],
+            }, ensure_ascii=False).encode("utf-8")
+            request = Request(f"{base_url}/chat/completions", data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
             try:
                 with urlopen(request, timeout=timeout) as response:
                     response_data = json.loads(response.read().decode("utf-8"))
                 break
             except HTTPError as exc:
+                if exc.code == 413 and has_images and image_max_side > 900:
+                    # The scan (page count × resolution) is too large for the
+                    # gateway to accept — halve the image size and quality once
+                    # and retry immediately, instead of failing recognition
+                    # outright on a heavy but otherwise ordinary scan.
+                    image_max_side, image_quality = image_max_side // 2, 65
+                    user_content = build_user_content(image_max_side, image_quality)
+                    continue
                 if exc.code not in {429, 500, 502, 503, 504}:
                     try:
                         detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message")
@@ -796,8 +817,9 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
                 last_network_error = exc
             except (URLError, TimeoutError, ConnectionError, OSError, json.JSONDecodeError) as exc:
                 last_network_error = exc
-            if network_attempt < network_attempts - 1:
-                time.sleep(1 + network_attempt * 2)
+            network_attempt += 1
+            if network_attempt < network_attempts:
+                time.sleep(1 + (network_attempt - 1) * 2)
         if response_data is None:
             raise TenderAIError("AI Gateway не ответил после нескольких попыток. Попробуйте позже.") from last_network_error
         usage = response_data.get("usage", {})
