@@ -1273,7 +1273,22 @@ def _category_candidates(categories_by_source, line, intent, limit_per_source=12
             if normalized:
                 weighted_phrases.append((weight, normalized))
 
-    generic_tokens = {"товар", "товары", "каталог", "одежда", "текстиль", "сувенир", "сувениры", "продукция"}
+    # Procurement-document boilerplate: these words show up in the name of
+    # almost every promotional-merch category ("Блокноты с логотипом",
+    # "Ветровки с логотипом", ...) and in almost every tender position name
+    # ("... с нанесением логотипа", "с символикой ..."). Scored like any
+    # other token they out-weigh the one word that actually identifies the
+    # item, pulling in categories that share only the boilerplate.
+    generic_tokens = {
+        "товар", "товары", "каталог", "одежда", "текстиль", "сувенир", "сувениры", "продукция",
+        "логотип", "логотипом", "логотипа", "логотипе", "логотипу",
+        "символика", "символикой", "символики", "символике",
+        "нанесение", "нанесением", "нанесения", "нанесении",
+        "вручение", "вручения", "вручению",
+        "изготовление", "изготовления", "изготовлению",
+        "поставка", "поставки", "поставке", "поставку",
+        "услуга", "услуги", "услугу", "услуге",
+    }
     class_tokens = set(_normalized(intent.get("product_class")).split())
     token_weights = {}
     for weight, phrase in weighted_phrases:

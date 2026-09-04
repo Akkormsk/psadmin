@@ -74,7 +74,7 @@ class TenderTests(TestCase):
         self.assertIn("function updateRouteToolbar", content)
         self.assertIn("function setProductionBusy", content)
         self.assertIn("aria-busy", content)
-        self.assertIn(".tender-production-header { position:sticky", styles)
+        self.assertIn(".tender-production-header { position:fixed", styles)
         self.assertIn(".tender-production-result.is-loading::after", styles)
         self.assertIn(".is-loading-button::before", styles)
         self.assertIn("bottom:0", styles)
