@@ -1752,13 +1752,20 @@ def _catalog_requirement_lines(line, intent):
         seen.add(key)
         lines.append(f"{label}: {value}" if label else value)
 
+    intent = intent if isinstance(intent, dict) else {}
+    # Product identity is always the first thing to check, even when the ТЗ
+    # never states it as a separate line — a card that is a different garment
+    # sub-type (полo shirt for a "майка" query) must fail this before any of
+    # its listed characteristics are even looked at.
+    item_name = _cell_text(intent.get("item")) or _cell_text(line.get("name")) if isinstance(line, dict) else ""
+    if item_name:
+        add("Тип товара — заявленная позиция", item_name)
     requirements = line.get("requirements") if isinstance(line, dict) else None
     if isinstance(requirements, dict):
         requirements = requirements.get("requirements")
     for value in requirements if isinstance(requirements, list) else []:
         if isinstance(value, dict):
             add(value.get("label"), value.get("value"))
-    intent = intent if isinstance(intent, dict) else {}
     for group in ("required", "preferred"):
         for value in intent.get(group, []) if isinstance(intent.get(group), list) else []:
             if isinstance(value, dict):
