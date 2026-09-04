@@ -2272,8 +2272,17 @@ def catalog_candidates_for_line(
             "variants": _product_variants(product),
             "normalized_requirements": normalized_requirements,
             "normalized_product_values": normalized_product_values,
+            # Full card text for the semantic review step (LLM reads these, not the backend).
+            "description": _text(product.description, 1500),
+            "attributes": [
+                {"name": _text(value.get("name"), 200), "value": _text(value.get("value"), 500)}
+                for value in (product.attributes if isinstance(product.attributes, list) else [])
+                if isinstance(value, dict) and _text(value.get("name"), 200) and _text(value.get("value"), 500)
+            ][:40],
+            "materials": [_text(value, 200) for value in (product.materials if isinstance(product.materials, list) else []) if _text(value, 200)],
+            "colors": [_text(value, 120) for value in (product.colors if isinstance(product.colors, list) else []) if _text(value, 120)],
         })
-        if len(selected) >= max(1, min(10, limit)):
+        if len(selected) >= max(1, min(60, limit)):
             break
     if include_diagnostics:
         return {

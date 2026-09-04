@@ -1453,6 +1453,30 @@ def catalog_feedback_contract():
     }
 
 
+def _catalog_review_rules(raw):
+    """Named, admin-visible rules fed verbatim into the shortlist review prompt."""
+    result, seen = [], set()
+    for value in raw if isinstance(raw, list) else []:
+        if isinstance(value, str):
+            value = {"text": value}
+        if not isinstance(value, dict):
+            continue
+        text = _cell_text(value.get("text"))[:300].strip()
+        if not text:
+            continue
+        key = _normalized_text(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({
+            "id": _cell_text(value.get("id"))[:40] or hashlib.sha1(key.encode("utf-8")).hexdigest()[:12],
+            "text": text,
+            "label": _cell_text(value.get("label"))[:60].strip() or text[:60],
+            "source_phrase": _cell_text(value.get("source_phrase"))[:300],
+        })
+    return result[:20]
+
+
 def _normalize_catalog_intent(raw, preserve_internal=False):
     """Keep the LLM catalogue planner structured while preserving legacy fields."""
     raw = raw if isinstance(raw, dict) else {}
@@ -1538,6 +1562,7 @@ def _normalize_catalog_intent(raw, preserve_internal=False):
         "source_strategy": strategy_list(raw.get("source_strategy")),
         "constraints": constraints,
         "allowed_sources": text_list(raw.get("allowed_sources"), limit=8),
+        "review_rules": _catalog_review_rules(raw.get("review_rules")),
         "rule_scope": text_list(raw.get("rule_scope"), limit=12),
         "hard_constraints": text_list(raw.get("hard_constraints"), limit=12),
         "preferences": text_list(raw.get("preferences"), limit=8),
@@ -1704,19 +1729,196 @@ def _catalog_search_outcome(raw):
             "attempts": raw.get("attempts", []) if isinstance(raw.get("attempts"), list) else [],
             "category_usage": raw.get("category_usage", {}) if isinstance(raw.get("category_usage"), dict) else {},
             "category_errors": raw.get("category_errors", []) if isinstance(raw.get("category_errors"), list) else [],
+            "review": raw.get("review", {}) if isinstance(raw.get("review"), dict) else {},
         }
     return {
         "candidates": raw if isinstance(raw, list) else [], "sources": {}, "attempts": [],
-        "category_usage": {}, "category_errors": [],
+        "category_usage": {}, "category_errors": [], "review": {},
     }
 
 
+def _catalog_requirement_lines(line, intent):
+    """Human-readable ТЗ points: recognised requirements first, planner extras second."""
+    seen, lines = set(), []
+
+    def add(label, value):
+        label = _cell_text(label)[:160].strip(" :")
+        value = _cell_text(value)[:400].strip()
+        if not value:
+            return
+        key = _normalized_text(f"{label} {value}")
+        if key in seen:
+            return
+        seen.add(key)
+        lines.append(f"{label}: {value}" if label else value)
+
+    requirements = line.get("requirements") if isinstance(line, dict) else None
+    if isinstance(requirements, dict):
+        requirements = requirements.get("requirements")
+    for value in requirements if isinstance(requirements, list) else []:
+        if isinstance(value, dict):
+            add(value.get("label"), value.get("value"))
+    intent = intent if isinstance(intent, dict) else {}
+    for group in ("required", "preferred"):
+        for value in intent.get(group, []) if isinstance(intent.get(group), list) else []:
+            if isinstance(value, dict):
+                add(value.get("label"), value.get("value"))
+    for value in intent.get("constraints", []) if isinstance(intent.get("constraints"), list) else []:
+        if isinstance(value, dict) and value.get("values"):
+            add(value.get("field"), ", ".join(_cell_text(item) for item in value["values"] if _cell_text(item)))
+    return lines[:40]
+
+
+def _catalog_review_card(index, candidate):
+    attributes = candidate.get("attributes") if isinstance(candidate.get("attributes"), list) else []
+    variants = candidate.get("variants") if isinstance(candidate.get("variants"), list) else []
+    sizes = sorted({
+        _cell_text(value.get("size"))
+        for value in variants if isinstance(value, dict) and _cell_text(value.get("size"))
+    }) or [_cell_text(value) for value in (candidate.get("sizes") or []) if _cell_text(value)]
+    return {
+        "id": str(index),
+        "название": _cell_text(candidate.get("name"))[:200],
+        "поставщик": _cell_text(candidate.get("supplier_code")),
+        "цена": candidate.get("price"),
+        "склад": candidate.get("stock"),
+        "размеры": sizes[:24],
+        "материалы": candidate.get("materials") or [],
+        "цвета": candidate.get("colors") or [],
+        "атрибуты": [
+            f"{_cell_text(value.get('name'))}: {_cell_text(value.get('value'))}"
+            for value in attributes[:30]
+            if isinstance(value, dict) and _cell_text(value.get("name"))
+        ],
+        "описание": _cell_text(candidate.get("description"))[:800],
+    }
+
+
+def _review_catalog_shortlist(line, intent, candidates, extra_rules=()):
+    """One LLM pass over the backend shortlist — keep/drop like a procurement
+    specialist and give a verdict for every ТЗ point. The backend has already
+    filtered stock, blatant type and colour family; this step handles meaning."""
+    candidates = [value for value in candidates if isinstance(value, dict)]
+    diagnostics = {"reviewed": len(candidates), "kept": len(candidates), "rules": list(extra_rules), "llm": False}
+    if not candidates:
+        return candidates, {}, diagnostics
+    requirements = _catalog_requirement_lines(line, intent)
+    if not requirements:
+        diagnostics["skipped"] = "no_requirements"
+        return candidates, {}, diagnostics
+
+    cards = [_catalog_review_card(index, value) for index, value in enumerate(candidates)]
+    rules_block = ""
+    if extra_rules:
+        rules_block = "\nДополнительные правила администратора (соблюдать строго):\n" + "\n".join(
+            f"- {_cell_text(rule)[:300]}" for rule in extra_rules if _cell_text(rule)
+        )
+    item_name = _cell_text(intent.get("item")) if isinstance(intent, dict) else ""
+    prompt = f"""Ты — опытный закупщик тендерного отдела. Ниже требования ТЗ по одной позиции и карточки товаров, которые бэкенд уже отобрал по названию, наличию на складе и семейству цвета. Проверь каждую карточку по смыслу — так, как это сделал бы человек.
+
+Позиция ТЗ: {item_name or _cell_text(line.get("name"))[:200]}
+
+Требования ТЗ:
+{chr(10).join(f"- {value}" for value in requirements)}
+{rules_block}
+
+Правила проверки:
+- Товар ПОДХОДИТ (keep=true), если соответствует ТЗ или превосходит его. Нет данных в карточке по пункту → это "unclear", а не отказ.
+- Товар НЕ ПОДХОДИТ (keep=false), если он отклоняется от ТЗ в сторону, которую заказчик не просил: детский размер или крой (если в ТЗ нет детских размеров), женский крой при нейтральном ТЗ, тематический/сезонный/праздничный принт, другой подвид изделия, не тот размерный ряд, не то назначение.
+- Не выдумывай характеристики. Опирайся только на текст карточки: название, описание, атрибуты, материалы, размеры.
+- Наличие и семейство цвета уже проверены бэкендом — не отклоняй и не понижай карточку из-за них. Оттенок внутри нужного цвета оценивай сам.
+- keep=true по умолчанию, если нет явной причины отклонить.
+
+Карточки товаров:
+{json.dumps(cards, ensure_ascii=False)}
+
+Верни ТОЛЬКО JSON:
+{{"results":[{{"id":"0","keep":true,"reason":"коротко, почему подходит или нет","review":[{{"point":"<пункт ТЗ дословно>","verdict":"match|mismatch|unclear","note":"коротко из карточки"}}]}}]}}"""
+
+    try:
+        result, usage = _ai_gateway_json(
+            prompt, max_tokens=min(9000, 1200 + len(cards) * 170), timeout=90, network_attempts=2,
+        )
+    except TenderAIError as exc:
+        diagnostics["error"] = str(exc)[:200]
+        return candidates, {}, diagnostics
+
+    verdicts = {}
+    for value in result.get("results", []) if isinstance(result, dict) and isinstance(result.get("results"), list) else []:
+        if isinstance(value, dict) and value.get("id") is not None:
+            verdicts[str(value.get("id"))] = value
+
+    reviewed = []
+    for index, candidate in enumerate(candidates):
+        verdict = verdicts.get(str(index), {})
+        review = []
+        for row in verdict.get("review", []) if isinstance(verdict.get("review"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            state = _normalized_text(row.get("verdict"))
+            state = state if state in {"match", "mismatch", "unclear"} else "unclear"
+            point = _cell_text(row.get("point"))[:200]
+            if point:
+                review.append({"point": point, "verdict": state, "note": _cell_text(row.get("note"))[:300]})
+        keep = verdict.get("keep", True) is not False
+        enriched = {
+            **candidate,
+            "requirement_review": review,
+            "review_reason": _cell_text(verdict.get("reason"))[:300],
+            "review_dropped": not keep,
+            "review_mismatch_count": sum(1 for row in review if row["verdict"] == "mismatch"),
+            "review_unclear_count": sum(1 for row in review if row["verdict"] == "unclear"),
+        }
+        if review:
+            enriched["matches"] = [row["point"] for row in review if row["verdict"] == "match"]
+            enriched["mismatches"] = [
+                f"{row['point']} — {row['note']}" if row["note"] else row["point"]
+                for row in review if row["verdict"] == "mismatch"
+            ]
+            enriched["unknown"] = [
+                f"{row['point']} — {row['note']}" if row["note"] else row["point"]
+                for row in review if row["verdict"] == "unclear"
+            ]
+            enriched["fit"] = "exact" if not enriched["mismatches"] and not enriched["unknown"] else "partial"
+        if keep:
+            reviewed.append(enriched)
+
+    if not reviewed:
+        # The model rejected everything — do not blank the screen. Keep the
+        # backend's best few, flagged, so the admin still sees something.
+        reviewed = [
+            {**candidate, "review_reason": "Ревизор отклонил все варианты — показаны ближайшие по данным бэкенда.",
+             "review_dropped": False}
+            for candidate in candidates[:5]
+        ]
+        diagnostics["all_rejected"] = True
+
+    def _price(value):
+        try:
+            return Decimal(str(value.get("price")))
+        except (InvalidOperation, TypeError, ValueError):
+            return Decimal("Infinity")
+
+    reviewed.sort(key=lambda value: (
+        value.get("review_mismatch_count", 0),
+        value.get("review_unclear_count", 0),
+        value.get("price") in (None, ""),
+        _price(value),
+        _cell_text(value.get("name")),
+    ))
+    diagnostics.update({"kept": len(reviewed), "llm": True})
+    return reviewed, usage if isinstance(usage, dict) else {}, diagnostics
+
+
 def _translate_catalog_feedback(line, current_intent, feedback):
-    prompt = f"""Переведи обратную связь администратора в атомарные команды изменения каталожного поиска.
-Не пересказывай фразу и не создавай новый поисковый план. Верни только JSON вида {{"operations":[{{"op":"команда","field":"поле","values":["значение"]}}]}}.
-Используй исключительно переданный контракт. Одно высказывание может требовать нескольких операций: например, разрешённые и запрещённые значения передаются отдельно. Отрицание никогда не записывай как положительное значение.
-Отсутствующее или не указанное значение задавай только командой set_missing_policy: reject — исключить, allow — оставить на равных, allow_with_penalty — оставить ниже явно подходящих. Не передавай missing, unknown, «не указан» или «без указания» как обычное значение поля.
-Пример: «если пол не указан, оставить ниже» → {{"op":"set_missing_policy","field":"gender","value":"allow_with_penalty"}}.
+    prompt = f"""Переведи обратную связь администратора об отборе товаров.
+Верни только JSON: {{"operations":[...], "review_rules":[{{"text":"...","label":"..."}}]}}.
+
+operations — атомарные команды изменения поискового плана строго по контракту (поменять синонимы, добавить/запретить значение поля, политику отсутствующего значения). Одно высказывание может требовать нескольких операций. Отрицание никогда не записывай как положительное значение.
+
+review_rules — короткое правило на человеческом языке для шага смысловой проверки карточек, когда фраза говорит «убери такие-то», «не предлагай», «только такие», «игнорируй». text — инструкция ревизору («Исключать детские товары»), label — 2–4 слова для интерфейса («Без детских»). Не дублируй сюда числовые ограничения, которые уже разложены в operations.
+
+Отсутствующее значение задавай только командой set_missing_policy (reject / allow / allow_with_penalty). Не передавай «не указан» как обычное значение поля.
 
 КОНТРАКТ:
 {json.dumps(catalog_feedback_contract(), ensure_ascii=False)}
@@ -1729,11 +1931,26 @@ def _translate_catalog_feedback(line, current_intent, feedback):
 
 ОБРАТНАЯ СВЯЗЬ:
 {feedback}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=1400, timeout=45, network_attempts=2)
+    result, usage = _ai_gateway_json(prompt, max_tokens=1600, timeout=45, network_attempts=2)
     operations = result.get("operations") if isinstance(result, dict) else None
-    if not isinstance(operations, list) or not operations:
-        return [], usage, ["LLM не сформировала команды изменения каталога; действующий план сохранён без изменений."]
-    return operations, usage, []
+    operations = operations if isinstance(operations, list) else []
+    review_rules = []
+    for value in result.get("review_rules", []) if isinstance(result, dict) and isinstance(result.get("review_rules"), list) else []:
+        if isinstance(value, str):
+            value = {"text": value}
+        if not isinstance(value, dict):
+            continue
+        text = _cell_text(value.get("text"))[:300].strip()
+        if not text:
+            continue
+        review_rules.append({
+            "text": text,
+            "label": _cell_text(value.get("label"))[:60].strip() or text[:60],
+            "source_phrase": _cell_text(feedback)[:300],
+        })
+    if not operations and not review_rules:
+        return [], [], usage, ["LLM не сформировала изменения отбора; действующий план сохранён без изменений."]
+    return operations, review_rules, usage, []
 
 
 def _requirement_list(values):
@@ -2965,7 +3182,7 @@ def _example_route_for_prompt(route):
     }
 
 
-def build_training_hypothesis(line, current=None, feedback="", progress_callback=None):
+def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, review_rules_override=None):
     started_at = time.perf_counter()
     if progress_callback:
         progress_callback("cases")
@@ -3083,17 +3300,32 @@ item — самое короткое узнаваемое название то�
     raw_intent = result.get("catalog_intent") if isinstance(result.get("catalog_intent"), dict) else {}
     raw_operations = result.get("catalog_operations") if isinstance(result.get("catalog_operations"), list) else []
     current_intent = current.get("catalog_intent") if isinstance(current, dict) and isinstance(current.get("catalog_intent"), dict) else {}
-    if feedback and raw_operations:
-        catalog_intent, applied_operations, contract_errors = _apply_catalog_operations(current_intent, raw_operations)
-    elif feedback:
-        translated_operations, translation_usage, translation_errors = _translate_catalog_feedback(line, current_intent, feedback)
-        catalog_intent, applied_operations, operation_errors = _apply_catalog_operations(current_intent, translated_operations) if translated_operations else (_normalize_catalog_intent(current_intent, preserve_internal=True), [], [])
-        contract_errors = [*translation_errors, *operation_errors]
+    new_review_rules = []
+    if feedback:
+        # Always translate the phrase: it yields both structured operations and
+        # admin-visible shortlist-review rules ("не предлагай детские" → rule).
+        translated_operations, new_review_rules, translation_usage, translation_errors = _translate_catalog_feedback(line, current_intent, feedback)
+        operations_to_apply = raw_operations or translated_operations
+        if operations_to_apply:
+            catalog_intent, applied_operations, operation_errors = _apply_catalog_operations(current_intent, operations_to_apply)
+        else:
+            catalog_intent, applied_operations, operation_errors = _normalize_catalog_intent(current_intent, preserve_internal=True), [], []
+        contract_errors = [error for error in [*translation_errors, *operation_errors] if not (raw_operations and error in translation_errors)]
         usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (translation_usage.get("prompt_tokens", 0) or 0)
         usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (translation_usage.get("completion_tokens", 0) or 0)
     else:
         catalog_intent = _normalize_catalog_intent(raw_intent)
         applied_operations, contract_errors = [], []
+    # Admin-visible shortlist-review rules. An explicit override (the UI cleared a
+    # rule with ×) wins; otherwise carry forward what is on the current hypothesis
+    # and add the ones this feedback produced.
+    if review_rules_override is not None:
+        catalog_intent["review_rules"] = _catalog_review_rules(review_rules_override)
+    else:
+        catalog_intent["review_rules"] = _catalog_review_rules([
+            *_catalog_review_rules(current_intent.get("review_rules")),
+            *new_review_rules,
+        ])
     invalid_strategy_sources = sorted({
         _cell_text(value.get("source"))[:80]
         for value in raw_intent.get("source_strategy", [])
@@ -3105,12 +3337,33 @@ item — самое короткое узнаваемое название то�
             "Неподдерживаемые источники поиска отброшены: " + ", ".join(invalid_strategy_sources)
         )
     def _search_catalog():
-        # Product search is a plain catalogue lookup by item name + synonyms
-        # (full text) combined with the best keyword-matched category — like
-        # browsing oasiscatalog.com / gifts.ru. No LLM in this step.
-        return _catalog_search_outcome(catalog_candidates_for_line(
-            line, limit=10, intent=catalog_intent, include_diagnostics=True,
+        # Step 1 — backend: plain catalogue lookup by name + synonyms, then cheap
+        # objective gates (stock, blatant type, colour family). No LLM. Produces a
+        # shortlist of ~40.
+        outcome = _catalog_search_outcome(catalog_candidates_for_line(
+            line, limit=40, intent=catalog_intent, include_diagnostics=True,
         ))
+        shortlist = outcome.get("candidates", [])
+        if not shortlist:
+            outcome["review"] = {"reviewed": 0, "kept": 0}
+            return outcome
+        # Step 2 — one LLM pass: keep/drop each card like a procurement specialist
+        # and give a verdict per ТЗ point. Step 3 — backend re-sorts by price.
+        if progress_callback:
+            progress_callback("review")
+        review_rules = [
+            _cell_text(rule.get("text"))
+            for rule in catalog_intent.get("review_rules", []) if isinstance(rule, dict) and _cell_text(rule.get("text"))
+        ]
+        reviewed, review_usage, review_diag = _review_catalog_shortlist(
+            line, catalog_intent, shortlist, extra_rules=review_rules,
+        )
+        outcome["candidates"] = reviewed[:10]
+        outcome["review"] = review_diag
+        if isinstance(review_usage, dict):
+            usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + review_usage.get("prompt_tokens", 0)
+            usage["completion_tokens"] = usage.get("completion_tokens", 0) + review_usage.get("completion_tokens", 0)
+        return outcome
 
     catalog_started_at = time.perf_counter()
     # The catalogues only matter when the route actually buys a finished blank
@@ -3118,7 +3371,7 @@ item — самое короткое узнаваемое название то�
     # a pure polygraphy or turnkey route does not.
     route_buys_finished_good = "Закупка готового изделия" in hypothesis.get("route", {}).get("steps", [])
     catalog_candidates = []
-    catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": []}
+    catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": [], "review": {}}
     if not route_buys_finished_good:
         hypothesis["catalog_skipped"] = "route_has_no_finished_good"
     else:
@@ -3145,6 +3398,8 @@ item — самое короткое узнаваемое название то�
     hypothesis["catalog_candidates"] = catalog_candidates
     hypothesis["catalog_sources"] = catalog_outcome["sources"]
     hypothesis["catalog_attempts"] = catalog_outcome["attempts"]
+    hypothesis["catalog_review"] = catalog_outcome.get("review", {})
+    hypothesis["catalog_review_rules"] = catalog_intent.get("review_rules", [])
     failed_sources = [
         f"{code}: {value.get('message')}"
         for code, value in catalog_outcome["sources"].items()
@@ -3256,7 +3511,7 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     if isinstance(hypothesis, dict) and isinstance(hypothesis.get("catalog_intent"), dict):
         normalized["catalog_intent"] = hypothesis["catalog_intent"]
-    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors"):
+    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors", "catalog_review", "catalog_review_rules"):
         if isinstance(hypothesis, dict) and key in hypothesis:
             normalized[key] = hypothesis[key]
     existing_sources = hypothesis.get("sources", []) if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list) else []

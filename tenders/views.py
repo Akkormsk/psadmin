@@ -49,7 +49,8 @@ atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
 _STAGE_LABELS = {
     "cases": "Подбираю похожие подтверждённые примеры…",
     "ai": "Строю гипотезу маршрута…",
-    "catalog": "Ищу и ранжирую товары поставщиков…",
+    "catalog": "Ищу товары поставщиков по названию…",
+    "review": "Сверяю карточки с ТЗ…",
     "finalizing": "Формирую результат…",
 }
 
@@ -428,7 +429,10 @@ def revise_production_hypothesis(request):
         session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
-        if not feedback or len(feedback) > 3000 or not str(line.get("name", "")).strip():
+        review_rules_override = payload.get("review_rules") if isinstance(payload.get("review_rules"), list) else None
+        if len(feedback) > 3000 or not str(line.get("name", "")).strip():
+            raise ValueError
+        if not feedback and review_rules_override is None:
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
@@ -438,6 +442,7 @@ def revise_production_hypothesis(request):
         hypothesis = build_training_hypothesis(
             line, current=prior, feedback=feedback,
             progress_callback=lambda stage: _record_stage(session.pk, stage),
+            review_rules_override=review_rules_override,
         )
         session.position_name = str(line.get("name", ""))[:500]
         session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
