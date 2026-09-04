@@ -1990,8 +1990,71 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
 
 # A well-scoped category never holds this many SKUs; the ceiling only stops a
 # too-broad category (or a bare full-text query) from crawling Oasis for minutes
-# at the client's 1s-per-page rate limit.
+# at the client's 1s-per-page rate limit. Only used when no local mirror exists
+# yet (see _local_catalog_pool) — once `sync_oasis_catalog` has run, search
+# reads the mirror like Gifts and this crawl is never touched.
 _OASIS_PAGE_CEILING = 6
+
+
+def _local_catalog_pool(supplier_code, selected_category_ids, terms, thin_threshold=40, category_limit=1500, text_limit=1200):
+    """Search a locally-mirrored supplier catalogue: keyword-matched category
+    rows first, full-text fallback when that's thin — exactly how Gifts has
+    always been searched. Oasis uses this once `sync_oasis_catalog` has been
+    run at least once; both suppliers share the one code path."""
+    base = CatalogProduct.objects.filter(supplier__code=supplier_code, is_active=True)
+    cached, seen = [], set()
+    if selected_category_ids:
+        if connection.features.supports_json_field_contains:
+            category_query = Q()
+            for category_id in selected_category_ids:
+                category_query |= Q(category_ids__contains=[category_id])
+            cached.extend(base.filter(category_query).order_by("id")[:category_limit])
+        else:
+            for value in base.order_by("id").iterator(chunk_size=1000):
+                if selected_category_ids & {str(cid) for cid in value.category_ids}:
+                    cached.append(value)
+                    if len(cached) >= category_limit:
+                        break
+        seen = {value.pk for value in cached}
+    if terms and len(cached) < thin_threshold:
+        text_query = Q()
+        for term in terms:
+            text_query |= Q(search_text__icontains=term)
+        cached.extend(value for value in base.filter(text_query).order_by("id")[:text_limit] if value.pk not in seen)
+    return cached
+
+
+def _refresh_live_oasis_prices(client, candidates, quantity=0):
+    """One batched live call for exactly the Oasis cards about to be shown —
+    the mirror can be hours old, but the price and stock quoted to a tender
+    must be current. Uses the API's `ids=` filter (confirmed batch lookup,
+    ~1s regardless of count) instead of a per-item call."""
+    oasis_candidates = [value for value in candidates if value.get("supplier_code") == "oasis" and value.get("external_id")]
+    if not client or not oasis_candidates:
+        return
+    ids = list(dict.fromkeys(value["external_id"] for value in oasis_candidates))
+    try:
+        payload = client.get("/v4/products", {
+            "format": "json", "ids": ",".join(ids), "available": 1, "includeGroupId": 1,
+        })
+        rows = payload.get("items", payload) if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            return
+    except Exception:
+        logger.exception("Live Oasis price/stock refresh failed; showing mirrored values")
+        return
+    fresh = {str(row.get("id")): row for row in rows if isinstance(row, dict)}
+    for value in oasis_candidates:
+        row = fresh.get(value["external_id"])
+        if not row:
+            continue
+        price = _decimal(row.get("discount_price") or row.get("price"))
+        stock = max(0, _integer(row.get("total_stock")))
+        value["stock"] = stock
+        value["price"] = str(price) if price is not None else None
+        value["cost_total"] = (
+            str((price * quantity).quantize(Decimal("0.01"))) if price is not None and quantity > 0 else None
+        )
 
 
 def catalog_candidates_for_line(
@@ -2060,6 +2123,7 @@ def catalog_candidates_for_line(
     }
 
     # Oasis is optional: an API/category failure must not suppress Gifts.
+    oasis_used_mirror = False
     try:
         client = client or OasisClient()
         categories = _oasis_category_snapshot(client)
@@ -2085,42 +2149,54 @@ def catalog_candidates_for_line(
         ]
         selected_oasis_categories = [value for value in selected_oasis_categories if value]
         category = selected_oasis_categories[0] if selected_oasis_categories else None
-        # Prefer the keyword-matched Oasis categories; fall back to a full-text
-        # page only when the keyword scorer found no Oasis node.
         search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(name_anchors)))[:6]
-        oasis_search_categories = selected_oasis_categories or [None]
-        for selected_category in oasis_search_categories:
-            offset = 0
-            for _ in range(_OASIS_PAGE_CEILING):
-                params = {
-                    "format": "json", "limit": 500, "offset": offset,
-                    "available": 1, "includeGroupId": 1, "fields": fields,
-                }
-                if selected_category:
-                    params["category"] = selected_category["id"]
-                elif search_terms:
-                    params["search"] = " ".join(search_terms)
-                payload = client.get("/v4/products", params)
-                page = payload.get("items", []) if isinstance(payload, dict) else payload
-                if not isinstance(page, list):
-                    raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
-                fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
-                rows.extend(fresh)
-                seen_ids.update(str(value.get("id", "")) for value in fresh)
-                if len(page) < 500 or not fresh:
-                    break
-                offset += len(page)
-        supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
-        marker = str(uuid.uuid4())
-        pool.extend(value for value in (
-            _product_from_payload(supplier, raw, category_map, marker)
-            for raw in rows if isinstance(raw, dict)
-        ) if value and value.is_active)
-        pool = _aggregate_color_variants(pool)
-        source_status["oasis"] = {"status": "success", "message": "", "received": len(pool)}
+
+        if CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists():
+            # A local mirror exists (`python manage.py sync_oasis_catalog`) —
+            # search it exactly like Gifts, instant, no live crawl. Live price
+            # and stock for the handful of cards actually shown are refreshed
+            # in one batched call right before returning (see below).
+            oasis_used_mirror = True
+            selected_oasis_ids = {str(value["id"]) for value in selected_oasis_categories}
+            oasis_pool = _aggregate_color_variants(_local_catalog_pool("oasis", selected_oasis_ids, search_terms))
+            pool.extend(oasis_pool)
+            source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
+        else:
+            # No mirror synced yet in this environment — fall back to the live
+            # crawl (respects Oasis's 1 request/second API limit; slow on a
+            # broad, unspecific category).
+            oasis_search_categories = selected_oasis_categories or [None]
+            for selected_category in oasis_search_categories:
+                offset = 0
+                for _ in range(_OASIS_PAGE_CEILING):
+                    params = {
+                        "format": "json", "limit": 500, "offset": offset,
+                        "available": 1, "includeGroupId": 1, "fields": fields,
+                    }
+                    if selected_category:
+                        params["category"] = selected_category["id"]
+                    elif search_terms:
+                        params["search"] = " ".join(search_terms)
+                    payload = client.get("/v4/products", params)
+                    page = payload.get("items", []) if isinstance(payload, dict) else payload
+                    if not isinstance(page, list):
+                        raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
+                    fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
+                    rows.extend(fresh)
+                    seen_ids.update(str(value.get("id", "")) for value in fresh)
+                    if len(page) < 500 or not fresh:
+                        break
+                    offset += len(page)
+            supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
+            marker = str(uuid.uuid4())
+            oasis_pool = _aggregate_color_variants([value for value in (
+                _product_from_payload(supplier, raw, category_map, marker)
+                for raw in rows if isinstance(raw, dict)
+            ) if value and value.is_active])
+            pool.extend(oasis_pool)
+            source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
     except CatalogSyncError as exc:
         source_status["oasis"] = {"status": "failed", "message": str(exc)[:300], "received": 0}
-        pool = []
     except Exception as exc:
         logger.exception("Unexpected Oasis catalogue search failure")
         source_status["oasis"] = {
@@ -2128,37 +2204,15 @@ def catalog_candidates_for_line(
             "message": "Oasis вернул данные в неожиданном формате.",
             "received": 0,
         }
-        pool = []
 
     # Gifts: full-text over the stored name/description (like typing into
     # gifts.ru) plus the products of the keyword-matched Gifts categories.
-    gifts_query = Q()
     gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(name_anchors)))
-    for term in gifts_terms:
-        gifts_query |= Q(search_text__icontains=term)
     gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
     selected_gifts_ids = {
         str(value.get("category_id")) for value in category_tasks if value.get("source") == "gifts"
     }
-    base = CatalogProduct.objects.filter(supplier__code="gifts", is_active=True)
-    cached, seen_gifts = [], set()
-    if selected_gifts_ids:
-        if connection.features.supports_json_field_contains:
-            category_query = Q()
-            for category_id in selected_gifts_ids:
-                category_query |= Q(category_ids__contains=[category_id])
-            cached.extend(base.filter(category_query).order_by("id")[:1500])
-        else:
-            for value in base.order_by("id").iterator(chunk_size=1000):
-                if selected_gifts_ids & {str(cid) for cid in value.category_ids}:
-                    cached.append(value)
-                    if len(cached) >= 1500:
-                        break
-        seen_gifts = {value.pk for value in cached}
-    # Full-text over name/description only when the keyword categories are thin.
-    if gifts_terms and len(cached) < 40:
-        cached.extend(value for value in base.filter(gifts_query).order_by("id")[:1200] if value.pk not in seen_gifts)
-    cached_products = cached
+    cached_products = _local_catalog_pool("gifts", selected_gifts_ids, gifts_terms)
     pool.extend(cached_products)
     source_status["gifts"] = {
         "status": "success" if gifts_supplier_exists else "not_configured",
@@ -2290,6 +2344,11 @@ def catalog_candidates_for_line(
             continue
         if len(selected) >= max(1, min(60, limit)):
             break
+    if oasis_used_mirror:
+        # The mirror can be hours old; the price and stock actually quoted to
+        # the tender must be current. One batched call for just the handful
+        # of Oasis cards making the shortlist — not the whole crawled pool.
+        _refresh_live_oasis_prices(client, selected, quantity=quantity)
     if include_diagnostics:
         return {
             "candidates": selected,
