@@ -3202,7 +3202,72 @@ def _example_route_for_prompt(route):
     }
 
 
+def _catalog_intent_from_requirements(line):
+    """Build a catalog_intent straight from the recognised ТЗ — no LLM. The
+    position name is the item, every recognised requirement row is passed
+    through as-is. Used only by the no-LLM diagnostic path below, to test
+    the backend search+filter in isolation from any model call."""
+    name = _cell_text(line.get("name")) if isinstance(line, dict) else ""
+    requirements = line.get("requirements") if isinstance(line, dict) else None
+    if isinstance(requirements, dict):
+        requirements = requirements.get("requirements")
+    required = []
+    for value in requirements if isinstance(requirements, list) else []:
+        if isinstance(value, dict) and _cell_text(value.get("label")) and _cell_text(value.get("value")):
+            required.append({"label": _cell_text(value.get("label"))[:120], "value": _cell_text(value.get("value"))[:500]})
+    return _normalize_catalog_intent({"item": name[:200], "categories": [name[:200]] if name else [], "required": required})
+
+
+def _build_hypothesis_backend_only(line, progress_callback=None):
+    """Diagnostic bypass, no LLM call at all — set ASSISTANT_NO_LLM=1. Route
+    is assumed to always be "закупка готового изделия + нанесение";
+    catalog_intent comes straight from the recognised ТЗ; no shortlist
+    review. Exists to verify the backend search+filter alone is fast,
+    brick by brick, before any LLM step is re-added on top."""
+    started_at = time.perf_counter()
+    from .catalog import catalog_candidates_for_line
+
+    if progress_callback:
+        progress_callback("catalog")
+    catalog_intent = _catalog_intent_from_requirements(line)
+    catalog_started_at = time.perf_counter()
+    outcome = _catalog_search_outcome(catalog_candidates_for_line(
+        line, limit=10, intent=catalog_intent, include_diagnostics=True,
+    ))
+    catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
+    if progress_callback:
+        progress_callback("finalizing")
+    hypothesis = {
+        "stage": "training_dialogue",
+        "product_type": "no_llm_diagnostic",
+        "summary": _cell_text(line.get("name")),
+        "confidence": 1.0,
+        "facts": [],
+        "route": {
+            "name": "Закупка готового изделия + нанесение",
+            "steps": ["Закупка готового изделия", "Нанесение"],
+            "reason": "Диагностический режим без ИИ (ASSISTANT_NO_LLM=1): маршрут не проверяется, принят по умолчанию.",
+        },
+        "costs": [], "questions": [],
+        "assumptions": ["ИИ отключён для эксперимента — маршрут не анализировался, использован маршрут по умолчанию."],
+        "matched_example_ids": [], "understood_changes": [],
+        "catalog_intent": catalog_intent,
+        "catalog_operations_applied": [], "catalog_contract_errors": [],
+        "catalog_candidates": outcome["candidates"],
+        "catalog_sources": outcome["sources"],
+        "catalog_attempts": outcome["attempts"],
+        "catalog_review": {"reviewed": 0, "kept": len(outcome["candidates"]), "llm": False, "skipped": "no_llm_diagnostic"},
+        "catalog_review_rules": [],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "timings": {"ai_seconds": 0, "catalog_seconds": catalog_seconds, "total_seconds": round(time.perf_counter() - started_at, 3)},
+        "production_types": [],
+    }
+    return _attach_memory_preview(hypothesis)
+
+
 def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, review_rules_override=None):
+    if os.getenv("ASSISTANT_NO_LLM", "").strip() == "1":
+        return _build_hypothesis_backend_only(line, progress_callback=progress_callback)
     started_at = time.perf_counter()
     if progress_callback:
         progress_callback("cases")

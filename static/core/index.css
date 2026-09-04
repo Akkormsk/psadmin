@@ -1052,7 +1052,7 @@ h1 {
 .tender-requirements-drawer ul, .tender-requirements-drawer ol { display:grid; gap:6px; margin:0; padding-left:20px; color:#4b5563; font-size:12px; }
 .tender-requirements-drawer .has-questions { padding:12px; border-radius:9px; background:#fff8e8; }
 .tender-production { padding-top:10px; border-top:1px solid #e5e7eb; }
-.tender-production-header { position:sticky; top:0; z-index:8; display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 -8px; padding:9px 8px; border-bottom:1px solid rgba(226,232,240,.9); background:rgba(255,255,255,.94); box-shadow:0 7px 16px rgba(15,23,42,.06); backdrop-filter:blur(8px); }
+.tender-production-header { position:sticky; bottom:0; top:auto; z-index:8; display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 -8px; padding:9px 8px; border-top:1px solid rgba(226,232,240,.9); border-bottom:0; background:rgba(255,255,255,.94); box-shadow:0 -7px 16px rgba(15,23,42,.06); backdrop-filter:blur(8px); }
 .tender-production-heading { display:grid; min-width:0; gap:2px; }
 .tender-requirements-drawer .tender-production-header h3 { margin:0; color:#344054; font-size:12px; line-height:1.2; text-transform:none; }
 .tender-production-header p { margin:0; color:#7a8492; font-size:9px; line-height:1.3; }
