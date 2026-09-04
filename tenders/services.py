@@ -1778,19 +1778,19 @@ def _catalog_review_card(index, candidate):
     }) or [_cell_text(value) for value in (candidate.get("sizes") or []) if _cell_text(value)]
     return {
         "id": str(index),
-        "название": _cell_text(candidate.get("name"))[:200],
+        "название": _cell_text(candidate.get("name"))[:160],
         "поставщик": _cell_text(candidate.get("supplier_code")),
         "цена": candidate.get("price"),
         "склад": candidate.get("stock"),
-        "размеры": sizes[:24],
-        "материалы": candidate.get("materials") or [],
-        "цвета": candidate.get("colors") or [],
+        "размеры": sizes[:16],
+        "материалы": (candidate.get("materials") or [])[:6],
+        "цвета": (candidate.get("colors") or [])[:6],
         "атрибуты": [
-            f"{_cell_text(value.get('name'))}: {_cell_text(value.get('value'))}"
-            for value in attributes[:30]
+            f"{_cell_text(value.get('name'))[:60]}: {_cell_text(value.get('value'))[:160]}"
+            for value in attributes[:14]
             if isinstance(value, dict) and _cell_text(value.get("name"))
         ],
-        "описание": _cell_text(candidate.get("description"))[:800],
+        "описание": _cell_text(candidate.get("description"))[:350],
     }
 
 
@@ -1824,10 +1824,11 @@ def _review_catalog_shortlist(line, intent, candidates, extra_rules=()):
 
 Правила проверки:
 - Товар ПОДХОДИТ (keep=true), если соответствует ТЗ или превосходит его. Нет данных в карточке по пункту → это "unclear", а не отказ.
-- Товар НЕ ПОДХОДИТ (keep=false), если он отклоняется от ТЗ в сторону, которую заказчик не просил: детский размер или крой (если в ТЗ нет детских размеров), женский крой при нейтральном ТЗ, тематический/сезонный/праздничный принт, другой подвид изделия, не тот размерный ряд, не то назначение.
+- Товар ОТМЕЧАЕТСЯ (keep=false), если он отклоняется от ТЗ в сторону, которую заказчик не просил: детский размер или крой (если в ТЗ нет детских размеров), женский крой при нейтральном ТЗ, тематический/сезонный/праздничный принт, другой подвид изделия, не тот размерный ряд, не то назначение. Это не удаляет карточку — только опускает её вниз списка, поэтому отмечай смело, когда видишь явное отклонение.
 - Не выдумывай характеристики. Опирайся только на текст карточки: название, описание, атрибуты, материалы, размеры.
 - Наличие и семейство цвета уже проверены бэкендом — не отклоняй и не понижай карточку из-за них. Оттенок внутри нужного цвета оценивай сам.
 - keep=true по умолчанию, если нет явной причины отклонить.
+- Дай review по каждому пункту ТЗ выше для каждой карточки, даже если карточка отклонена.
 
 Карточки товаров:
 {json.dumps(cards, ensure_ascii=False)}
@@ -1837,75 +1838,74 @@ def _review_catalog_shortlist(line, intent, candidates, extra_rules=()):
 
     try:
         result, usage = _ai_gateway_json(
-            prompt, max_tokens=min(9000, 1200 + len(cards) * 170), timeout=90, network_attempts=2,
+            prompt, max_tokens=min(7000, 900 + len(cards) * 130), timeout=90, network_attempts=2,
         )
     except TenderAIError as exc:
         diagnostics["error"] = str(exc)[:200]
         return candidates, {}, diagnostics
 
-    verdicts = {}
-    for value in result.get("results", []) if isinstance(result, dict) and isinstance(result.get("results"), list) else []:
-        if isinstance(value, dict) and value.get("id") is not None:
-            verdicts[str(value.get("id"))] = value
+    try:
+        verdicts = {}
+        for value in result.get("results", []) if isinstance(result, dict) and isinstance(result.get("results"), list) else []:
+            if isinstance(value, dict) and value.get("id") is not None:
+                verdicts[str(value.get("id"))] = value
 
-    reviewed = []
-    for index, candidate in enumerate(candidates):
-        verdict = verdicts.get(str(index), {})
-        review = []
-        for row in verdict.get("review", []) if isinstance(verdict.get("review"), list) else []:
-            if not isinstance(row, dict):
-                continue
-            state = _normalized_text(row.get("verdict"))
-            state = state if state in {"match", "mismatch", "unclear"} else "unclear"
-            point = _cell_text(row.get("point"))[:200]
-            if point:
-                review.append({"point": point, "verdict": state, "note": _cell_text(row.get("note"))[:300]})
-        keep = verdict.get("keep", True) is not False
-        enriched = {
-            **candidate,
-            "requirement_review": review,
-            "review_reason": _cell_text(verdict.get("reason"))[:300],
-            "review_dropped": not keep,
-            "review_mismatch_count": sum(1 for row in review if row["verdict"] == "mismatch"),
-            "review_unclear_count": sum(1 for row in review if row["verdict"] == "unclear"),
-        }
-        if review:
-            enriched["matches"] = [row["point"] for row in review if row["verdict"] == "match"]
-            enriched["mismatches"] = [
-                f"{row['point']} — {row['note']}" if row["note"] else row["point"]
-                for row in review if row["verdict"] == "mismatch"
-            ]
-            enriched["unknown"] = [
-                f"{row['point']} — {row['note']}" if row["note"] else row["point"]
-                for row in review if row["verdict"] == "unclear"
-            ]
-            enriched["fit"] = "exact" if not enriched["mismatches"] and not enriched["unknown"] else "partial"
-        if keep:
+        # The review only ever re-ranks and annotates — it never removes a card
+        # the backend already found. A card the model marks keep=false is pushed
+        # to the bottom (still visible, still selectable), never dropped: the
+        # admin asked for ~10 scrollable options, not a single "best guess".
+        reviewed = []
+        for index, candidate in enumerate(candidates):
+            verdict = verdicts.get(str(index), {})
+            review = []
+            for row in verdict.get("review", []) if isinstance(verdict.get("review"), list) else []:
+                if not isinstance(row, dict):
+                    continue
+                state = _normalized_text(row.get("verdict"))
+                state = state if state in {"match", "mismatch", "unclear"} else "unclear"
+                point = _cell_text(row.get("point"))[:200]
+                if point:
+                    review.append({"point": point, "verdict": state, "note": _cell_text(row.get("note"))[:300]})
+            flagged = verdict.get("keep", True) is False
+            enriched = {
+                **candidate,
+                "requirement_review": review,
+                "review_reason": _cell_text(verdict.get("reason"))[:300],
+                "review_flagged": flagged,
+                "review_mismatch_count": sum(1 for row in review if row["verdict"] == "mismatch"),
+                "review_unclear_count": sum(1 for row in review if row["verdict"] == "unclear"),
+            }
+            if review:
+                enriched["matches"] = [row["point"] for row in review if row["verdict"] == "match"]
+                enriched["mismatches"] = [
+                    f"{row['point']} — {row['note']}" if row["note"] else row["point"]
+                    for row in review if row["verdict"] == "mismatch"
+                ]
+                enriched["unknown"] = [
+                    f"{row['point']} — {row['note']}" if row["note"] else row["point"]
+                    for row in review if row["verdict"] == "unclear"
+                ]
+                enriched["fit"] = "exact" if not flagged and not enriched["mismatches"] and not enriched["unknown"] else "partial"
             reviewed.append(enriched)
 
-    if not reviewed:
-        # The model rejected everything — do not blank the screen. Keep the
-        # backend's best few, flagged, so the admin still sees something.
-        reviewed = [
-            {**candidate, "review_reason": "Ревизор отклонил все варианты — показаны ближайшие по данным бэкенда.",
-             "review_dropped": False}
-            for candidate in candidates[:5]
-        ]
-        diagnostics["all_rejected"] = True
+        def _price(value):
+            try:
+                return Decimal(str(value.get("price")))
+            except (InvalidOperation, TypeError, ValueError):
+                return Decimal("Infinity")
 
-    def _price(value):
-        try:
-            return Decimal(str(value.get("price")))
-        except (InvalidOperation, TypeError, ValueError):
-            return Decimal("Infinity")
-
-    reviewed.sort(key=lambda value: (
-        value.get("review_mismatch_count", 0),
-        value.get("review_unclear_count", 0),
-        value.get("price") in (None, ""),
-        _price(value),
-        _cell_text(value.get("name")),
-    ))
+        reviewed.sort(key=lambda value: (
+            value.get("review_flagged", False),
+            value.get("review_mismatch_count", 0),
+            value.get("review_unclear_count", 0),
+            value.get("price") in (None, ""),
+            _price(value),
+            _cell_text(value.get("name")),
+        ))
+    except Exception as exc:  # noqa: BLE001 — never let a formatting hiccup blank the shortlist
+        logger.exception("Catalog shortlist review post-processing failed")
+        diagnostics["error"] = f"review_processing: {exc}"[:200]
+        return candidates, {}, diagnostics
     diagnostics.update({"kept": len(reviewed), "llm": True})
     return reviewed, usage if isinstance(usage, dict) else {}, diagnostics
 
@@ -3341,7 +3341,7 @@ item — самое короткое узнаваемое название то�
         # objective gates (stock, blatant type, colour family). No LLM. Produces a
         # shortlist of ~40.
         outcome = _catalog_search_outcome(catalog_candidates_for_line(
-            line, limit=40, intent=catalog_intent, include_diagnostics=True,
+            line, limit=16, intent=catalog_intent, include_diagnostics=True,
         ))
         shortlist = outcome.get("candidates", [])
         if not shortlist:

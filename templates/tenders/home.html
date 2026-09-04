@@ -134,8 +134,8 @@ const flat=[...(item.matches||[]).map(v=>['match',v]),...(item.mismatches||[]).m
 if(!flat.length)return'';
 return`<div class="training-catalog-review">${flat.slice(0,4).map(([verdict,text])=>`<em class="${verdict==='match'?'':'is-warning'}">${verdict==='match'?'✓':'!'} ${escapeHtml(text)}</em>`).join('')}</div>`}
 const icon={match:'✓',mismatch:'✗',unclear:'?'},bad=review.filter(r=>r.verdict!=='match').length;
-const summary=item.review_reason?escapeHtml(item.review_reason):(bad?`Расхождений: ${bad}`:'Все пункты ТЗ совпали');
-return`<details class="training-catalog-review"${bad?' open':''}><summary>${summary}</summary><ul>${review.map(r=>`<li class="rv-${r.verdict||'unclear'}"><b>${icon[r.verdict]||'?'}</b><span>${escapeHtml(r.point)}</span>${r.note?`<small>${escapeHtml(r.note)}</small>`:''}</li>`).join('')}</ul></details>`}
+const summary=`${bad?`Расхождений: ${bad}`:'Все пункты ТЗ совпали'} · пункты ТЗ (${review.length})`;
+return`<details class="training-catalog-review"><summary>${summary}</summary>${item.review_reason?`<p>${escapeHtml(item.review_reason)}</p>`:''}<ul>${review.map(r=>`<li class="rv-${r.verdict||'unclear'}"><b>${icon[r.verdict]||'?'}</b><span>${escapeHtml(r.point)}</span>${r.note?`<small>${escapeHtml(r.note)}</small>`:''}</li>`).join('')}</ul></details>`}
 function catalogReviewRulesHtml(result){
 const rules=result.catalog_review_rules||[];
 if(!rules.length)return'';

@@ -2232,56 +2232,62 @@ def catalog_candidates_for_line(
         if group_key in seen_groups:
             continue
         seen_groups.add(group_key)
-        price = product.effective_price
-        product_url = product.product_url
-        supplier_site = urlparse(product_url or product.supplier.base_url).netloc.lower()
-        if supplier_site.startswith("www."):
-            supplier_site = supplier_site[4:]
-        normalized_requirements, normalized_product_values = _normalized_comparison_values(
-            product, effective_line, quantity, intent=intent,
-        )
-        selected.append({
-            "id": product.external_id,
-            "supplier_code": product.supplier.code,
-            "supplier_name": product.supplier.name,
-            "supplier_site": supplier_site,
-            "external_id": product.external_id,
-            "article": product.article,
-            "name": product.full_name or product.name,
-            "price": str(price) if price is not None else None,
-            "cost_total": str((price * quantity).quantize(Decimal("0.01"))) if price is not None and quantity > 0 else None,
-            "stock": product.total_stock,
-            "delivery_days": product.delivery_days,
-            "image_url": product.image_url,
-            "url": product_url,
-            "fit": "exact" if not mismatches and not unknown else "partial",
-            "matches": matches,
-            "mismatches": mismatches,
-            "unknown": unknown,
-            "eligibility": eligibility_status,
-            "eligibility_reasons": eligibility_reasons,
-            "synced_at": timezone.now().isoformat(),
-            "category": (
-                product.category_names[0]
-                if isinstance(product.category_names, list) and product.category_names else
-                (category["path"] or category["name"]) if category else "Поиск по названию и описанию"
-            ),
-            "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
-            "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
-            "color_group_id": product.color_group_id or product.external_id,
-            "variants": _product_variants(product),
-            "normalized_requirements": normalized_requirements,
-            "normalized_product_values": normalized_product_values,
-            # Full card text for the semantic review step (LLM reads these, not the backend).
-            "description": _text(product.description, 1500),
-            "attributes": [
-                {"name": _text(value.get("name"), 200), "value": _text(value.get("value"), 500)}
-                for value in (product.attributes if isinstance(product.attributes, list) else [])
-                if isinstance(value, dict) and _text(value.get("name"), 200) and _text(value.get("value"), 500)
-            ][:40],
-            "materials": [_text(value, 200) for value in (product.materials if isinstance(product.materials, list) else []) if _text(value, 200)],
-            "colors": [_text(value, 120) for value in (product.colors if isinstance(product.colors, list) else []) if _text(value, 120)],
-        })
+        try:
+            price = product.effective_price
+            product_url = product.product_url
+            supplier_site = urlparse(product_url or product.supplier.base_url).netloc.lower()
+            if supplier_site.startswith("www."):
+                supplier_site = supplier_site[4:]
+            normalized_requirements, normalized_product_values = _normalized_comparison_values(
+                product, effective_line, quantity, intent=intent,
+            )
+            selected.append({
+                "id": product.external_id,
+                "supplier_code": product.supplier.code,
+                "supplier_name": product.supplier.name,
+                "supplier_site": supplier_site,
+                "external_id": product.external_id,
+                "article": product.article,
+                "name": product.full_name or product.name,
+                "price": str(price) if price is not None else None,
+                "cost_total": str((price * quantity).quantize(Decimal("0.01"))) if price is not None and quantity > 0 else None,
+                "stock": product.total_stock,
+                "delivery_days": product.delivery_days,
+                "image_url": product.image_url,
+                "url": product_url,
+                "fit": "exact" if not mismatches and not unknown else "partial",
+                "matches": matches,
+                "mismatches": mismatches,
+                "unknown": unknown,
+                "eligibility": eligibility_status,
+                "eligibility_reasons": eligibility_reasons,
+                "synced_at": timezone.now().isoformat(),
+                "category": (
+                    product.category_names[0]
+                    if isinstance(product.category_names, list) and product.category_names else
+                    (category["path"] or category["name"]) if category else "Поиск по названию и описанию"
+                ),
+                "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
+                "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
+                "color_group_id": product.color_group_id or product.external_id,
+                "variants": _product_variants(product),
+                "normalized_requirements": normalized_requirements,
+                "normalized_product_values": normalized_product_values,
+                # Full card text for the semantic review step (LLM reads these, not the backend).
+                "description": _text(product.description, 800),
+                "attributes": [
+                    {"name": _text(value.get("name"), 100), "value": _text(value.get("value"), 250)}
+                    for value in (product.attributes if isinstance(product.attributes, list) else [])
+                    if isinstance(value, dict) and _text(value.get("name"), 100) and _text(value.get("value"), 250)
+                ][:20],
+                "materials": [_text(value, 200) for value in (product.materials if isinstance(product.materials, list) else []) if _text(value, 200)],
+                "colors": [_text(value, 120) for value in (product.colors if isinstance(product.colors, list) else []) if _text(value, 120)],
+            })
+        except Exception:
+            # One malformed card (odd supplier payload) must not blank the
+            # whole shortlist — skip it and keep ranking the rest.
+            logger.exception("Skipped a catalogue candidate that failed to serialise")
+            continue
         if len(selected) >= max(1, min(60, limit)):
             break
     if include_diagnostics:
