@@ -1754,12 +1754,19 @@ def _catalog_requirement_lines(line, intent):
 
     intent = intent if isinstance(intent, dict) else {}
     # Product identity is always the first thing to check, even when the ТЗ
-    # never states it as a separate line — a card that is a different garment
-    # sub-type (полo shirt for a "майка" query) must fail this before any of
-    # its listed characteristics are even looked at.
-    item_name = _cell_text(intent.get("item")) or _cell_text(line.get("name")) if isinstance(line, dict) else ""
+    # never states it as a separate line. Give the reviewer every name this
+    # entity is already known to go by (a procurement officer writes "майки"
+    # or "майки-поло" loosely; the upstream planner already normalised that
+    # into item + synonyms) — the check is "same garment family as any of
+    # these", not a literal match on one word.
+    item_name = _cell_text(intent.get("item")) or (_cell_text(line.get("name")) if isinstance(line, dict) else "")
+    synonyms = [
+        _cell_text(value) for value in (intent.get("synonyms") or [])
+        if isinstance(intent.get("synonyms"), list) and _cell_text(value) and _cell_text(value) != item_name
+    ][:6]
     if item_name:
-        add("Тип товара — заявленная позиция", item_name)
+        label = item_name if not synonyms else f"{item_name} (в позиции также встречается как: {', '.join(synonyms)})"
+        add("Тип товара — заявленная позиция", label)
     requirements = line.get("requirements") if isinstance(line, dict) else None
     if isinstance(requirements, dict):
         requirements = requirements.get("requirements")
@@ -1821,17 +1828,23 @@ def _review_catalog_shortlist(line, intent, candidates, extra_rules=()):
             f"- {_cell_text(rule)[:300]}" for rule in extra_rules if _cell_text(rule)
         )
     item_name = _cell_text(intent.get("item")) if isinstance(intent, dict) else ""
+    item_synonyms = [
+        _cell_text(value) for value in (intent.get("synonyms") or [])
+        if isinstance(intent, dict) and isinstance(intent.get("synonyms"), list) and _cell_text(value) and _cell_text(value) != item_name
+    ][:6]
     prompt = f"""Ты — опытный закупщик тендерного отдела. Ниже требования ТЗ по одной позиции и карточки товаров, которые бэкенд уже отобрал по названию, наличию на складе и семейству цвета. Проверь каждую карточку по смыслу — так, как это сделал бы человек.
 
-Позиция ТЗ: {item_name or _cell_text(line.get("name"))[:200]}
+Позиция ТЗ: {item_name or _cell_text(line.get("name"))[:200]}{f" (эта позиция в закупках также называется: {', '.join(item_synonyms)})" if item_synonyms else ""}
 
 Требования ТЗ:
 {chr(10).join(f"- {value}" for value in requirements)}
 {rules_block}
 
 Правила проверки:
+- Сначала определи товарную категорию (первый пункт «Тип товара») — по смыслу, не по буквальному слову в названии позиции. Заказчик тендера часто пишет неточно или на своём языке («майки-поло», просто «майки», когда по остальным характеристикам ТЗ понятна обычная футболка) — суди по совокупности характеристик ниже (крой, горловина, назначение), а не только по слову в названии позиции.
+- Только после этого проверяй остальные пункты ТЗ по каждой карточке.
 - Товар ПОДХОДИТ (keep=true), если соответствует ТЗ или превосходит его. Нет данных в карточке по пункту → это "unclear", а не отказ.
-- Товар ОТМЕЧАЕТСЯ (keep=false), если он отклоняется от ТЗ в сторону, которую заказчик не просил: детский размер или крой (если в ТЗ нет детских размеров), женский крой при нейтральном ТЗ, тематический/сезонный/праздничный принт, другой подвид изделия, не тот размерный ряд, не то назначение. Это не удаляет карточку — только опускает её вниз списка, поэтому отмечай смело, когда видишь явное отклонение.
+- Товар ОТМЕЧАЕТСЯ (keep=false), если он отклоняется от ТЗ в сторону, которую заказчик не просил: детский размер или крой (если в ТЗ нет детских размеров), женский крой при нейтральном ТЗ, тематический/сезонный/праздничный принт, другой подвид изделия (по существу, не по формальному названию), не тот размерный ряд, не то назначение. Это не удаляет карточку — только опускает её вниз списка, поэтому отмечай смело, когда видишь явное отклонение.
 - Не выдумывай характеристики. Опирайся только на текст карточки: название, описание, атрибуты, материалы, размеры.
 - Наличие и семейство цвета уже проверены бэкендом — не отклоняй и не понижай карточку из-за них. Оттенок внутри нужного цвета оценивай сам.
 - keep=true по умолчанию, если нет явной причины отклонить.
