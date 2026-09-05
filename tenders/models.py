@@ -101,6 +101,26 @@ class ProductionTrainingSession(models.Model):
         return self.position_name
 
 
+class CatalogSearchRule(models.Model):
+    """A permanent, admin-confirmed instruction for the catalogue search's
+    query-cleanup step ("не искать детские размеры", "добавляй слово
+    оптом") — the "Подтвердить и обучить" button promotes a session-scoped
+    rule here; every search after that includes every active row."""
+    text = models.CharField("Правило", max_length=300)
+    source_phrase = models.CharField("Из какой фразы обратной связи", max_length=300, blank=True)
+    is_active = models.BooleanField("Активно", default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="catalog_search_rules")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Правило поиска по каталогу"
+        verbose_name_plural = "Правила поиска по каталогу"
+
+    def __str__(self):
+        return self.text
+
+
 class ProductionTrainingTurn(models.Model):
     session = models.ForeignKey(ProductionTrainingSession, on_delete=models.CASCADE, related_name="turns")
     feedback = models.TextField("Комментарий администратора", blank=True)

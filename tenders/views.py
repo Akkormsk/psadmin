@@ -25,10 +25,10 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSearchRule, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, classify_production_type, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
+from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
 logger = logging.getLogger(__name__)
@@ -47,10 +47,9 @@ _ASSISTANT_INFLIGHT_LOCK = threading.Lock()
 atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
 
 _STAGE_LABELS = {
-    "cases": "Подбираю похожие подтверждённые примеры…",
-    "ai": "Строю гипотезу маршрута…",
+    "cases": "Готовлю поиск…",
+    "ai": "Убираю лишние слова из названия и подбираю запросы…",
     "catalog": "Ищу товары поставщиков по названию…",
-    "review": "Сверяю карточки с ТЗ…",
     "finalizing": "Формирую результат…",
 }
 
@@ -429,10 +428,10 @@ def revise_production_hypothesis(request):
         session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
-        review_rules_override = payload.get("review_rules") if isinstance(payload.get("review_rules"), list) else None
+        search_rules_override = payload.get("search_rules") if isinstance(payload.get("search_rules"), list) else None
         if len(feedback) > 3000 or not str(line.get("name", "")).strip():
             raise ValueError
-        if not feedback and review_rules_override is None:
+        if not feedback and search_rules_override is None:
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
@@ -442,7 +441,7 @@ def revise_production_hypothesis(request):
         hypothesis = build_training_hypothesis(
             line, current=prior, feedback=feedback,
             progress_callback=lambda stage: _record_stage(session.pk, stage),
-            review_rules_override=review_rules_override,
+            search_rules_override=search_rules_override,
         )
         session.position_name = str(line.get("name", ""))[:500]
         session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
@@ -682,57 +681,32 @@ def confirm_production_type(request):
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         session_id = payload.get("session_id")
         if session_id:
+            # "Подтвердить и обучить" no longer learns a route (route is a
+            # hardcoded placeholder while search is being tuned — see
+            # build_training_hypothesis) — it promotes this session's search
+            # rules to permanent, global CatalogSearchRule rows so every
+            # future search applies them, not just this line.
             session = ProductionTrainingSession.objects.get(pk=session_id, created_by=request.user, is_confirmed=False)
             hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-            production_type = ProductionType.objects.get(code=hypothesis.get("product_type"), is_active=True)
-            name = session.position_name.strip()
-            if not name or not hypothesis.get("route"):
-                raise ValueError
-            learning_warnings = [str(value) for value in hypothesis.get("learning_warnings", []) if str(value).strip()]
-            if learning_warnings:
-                return JsonResponse({
-                    "error": "Пока нельзя сохранить в обучение: " + " ".join(learning_warnings[:3]),
-                    "learning_warnings": learning_warnings,
-                }, status=400)
-            route = hypothesis["route"]
-            attached_source_ids = [
-                value.get("id") for value in hypothesis.get("sources", [])
-                if isinstance(value, dict) and value.get("id")
-            ]
-            example = ProductionTrainingExample.objects.create(
-                production_type=production_type,
-                position_name=name[:500],
-                requirements=session.requirements,
-                features=hypothesis.get("facts", [])[:10],
-                routes=[{
-                    "name": str(route.get("name", ""))[:200],
-                    "reason": str(route.get("reason", ""))[:700],
-                    "steps": route.get("steps", [])[:6],
-                    "processes": route.get("processes", [])[:6],
-                    "costs": hypothesis.get("costs", [])[:12],
-                    "totals": hypothesis.get("totals", {}),
-                    "psodin_calculation": hypothesis.get("psodin_calculation", {}),
-                    "catalog_intent": hypothesis.get("catalog_intent", {}),
-                    "catalog_selection": hypothesis.get("catalog_selection", {}),
-                }],
-                note=str(payload.get("note", ""))[:500],
-                created_by=request.user,
-            )
-            ProductionTrainingExample.objects.filter(
-                production_type=production_type,
-                position_name__iexact=name,
-                is_active=True,
-            ).exclude(pk=example.pk).update(is_active=False, superseded_by=example)
-            refresh_training_example_embedding(example)
-            if attached_source_ids:
-                TenderKnowledgeSource.objects.filter(
-                    pk__in=attached_source_ids, created_by=request.user, is_active=False,
-                ).update(is_active=True)
+            rules = hypothesis.get("catalog_search_rules", [])
+            rules = rules if isinstance(rules, list) else []
+            if not rules:
+                return JsonResponse({"error": "Нет правил поиска для сохранения — сначала оставьте хотя бы один комментарий к поиску."}, status=400)
+            saved = 0
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                text = str(rule.get("text", "")).strip()[:300]
+                if not text:
+                    continue
+                _, created = CatalogSearchRule.objects.get_or_create(
+                    text=text, is_active=True,
+                    defaults={"source_phrase": str(rule.get("source_phrase", ""))[:300], "created_by": request.user},
+                )
+                saved += int(created)
             session.is_confirmed = True
-            session.confirmed_example = example
-            session.save(update_fields=["is_confirmed", "confirmed_example", "updated_at"])
-            session.catalog_decisions.update(is_confirmed=True)
-            return JsonResponse({"message": f"Расчёт подтверждён и сохранён как учебный пример: {production_type.name}.", "example_id": example.pk})
+            session.save(update_fields=["is_confirmed", "updated_at"])
+            return JsonResponse({"message": f"Сохранено новых правил поиска: {saved}. Применяются во всех новых расчётах.", "rules_saved": saved})
         production_type = ProductionType.objects.get(code=payload.get("production_type"), is_active=True)
         name = str(line.get("name", "")).strip()
         if not name:

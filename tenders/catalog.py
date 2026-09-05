@@ -24,24 +24,6 @@ from .models import CatalogCategory, CatalogProduct, CatalogSupplier, CatalogSyn
 logger = logging.getLogger(__name__)
 
 
-CATALOG_SOURCE_CAPABILITIES = (
-    {
-        "source": "oasis",
-        "mode": "live_api",
-        "fields": ["category", "name", "full_name", "description", "attributes", "materials", "colors", "branding", "price", "stock"],
-    },
-    {
-        "source": "gifts",
-        "mode": "database",
-        "fields": ["category", "name", "description", "attributes", "materials", "colors", "price", "stock"],
-    },
-)
-
-
-def catalog_source_capabilities():
-    return [dict(value) for value in CATALOG_SOURCE_CAPABILITIES]
-
-
 class CatalogSyncError(Exception):
     pass
 
@@ -385,54 +367,6 @@ def _store_gifts_categories(supplier, categories):
             objects, update_conflicts=True, unique_fields=["supplier", "external_id"],
             update_fields=["parent_external_id", "name", "path", "is_active"],
         )
-    _refresh_category_embeddings(supplier)
-
-
-def _category_embedding_text(category, names_by_id):
-    parent_name = names_by_id.get(category.parent_external_id, "")
-    return " | ".join(filter(None, [
-        category.name,
-        f"Родитель: {parent_name}" if parent_name else "",
-        f"Путь: {category.path}" if category.path else "",
-    ]))
-
-
-def _refresh_category_embeddings(supplier):
-    from .services import TenderAIError, _embedding_model, _embedding_vectors, _embeddings_enabled
-
-    if not _embeddings_enabled():
-        return 0
-    categories = list(CatalogCategory.objects.filter(supplier=supplier, is_active=True))
-    names_by_id = {value.external_id: value.name for value in categories}
-    model = _embedding_model()
-    pending = []
-    for category in categories:
-        text = _category_embedding_text(category, names_by_id)
-        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        if category.embedding and category.embedding_model == model and category.embedding_text_hash == text_hash:
-            continue
-        pending.append((category, text, text_hash))
-    updated = []
-    try:
-        for offset in range(0, len(pending), 64):
-            batch = pending[offset:offset + 64]
-            vectors = _embedding_vectors([text for _, text, _ in batch], model=model)
-            for (category, _, text_hash), vector in zip(batch, vectors):
-                category.embedding = vector
-                category.embedding_model = model
-                category.embedding_text_hash = text_hash
-                category.embedding_updated_at = timezone.now()
-                updated.append(category)
-    except TenderAIError:
-        logger.warning("Could not refresh category embeddings for supplier %s", supplier.code)
-        return 0
-    if updated:
-        CatalogCategory.objects.bulk_update(
-            updated,
-            ["embedding", "embedding_model", "embedding_text_hash", "embedding_updated_at"],
-            batch_size=200,
-        )
-    return len(updated)
 
 
 def _gifts_category_tree(tree_xml):
@@ -726,7 +660,6 @@ def _sync_categories(client, supplier):
         with transaction.atomic():
             CatalogCategory.objects.filter(supplier=supplier).update(is_active=False)
             CatalogCategory.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=["parent_external_id", "name", "path", "is_active"])
-        _refresh_category_embeddings(supplier)
     return {value.external_id: value.path or value.name for value in CatalogCategory.objects.filter(supplier=supplier, is_active=True)}
 
 

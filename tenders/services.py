@@ -1432,51 +1432,10 @@ def _short_text_list(values, limit=12):
     return [_cell_text(value)[:300] for value in values[:limit] if _cell_text(value)]
 
 
-CATALOG_OPERATION_NAMES = {
-    "allow", "forbid", "require", "prefer", "deprioritize", "ignore",
-    "add_alias", "remove_alias", "set_missing_policy",
-    "lte", "gte", "between", "source_only", "set_scope", "remove_rule",
-}
-CATALOG_CONSTRAINT_OPERATORS = {"in", "not_in", "contains", "not_contains", "lte", "gte", "between", "exists"}
-CATALOG_MISSING_POLICIES = {"reject", "allow", "allow_with_penalty"}
-
-
-def _catalog_field(value):
-    normalized = _normalized_text(value)
-    groups = (
-        ("price", ("price", "цена", "стоимост", "бюджет")),
-        ("name", ("name", "назван", "наименован", "модель")),
-        ("product_type", ("product type", "тип товара", "категор", "вид изделия")),
-        ("material", ("material", "материал", "состав", "сырье")),
-        ("color", ("color", "цвет", "оттен")),
-        ("density", ("density", "плотност")),
-        ("branding", ("branding", "нанес", "вышив", "гравиров", "печать", "логотип")),
-        ("stock", ("stock", "остаток", "налич", "тираж", "количеств", "склад")),
-        ("gender", ("gender", "пол", "гендер", "мужск", "женск", "унисекс")),
-        ("source", ("source", "источник", "поставщик")),
-    )
-    for key, markers in groups:
-        if any(marker in normalized for marker in markers):
-            return key
-    return re.sub(r"[^a-zа-я0-9]+", "_", normalized).strip("_")[:80]
-
-
-def catalog_feedback_contract():
-    return {
-        "operations": sorted(CATALOG_OPERATION_NAMES),
-        "constraint_operators": sorted(CATALOG_CONSTRAINT_OPERATORS),
-        "missing_policies": sorted(CATALOG_MISSING_POLICIES),
-        "known_fields": ["product_type", "name", "price", "material", "color", "density", "branding", "stock", "gender", "source"],
-        "rules": [
-            "required positive constraints define exact fit and rank nearest alternatives below it",
-            "forbidden values and wrong product type filter before ranking",
-            "feedback operations patch the current intent and do not replace it",
-        ],
-    }
-
-
-def _catalog_review_rules(raw):
-    """Named, admin-visible rules fed verbatim into the shortlist review prompt."""
+def _search_rules(raw):
+    """Named, admin-visible rules fed verbatim into the search-plan step
+    (_build_search_plan) — session-scoped until promoted to a permanent
+    CatalogSearchRule via "Подтвердить и обучить"."""
     result, seen = [], set()
     for value in raw if isinstance(raw, list) else []:
         if isinstance(value, str):
@@ -1499,249 +1458,28 @@ def _catalog_review_rules(raw):
     return result[:20]
 
 
-def _normalize_catalog_intent(raw, preserve_internal=False):
-    """Keep the LLM catalogue planner structured while preserving legacy fields."""
+def _normalize_catalog_intent(raw):
+    """A catalog_intent is now just what to search for: item, a category
+    hint, search phrases, and the recognised ТЗ requirements passed
+    straight through. No DSL, no per-source strategy, no structured
+    constraints — _build_search_plan and the backend keyword search handle
+    everything themselves."""
     raw = raw if isinstance(raw, dict) else {}
-
-    def text_list(values, limit=12):
-        return _short_text_list(values, limit=limit)
-
-    def requirement_list(values):
-        result = []
-        if not isinstance(values, list):
-            return result
-        for value in values[:20]:
-            if not isinstance(value, dict):
-                continue
-            label = _cell_text(value.get("label"))[:120]
-            item_value = _cell_text(value.get("value"))[:500]
-            if label and item_value:
-                result.append({"label": label, "value": item_value})
-        return result
-
-    def strategy_list(values):
-        result = []
-        if not isinstance(values, list):
-            return result
-        for value in values[:8]:
-            if not isinstance(value, dict):
-                continue
-            source = _normalized_text(value.get("source"))
-            if source not in {"oasis", "gifts"}:
-                continue
-            result.append({
-                "source": source,
-                "category_terms": text_list(value.get("category_terms"), limit=8),
-                "query_terms": text_list(value.get("query_terms"), limit=12),
-                "search_fields": text_list(value.get("search_fields"), limit=8),
-            })
-        return result
-
-    constraints = []
-    for value in raw.get("constraints", [])[:30] if isinstance(raw.get("constraints"), list) else []:
-        if not isinstance(value, dict):
-            continue
-        field = _catalog_field(value.get("field"))
-        operator = _normalized_text(value.get("operator")).replace(" ", "_")
-        values = value.get("values")
-        values = values if isinstance(values, list) else [values]
-        values = [_cell_text(item)[:300] for item in values[:20] if _cell_text(item)]
-        level = _normalized_text(value.get("level"))
-        missing_policy = _normalized_text(value.get("missing_policy")).replace(" ", "_")
-        if not field or operator not in CATALOG_CONSTRAINT_OPERATORS:
-            continue
-        if operator != "exists" and not values:
-            continue
-        constraints.append({
-            "field": field,
-            "operator": operator,
-            "values": values,
-            "level": "preferred" if level == "preferred" else "required",
-            "missing_policy": missing_policy if missing_policy in CATALOG_MISSING_POLICIES else "reject",
-        })
-
-    fallback_queries = []
-    for value in raw.get("fallback_queries", [])[:8] if isinstance(raw.get("fallback_queries"), list) else []:
-        if not isinstance(value, dict):
-            continue
-        terms = text_list(value.get("terms"), limit=8)
-        if terms:
-            fallback_queries.append({"terms": terms, "relaxable": bool(value.get("relaxable"))})
-    categories = text_list(raw.get("categories"), limit=8)
     item = _cell_text(raw.get("item"))[:200]
-    product_class = _cell_text(raw.get("product_class"))[:100]
-    if item and not categories:
-        categories = [item]
-    result = {
+    categories = _short_text_list(raw.get("categories"), limit=8) or ([item] if item else [])
+    required = []
+    for value in (raw.get("required") or [])[:20]:
+        if isinstance(value, dict):
+            label, item_value = _cell_text(value.get("label"))[:120], _cell_text(value.get("value"))[:500]
+            if label and item_value:
+                required.append({"label": label, "value": item_value})
+    return {
         "item": item,
-        "product_class": product_class,
         "categories": categories,
-        "synonyms": text_list(raw.get("synonyms"), limit=12),
-        "required": requirement_list(raw.get("required")),
-        "preferred": requirement_list(raw.get("preferred")) + requirement_list(raw.get("secondary")),
-        "search_fields": text_list(raw.get("search_fields"), limit=8),
-        "fallback_queries": fallback_queries,
-        "source_strategy": strategy_list(raw.get("source_strategy")),
-        "constraints": constraints,
-        "allowed_sources": text_list(raw.get("allowed_sources"), limit=8),
-        "review_rules": _catalog_review_rules(raw.get("review_rules")),
-        "rule_scope": text_list(raw.get("rule_scope"), limit=12),
-        "hard_constraints": text_list(raw.get("hard_constraints"), limit=12),
-        "preferences": text_list(raw.get("preferences"), limit=8),
+        "synonyms": _short_text_list(raw.get("synonyms"), limit=12),
+        "required": required,
+        "search_rules": _search_rules(raw.get("search_rules")),
     }
-    if preserve_internal and raw.get("_source_only_confirmed") is True:
-        result["_source_only_confirmed"] = True
-    return result
-
-
-def _apply_catalog_operations(current, operations):
-    intent = _normalize_catalog_intent(current, preserve_internal=True)
-    applied, errors = [], []
-    if not isinstance(operations, list):
-        return intent, applied, ["catalog_operations должен быть списком"]
-
-    def values_of(raw):
-        values = raw.get("values")
-        if not isinstance(values, list):
-            values = [raw.get("value")] if raw.get("value") is not None else []
-        return [_cell_text(value)[:300] for value in values[:20] if _cell_text(value)]
-
-    missing_value_markers = {
-        "missing", "unknown", "unspecified", "not specified",
-        "не указан", "не указано", "не указана", "без указания", "неизвестно", "отсутствует",
-    }
-
-    def implicit_missing_policy(raw):
-        op = _normalized_text(raw.get("op")).replace(" ", "_")
-        values = values_of(raw)
-        if not values or not all(_normalized_text(value) in missing_value_markers for value in values):
-            return ""
-        return {
-            "allow": "allow",
-            "forbid": "reject",
-            "prefer": "allow_with_penalty",
-            "deprioritize": "allow_with_penalty",
-        }.get(op, "")
-
-    requested_missing_policies = {}
-    for raw in operations[:30]:
-        if not isinstance(raw, dict):
-            continue
-        op = _normalized_text(raw.get("op")).replace(" ", "_")
-        field = _catalog_field(raw.get("field"))
-        policy = (
-            _normalized_text(raw.get("value")).replace(" ", "_")
-            if op == "set_missing_policy"
-            else implicit_missing_policy(raw)
-        )
-        if field and policy in CATALOG_MISSING_POLICIES:
-            requested_missing_policies[field] = policy
-
-    for index, raw in enumerate(operations[:30]):
-        if not isinstance(raw, dict):
-            errors.append(f"Операция {index + 1}: ожидается объект")
-            continue
-        op = _normalized_text(raw.get("op")).replace(" ", "_")
-        missing_policy_alias = implicit_missing_policy(raw)
-        if missing_policy_alias:
-            op = "set_missing_policy"
-        if op not in CATALOG_OPERATION_NAMES:
-            errors.append(f"Операция {index + 1}: неподдерживаемая команда {op or 'пусто'}")
-            continue
-        field = _catalog_field(raw.get("field"))
-        values = [] if missing_policy_alias else values_of(raw)
-        normalized = {"op": op}
-        if field:
-            normalized["field"] = field
-        if values and op != "set_missing_policy":
-            normalized["values"] = values
-
-        if op in {"add_alias", "remove_alias"}:
-            if not values:
-                errors.append(f"Операция {index + 1}: для {op} нужны values")
-                continue
-            aliases = list(intent["synonyms"])
-            if op == "add_alias":
-                for value in values:
-                    if _normalized_text(value) not in {_normalized_text(item) for item in aliases}:
-                        aliases.append(value)
-            else:
-                removing = {_normalized_text(value) for value in values}
-                aliases = [value for value in aliases if _normalized_text(value) not in removing]
-            intent["synonyms"] = aliases[:12]
-        elif op in {"source_only", "set_scope"}:
-            if not values:
-                errors.append(f"Операция {index + 1}: для {op} нужны values")
-                continue
-            if op == "set_scope":
-                intent["rule_scope"] = values[:12]
-            else:
-                intent["allowed_sources"] = values[:8]
-                intent["_source_only_confirmed"] = True
-        elif op in {"ignore", "remove_rule"}:
-            if not field:
-                errors.append(f"Операция {index + 1}: для {op} нужен field")
-                continue
-            intent["constraints"] = [item for item in intent["constraints"] if item["field"] != field]
-            for group in ("required", "preferred"):
-                intent[group] = [item for item in intent[group] if _catalog_field(item.get("label")) != field]
-            if op == "remove_rule" and field == "source":
-                intent["allowed_sources"] = []
-                intent.pop("_source_only_confirmed", None)
-        elif op == "set_missing_policy":
-            policy = missing_policy_alias or _normalized_text(raw.get("value")).replace(" ", "_")
-            if not field or policy not in CATALOG_MISSING_POLICIES:
-                errors.append(f"Операция {index + 1}: неверные field или missing policy")
-                continue
-            for constraint in intent["constraints"]:
-                if constraint["field"] == field:
-                    constraint["missing_policy"] = policy
-            normalized["value"] = policy
-        else:
-            if not field:
-                errors.append(f"Операция {index + 1}: для {op} нужен field")
-                continue
-            negative_markers = ("исключ", "не показы", "не предлаг", "запрещ", "избег", "кроме")
-            for group in ("required", "preferred"):
-                intent[group] = [
-                    item for item in intent[group]
-                    if not (
-                        _catalog_field(item.get("label")) == field
-                        and any(marker in _normalized_text(item.get("value")) for marker in negative_markers)
-                    )
-                ]
-            operator = {"allow": "in", "forbid": "not_in", "require": "in", "prefer": "in", "deprioritize": "not_in", "lte": "lte", "gte": "gte", "between": "between"}[op]
-            if not values and op != "require":
-                errors.append(f"Операция {index + 1}: для {op} нужны values")
-                continue
-            if op == "require" and not values:
-                operator = "exists"
-            level = "preferred" if op in {"prefer", "deprioritize"} else "required"
-            missing_policy = _normalized_text(raw.get("missing_policy")).replace(" ", "_")
-            if missing_policy not in CATALOG_MISSING_POLICIES:
-                missing_policy = requested_missing_policies.get(field, "reject" if level == "required" else "allow_with_penalty")
-            existing = next((item for item in intent["constraints"] if item["field"] == field and item["operator"] == operator), None)
-            if existing:
-                for value in values:
-                    if _normalized_text(value) not in {_normalized_text(item) for item in existing["values"]}:
-                        existing["values"].append(value)
-                existing.update({"level": level, "missing_policy": missing_policy})
-            else:
-                intent["constraints"].append({
-                    "field": field, "operator": operator, "values": values,
-                    "level": level, "missing_policy": missing_policy,
-                })
-        applied.append(normalized)
-    for field, policy in requested_missing_policies.items():
-        related = [constraint for constraint in intent["constraints"] if constraint["field"] == field]
-        if not related:
-            errors.append(f"Политика отсутствующего значения не применена: для поля {field} нет ограничения")
-            applied = [item for item in applied if not (item.get("op") == "set_missing_policy" and item.get("field") == field)]
-            continue
-        for constraint in related:
-            constraint["missing_policy"] = policy
-    return intent, applied, errors
-
 
 def _catalog_search_outcome(raw):
     if isinstance(raw, dict):
@@ -1759,225 +1497,25 @@ def _catalog_search_outcome(raw):
     }
 
 
-def _catalog_requirement_lines(line, intent):
-    """Human-readable ТЗ points: recognised requirements first, planner extras second."""
-    seen, lines = set(), []
 
-    def add(label, value):
-        label = _cell_text(label)[:160].strip(" :")
-        value = _cell_text(value)[:400].strip()
-        if not value:
-            return
-        key = _normalized_text(f"{label} {value}")
-        if key in seen:
-            return
-        seen.add(key)
-        lines.append(f"{label}: {value}" if label else value)
+def _translate_search_feedback(line, feedback, current_rules=()):
+    """Turn an admin comment about the search into one or more named search
+    rules — "убери детские", "добавь слово опт", "не ищи в категории носки".
+    No DSL, no operations: a rule is plain text fed verbatim into
+    _build_search_plan next time."""
+    prompt = f"""Администратор оставил комментарий к поиску товара по позиции тендера. Разбей его на одно или несколько отдельных правил для поиска — что искать или не искать, какие слова добавить или убрать, что игнорировать.
 
-    intent = intent if isinstance(intent, dict) else {}
-    # Product identity is always the first thing to check, even when the ТЗ
-    # never states it as a separate line. Give the reviewer every name this
-    # entity is already known to go by (a procurement officer writes "майки"
-    # or "майки-поло" loosely; the upstream planner already normalised that
-    # into item + synonyms) — the check is "same garment family as any of
-    # these", not a literal match on one word.
-    item_name = _cell_text(intent.get("item")) or (_cell_text(line.get("name")) if isinstance(line, dict) else "")
-    synonyms = [
-        _cell_text(value) for value in (intent.get("synonyms") or [])
-        if isinstance(intent.get("synonyms"), list) and _cell_text(value) and _cell_text(value) != item_name
-    ][:6]
-    if item_name:
-        label = item_name if not synonyms else f"{item_name} (в позиции также встречается как: {', '.join(synonyms)})"
-        add("Тип товара — заявленная позиция", label)
-    requirements = line.get("requirements") if isinstance(line, dict) else None
-    if isinstance(requirements, dict):
-        requirements = requirements.get("requirements")
-    for value in requirements if isinstance(requirements, list) else []:
-        if isinstance(value, dict):
-            add(value.get("label"), value.get("value"))
-    for group in ("required", "preferred"):
-        for value in intent.get(group, []) if isinstance(intent.get(group), list) else []:
-            if isinstance(value, dict):
-                add(value.get("label"), value.get("value"))
-    for value in intent.get("constraints", []) if isinstance(intent.get("constraints"), list) else []:
-        if isinstance(value, dict) and value.get("values"):
-            add(value.get("field"), ", ".join(_cell_text(item) for item in value["values"] if _cell_text(item)))
-    return lines[:40]
+Каждое правило — короткая инструкция человеческим языком, которую в следующий раз применит помощник, готовящий поисковые запросы. Не выдумывай ничего, чего нет в комментарии.
 
+Позиция: {json.dumps(line, ensure_ascii=False)}
+Уже действующие правила: {json.dumps([_cell_text(value.get("text")) for value in current_rules if isinstance(value, dict)], ensure_ascii=False)}
+Комментарий администратора: {feedback}
 
-def _catalog_review_card(index, candidate):
-    attributes = candidate.get("attributes") if isinstance(candidate.get("attributes"), list) else []
-    variants = candidate.get("variants") if isinstance(candidate.get("variants"), list) else []
-    sizes = sorted({
-        _cell_text(value.get("size"))
-        for value in variants if isinstance(value, dict) and _cell_text(value.get("size"))
-    }) or [_cell_text(value) for value in (candidate.get("sizes") or []) if _cell_text(value)]
-    return {
-        "id": str(index),
-        "название": _cell_text(candidate.get("name"))[:160],
-        "поставщик": _cell_text(candidate.get("supplier_code")),
-        "цена": candidate.get("price"),
-        "склад": candidate.get("stock"),
-        "размеры": sizes[:16],
-        "материалы": (candidate.get("materials") or [])[:6],
-        "цвета": (candidate.get("colors") or [])[:6],
-        "атрибуты": [
-            f"{_cell_text(value.get('name'))[:60]}: {_cell_text(value.get('value'))[:160]}"
-            for value in attributes[:14]
-            if isinstance(value, dict) and _cell_text(value.get("name"))
-        ],
-        "описание": _cell_text(candidate.get("description"))[:350],
-    }
-
-
-def _review_catalog_shortlist(line, intent, candidates, extra_rules=()):
-    """One LLM pass over the backend shortlist — keep/drop like a procurement
-    specialist and give a verdict for every ТЗ point. The backend has already
-    filtered stock, blatant type and colour family; this step handles meaning."""
-    candidates = [value for value in candidates if isinstance(value, dict)]
-    diagnostics = {"reviewed": len(candidates), "kept": len(candidates), "rules": list(extra_rules), "llm": False}
-    if not candidates:
-        return candidates, {}, diagnostics
-    requirements = _catalog_requirement_lines(line, intent)
-    if not requirements:
-        diagnostics["skipped"] = "no_requirements"
-        return candidates, {}, diagnostics
-
-    cards = [_catalog_review_card(index, value) for index, value in enumerate(candidates)]
-    rules_block = ""
-    if extra_rules:
-        rules_block = "\nДополнительные правила администратора (соблюдать строго):\n" + "\n".join(
-            f"- {_cell_text(rule)[:300]}" for rule in extra_rules if _cell_text(rule)
-        )
-    item_name = _cell_text(intent.get("item")) if isinstance(intent, dict) else ""
-    item_synonyms = [
-        _cell_text(value) for value in (intent.get("synonyms") or [])
-        if isinstance(intent, dict) and isinstance(intent.get("synonyms"), list) and _cell_text(value) and _cell_text(value) != item_name
-    ][:6]
-    prompt = f"""Ты — опытный закупщик тендерного отдела. Ниже требования ТЗ по одной позиции и карточки товаров, которые бэкенд уже отобрал по названию, наличию на складе и семейству цвета. Проверь каждую карточку по смыслу — так, как это сделал бы человек.
-
-Позиция ТЗ: {item_name or _cell_text(line.get("name"))[:200]}{f" (эта позиция в закупках также называется: {', '.join(item_synonyms)})" if item_synonyms else ""}
-
-Требования ТЗ:
-{chr(10).join(f"- {value}" for value in requirements)}
-{rules_block}
-
-Правила проверки:
-- Сначала определи товарную категорию (первый пункт «Тип товара») — по смыслу, не по буквальному слову в названии позиции. Заказчик тендера часто пишет неточно или на своём языке («майки-поло», просто «майки», когда по остальным характеристикам ТЗ понятна обычная футболка) — суди по совокупности характеристик ниже (крой, горловина, назначение), а не только по слову в названии позиции.
-- Только после этого проверяй остальные пункты ТЗ по каждой карточке.
-- Товар ПОДХОДИТ (keep=true), если соответствует ТЗ или превосходит его. Нет данных в карточке по пункту → это "unclear", а не отказ.
-- Товар ОТМЕЧАЕТСЯ (keep=false), если он отклоняется от ТЗ в сторону, которую заказчик не просил: детский размер или крой (если в ТЗ нет детских размеров), женский крой при нейтральном ТЗ, тематический/сезонный/праздничный принт, другой подвид изделия (по существу, не по формальному названию), не тот размерный ряд, не то назначение. Это не удаляет карточку — только опускает её вниз списка, поэтому отмечай смело, когда видишь явное отклонение.
-- Не выдумывай характеристики. Опирайся только на текст карточки: название, описание, атрибуты, материалы, размеры.
-- Наличие и семейство цвета уже проверены бэкендом — не отклоняй и не понижай карточку из-за них. Оттенок внутри нужного цвета оценивай сам.
-- keep=true по умолчанию, если нет явной причины отклонить.
-- Дай review по каждому пункту ТЗ выше для каждой карточки, даже если карточка отклонена.
-
-Карточки товаров:
-{json.dumps(cards, ensure_ascii=False)}
-
-Верни ТОЛЬКО JSON:
-{{"results":[{{"id":"0","keep":true,"reason":"коротко, почему подходит или нет","review":[{{"point":"<пункт ТЗ дословно>","verdict":"match|mismatch|unclear","note":"коротко из карточки"}}]}}]}}"""
-
-    try:
-        result, usage = _ai_gateway_json(
-            prompt, max_tokens=min(7000, 900 + len(cards) * 130), timeout=90, network_attempts=2,
-        )
-    except TenderAIError as exc:
-        diagnostics["error"] = str(exc)[:200]
-        return candidates, {}, diagnostics
-
-    try:
-        verdicts = {}
-        for value in result.get("results", []) if isinstance(result, dict) and isinstance(result.get("results"), list) else []:
-            if isinstance(value, dict) and value.get("id") is not None:
-                verdicts[str(value.get("id"))] = value
-
-        # The review only ever re-ranks and annotates — it never removes a card
-        # the backend already found. A card the model marks keep=false is pushed
-        # to the bottom (still visible, still selectable), never dropped: the
-        # admin asked for ~10 scrollable options, not a single "best guess".
-        reviewed = []
-        for index, candidate in enumerate(candidates):
-            verdict = verdicts.get(str(index), {})
-            review = []
-            for row in verdict.get("review", []) if isinstance(verdict.get("review"), list) else []:
-                if not isinstance(row, dict):
-                    continue
-                state = _normalized_text(row.get("verdict"))
-                state = state if state in {"match", "mismatch", "unclear"} else "unclear"
-                point = _cell_text(row.get("point"))[:200]
-                if point:
-                    review.append({"point": point, "verdict": state, "note": _cell_text(row.get("note"))[:300]})
-            flagged = verdict.get("keep", True) is False
-            enriched = {
-                **candidate,
-                "requirement_review": review,
-                "review_reason": _cell_text(verdict.get("reason"))[:300],
-                "review_flagged": flagged,
-                "review_mismatch_count": sum(1 for row in review if row["verdict"] == "mismatch"),
-                "review_unclear_count": sum(1 for row in review if row["verdict"] == "unclear"),
-            }
-            if review:
-                enriched["matches"] = [row["point"] for row in review if row["verdict"] == "match"]
-                enriched["mismatches"] = [
-                    f"{row['point']} — {row['note']}" if row["note"] else row["point"]
-                    for row in review if row["verdict"] == "mismatch"
-                ]
-                enriched["unknown"] = [
-                    f"{row['point']} — {row['note']}" if row["note"] else row["point"]
-                    for row in review if row["verdict"] == "unclear"
-                ]
-                enriched["fit"] = "exact" if not flagged and not enriched["mismatches"] and not enriched["unknown"] else "partial"
-            reviewed.append(enriched)
-
-        def _price(value):
-            try:
-                return Decimal(str(value.get("price")))
-            except (InvalidOperation, TypeError, ValueError):
-                return Decimal("Infinity")
-
-        reviewed.sort(key=lambda value: (
-            value.get("review_flagged", False),
-            value.get("review_mismatch_count", 0),
-            value.get("review_unclear_count", 0),
-            value.get("price") in (None, ""),
-            _price(value),
-            _cell_text(value.get("name")),
-        ))
-    except Exception as exc:  # noqa: BLE001 — never let a formatting hiccup blank the shortlist
-        logger.exception("Catalog shortlist review post-processing failed")
-        diagnostics["error"] = f"review_processing: {exc}"[:200]
-        return candidates, {}, diagnostics
-    diagnostics.update({"kept": len(reviewed), "llm": True})
-    return reviewed, usage if isinstance(usage, dict) else {}, diagnostics
-
-
-def _translate_catalog_feedback(line, current_intent, feedback):
-    prompt = f"""Переведи обратную связь администратора об отборе товаров.
-Верни только JSON: {{"operations":[...], "review_rules":[{{"text":"...","label":"..."}}]}}.
-
-operations — атомарные команды изменения поискового плана строго по контракту (поменять синонимы, добавить/запретить значение поля, политику отсутствующего значения). Одно высказывание может требовать нескольких операций. Отрицание никогда не записывай как положительное значение.
-
-review_rules — короткое правило на человеческом языке для шага смысловой проверки карточек, когда фраза говорит «убери такие-то», «не предлагай», «только такие», «игнорируй». text — инструкция ревизору («Исключать детские товары»), label — 2–4 слова для интерфейса («Без детских»). Не дублируй сюда числовые ограничения, которые уже разложены в operations.
-
-Отсутствующее значение задавай только командой set_missing_policy (reject / allow / allow_with_penalty). Не передавай «не указан» как обычное значение поля.
-
-КОНТРАКТ:
-{json.dumps(catalog_feedback_contract(), ensure_ascii=False)}
-
-ТЕКУЩИЙ ПЛАН:
-{json.dumps(current_intent, ensure_ascii=False)}
-
-ПОЗИЦИЯ:
-{json.dumps(line, ensure_ascii=False)}
-
-ОБРАТНАЯ СВЯЗЬ:
-{feedback}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=1600, timeout=45, network_attempts=2)
-    operations = result.get("operations") if isinstance(result, dict) else None
-    operations = operations if isinstance(operations, list) else []
-    review_rules = []
-    for value in result.get("review_rules", []) if isinstance(result, dict) and isinstance(result.get("review_rules"), list) else []:
+Верни только JSON: {{"rules":[{{"text":"инструкция для поиска","label":"2-4 слова для плашки в интерфейсе"}}]}}
+Если комментарий не про поиск товара (например, про маршрут или цену), верни {{"rules":[]}}."""
+    result, usage = _ai_gateway_json(prompt, max_tokens=500, timeout=25, network_attempts=2)
+    rules = []
+    for value in result.get("rules", []) if isinstance(result, dict) and isinstance(result.get("rules"), list) else []:
         if isinstance(value, str):
             value = {"text": value}
         if not isinstance(value, dict):
@@ -1985,14 +1523,12 @@ review_rules — короткое правило на человеческом �
         text = _cell_text(value.get("text"))[:300].strip()
         if not text:
             continue
-        review_rules.append({
+        rules.append({
             "text": text,
             "label": _cell_text(value.get("label"))[:60].strip() or text[:60],
             "source_phrase": _cell_text(feedback)[:300],
         })
-    if not operations and not review_rules:
-        return [], [], usage, ["LLM не сформировала изменения отбора; действующий план сохранён без изменений."]
-    return operations, review_rules, usage, []
+    return rules, usage
 
 
 def _requirement_list(values):
@@ -2514,101 +2050,6 @@ def _unanswered_production_questions(raw_questions, line, features=None, limit=2
     return result
 
 
-def classify_production_type(line):
-    from .models import ProcessDefinition, ProductionTrainingExample, ProductionType
-
-    production_types = list(ProductionType.objects.filter(is_active=True))
-    # Ограничиваем контекст, чтобы обучение не раздувало время и стоимость
-    # каждого запроса на малом тарифе приложения.
-    examples = list(ProductionTrainingExample.objects.filter(is_active=True).select_related("production_type")[:25])
-    type_payload = [{"code": value.code, "name": value.name, "description": value.description} for value in production_types]
-    example_payload = [
-        {"id": value.pk, "name": value.position_name, "type": value.production_type.code, "features": value.features, "routes": value.routes}
-        for value in examples
-    ]
-    process_definitions = list(ProcessDefinition.objects.filter(is_active=True))
-    process_payload = [{"name": value.name, "role": value.role, "description": value.description} for value in process_definitions]
-    schema = '{"suggested_type":"digital_sheet","confidence":0.45,"reason":"почему","features":["существенный признак"],"alternatives":[{"type":"offset_print","reason":"почему возможно"}],"routes":[{"name":"Под ключ","reason":"почему","processes":[{"role":"supply|production|completion","name":"Процесс","reason":"зачем"}]}],"matched_example_ids":[1],"questions":[{"question":"один вопрос","missing_fact":"какого факта нет","why_it_changes_route":"что изменит ответ"}]}'
-    prompt = f"""Определи технологический тип и предложи 1–3 возможных маршрута из процессов. Пока НЕ ищи конкретного поставщика, НЕ выбирай калькулятор и НЕ считай цену.
-Используй только типы из справочника. Выдели фактические признаки из названия и ТЗ: тираж, формат, конструкцию, способ печати, материал и обязательные операции. Не считай само упоминание бумаги или печати доказательством цифровой листовой печати.
-Маршрут — последовательность процессов, приводящая к готовому изделию. Процесс может относиться к снабжению, производству или завершению/логистике. Один процесс «изготовление под ключ» допустим, если он реалистичен. Альтернативный маршрут может разделять снабжение и производство, например готовый бланк + нанесение. Не добавляй процессы ради количества.
-Используй известные процессы из справочника, но если необходимого процесса нет — предложи ясное новое название. DTF и УФ-DTF относятся к возможностям цифровой типографии; прямая УФ-печать на станке — отдельный процесс.
-Если данных недостаточно или подходят несколько технологий, честно снизь confidence и задай не более двух вопросов, ответ на которые действительно изменит классификацию.
-Перед каждым вопросом проверь все извлечённые requirements. Нельзя спрашивать способ нанесения, материал, формат или операцию, если они уже прямо указаны в ТЗ. Несколько операций могут сосуществовать: конгрев герба и тиснение надписи не являются офсетной или цифровой печатью. Вопрос допустим только о конкретном отсутствующем факте; укажи его в missing_fact и объясни в why_it_changes_route, какой выбор маршрута зависит от ответа. Если явного пробела нет, questions должен быть пустым.
-matched_example_ids указывай только для действительно похожих подтверждённых примеров. Не завышай уверенность: без близкого подтверждённого примера значение не должно превышать 0.55.
-Верни только JSON: {schema}
-
-ПОЗИЦИЯ:
-{json.dumps(line, ensure_ascii=False)}
-
-СПРАВОЧНИК ТИПОВ:
-{json.dumps(type_payload, ensure_ascii=False)}
-
-ИЗВЕСТНЫЕ ПРОЦЕССЫ:
-{json.dumps(process_payload, ensure_ascii=False)}
-
-ПОДТВЕРЖДЁННЫЕ АДМИНИСТРАТОРОМ ПРИМЕРЫ:
-{json.dumps(example_payload, ensure_ascii=False)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=1800)
-    valid_codes = {value.code for value in production_types}
-    suggested = result.get("suggested_type") if result.get("suggested_type") in valid_codes else "other"
-    features = _short_text_list(result.get("features"), limit=10)
-    questions = _unanswered_production_questions(result.get("questions"), line, features=features, limit=2)
-    valid_example_ids = {value.pk for value in examples}
-    matched_ids = []
-    for value in result.get("matched_example_ids", []) if isinstance(result.get("matched_example_ids"), list) else []:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            continue
-        if value in valid_example_ids:
-            matched_ids.append(value)
-    try:
-        model_confidence = max(0, min(1, float(result.get("confidence", 0))))
-    except (TypeError, ValueError):
-        model_confidence = 0
-    # Процент является программной оценкой доказательств, а не уверенностью,
-    # которую модель может объявить сама.
-    confidence_cap = .45 if not matched_ids else (.72 if len(matched_ids) == 1 else .82)
-    if questions:
-        confidence_cap = min(confidence_cap, .50)
-    confidence = min(model_confidence, confidence_cap)
-    alternatives = []
-    for raw in result.get("alternatives", [])[:3]:
-        if isinstance(raw, dict) and raw.get("type") in valid_codes and raw.get("type") != suggested:
-            alternatives.append({"type": raw["type"], "reason": _cell_text(raw.get("reason"))[:300]})
-    routes = []
-    for route_index, raw_route in enumerate(result.get("routes", [])[:3]):
-        if not isinstance(raw_route, dict):
-            continue
-        processes = []
-        for raw_process in raw_route.get("processes", [])[:10]:
-            if not isinstance(raw_process, dict):
-                continue
-            role = raw_process.get("role") if raw_process.get("role") in {"supply", "production", "completion"} else "production"
-            name = _cell_text(raw_process.get("name"))[:200]
-            if name:
-                processes.append({"role": role, "name": name, "reason": _cell_text(raw_process.get("reason"))[:300]})
-        if processes:
-            routes.append({"name": _cell_text(raw_route.get("name"))[:120] or f"Маршрут {route_index + 1}", "reason": _cell_text(raw_route.get("reason"))[:300], "processes": processes})
-    return {
-        "stage": "production_classification",
-        "suggested_type": suggested,
-        "confidence": confidence,
-        "reason": _cell_text(result.get("reason"))[:700],
-        "features": features,
-        "alternatives": alternatives,
-        "routes": routes,
-        "matched_example_ids": matched_ids,
-        "questions": questions,
-        "production_types": type_payload,
-        "process_definitions": process_payload,
-        "training_examples_count": len(examples),
-        "manager_answers": line.get("manager_answers") or line.get("requirements", {}).get("manager_answers") or {},
-        "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)},
-    }
-
-
 def _embeddings_enabled():
     return os.getenv("TIMEWEB_EMBEDDINGS_ENABLED", "0") == "1"
 
@@ -2668,46 +2109,6 @@ def refresh_training_example_embedding(example):
     example.embedding_updated_at = timezone.now()
     example.save(update_fields=["embedding", "embedding_model", "embedding_updated_at"])
     return True
-
-
-def _cosine_similarity(left, right):
-    if not left or not right or len(left) != len(right):
-        return 0
-    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
-    return sum(a * b for a, b in zip(left, right)) / denominator if denominator else 0
-
-
-def _training_examples_for_line(line, limit=12):
-    from .models import ProductionTrainingExample
-
-    target = _normalized_item_name(line.get("name"))
-    examples = list(ProductionTrainingExample.objects.filter(is_active=True).select_related("production_type")[:200])
-    semantic_scores = {}
-    model = _embedding_model()
-    embedded = [value for value in examples if value.embedding_model == model and isinstance(value.embedding, list) and value.embedding]
-    if _embeddings_enabled() and embedded:
-        source = json.dumps(line, ensure_ascii=False, sort_keys=True)
-        cache_key = f"training-query-embedding:{model}:{hashlib.sha256(source.encode('utf-8')).hexdigest()}"
-        query_embedding = cache.get(cache_key)
-        if query_embedding is None:
-            try:
-                query_embedding = _embedding_vector(source, model=model)
-                cache.set(cache_key, query_embedding, 24 * 60 * 60)
-            except TenderAIError:
-                query_embedding = []
-        semantic_scores = {value.pk: max(0, _cosine_similarity(query_embedding, value.embedding)) for value in embedded}
-    ranked = []
-    for example in examples:
-        source = _normalized_item_name(example.position_name)
-        lexical_score = SequenceMatcher(None, target, source).ratio() if target and source else 0
-        target_tokens, source_tokens = set(target.split()), set(source.split())
-        if target_tokens and source_tokens:
-            lexical_score = max(lexical_score, len(target_tokens & source_tokens) / len(target_tokens | source_tokens))
-        semantic_score = semantic_scores.get(example.pk)
-        score = semantic_score * .8 + lexical_score * .2 if semantic_score is not None else lexical_score
-        ranked.append((score, lexical_score, semantic_score, example))
-    ranked.sort(key=lambda value: (value[0], value[3].created_at), reverse=True)
-    return [value for score, lexical, semantic, value in ranked[:limit] if lexical >= .12 or (semantic or 0) >= .2]
 
 
 def _knowledge_sources_for_line(line, limit=4):
@@ -2877,113 +2278,6 @@ def _evaluate_cost_recipe(recipe, quantity):
         else:
             return None, []
     return total, steps
-
-
-def _extract_productivity_per_hour(*values):
-    text = " ".join(json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value for value in values if value)
-    text = text.lower().replace("ё", "е")
-    patterns = (
-        r"(\d+(?:[.,]\d+)?)\s*(?:шт\.?|штук\w*|издел\w*|футбол\w*)\s*(?:/|в)\s*(?:1\s*)?час",
-        r"за\s*(?:1\s*)?час\D{0,20}(\d+(?:[.,]\d+)?)\s*(?:шт\.?|штук\w*|издел\w*|футбол\w*)",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            try:
-                value = Decimal(match.group(1).replace(",", "."))
-            except InvalidOperation:
-                continue
-            if value > 0:
-                return value
-    return None
-
-
-def _apply_psodin_calculation(hypothesis, raw, line, current=None, feedback="", confirmed=None):
-    """Replace model arithmetic with the existing PSODIN backend calculator."""
-    from calculator.models import CalculatorSettings
-    from calculator.services import calculate_sheet_estimate
-
-    raw_calculation = raw.get("psodin_calculation") if isinstance(raw.get("psodin_calculation"), dict) else {}
-    current_calculation = current.get("psodin_calculation") if isinstance(current, dict) and isinstance(current.get("psodin_calculation"), dict) else {}
-    confirmed_calculation = confirmed if isinstance(confirmed, dict) else {}
-    feedback_text = feedback.lower().replace("ё", "е")
-    authorized = any(marker in feedback_text for marker in ("psodin", "псодин", "печатный салон №1")) or bool(current_calculation.get("authorized")) or bool(confirmed_calculation.get("authorized"))
-    if not authorized:
-        return hypothesis
-
-    productivity = _decimal_input(raw_calculation, "productivity_per_hour")
-    if productivity is None or productivity <= 0:
-        productivity = _decimal_input(current_calculation, "productivity_per_hour")
-    if productivity is None or productivity <= 0:
-        productivity = _decimal_input(confirmed_calculation, "productivity_per_hour")
-    if productivity is None or productivity <= 0:
-        productivity = _extract_productivity_per_hour(feedback, current, raw)
-    questions = list(hypothesis.get("questions") or [])
-    questions = [value for value in questions if "psodin" not in str(value).lower() and "час" not in str(value).lower()]
-    if productivity is None or productivity <= 0:
-        questions.append("Сколько изделий в час PSODIN выполняет эту работу?")
-        hypothesis["questions"] = list(dict.fromkeys(questions))[:3]
-        hypothesis["psodin_calculation"] = {"authorized": True, "status": "missing_productivity", "calculator": "sheet"}
-        return hypothesis
-
-    try:
-        quantity = max(Decimal("1"), Decimal(str(line.get("quantity", 1)).replace(",", ".")))
-    except (InvalidOperation, TypeError, ValueError):
-        quantity = Decimal("1")
-    exact_hours = quantity / productivity
-    billed_hours = (exact_hours * Decimal("2")).to_integral_value(rounding=ROUND_CEILING) / Decimal("2")
-    settings = CalculatorSettings.objects.get_or_create(pk=1)[0]
-    calculated = calculate_sheet_estimate([], quantity, billed_hours, settings, "sheet")
-    tariff = raw_calculation.get("tariff") or current_calculation.get("tariff") or confirmed_calculation.get("tariff") or "partner"
-    if tariff not in {"standard", "regular", "partner", "urgent"}:
-        tariff = "partner"
-    tariff_labels = {"standard": "стандартный", "regular": "постоянник", "partner": "контрагент", "urgent": "без очереди"}
-    amount = _money(calculated[tariff])
-    process_name = _cell_text(raw_calculation.get("process_name"))[:80] or "Работа PSODIN"
-    existing_costs = hypothesis.get("costs") if isinstance(hypothesis.get("costs"), list) else []
-    costs = [item for item in existing_costs if "psodin" not in f"{item.get('name', '')} {item.get('process_name', '')} {item.get('source', '')}".lower()]
-    base_formula = f"{_decimal_text(billed_hours)} ч × {_money(settings.hourly_rate)} ₽/ч × {_decimal_text(settings.time_coefficient)}"
-    steps = [
-        f"Тираж {_decimal_text(quantity)} шт. ÷ {_decimal_text(productivity)} шт./ч = {_decimal_text(exact_hours)} ч",
-        f"Оплачиваемое время с шагом 0,5 ч: {_decimal_text(billed_hours)} ч",
-        f"Стандартная цена: {base_formula} = {_money(calculated['standard'])} ₽",
-    ]
-    if tariff == "regular":
-        multiplier = Decimal("1") - settings.regular_discount / Decimal("100")
-        steps.append(f"Скидка {settings.regular_discount}% к стоимости: {_money(calculated['standard'])} ₽ × {multiplier} = {amount} ₽")
-    elif tariff == "partner":
-        multiplier = Decimal("1") - settings.partner_discount / Decimal("100")
-        steps.append(f"Скидка {settings.partner_discount}% к стоимости: {_money(calculated['standard'])} ₽ × {multiplier} = {amount} ₽")
-    elif tariff == "urgent":
-        steps.append(f"Коэффициент срочности {settings.urgency_multiplier}: {_money(calculated['standard'])} ₽ × {settings.urgency_multiplier} = {amount} ₽")
-    costs.append({
-        "category": "application", "name": "Работа PSODIN", "amount_total": str(amount), "process_name": process_name,
-        "source": "Калькулятор PSODIN · Листовая печать", "source_type": "calculator", "source_url": "", "source_date": "",
-        "basis": f"{base_formula}; тариф «{tariff_labels[tariff]}»",
-        "adaptation": "Трудоёмкость получена из тиража и подтверждённой производительности; цена полностью рассчитана бэкендом.",
-        "calculation_steps": steps,
-        "recipe": {"method": "psodin_backend", "inputs": {"quantity": str(quantity), "productivity_per_hour": str(productivity), "billed_hours": str(billed_hours), "tariff": tariff}},
-        "confirmed": False,
-    })
-    totals = {"material": Decimal("0"), "application": Decimal("0"), "logistics": Decimal("0")}
-    for item in costs:
-        category = item.get("category") if item.get("category") in totals else "application"
-        try:
-            totals[category] += max(Decimal("0"), Decimal(str(item.get("amount_total", 0)).replace(",", ".")))
-        except (InvalidOperation, TypeError, ValueError):
-            continue
-    total = sum(totals.values(), Decimal("0"))
-    hypothesis["costs"] = costs
-    hypothesis["totals"] = {
-        "material_unit": str(_money(totals["material"] / quantity)), "application_unit": str(_money(totals["application"] / quantity)),
-        "logistics_unit": str(_money(totals["logistics"] / quantity)), "cost_unit": str(_money(total / quantity)), "cost_total": str(_money(total)),
-    }
-    hypothesis["questions"] = list(dict.fromkeys(questions))[:3]
-    hypothesis["psodin_calculation"] = {
-        "authorized": True, "status": "calculated", "calculator": "sheet", "scope": "labour_only", "process_name": process_name,
-        "productivity_per_hour": str(productivity), "exact_hours": str(exact_hours), "billed_hours": str(billed_hours), "tariff": tariff,
-    }
-    return hypothesis
 
 
 def _normalize_training_hypothesis(raw, line, production_types, matched_ids):
@@ -3176,53 +2470,6 @@ def _attach_memory_preview(hypothesis):
     return hypothesis
 
 
-def _lean_current_for_prompt(current):
-    """Trim a prior hypothesis to the fields the model needs to refine the plan.
-
-    Product cards and search diagnostics add thousands of prompt tokens on every
-    revision without helping the model rework the route or the catalog intent.
-    """
-    if not isinstance(current, dict):
-        return {}
-    keep = (
-        "product_type", "summary", "confidence", "facts", "route", "costs",
-        "questions", "assumptions", "matched_example_ids", "understood_changes",
-        "catalog_intent", "psodin_calculation",
-    )
-    lean = {key: current[key] for key in keep if key in current}
-    selection = current.get("catalog_selection")
-    if isinstance(selection, dict):
-        lean["catalog_selection"] = {
-            key: selection.get(key) for key in ("name", "article", "price", "fit", "supplier_name")
-        }
-    return lean
-
-
-def _example_route_for_prompt(route):
-    """Confirmed example route stripped to its transferable rule.
-
-    The full route carries the previous product card, its search plan and the
-    prose calculation trace — thousands of tokens the model does not need to
-    recognise a pattern. The backend still reads the untrimmed example for
-    psodin settings once matched_example_ids points at it.
-    """
-    if not isinstance(route, dict):
-        return {}
-    costs = route.get("costs") if isinstance(route.get("costs"), list) else []
-    return {
-        "name": route.get("name", ""),
-        "reason": _cell_text(route.get("reason"))[:300],
-        "processes": [
-            {"name": value.get("name"), "details": value.get("details", [])[:3]}
-            for value in route.get("processes", []) if isinstance(value, dict)
-        ] if isinstance(route.get("processes"), list) else route.get("steps", []),
-        "costs": [
-            {key: value.get(key) for key in ("category", "process_name", "name", "amount_total", "basis", "recipe")}
-            for value in costs if isinstance(value, dict)
-        ],
-        "psodin_calculation": route.get("psodin_calculation") or {},
-    }
-
 
 _PROCUREMENT_TAIL_RE = re.compile(
     r"\s+с\s+(фирменной\s+)?символикой\b.*|\s+с\s+логотипом\b.*|\s+с\s+нанесением\b.*|\s+для\s+вручения\b.*",
@@ -3259,295 +2506,173 @@ def _catalog_intent_from_requirements(line):
     return _normalize_catalog_intent({"item": name[:200], "categories": [name[:200]] if name else [], "required": required})
 
 
-def _build_hypothesis_backend_only(line, progress_callback=None):
-    """Diagnostic bypass, no LLM call at all — set ASSISTANT_NO_LLM=1. Route
-    is assumed to always be "закупка готового изделия + нанесение";
-    catalog_intent comes straight from the recognised ТЗ; no shortlist
-    review. Exists to verify the backend search+filter alone is fast,
-    brick by brick, before any LLM step is re-added on top."""
+def _build_search_plan(line, rules=()):
+    """The one LLM call left in product search: turn a messy tender position
+    name into a clean item + a few search phrases, the way a person would
+    type into a supplier's own search box — not a route, not a catalog DSL,
+    nothing else. Kept deliberately tiny (no images, no card dumps) so it
+    stays fast: measured 0.5-2s per call against this gateway. Applies
+    admin-given search rules (add/remove words or categories) literally."""
+    name = _cell_text(line.get("name"))[:300] if isinstance(line, dict) else ""
+    requirements = line.get("requirements") if isinstance(line, dict) else None
+    if isinstance(requirements, dict):
+        requirements = requirements.get("requirements")
+    req_lines = [
+        f"{_cell_text(value.get('label'))}: {_cell_text(value.get('value'))}"
+        for value in (requirements if isinstance(requirements, list) else [])
+        if isinstance(value, dict) and _cell_text(value.get("label")) and _cell_text(value.get("value"))
+    ][:12]
+    rules_block = ""
+    if rules:
+        rules_block = "\nПравила администратора (применяй буквально, даже если они меняют смысл):\n" + "\n".join(
+            f"- {_cell_text(rule.get('text'))[:200]}" for rule in rules if isinstance(rule, dict) and _cell_text(rule.get("text"))
+        )
+    prompt = f"""Название позиции тендера почти всегда содержит канцелярские обороты. Убери их и дай короткое название товара и несколько поисковых фраз — как их вбил бы человек в поиск на сайте поставщика (gifts.ru, oasiscatalog.com).
+
+Название позиции: {name}
+Характеристики из ТЗ: {'; '.join(req_lines) or 'нет'}
+{rules_block}
+
+Правила:
+- item — 1-3 слова, конкретный товар. Убирай «с логотипом», «с символикой Х», «услуги по изготовлению и поставке» и подобное. Не заменяй конкретный вид товара более общим словом.
+- queries — 2-4 коротких поисковых фразы: сам item и синонимы/альтернативные названия того же товара (например «майка» → «футболка»), без характеристик и без канцелярских оборотов.
+- Не выдумывай характеристики и не добавляй их в queries.
+
+Верни только JSON: {{"item":"...","queries":["..."]}}"""
+    result, usage = _ai_gateway_json(prompt, max_tokens=250, timeout=20, network_attempts=2)
+    item = _cell_text(result.get("item"))[:100] if isinstance(result, dict) else ""
+    queries = [
+        _cell_text(value)[:150] for value in (result.get("queries") if isinstance(result, dict) and isinstance(result.get("queries"), list) else [])
+        if _cell_text(value)
+    ][:5]
+    if not item:
+        item = _strip_procurement_boilerplate(name) or name
+    return {"item": item, "queries": queries}, usage
+
+
+def _global_search_rules():
+    """Permanent rules the admin promoted with "Подтвердить и обучить" —
+    applied to every search, not just the session that created them."""
+    from .models import CatalogSearchRule
+    return [
+        {"id": f"g{row.pk}", "text": row.text, "label": row.text[:60], "source_phrase": row.source_phrase}
+        for row in CatalogSearchRule.objects.filter(is_active=True).order_by("-created_at")[:50]
+    ]
+
+
+def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, search_rules_override=None):
+    """Product search, rebuilt from scratch as five small, separately
+    testable steps (see docs/assistant_protocol.md):
+    1. ТЗ recognition already ran before this is called (document upload).
+    2. Route — hardcoded while search is the thing being perfected. No LLM,
+       no maybe-wrong guess: every position is "закупка готового изделия +
+       нанесение" until this comes back as its own brick.
+    3. One tiny LLM call (_build_search_plan): messy position name -> clean
+       item + a few search phrases, the way a person would type into a
+       supplier's own search box. Applies admin search rules literally.
+    4. Backend search (catalog.catalog_candidates_for_line) — unchanged,
+       no LLM, already tuned to answer in a few seconds.
+    5. No reviewer. The admin is the reviewer: feedback becomes named,
+       removable "search rule" chips (session-scoped) that a green
+       "Подтвердить и обучить" click promotes to permanent + global.
+    """
     started_at = time.perf_counter()
-    from .catalog import catalog_candidates_for_line
+    from .catalog import CatalogSyncError, catalog_candidates_for_line
 
     if progress_callback:
+        progress_callback("cases")
+    current_intent = current.get("catalog_intent") if isinstance(current, dict) and isinstance(current.get("catalog_intent"), dict) else {}
+
+    # Step 5 (rule bookkeeping): session rules carried from the current
+    # hypothesis, minus whatever the UI just cleared with ×, plus whatever
+    # this feedback phrase adds. Global (permanently confirmed) rules are
+    # kept separate and always included in the search-plan call below.
+    new_rules, feedback_usage = ([], {})
+    if feedback:
+        new_rules, feedback_usage = _translate_search_feedback(line, feedback, current_rules=_search_rules(current_intent.get("search_rules")))
+    if search_rules_override is not None:
+        session_rules = _search_rules(search_rules_override)
+    else:
+        session_rules = _search_rules([*_search_rules(current_intent.get("search_rules")), *new_rules])
+    global_rules = _global_search_rules()
+
+    # Step 3: the one LLM call.
+    if progress_callback:
+        progress_callback("ai")
+    ai_started_at = time.perf_counter()
+    plan, plan_usage = _build_search_plan(line, rules=[*global_rules, *session_rules])
+    ai_seconds = round(time.perf_counter() - ai_started_at, 3)
+    usage = {
+        "prompt_tokens": (plan_usage.get("prompt_tokens", 0) or 0) + (feedback_usage.get("prompt_tokens", 0) or 0),
+        "completion_tokens": (plan_usage.get("completion_tokens", 0) or 0) + (feedback_usage.get("completion_tokens", 0) or 0),
+    }
+    base_intent = _catalog_intent_from_requirements(line)
+    catalog_intent = _normalize_catalog_intent({
+        "item": plan.get("item") or base_intent.get("item", ""),
+        "categories": [plan.get("item")] if plan.get("item") else base_intent.get("categories", []),
+        "synonyms": plan.get("queries", []),
+        "required": base_intent.get("required", []),
+    })
+    catalog_intent["search_rules"] = session_rules
+
+    # Step 2: route, hardcoded for now.
+    route = {
+        "name": "Закупка готового изделия + Нанесение",
+        "steps": ["Закупка готового изделия", "Нанесение"],
+        "reason": "Маршрут временно не анализируется (идёт настройка поиска) — принят по умолчанию.",
+    }
+
+    # Step 4: backend search, no LLM, no reviewer.
+    if progress_callback:
         progress_callback("catalog")
-    catalog_intent = _catalog_intent_from_requirements(line)
     catalog_started_at = time.perf_counter()
-    outcome = _catalog_search_outcome(catalog_candidates_for_line(
-        line, limit=10, intent=catalog_intent, include_diagnostics=True,
-    ))
+    catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": []}
+    catalog_warning = ""
+    try:
+        catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
+            line, limit=10, intent=catalog_intent, include_diagnostics=True,
+        ))
+    except CatalogSyncError as exc:
+        catalog_warning = str(exc)[:300]
+    except Exception:
+        logger.exception("Unexpected catalog failure while building a training hypothesis")
+        catalog_warning = "Не удалось проверить каталог. Попробуйте ещё раз."
     catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
+    catalog_candidates = catalog_outcome["candidates"]
+
     if progress_callback:
         progress_callback("finalizing")
+
     hypothesis = {
         "stage": "training_dialogue",
-        "product_type": "no_llm_diagnostic",
+        "product_type": "",
         "summary": _cell_text(line.get("name")),
         "confidence": 1.0,
         "facts": [],
-        "route": {
-            "name": "Закупка готового изделия + нанесение",
-            "steps": ["Закупка готового изделия", "Нанесение"],
-            "reason": "Диагностический режим без ИИ (ASSISTANT_NO_LLM=1): маршрут не проверяется, принят по умолчанию.",
-        },
-        "costs": [], "questions": [],
-        "assumptions": ["ИИ отключён для эксперимента — маршрут не анализировался, использован маршрут по умолчанию."],
-        "matched_example_ids": [], "understood_changes": [],
+        "route": route,
+        "costs": [],
+        "questions": [],
+        "assumptions": ["Маршрут временно принят по умолчанию — идёт настройка поиска."],
+        "matched_example_ids": [],
+        "understood_changes": [_cell_text(rule.get("text")) for rule in new_rules] if new_rules else [],
         "catalog_intent": catalog_intent,
-        "catalog_operations_applied": [], "catalog_contract_errors": [],
-        "catalog_candidates": outcome["candidates"],
-        "catalog_sources": outcome["sources"],
-        "catalog_attempts": outcome["attempts"],
-        "catalog_review": {"reviewed": 0, "kept": len(outcome["candidates"]), "llm": False, "skipped": "no_llm_diagnostic"},
-        "catalog_review_rules": [],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
-        "timings": {"ai_seconds": 0, "catalog_seconds": catalog_seconds, "total_seconds": round(time.perf_counter() - started_at, 3)},
+        "catalog_operations_applied": [],
+        "catalog_contract_errors": [],
+        "catalog_candidates": catalog_candidates,
+        "catalog_sources": catalog_outcome["sources"],
+        "catalog_attempts": catalog_outcome["attempts"],
+        "catalog_search_rules": session_rules,
+        "catalog_search_rules_global": global_rules,
+        "usage": usage,
+        "timings": {"ai_seconds": ai_seconds, "catalog_seconds": catalog_seconds, "total_seconds": round(time.perf_counter() - started_at, 3)},
         "production_types": [],
     }
-    return _attach_memory_preview(hypothesis)
-
-
-def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, review_rules_override=None):
-    if os.getenv("ASSISTANT_NO_LLM", "").strip() == "1":
-        return _build_hypothesis_backend_only(line, progress_callback=progress_callback)
-    started_at = time.perf_counter()
-    if progress_callback:
-        progress_callback("cases")
-    from .models import ProductionType
-    from .catalog import CatalogSyncError, catalog_candidates_for_line, catalog_source_capabilities
-
-    production_types = list(ProductionType.objects.filter(is_active=True))
-    examples = _training_examples_for_line(line)
-    knowledge_sources = _knowledge_sources_for_line(line)
-    # A revision refines a plan that already committed to its matched examples;
-    # re-sending the other ten only inflates the prompt.
-    prior_matched = set(current.get("matched_example_ids", [])) if isinstance(current, dict) else set()
-    if feedback and prior_matched:
-        examples = [value for value in examples if value.pk in prior_matched] or examples[:3]
-    example_payload = [{
-        "id": value.pk,
-        "position": value.position_name,
-        "type": value.production_type.code,
-        "features": value.features,
-        "approved_route": _example_route_for_prompt(value.routes[0] if value.routes else {}),
-    } for value in examples]
-    schema = '{"product_type":"digital_sheet","summary":"как понята позиция","confidence":0.5,"facts":["факт"],"route":{"reason":"почему выбран маршрут","processes":[{"name":"Закупка материала","details":["операции и характеристики внутри процесса"]}]},"costs":[{"process_name":"Закупка материала","category":"material|application|logistics","name":"статья расхода","amount_total":0,"source":"точное название справочника, расчёта, поставщика или записи истории","source_type":"calculator|catalog|supplier|history|manager","source_url":"https://... или пусто","source_date":"дата цены или пусто","basis":"краткая итоговая формула","recipe":{"method":"sheet_yield|unit_rate|fixed|history_scaled|none","inputs":{"unit_price":380,"units_per_sheet":4,"waste_percent":5},"modifiers":[{"type":"discount_percent|markup_percent|add_fixed|subtract_fixed","value":15}]},"calculation_steps":["исходный формат и цена","выход изделий с листа","число листов с браком","арифметика стоимости"],"adaptation":"как исходная цена адаптирована к текущему формату, тиражу и условиям","confirmed":false}],"questions":["только критичный вопрос"],"assumptions":["допущение"],"matched_example_ids":[1],"understood_changes":["как понята обратная связь"]}'
-    schema = schema[:-1] + ',"psodin_calculation":{"requested":false,"calculator":"sheet","scope":"labour_only","process_name":"Работа PSODIN","productivity_per_hour":10,"tariff":"standard|regular|partner|urgent"}}'
-    schema = schema[:-1] + ',"catalog_intent":{"item":"цельная товарная сущность без характеристик, например рубашка поло","product_class":"общее название класса товара","categories":["только смысловые подсказки, не реальные категории поставщика"],"synonyms":["семантически равнозначное название"],"required":[{"label":"обязательная характеристика","value":"значение"}],"preferred":[{"label":"желательная характеристика","value":"значение"}],"constraints":[{"field":"gender|material|color|price|stock|любое поле атрибута","operator":"in|not_in|contains|not_contains|lte|gte|between|exists","values":["каноническое значение"],"level":"required|preferred","missing_policy":"reject|allow|allow_with_penalty"}],"search_fields":["name","category","attributes"],"fallback_queries":[{"terms":["равнозначное название товара"],"relaxable":false}],"source_strategy":[{"source":"oasis|gifts","category_terms":["смысловая подсказка"],"query_terms":["цельная товарная сущность или синоним"],"search_fields":["поля источника"]}],"hard_constraints":["обратная совместимость"],"preferences":["обратная совместимость"]}}'
-    schema = schema[:-1] + ',"catalog_operations":[{"op":"allow|forbid|require|prefer|deprioritize|ignore|add_alias|remove_alias|set_missing_policy|lte|gte|between|source_only|set_scope|remove_rule","field":"поле, если нужно","values":["значение"],"value":"одно значение или missing policy"}]}'
-    catalog_capabilities = catalog_source_capabilities()
-    catalog_contract = catalog_feedback_contract()
-    prompt = f"""Ты — ассистент администратора по расчёту тендеров. Предложи ровно ОДИН наиболее вероятный маршрут и его калькуляцию. Не строй дерево и не дроби производство на мелкие физические операции: шаг маршрута — крупный самостоятельно заказываемый блок (например, готовое изделие, нанесение, изготовление под ключ).
-Маршрут описывай универсальными процессами по 2–5 слов: «Закупка материала», «Универсальная типография», «Закупка готового изделия», «Нанесение». Не включай в название процесса конкретный продукт, тираж, материал или перечень операций. Конкретные резку, биговку, печать, тиснение и характеристики перечисляй в details процесса. Логистика и другие дополнительные расходы не являются процессом маршрута, если администратор явно не сказал обратное.
-«Закупка материала» используй только когда материал покупается отдельно и затем передаётся следующему исполнителю. Если один исполнитель сам предоставляет материал и выполняет весь заказ, это один производственный процесс «Цифровая типография под ключ», «Универсальная типография под ключ», «Швейное производство под ключ» и т. п. Не называй изготовление под ключ закупкой материала. Свой или сторонний исполнитель — атрибут конкретного предложения и источника цены, а не название процесса.
-Процесс «Закупка готового изделия» добавляй в маршрут, только когда действительно нужен готовый бланковый сувенирный или промо-товар (как есть или под нанесение). Маршрут может быть смешанным: закупка готового изделия + нанесение у подрядчика + упаковка в типографии и т. п.
-Не выдумывай цены. В costs добавляй только цену, явно указанную в подтверждённых примерах, текущей гипотезе или обратной связи администратора. amount_total — сумма статьи на весь тираж. Если цены нет, оставь её вопросом, а не нулевой выдуманной статьёй.
-Для каждой статьи costs дай проверяемый след расчёта. В source укажи конкретный источник, в basis — итоговую формулу, а в calculation_steps — максимально подробную арифметику по шагам: исходную единицу и цену, раскладку/выход, требуемое количество с отходами, операции, скидки и итог. В adaptation объясни, как цена источника приведена к текущему тиражу, формату и характеристикам. Для калькулятора перечисли материалы и операции отдельно. Для истории или поставщика укажи исходный кейс/товар и все коэффициенты пересчёта. Не придумывай отсутствующие детали: если подробного основания нет, прямо напиши это в adaptation и задай вопрос администратору.
-Если переносишь опыт подтверждённого примера, переноси его ПРАВИЛО и заново подставляй текущие параметры, а не копируй готовую сумму. Для воспроизводимых правил заполняй recipe: sheet_yield использует unit_price, units_per_sheet и waste_percent; unit_rate — unit_rate; fixed — fixed_amount; history_scaled — base_total и base_quantity. Скидки, наценки и фиксированные поправки передавай только в recipe.modifiers в порядке применения. Никогда не меняй amount_total самостоятельно из-за скидки: сервер пересчитает сумму и сам сформирует объяснение. amount_total должен соответствовать recipe.
-Значения material_unit, application_unit и logistics_unit в ПОЗИЦИИ — ручные поля текущего расчёта, а не факты из ТЗ. Если используешь их, source_type=manager и source="Введено администратором". Нельзя писать «дано в ТЗ», если цена не находится внутри requirements с явным source.
-Подтверждённые примеры важнее общих предположений. matched_example_ids указывай только для действительно похожих примеров. Без подтверждённого близкого примера confidence не выше 0.55.
-ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ — это кандидаты цен и предложений, а не готовый ответ. Используй только источник, характеристики которого подходят текущей позиции. В source пиши поставщика и название источника, в source_url — его ссылку. Если условия нельзя надёжно адаптировать, задай вопрос вместо выдумывания цены.
-Если передана ОБРАТНАЯ СВЯЗЬ, обнови производственную часть гипотезы и запиши в understood_changes краткий структурированный список того, что изменил. Каталожный план целиком не переписывай: переведи каждое изменение поиска в catalog_operations по переданному контракту. Не повторяй закрытые вопросы. Найденные в ТЗ факты не спрашивай повторно.
-Калькулятор PSODIN реально доступен на бэкенде. Если администратор явно сказал, что работу делает PSODIN, заполни psodin_calculation. Не считай часы, скидку и сумму: это сделает бэкенд. Передай только явно названную администратором производительность в штуках в час и тариф. Не добавляй работу PSODIN в costs: сервер добавит её сам.
-Для поиска готового товара заполни catalog_intent как смысловой план, но не придумывай реальные категории поставщиков: после твоего ответа бэкенд отдельно найдёт их в актуальных деревьях Oasis и Gifts и даст тебе выбрать существующие ID. Прочитай полный заголовок и требования как менеджер по закупкам.
-item — самое короткое узнаваемое название товара из 1–3 слов, как его назвал бы закупщик: «бафф», «планинг», «шарф», «рубашка поло». НЕ переписывай в item описательную формулировку из ТЗ («многофункциональная тканевая труба») и НЕ заменяй конкретный вид более общим («ежедневник» вместо «планинг», «одежда» вместо «поло»). Описательную фразу из ТЗ, подтип и равнозначные названия положи в synonyms. Общее родительское понятие — только в product_class или categories как подсказку.
-В constraints кладут только атрибуты товара (цвет, материал, пол, плотность, размер, цена, остаток). Сам вид товара в constraints не дублируй — он уже в item.
-Раздели требования на два уровня: required — то, что описывает искомый товар, preferred — дополнительные пожелания. Числовые веса не проставляй: бэкенд ранжирует по количеству совпадений, а не по весам. Наличие полного тиража делай обязательным только когда из ТЗ или обратной связи следует, что частичная поставка или ожидание недопустимы.
-При первой гипотезе заполни полный catalog_intent. Разрешения, запреты, числовые границы и политику отсутствующего значения записывай в constraints, а не одной фразой с отрицанием.
-Цвет, материал, пол и другие свойства самого товара всегда записывай положительно: `color in [нужный цвет]`, а не `not_in`. `not_in` используй только когда в ТЗ явно сказано «кроме», «исключить», «не предлагать». Если в ТЗ несколько цветов, различай: цвет изделия — это требование к товару, а цвета логотипов, принтов и нанесения из блока «Нанесение/Печать» — это не свойства товара, в constraints их не клади. При обратной связи используй только catalog_operations: forbid для «исключить/не показывать/убрать», allow для допустимых значений, require/prefer для обязательного/желательного, ignore для неважного, deprioritize для понижения в preferred, add_alias/remove_alias для поисковых названий, set_missing_policy для неизвестного значения, lte/gte/between для границ, source_only для единственного разрешённого поставщика, set_scope для области применения правила, remove_rule для отмены. Никогда не помещай запрещённое значение в положительное required.
-Подтверждённые catalog_intent из похожих примеров используй как опыт, но не как глобальное правило: переноси их только когда условия действительно похожи.
-В source_strategy используй только источники oasis и gifts. Если источник не подходит, не придумывай другой код. fallback_queries разрешены только для повторного поиска; relaxable=true ставь только для необязательных ограничений. Не подбирай артикулы, не создавай расходы с source_type=catalog, не сравнивай числа, цены и остатки и ничего не рассчитывай — актуальный товар и каталожную цену добавит только бэкенд.
-Верни только JSON: {schema}
-
-ПОЗИЦИЯ:
-{json.dumps(line, ensure_ascii=False)}
-
-ТЕКУЩАЯ ГИПОТЕЗА:
-{json.dumps(_lean_current_for_prompt(current), ensure_ascii=False)}
-
-ОБРАТНАЯ СВЯЗЬ АДМИНИСТРАТОРА:
-{feedback or 'нет — это первая гипотеза'}
-
-ТИПЫ ПРОДУКЦИИ:
-{json.dumps([{"code": value.code, "name": value.name, "description": value.description} for value in production_types], ensure_ascii=False)}
-
-ПОДТВЕРЖДЁННЫЕ ПРИМЕРЫ:
-{json.dumps(example_payload, ensure_ascii=False)}
-
-ПРОВЕРЕННЫЕ ИСТОЧНИКИ ИЗ БАЗЫ:
-{json.dumps(knowledge_sources, ensure_ascii=False)}
-
-ВОЗМОЖНОСТИ КАТАЛОГОВ:
-{json.dumps(catalog_capabilities, ensure_ascii=False)}
-
-КОНТРАКТ КОМАНД КАТАЛОГА:
-{json.dumps(catalog_contract, ensure_ascii=False)}"""
-    ai_started_at = time.perf_counter()
-    if progress_callback:
-        progress_callback("ai")
-    result, usage = _ai_gateway_json(prompt, max_tokens=3600, timeout=60, network_attempts=2)
-    ai_seconds = round(time.perf_counter() - ai_started_at, 3)
-    valid_ids = {value.pk for value in examples}
-    matched_ids = []
-    for value in result.get("matched_example_ids", []) if isinstance(result.get("matched_example_ids"), list) else []:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            continue
-        if value in valid_ids:
-            matched_ids.append(value)
-    unverified_catalog_costs = []
-    normalization_result = result
-    has_current_catalog_selection = isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict)
-    if not has_current_catalog_selection and isinstance(result.get("costs"), list):
-        unverified_catalog_costs = [
-            value for value in result["costs"]
-            if isinstance(value, dict) and value.get("source_type") == "catalog"
-        ]
-        if unverified_catalog_costs:
-            normalization_result = {
-                **result,
-                "costs": [
-                    value for value in result["costs"]
-                    if not (isinstance(value, dict) and value.get("source_type") == "catalog")
-                ],
-            }
-    hypothesis = _normalize_training_hypothesis(normalization_result, line, production_types, matched_ids)
-    if unverified_catalog_costs:
-        hypothesis["learning_warnings"] = [
-            *hypothesis.get("learning_warnings", []),
-            "Каталожная цена из ответа LLM исключена: она не подтверждена текущим поиском.",
-        ]
-    confirmed_psodin = next((
-        route.get("psodin_calculation")
-        for example in examples if example.pk in matched_ids
-        for route in example.routes[:1] if isinstance(route, dict) and isinstance(route.get("psodin_calculation"), dict)
-    ), None)
-    hypothesis = _apply_psodin_calculation(hypothesis, result, line, current=current, feedback=feedback, confirmed=confirmed_psodin)
-    raw_intent = result.get("catalog_intent") if isinstance(result.get("catalog_intent"), dict) else {}
-    raw_operations = result.get("catalog_operations") if isinstance(result.get("catalog_operations"), list) else []
-    current_intent = current.get("catalog_intent") if isinstance(current, dict) and isinstance(current.get("catalog_intent"), dict) else {}
-    new_review_rules = []
-    if feedback:
-        # Always translate the phrase: it yields both structured operations and
-        # admin-visible shortlist-review rules ("не предлагай детские" → rule).
-        translated_operations, new_review_rules, translation_usage, translation_errors = _translate_catalog_feedback(line, current_intent, feedback)
-        operations_to_apply = raw_operations or translated_operations
-        if operations_to_apply:
-            catalog_intent, applied_operations, operation_errors = _apply_catalog_operations(current_intent, operations_to_apply)
-        else:
-            catalog_intent, applied_operations, operation_errors = _normalize_catalog_intent(current_intent, preserve_internal=True), [], []
-        contract_errors = [error for error in [*translation_errors, *operation_errors] if not (raw_operations and error in translation_errors)]
-        usage["prompt_tokens"] = (usage.get("prompt_tokens", 0) or 0) + (translation_usage.get("prompt_tokens", 0) or 0)
-        usage["completion_tokens"] = (usage.get("completion_tokens", 0) or 0) + (translation_usage.get("completion_tokens", 0) or 0)
-    else:
-        catalog_intent = _normalize_catalog_intent(raw_intent)
-        applied_operations, contract_errors = [], []
-    # Admin-visible shortlist-review rules. An explicit override (the UI cleared a
-    # rule with ×) wins; otherwise carry forward what is on the current hypothesis
-    # and add the ones this feedback produced.
-    if review_rules_override is not None:
-        catalog_intent["review_rules"] = _catalog_review_rules(review_rules_override)
-    else:
-        catalog_intent["review_rules"] = _catalog_review_rules([
-            *_catalog_review_rules(current_intent.get("review_rules")),
-            *new_review_rules,
-        ])
-    invalid_strategy_sources = sorted({
-        _cell_text(value.get("source"))[:80]
-        for value in raw_intent.get("source_strategy", [])
-        if isinstance(value, dict) and _normalized_text(value.get("source")) not in {"oasis", "gifts"}
-        and _cell_text(value.get("source"))
-    }) if isinstance(raw_intent.get("source_strategy"), list) else []
-    if invalid_strategy_sources:
-        contract_errors.append(
-            "Неподдерживаемые источники поиска отброшены: " + ", ".join(invalid_strategy_sources)
-        )
-    def _search_catalog():
-        # Step 1 — backend: plain catalogue lookup by name + synonyms, then cheap
-        # objective gates (stock, blatant type, colour family). No LLM. Produces a
-        # shortlist of ~40.
-        outcome = _catalog_search_outcome(catalog_candidates_for_line(
-            line, limit=16, intent=catalog_intent, include_diagnostics=True,
-        ))
-        shortlist = outcome.get("candidates", [])
-        if not shortlist:
-            outcome["review"] = {"reviewed": 0, "kept": 0}
-            return outcome
-        # Step 2 — one LLM pass: keep/drop each card like a procurement specialist
-        # and give a verdict per ТЗ point. Step 3 — backend re-sorts by price.
-        if progress_callback:
-            progress_callback("review")
-        review_rules = [
-            _cell_text(rule.get("text"))
-            for rule in catalog_intent.get("review_rules", []) if isinstance(rule, dict) and _cell_text(rule.get("text"))
-        ]
-        reviewed, review_usage, review_diag = _review_catalog_shortlist(
-            line, catalog_intent, shortlist, extra_rules=review_rules,
-        )
-        outcome["candidates"] = reviewed[:10]
-        outcome["review"] = review_diag
-        if isinstance(review_usage, dict):
-            usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + review_usage.get("prompt_tokens", 0)
-            usage["completion_tokens"] = usage.get("completion_tokens", 0) + review_usage.get("completion_tokens", 0)
-        return outcome
-
-    catalog_started_at = time.perf_counter()
-    # The catalogues only matter when the route actually buys a finished blank
-    # item. A mixed route (finished good + printing + packaging) still qualifies;
-    # a pure polygraphy or turnkey route does not.
-    route_buys_finished_good = "Закупка готового изделия" in hypothesis.get("route", {}).get("steps", [])
-    catalog_candidates = []
-    catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": [], "review": {}}
-    if not route_buys_finished_good:
-        hypothesis["catalog_skipped"] = "route_has_no_finished_good"
-    else:
-        if progress_callback:
-            progress_callback("catalog")
-        try:
-            catalog_outcome = _search_catalog()
-            catalog_candidates = catalog_outcome["candidates"]
-        except CatalogSyncError as exc:
-            hypothesis["catalog_warning"] = str(exc)[:300]
-        except Exception:
-            logger.exception("Unexpected catalog failure while building a training hypothesis")
-            hypothesis["catalog_warning"] = "Не удалось проверить каталог Oasis. Маршрут сохранён без цены поставщика."
-    catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
-    hypothesis["catalog_intent"] = catalog_intent
-    hypothesis["catalog_operations_applied"] = applied_operations
-    hypothesis["catalog_contract_errors"] = contract_errors
-    if contract_errors:
-        hypothesis["catalog_warning"] = "Не все команды обратной связи применены: " + " ".join(contract_errors[:3])
-        hypothesis["learning_warnings"] = [
-            *hypothesis.get("learning_warnings", []),
-            "Исправьте неприменённые команды каталога перед подтверждением обучения.",
-        ]
-    hypothesis["catalog_candidates"] = catalog_candidates
-    hypothesis["catalog_sources"] = catalog_outcome["sources"]
-    hypothesis["catalog_attempts"] = catalog_outcome["attempts"]
-    hypothesis["catalog_review"] = catalog_outcome.get("review", {})
-    hypothesis["catalog_review_rules"] = catalog_intent.get("review_rules", [])
-    failed_sources = [
-        f"{code}: {value.get('message')}"
-        for code, value in catalog_outcome["sources"].items()
-        if isinstance(value, dict) and value.get("status") in {"failed", "not_configured"} and value.get("message")
-    ]
-    if failed_sources:
-        hypothesis["catalog_warning"] = "Не все каталоги доступны. " + " ".join(failed_sources[:3])
+    if catalog_warning:
+        hypothesis["catalog_warning"] = catalog_warning
     if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
         selected_id = current["catalog_selection"].get("id")
         if any(value.get("id") == selected_id and value.get("fit") == "exact" for value in catalog_candidates):
             hypothesis["catalog_selection"] = current["catalog_selection"]
-    if isinstance(current, dict) and isinstance(current.get("sources"), list):
-        hypothesis["sources"] = current["sources"][:20]
-    hypothesis["usage"] = {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)}
-    hypothesis["timings"] = {
-        "ai_seconds": ai_seconds,
-        "catalog_seconds": catalog_seconds,
-        "total_seconds": round(time.perf_counter() - started_at, 3),
-    }
-    hypothesis["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
-    if progress_callback:
-        progress_callback("finalizing")
     # A fully matching live offer is an executable backend price source, not
     # merely a visual suggestion. Apply it immediately so the displayed total
     # and the tender material field cannot remain zero while showing a product.
@@ -3564,8 +2689,6 @@ item — самое короткое узнаваемое название то�
         if preserved_warning:
             hypothesis["catalog_warning"] = preserved_warning
     return _attach_memory_preview(hypothesis)
-
-
 def apply_catalog_candidate(hypothesis, line, product_id):
     from .models import ProductionType
 
@@ -3637,7 +2760,7 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     if isinstance(hypothesis, dict) and isinstance(hypothesis.get("catalog_intent"), dict):
         normalized["catalog_intent"] = hypothesis["catalog_intent"]
-    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors", "catalog_review", "catalog_review_rules"):
+    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors", "catalog_search_rules", "catalog_search_rules_global", "timings", "usage"):
         if isinstance(hypothesis, dict) and key in hypothesis:
             normalized[key] = hypothesis[key]
     existing_sources = hypothesis.get("sources", []) if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list) else []
@@ -3660,176 +2783,6 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     if isinstance(hypothesis, dict) and hypothesis.get("catalog_warning"):
         normalized["catalog_warning"] = _cell_text(hypothesis.get("catalog_warning"))[:300]
     return _attach_memory_preview(normalized)
-
-
-def analyze_production_route(line):
-    from calculator.models import PriceItem
-
-    items = list(PriceItem.objects.filter(is_active=True).select_related("base_item", "production_rule"))
-    catalog = [
-        {"id": item.pk, "category": item.category, "name": item.name, "aliases": item.aliases, "unit": item.unit_name, "price": str(item.effective_unit_price)}
-        for item in items
-    ]
-    schema = '{"product_class":"тип продукции","source_candidates":[{"source":"psodin_sheet|psodin_canon|supplier_price|supplier_api|history|white_site|open_web|manager","title":"название источника","priority":1,"fit":"high|medium|low","reason":"почему"}],"selected_source":"psodin_sheet|psodin_canon|supplier_price|supplier_api|history|white_site|open_web|manager|unknown","calculator":"sheet|canon|none","route":"internal|hybrid|outsourcing|unknown","confidence":0.8,"reason":"почему выбран источник","components":[{"name":"Компонент","source":"internal|outsourcing|unknown","source_reason":"почему","kind":"sheet|operation|material","finished_width_mm":148,"finished_height_mm":210,"units_per_product":60,"material_query":"офсетная бумага","grammage_gsm":80,"print_required":false,"bleed_mm":0,"operation_item_ids":[]}],"questions":[],"warnings":[]}'
-    prompt = f"""Подбери источники коммерческого предложения для позиции. Цель — найти наиболее выгодный надёжный вариант, а не обязательно изготовить изделие у нас.
-
-Сначала классифицируй изделие, затем составь source_candidates в порядке полезности:
-1) точный загруженный прайс или специализированный калькулятор;
-2) подтверждённая история расчётов;
-3) API поставщика;
-4) проверенные сайты поставщиков;
-5) открытый интернет;
-6) уточнение у менеджера.
-Перечисляй только реально подходящие источники. Не придумывай наличие цены или интеграции.
-
-«Печатный салон №1 · psodin.ru» — один обычный подрядчик среди остальных:
-- psodin_sheet подходит только для цифровой листовой печати и постпечатки, когда изделие технологически укладывается в лист SRA3; типичные признаки — небольшой тираж, листовая полиграфия без сложной фигурной вырубки и сборки;
-- psodin_canon подходит только для широкоформатной рулонной печати;
-- пакет, твёрдый переплёт, сложная фигурная вырубка, офсетный/промышленный тираж или готовый сувенир нельзя уверенно отправлять в psodin_sheet только потому, что в описании есть бумага или печать.
-Если признаков недостаточно, selected_source=manager или unknown, calculator=none и задай один короткий вопрос, который поможет выбрать источник.
-
-Компоненты и детальный расчёт по каталогу создавай только если selected_source=psodin_sheet или psodin_canon. Для листового компонента укажи чистовой размер и количество листов/заготовок на конечное изделие. Не подменяй формат готового изделия форматом исходного листа.
-Если материал или операция отсутствуют в каталоге, не выбирай похожее молча: сохрани описание и добавь короткий вопрос. operation_item_ids может содержать только существующие ID из каталога.
-В позиции могут быть manager_answers — ответы опытного менеджера. Они приоритетны: примени их и не повторяй уже закрытый вопрос. Ответ может быть названием позиции каталога, ссылкой или свободным описанием цены и параметров.
-Не рассчитывай раскладку и стоимость — это сделает программа детерминированно.
-Верни только JSON строго такого вида: {schema}
-
-ПОЗИЦИЯ:
-{json.dumps(line, ensure_ascii=False)}
-
-НАШ КАТАЛОГ МАТЕРИАЛОВ И ОПЕРАЦИЙ:
-{json.dumps(catalog, ensure_ascii=False)}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=3200)
-    route = result.get("route") if result.get("route") in {"internal", "hybrid", "outsourcing", "unknown"} else "unknown"
-    calculator = result.get("calculator") if result.get("calculator") in {"sheet", "canon", "none"} else "none"
-    valid_sources = {"psodin_sheet", "psodin_canon", "supplier_price", "supplier_api", "history", "white_site", "open_web", "manager", "unknown"}
-    selected_source = result.get("selected_source") if result.get("selected_source") in valid_sources else ({"sheet": "psodin_sheet", "canon": "psodin_canon"}.get(calculator, "unknown"))
-    if selected_source not in {"psodin_sheet", "psodin_canon"}:
-        calculator = "none"
-    try:
-        confidence = max(0, min(1, float(result.get("confidence", 0))))
-    except (TypeError, ValueError):
-        confidence = 0
-    paper_items = [item for item in items if item.category == PriceItem.CATEGORY_PAPER]
-    components = []
-    for raw in result.get("components", [])[:20]:
-        if not isinstance(raw, dict):
-            continue
-        component = {
-            "name": _cell_text(raw.get("name"))[:200] or "Компонент",
-            "source": raw.get("source") if raw.get("source") in {"internal", "outsourcing", "unknown"} else ("internal" if route == "internal" else "unknown"),
-            "source_reason": _cell_text(raw.get("source_reason"))[:300],
-            "kind": raw.get("kind") if raw.get("kind") in {"sheet", "operation", "material"} else "material",
-            "finished_width_mm": raw.get("finished_width_mm"),
-            "finished_height_mm": raw.get("finished_height_mm"),
-            "units_per_product": raw.get("units_per_product"),
-            "material_query": _cell_text(raw.get("material_query"))[:300],
-            "grammage_gsm": raw.get("grammage_gsm"),
-            "print_required": bool(raw.get("print_required")),
-            "bleed_mm": raw.get("bleed_mm") or 0,
-        }
-        valid_ids = []
-        for value in raw.get("operation_item_ids", []) if isinstance(raw.get("operation_item_ids"), list) else []:
-            try:
-                item_id = int(value)
-            except (TypeError, ValueError):
-                continue
-            if any(item.pk == item_id for item in items):
-                valid_ids.append(item_id)
-        component["operations"] = [entry for entry in catalog if entry["id"] in valid_ids]
-        component["paper_candidates"] = _paper_candidates(component, line.get("quantity") or 0, paper_items) if component["kind"] == "sheet" and component["source"] == "internal" else []
-        components.append(component)
-    questions = _short_text_list(result.get("questions"), limit=6)
-    manager_answers = line.get("manager_answers") or line.get("requirements", {}).get("manager_answers") or {}
-    source_text = json.dumps(line, ensure_ascii=False).lower()
-    cost_options = []
-
-    # ИИ предлагает маршрут, но известные операции проверяем по устойчивым
-    # технологическим синонимам. Так «горячее тиснение» не потеряет категорию
-    # калькулятора, которая коротко называется «Тиснение».
-    internal_allowed = selected_source in {"psodin_sheet", "psodin_canon"} and any(component["source"] == "internal" for component in components)
-    if internal_allowed and any(value in source_text for value in ("тиснен", "фольгир", "горячая фольга")):
-        for item in items:
-            if item.category != PriceItem.CATEGORY_EMBOSSING:
-                continue
-            quantity = Decimal("1") if "прилад" in item.name.lower() else Decimal(str(line.get("quantity") or 0))
-            total = quantity * item.effective_unit_price
-            cost_options.append({
-                "group": "embossing",
-                "mode": "required",
-                "catalog_item_id": item.pk,
-                "name": item.name,
-                "calculation": "однократно" if quantity == 1 else f"{quantity} × {item.effective_unit_price} ₽",
-                "total_cost": str(_money(total)),
-            })
-
-    if internal_allowed and "пружин" in source_text:
-        quantity = Decimal(str(line.get("quantity") or 0))
-        finished_edges = []
-        for component in components:
-            try:
-                width = Decimal(str(component.get("finished_width_mm") or 0))
-                height = Decimal(str(component.get("finished_height_mm") or 0))
-            except (InvalidOperation, TypeError, ValueError):
-                continue
-            if width > 0 and height > 0:
-                finished_edges.append(min(width, height))
-        binding_mm = min(finished_edges) if finished_edges else Decimal("0")
-        spring_items = [item for item in items if item.category == PriceItem.CATEGORY_POSTPRESS and "пружин" in item.name.lower()]
-        for item in spring_items:
-            rule = getattr(item, "production_rule", None)
-            if rule and rule.calculation_kind == "linear" and rule.package_quantity > 0 and binding_mm > 0:
-                required_m = binding_mm / Decimal("1000") * quantity * (Decimal("1") + rule.waste_percent / Decimal("100"))
-                packages = math.ceil(required_m / rule.package_quantity)
-                total = Decimal(packages) * item.effective_unit_price
-                calculation = f"{required_m.quantize(Decimal('0.01'))} м → {packages} уп."
-            else:
-                # Текущие позиции каталога заданы отрезками около 30 см.
-                # Показываем геометрический выход, но оставляем подтверждение технологу.
-                pieces_per_segment = max(1, math.floor(Decimal("300") / binding_mm)) if binding_mm else 1
-                segments = math.ceil(quantity / pieces_per_segment)
-                total = Decimal(segments) * item.effective_unit_price
-                calculation = f"{pieces_per_segment} шт. с 30 см · {segments} отрезков"
-            cost_options.append({
-                "group": "spring",
-                "mode": "alternative",
-                "catalog_item_id": item.pk,
-                "name": item.name,
-                "calculation": calculation,
-                "total_cost": str(_money(total)),
-            })
-        spring_answered = any("пружин" in str(question).lower() and str(answer).strip() for question, answer in manager_answers.items())
-        if spring_items and not spring_answered:
-            questions.append("Подтвердите тип пружины и допустимо ли получать две пружины А5 из отрезка 30 см.")
-
-    questions = [question for question in questions if not str(manager_answers.get(question, "")).strip()]
-    source_candidates = []
-    for raw in result.get("source_candidates", [])[:8]:
-        if not isinstance(raw, dict) or raw.get("source") not in valid_sources:
-            continue
-        source_candidates.append({
-            "source": raw["source"],
-            "title": _cell_text(raw.get("title"))[:120] or raw["source"],
-            "fit": raw.get("fit") if raw.get("fit") in {"high", "medium", "low"} else "medium",
-            "reason": _cell_text(raw.get("reason"))[:300],
-        })
-    return {
-        "product_class": _cell_text(result.get("product_class"))[:200],
-        "selected_source": selected_source,
-        "source_candidates": source_candidates,
-        "route": route,
-        "calculator": calculator,
-        "confidence": confidence,
-        "reason": _cell_text(result.get("reason"))[:700],
-        "components": components,
-        "cost_options": cost_options,
-        "questions": list(dict.fromkeys(questions))[:8],
-        "manager_answers": manager_answers,
-        "catalog_choices": [{"id": item.pk, "name": item.name, "category": item.get_category_display()} for item in items],
-        "warnings": _short_text_list(result.get("warnings"), limit=6),
-        "assumptions": ["Раскладка геометрическая, с поворотом заготовки.", "Технологические отходы: 3%.", "Направление волокна, поля оборудования и порядок реза должен подтвердить технолог."],
-        "usage": {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0)},
-    }
 
 
 def _money(value):
