@@ -1033,9 +1033,18 @@ h1 {
 @media (max-width:850px) { .tender-smart-upload { grid-template-columns:1fr; } .tender-smart-upload-card > input { max-width:none; } }
 .tender-requirements-overlay { position:fixed; inset:0; z-index:1800; visibility:hidden; background:rgba(15,23,42,.26); opacity:0; transition:opacity .16s ease,visibility .16s ease; }
 .tender-requirements-overlay.is-open { visibility:visible; opacity:1; }
-.tender-requirements-drawer { position:absolute; top:0; right:0; width:min(470px,calc(100vw - 28px)); height:100%; box-sizing:border-box; padding:20px 20px 84px; overflow:auto; background:#fff; box-shadow:-16px 0 40px rgba(15,23,42,.16); transform:translateX(100%); transition:transform .18s ease; }
+/* A transformed ancestor only exempts its position:fixed descendants from
+   OUTER page scrolling — if that same ancestor is also the thing that
+   scrolls (overflow:auto here), the "fixed" bar scrolls right along with
+   its own content, because the containing block itself is moving. So the
+   drawer no longer scrolls itself: it's a flex column, and only
+   #tender-requirements-body (a plain descendant, not the containing block)
+   scrolls — that keeps the drawer's box motionless, which is what the fixed
+   bottom bar below is actually anchored to. */
+.tender-requirements-drawer { position:absolute; top:0; right:0; width:min(470px,calc(100vw - 28px)); height:100%; box-sizing:border-box; display:flex; flex-direction:column; padding:20px 20px 0; overflow:hidden; background:#fff; box-shadow:-16px 0 40px rgba(15,23,42,.16); transform:translateX(100%); transition:transform .18s ease; }
 .tender-requirements-overlay.is-open .tender-requirements-drawer { transform:translateX(0); }
-.tender-requirements-drawer .modal-header { align-items:flex-start; }
+.tender-requirements-drawer .modal-header { flex:0 0 auto; align-items:flex-start; }
+#tender-requirements-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding-bottom:84px; }
 .tender-requirements-drawer .modal-header small { color:#6b7280; font-size:10px; }
 .tender-requirements-drawer .modal-header h2 { margin-top:3px; font-size:18px; }
 .tender-requirement-state { display:grid; justify-items:start; gap:5px; margin:12px 0; }
@@ -1051,27 +1060,54 @@ h1 {
 .tender-requirement-row small { grid-column:2; color:#9ca3af; font-size:9px; }
 .tender-requirements-drawer ul, .tender-requirements-drawer ol { display:grid; gap:6px; margin:0; padding-left:20px; color:#4b5563; font-size:12px; }
 .tender-requirements-drawer .has-questions { padding:12px; border-radius:9px; background:#fff8e8; }
-.tender-production { padding-top:10px; border-top:1px solid #e5e7eb; }
+/* Recognised ТЗ: a fixed reference, not a step in the assistant's own
+   dialogue — always present regardless of whether a calculation is running,
+   done, or hasn't started. Collapsed by default (it's reference material,
+   not something to act on every time) and independent of the calculation. */
+.tender-requirements-tz { margin-top:14px; padding:11px 14px; border-radius:10px; background:#f8fafc; border:1px solid #eef1f4; }
+.tender-requirements-tz > summary { cursor:pointer; color:#4b5563; font-size:11px; font-weight:700; text-transform:uppercase; list-style:none; }
+.tender-requirements-tz > summary::-webkit-details-marker { display:none; }
+.tender-requirements-tz > summary::after { color:#9aa4af; content:' ▾'; }
+.tender-requirements-tz[open] > summary { margin-bottom:8px; }
+.tender-requirements-tz[open] > summary::after { content:' ▴'; }
+.tender-requirements-tz .tender-requirement-row:last-child { border-bottom:0; }
+.tender-requirements-tz .tender-requirement-row { display:grid; grid-template-columns:15px 108px 1fr; gap:3px 8px; align-items:start; cursor:pointer; }
+.tender-requirements-tz .tender-requirement-row input { margin:2px 0 0; cursor:pointer; }
+.tender-requirements-tz .tender-requirement-row small { grid-column:2 / -1; }
+.tender-requirements-tz .tender-requirement-row.is-off { opacity:.5; }
+.tender-requirements-tz .tender-requirement-row.is-off strong { text-decoration:line-through; }
+.tender-requirements-tz__count { margin-bottom:7px; color:#8a94a0; font-size:9px; line-height:1.35; }
+.tender-requirements-tz__rules { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-bottom:7px; }
+.tender-requirements-tz__rules small { color:#8a94a0; font-size:9px; }
+.tz-skip-rule { display:inline-flex; align-items:center; gap:3px; padding:2px 3px 2px 8px; border:1px dashed #cbd3da; border-radius:11px; background:#fff; color:#5b6672; font-size:9px; }
+.tz-skip-rule button { min-height:0; width:14px; height:14px; padding:0; border:0; border-radius:50%; background:#eef1f3; color:#68727d; font-size:10px; line-height:1; cursor:pointer; }
+.tz-skip-rule button:hover { background:#e2ece4; color:#2f7a48; }
+.tender-requirements-tz__apply { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:9px; }
+.tender-requirements-tz__apply button { min-height:30px; padding:5px 10px; font-size:10px; }
+.tender-requirements-tz__apply small { color:#78828e; font-size:9px; }
+.tender-requirements-drawer section.tender-production { margin-top:10px; padding-top:0; border-top:0; }
 /* Fixed, not sticky: the drawer is the nearest transformed ancestor (its
-   open/close slide uses `transform`), so `position:fixed` here is pinned to
-   the DRAWER's own box, not the viewport — it rides the slide-in animation
-   and stays clear of the drawer's own scroll, exactly like the proven
-   mobile bar below. A running total is a result, it belongs anchored at
-   the end, not competing with content at the top. */
-.tender-production-header { position:fixed; top:auto; right:0; bottom:0; width:min(470px,calc(100vw - 28px)); z-index:1810; display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0; padding:9px 20px; border-top:1px solid rgba(226,232,240,.9); border-bottom:0; background:rgba(255,255,255,.96); box-shadow:0 -7px 16px rgba(15,23,42,.08); backdrop-filter:blur(8px); }
-.tender-production-heading { display:grid; min-width:0; gap:2px; }
-.tender-requirements-drawer .tender-production-header h3 { margin:0; color:#344054; font-size:12px; line-height:1.2; text-transform:none; }
-.tender-production-header p { margin:0; color:#7a8492; font-size:9px; line-height:1.3; }
-.tender-route-totals { display:flex; align-items:center; gap:10px; margin-left:auto; }
+   open/close slide uses `transform`) and — since the drawer itself no longer
+   scrolls (see above) — a genuinely motionless containing block, so
+   `position:fixed` here rides the slide-in animation but never the drawer's
+   internal scroll. A running total is a result, it belongs anchored at the
+   end, not competing with content at the top.
+   left:0 + right:0 (auto width) instead of a hardcoded width: #tender-
+   requirements-body owns the scrollbar now, but this still avoids having to
+   keep a copy of the drawer's own `width:min(470px,…)` in sync by hand. */
+.tender-production-header { box-sizing:border-box; position:fixed; top:auto; left:0; right:0; bottom:0; z-index:1810; display:flex; align-items:center; justify-content:flex-end; gap:10px; margin:0; padding:9px 20px; border-top:1px solid rgba(226,232,240,.9); border-bottom:0; background:rgba(255,255,255,.96); box-shadow:0 -7px 16px rgba(15,23,42,.08); backdrop-filter:blur(8px); }
+.tender-route-totals { display:flex; align-items:center; gap:12px; margin-right:auto; }
 .tender-route-totals[hidden] { display:none; }
-.tender-route-totals span { display:grid; gap:1px; min-width:64px; }
+.tender-route-totals span { display:grid; gap:1px; min-width:60px; }
 .tender-route-totals small { color:#7a8492; font-size:8px; line-height:1.15; white-space:nowrap; }
-.tender-route-totals strong { color:#263442; font-size:10px; line-height:1.2; white-space:nowrap; }
-.tender-route-totals span:last-child strong { color:#176b3a; }
+.tender-route-totals strong { font-size:11px; line-height:1.2; white-space:nowrap; }
+.tender-route-totals span:first-child strong { color:#5b6672; font-weight:600; }
+.tender-route-totals span:last-child strong { color:#176b3a; font-weight:800; }
+.tender-production-header .button-success { min-height:32px; padding:6px 12px; font-size:10px; }
 .tender-production-result { position:relative; }
-.tender-production-result.is-loading { min-height:180px; pointer-events:none; user-select:none; }
-.tender-production-result.is-loading::before { content:''; position:absolute; inset:0; z-index:20; border-radius:10px; background:rgba(255,255,255,.72); backdrop-filter:blur(1.5px); }
-.tender-production-result.is-loading::after { content:attr(data-loading-label); position:sticky; bottom:76px; z-index:21; display:block; width:fit-content; max-width:270px; margin:16px auto 0; padding:10px 13px; border:1px solid #dbe8df; border-radius:10px; background:rgba(255,255,255,.96); color:#356044; box-shadow:0 8px 24px rgba(15,23,42,.12); font-size:11px; font-weight:700; text-align:center; }
+.tender-production-result.is-loading, .training-step-block__body.is-loading { min-height:140px; pointer-events:none; user-select:none; }
+.tender-production-result.is-loading::before, .training-step-block__body.is-loading::before { content:''; position:absolute; inset:0; z-index:20; border-radius:10px; background:rgba(255,255,255,.72); backdrop-filter:blur(1.5px); }
+.tender-production-result.is-loading::after, .training-step-block__body.is-loading::after { content:attr(data-loading-label); position:sticky; bottom:76px; z-index:21; display:block; width:fit-content; max-width:270px; margin:16px auto 0; padding:10px 13px; border:1px solid #dbe8df; border-radius:10px; background:rgba(255,255,255,.96); color:#356044; box-shadow:0 8px 24px rgba(15,23,42,.12); font-size:11px; font-weight:700; text-align:center; }
 .ai-route-button { display:inline-flex; flex:0 0 auto; align-items:center; justify-content:center; gap:5px; min-height:32px; padding:6px 11px; border:1px solid #73bd8c; border-radius:9px; background:#edf8f1; color:#176b3a; cursor:pointer; font:inherit; font-size:10px; font-weight:700; white-space:nowrap; box-shadow:0 2px 7px rgb(22 101 52 / 10%); transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease; }
 .ai-route-button::before { content:'✦'; color:#16a34a; font-size:11px; }
 .is-loading-button::before { content:''; width:11px; height:11px; box-sizing:border-box; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:tender-button-spin .7s linear infinite; }
@@ -1140,13 +1176,6 @@ h1 {
 .tender-route-editor > .button-secondary, .tender-route-editor article > .button-secondary { min-height:30px; padding:5px 9px; justify-self:start; }
 @media (max-width:700px) { .tender-route-process { grid-template-columns:1fr 24px; } .tender-route-process select { grid-column:1; } .tender-route-process input { grid-column:1; } .tender-route-process button { grid-column:2; grid-row:1/3; } }
 .training-dialogue { display:grid; gap:8px; }
-.training-dialogue__summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:start; padding:10px; border-radius:10px; background:#f4f7f9; }
-.training-dialogue__summary small { display:block; color:#687383; font-size:10px; font-weight:500; }
-.training-dialogue__summary strong { display:block; margin:2px 0; font-size:15px; }
-.training-dialogue__summary em { display:block; margin:5px 0 1px; color:#78828e; font-size:8px; font-style:normal; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
-.training-dialogue__summary p { margin:0; color:#556170; font-size:11px; line-height:1.35; }
-.training-dialogue__summary > b { color:#176b3a; font-size:16px; text-align:right; white-space:nowrap; }
-.training-dialogue__summary > b small { margin-top:1px; font-size:9px; }
 .training-catalog { overflow:hidden; border:1px solid #d8e8dd; border-radius:9px; background:#fbfefc; }
 .training-catalog > header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-bottom:1px solid #e6eee8; }
 .training-catalog > header span { display:grid; gap:1px; }
@@ -1185,14 +1214,15 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
 .training-catalog-rule { display:inline-flex; align-items:center; gap:4px; padding:3px 4px 3px 8px; border:1px solid #d5dde3; border-radius:12px; background:#fff; color:#344151; font-size:9px; }
 .training-catalog-rule button { min-height:0; padding:0; width:15px; height:15px; border:0; border-radius:50%; background:#eef1f3; color:#68727d; font-size:11px; line-height:1; cursor:pointer; }
 .training-catalog-rule button:hover { background:#f0d8d8; color:#b23b3b; }
+.training-catalog-rule.is-fired { border-color:#8fcba3; background:#eef8f1; color:#1f6b3a; }
+.training-catalog-rule--permanent { padding:3px 8px; border-style:dashed; color:#5b6472; background:#f7f9fa; }
 .training-catalog-actions { display:grid; justify-items:end; gap:4px; }
 .training-catalog-selected, .training-catalog-mismatch { padding:3px 6px; border-radius:6px; background:#e9f7ee; color:#168245; font-size:8px; white-space:nowrap; }
 .training-catalog-mismatch { background:#fff5df; color:#8a621b; }
-.training-dialogue__route { display:flex; flex-wrap:wrap; gap:5px; }
-.training-dialogue__route span { display:inline-flex; align-items:center; gap:5px; min-height:28px; padding:4px 8px; border:1px solid #dce3e8; border-radius:8px; background:#fff; color:#344151; font-size:10px; }
-.training-dialogue__route span b { display:grid; width:16px; height:16px; place-items:center; border-radius:50%; background:#eaf6ee; color:#168245; font-size:9px; }
 .training-section-label { margin-bottom:-3px; color:#78828e; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .training-dialogue__costs { overflow:hidden; border:1px solid #e1e6ea; border-radius:9px; }
+.training-dialogue__costs > header { padding:8px 10px; border-bottom:1px solid #dfe6ea; background:#eef2f4; color:#3a4653; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.tender-requirements-drawer .training-dialogue__costs .training-cost-group { margin-top:0; }
 .training-cost-group h4 { margin:0; padding:5px 9px; border-bottom:1px solid #e7ecef; background:#f5f7f8; color:#526071; font-size:9px; }
 .training-cost-row, .training-dialogue__costs footer { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; padding:6px 9px; border-bottom:1px solid #edf0f2; font-size:10px; }
 .training-cost-row > strong { white-space:nowrap; }
@@ -1237,38 +1267,72 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
 .training-dialogue__questions { background:#fff7e7; color:#785b21; }
 .training-dialogue__changes ul, .training-dialogue__questions ul, .training-dialogue details ul { margin:4px 0 0; padding-left:17px; }
 .training-dialogue details { color:#657080; font-size:10px; }
-.training-dialogue__feedback { display:grid; gap:5px; padding-top:3px; }
-.training-dialogue__feedback label { font-size:10px; font-weight:700; }
-.training-dialogue__feedback textarea { width:100%; min-height:66px; resize:vertical; padding:8px 9px; border:1px solid #ccd5dd; border-radius:9px; background:#fff; color:#202b38; font:inherit; font-size:11px; line-height:1.35; }
-.training-dialogue__feedback textarea:focus { border-color:#43a96b; outline:2px solid rgb(67 169 107 / 12%); }
-.training-dialogue__feedback > div { display:flex; flex-wrap:wrap; gap:6px; }
-.training-dialogue__feedback button { min-height:32px; padding:6px 10px; font-size:10px; }
-.training-dialogue__feedback > small { color:#78828e; font-size:9px; }
 .training-dialogue { gap:0; color:#334155; font-size:12px; }
 .training-dialogue .training-step { margin:0; padding:16px 0; border-bottom:1px solid #e7ebef; }
 .training-dialogue .training-step:first-child { padding-top:8px; }
-.training-dialogue .training-step:nth-child(2) > header { margin:0 -10px; padding:12px 10px 8px; border:1px solid #d7eadc; border-bottom:0; border-radius:10px 10px 0 0; background:#f1f9f3; }
-.training-dialogue .training-step:nth-child(2) > .training-dialogue__summary { margin:0 -10px 12px; padding:0 10px 12px; border:1px solid #d7eadc; border-top:0; border-radius:0 0 10px 10px; background:#f1f9f3; }
-.training-dialogue .training-step:nth-child(4) { margin:0 -10px; padding:16px 10px; border-radius:10px; background:#f5f7fb; }
-.training-step > header, .training-provider > summary { display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
-.training-step > header > span, .training-provider > summary > span { display:grid; flex:0 0 25px; height:25px; place-items:center; border-radius:50%; background:#e8f4ec; color:#176b3a; font-size:11px; font-weight:800; }
-.training-step > header div, .training-provider > summary div { display:grid; gap:2px; }
+.training-provider > summary { display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
+.training-provider > summary > span { display:grid; flex:0 0 25px; height:25px; place-items:center; border-radius:50%; background:#e8f4ec; color:#176b3a; font-size:11px; font-weight:800; }
+.training-provider > summary div { display:grid; gap:2px; }
 .tender-requirements-drawer .training-step h3 { margin:0; color:#263442; font-size:13px; line-height:1.3; text-transform:none; }
-.training-step > header p, .training-provider > summary p { margin:0; color:#788493; font-size:10px; line-height:1.4; }
+.training-provider > summary p { margin:0; color:#788493; font-size:10px; line-height:1.4; }
+/* Route + step-block + feedback: one block-diagram representation of the
+   route (reasoning line, then vertical numbered blocks joined by
+   connectors, each anchor-linking down to its section), collapsible
+   per-step blocks holding that step's own tool, and a reusable feedback
+   widget that recomputes only its own block. */
+.training-dialogue { display:grid; gap:12px; }
+.training-route { display:grid; gap:10px; padding:12px; border:1px solid #d7eadc; border-radius:11px; background:#f1f9f3; }
+.training-route > header { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; }
+.tender-requirements-drawer .training-route h3 { margin:0; color:#17603a; font-size:13px; line-height:1.3; text-transform:none; }
+.training-route > header small { color:#5c7c67; font-size:10px; }
+.training-route__reason { margin:0; color:#3f5647; font-size:11px; line-height:1.45; }
+.training-route__flow { display:grid; gap:0; margin:2px 0 0; padding:0; list-style:none; }
+.training-route__flow li { position:relative; display:grid; }
+.training-route__flow li + li { margin-top:22px; }
+.training-route__flow li + li::before { content:''; position:absolute; top:-19px; left:15px; width:2px; height:15px; background:#9ccbad; }
+.training-route__flow li + li::after { content:''; position:absolute; top:-6px; left:11px; width:0; height:0; border:5px solid transparent; border-top-color:#9ccbad; }
+.training-route__flow a { display:flex; align-items:center; gap:9px; padding:8px 10px; border:1px solid #bfe0c9; border-radius:9px; background:#fff; color:#26402f; font-size:11px; font-weight:650; text-decoration:none; }
+.training-route__flow a:hover { border-color:#7cc194; background:#f4fbf6; }
+.training-route__flow b { display:grid; flex:0 0 22px; height:22px; place-items:center; border-radius:50%; background:#e6f5eb; color:#17803f; font-size:10px; }
+.training-route__flow li > span { padding:8px 10px; color:#6a7b70; font-size:11px; }
+.training-route__fix { border:1px dashed #bcd8c6; border-radius:9px; background:#f6fbf7; }
+.training-route__fix > summary { padding:8px 10px; color:#3c7350; font-size:10px; font-weight:650; cursor:pointer; list-style:none; }
+.training-route__fix > summary::-webkit-details-marker { display:none; }
+.training-route__fix > summary::after { margin-left:6px; color:#8bb79b; content:'▾'; }
+.training-route__fix[open] > summary::after { content:'▴'; }
+.training-route__fix[open] > summary { border-bottom:1px dashed #d3e6d9; }
+.training-route__fix .training-feedback { padding:10px; }
+.training-block-changes { display:grid; gap:3px; padding:8px 10px; border-radius:8px; background:#eef4f0; color:#3f5a49; font-size:10px; }
+.training-block-changes b { font-size:9px; text-transform:uppercase; letter-spacing:.04em; }
+.training-block-changes ul { margin:0; padding-left:16px; }
+.training-step-block { border:1px solid #e2e7ec; border-radius:10px; background:#fff; overflow:hidden; }
+.training-step-block > summary { display:flex; align-items:flex-start; gap:10px; padding:11px 12px; cursor:pointer; list-style:none; }
+.training-step-block > summary::-webkit-details-marker { display:none; }
+.training-step-block > summary::after { margin-left:auto; align-self:center; color:#8a94a0; content:'▸'; font-size:11px; transition:transform .15s ease; }
+.training-step-block[open] > summary::after { transform:rotate(90deg); }
+.training-step-block[open] > summary { border-bottom:1px solid #eef1f4; background:#fafbfc; }
+.training-step-block > summary > b { display:grid; flex:0 0 24px; height:24px; place-items:center; border-radius:50%; background:#e8f4ec; color:#176b3a; font-size:11px; font-weight:800; }
+.training-step-block > summary div { display:grid; gap:2px; min-width:0; }
+.tender-requirements-drawer .training-step-block h4 { margin:0; color:#263442; font-size:12px; font-weight:700; }
+.training-step-block > summary small { color:#788493; font-size:10px; line-height:1.4; }
+.training-step-block__body { position:relative; display:grid; gap:10px; padding:12px; }
+.training-feedback { display:grid; gap:6px; }
+.training-feedback textarea { width:100%; box-sizing:border-box; min-height:64px; resize:vertical; padding:8px 9px; border:1px solid #ccd5dd; border-radius:9px; background:#fff; color:#202b38; font:inherit; font-size:11px; line-height:1.4; }
+.training-feedback textarea:focus { border-color:#43a96b; outline:2px solid rgb(67 169 107 / 12%); }
+.training-feedback__row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.training-feedback__row button { min-height:32px; padding:6px 11px; font-size:10px; }
+.training-feedback__row small { color:#78828e; font-size:9px; line-height:1.35; }
+.training-provider__actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
+.training-provider__actions small { color:#78828e; font-size:9px; }
+.training-dialogue__questions b { display:block; margin-bottom:3px; font-size:9px; text-transform:uppercase; letter-spacing:.04em; }
+.tender-production-header .tender-bar-restart { flex:0 0 auto; min-width:0; padding:6px 9px; border-color:#d7dee4; background:#f4f6f8; color:#5b6672; font-size:14px; box-shadow:none; }
+.tender-production-header .tender-bar-restart::before { content:none; }
 .training-requirements { display:grid; }
 .training-requirements > div { display:grid; grid-template-columns:125px minmax(0,1fr); gap:3px 10px; padding:8px 0; border-bottom:1px solid #edf0f2; }
 .training-requirements > div:last-child { border-bottom:0; }
 .training-requirements span { color:#718096; font-size:11px; }
 .training-requirements strong { color:#263442; font-size:11px; line-height:1.45; }
 .training-requirements small { grid-column:2; color:#98a1ad; font-size:10px; }
-.training-dialogue__summary { padding:0; background:transparent; }
-.training-dialogue__summary small, .training-dialogue__summary p { font-size:11px; }
-.training-dialogue__summary strong { margin:3px 0 5px; font-size:14px; }
-.training-dialogue__summary > b { font-size:14px; }
-.training-dialogue__route { margin:12px 0; }
-.training-dialogue__route span { font-size:11px; }
-.training-plain-list { display:grid; gap:7px; margin:0; padding-left:20px; color:#465567; font-size:11px; line-height:1.45; }
-.training-plain-list--questions { padding:12px 12px 12px 30px; border-radius:9px; background:#fff8e8; color:#6d5017; }
 .training-catalog { border-color:#e1e6ea; background:#fff; }
 .training-catalog > header { justify-content:flex-end; }
 .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; padding:10px; }
@@ -1281,9 +1345,8 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
 .training-cost-group h4, .training-cost-row, .training-dialogue__costs footer { font-size:11px; }
 .training-dialogue__costs .training-cost-trace { gap:4px; margin-top:4px; font-size:10px; line-height:1.4; }
 .training-source-toggle { font-size:10px; }
-.training-dialogue__feedback { padding:0; }
-.training-dialogue__feedback textarea { min-height:92px; font-size:12px; line-height:1.5; }
-.training-dialogue__feedback > small { font-size:10px; line-height:1.4; }
+.training-feedback textarea { min-height:80px; font-size:12px; line-height:1.5; }
+.training-feedback__row small { font-size:10px; line-height:1.4; }
 .training-provider { cursor:default; }
 .training-provider > summary { margin:0; list-style:none; cursor:pointer; }
 .training-provider > summary::-webkit-details-marker { display:none; }
@@ -1293,11 +1356,9 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
 .training-provider .training-attached-sources { margin-bottom:10px; font-size:10px; }
 .training-source-form select, .training-source-form input, .training-source-form textarea { min-height:34px; font-size:10px; }
 .training-source-form > header, .training-source-form > div small, .training-source-collection__actions small { font-size:10px; }
-.training-dialogue__actions { display:flex; flex-wrap:wrap; gap:7px; padding-top:14px; }
-.training-dialogue__actions button { min-height:34px; padding:7px 11px; font-size:10px; }
-.training-dialogue__status { display:block; padding:7px 0 12px; color:#78828e; font-size:10px; line-height:1.4; }
+.training-dialogue__status { display:block; min-height:14px; padding:2px 0 6px; color:#78828e; font-size:10px; line-height:1.4; }
 .training-dialogue__details { margin-bottom:12px; padding:10px; border-radius:8px; background:#f7f9fa; }
-@media (max-width:700px) { .training-dialogue__summary { grid-template-columns:1fr; } .training-dialogue__summary > b { text-align:left; } .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; } .training-dialogue__feedback > div { display:grid; grid-template-columns:1fr; } .training-dialogue__feedback button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } }
+@media (max-width:700px) { .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; } .training-feedback__row { display:grid; grid-template-columns:1fr; } .training-feedback__row button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } }
 .tender-production-dialog { display:grid; gap:8px; }
 .tender-production-dialog label { display:grid; gap:4px; }
 .tender-production-dialog label span { font-size:10px; line-height:1.35; }
@@ -1337,10 +1398,10 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
   .container { padding: 12px 16px 16px; }
   .tender-document-strip { flex-wrap:wrap; overflow:visible; }
   .tender-document-strip button { flex:0 0 auto; max-width:100%; }
-  .tender-requirements-drawer { width:100%; padding:16px 16px 92px; }
+  .tender-requirements-drawer { width:100%; padding:16px 16px 0; }
+  #tender-requirements-body { padding-bottom:92px; }
   .tender-production-header { position:fixed; top:auto; right:0; bottom:0; left:0; z-index:1810; margin:0; padding:10px 16px max(10px,env(safe-area-inset-bottom)); border-top:1px solid #dfe7e2; border-bottom:0; box-shadow:0 -8px 24px rgba(15,23,42,.12); }
-  .tender-production-heading { display:none; }
-  .tender-route-totals { margin:0 auto 0 0; }
+  .tender-route-totals { gap:10px; }
   .tender-production-result.is-loading::after { bottom:84px; }
   .container > .back-link { min-height: 30px; margin: 0 0 12px; align-items: center; }
   .app-home .container { padding-top: 54px; }
@@ -1432,7 +1493,10 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
   .saved-estimate__main { align-items:flex-start; flex-direction:column; }
   .tender-saved-estimate { align-items:stretch; flex-wrap:wrap; }
   .tender-saved-estimate .saved-estimate__main { grid-template-columns:1fr; }
-  .saved-estimate__status-form { flex:1 1 180px; }
+  /* Stay a compact pill even when the row wraps: `flex:0 0 auto` keeps it to
+     its content width and `align-self:flex-start` opts out of the row's
+     `align-items:stretch` so it does not balloon to the row's full height. */
+  .saved-estimate__status-form { flex:0 0 auto; align-self:flex-start; min-width:150px; }
   .tender-import-modal .modal { width:calc(100vw - 24px); max-height:calc(100vh - 24px); padding:16px; }
   .tender-import-upload { align-items:stretch; flex-direction:column; }
   .tender-import-controls { grid-template-columns:1fr 1fr; }

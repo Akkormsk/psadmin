@@ -25,10 +25,10 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSearchRule, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSearchRule, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
-from .services import TenderAIError, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
+from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, recognize_tender_items, refresh_training_example_embedding
 
 
 logger = logging.getLogger(__name__)
@@ -429,9 +429,21 @@ def revise_production_hypothesis(request):
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
         search_rules_override = payload.get("search_rules") if isinstance(payload.get("search_rules"), list) else None
+        # Which dialogue block's "Учесть и пересчитать" was pressed. The box
+        # the admin typed in decides the scope — no LLM guesses which block a
+        # comment belongs to. "catalog" keeps the route and search plan
+        # untouched; anything else is a full rebuild.
+        scope = str(payload.get("scope", "all")).strip().lower()
+        # "requirements" (the ТЗ-checkbox recompute) is catalog-scoped too —
+        # the route and the search plan do not change, only which rows the
+        # matcher is allowed to look at.
+        recompute = "catalog" if scope in {"catalog", "requirements"} else "all"
         if len(feedback) > 3000 or not str(line.get("name", "")).strip():
             raise ValueError
-        if not feedback and search_rules_override is None:
+        # A "requirements" recompute carries its change in the line payload
+        # (the ТЗ-row `selected` flags), so it needs neither feedback nor a
+        # rules override.
+        if not feedback and search_rules_override is None and scope != "requirements":
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
@@ -441,7 +453,7 @@ def revise_production_hypothesis(request):
         hypothesis = build_training_hypothesis(
             line, current=prior, feedback=feedback,
             progress_callback=lambda stage: _record_stage(session.pk, stage),
-            search_rules_override=search_rules_override,
+            search_rules_override=search_rules_override, recompute=recompute,
         )
         session.position_name = str(line.get("name", ""))[:500]
         session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
@@ -455,6 +467,24 @@ def revise_production_hypothesis(request):
     session.save(update_fields=["current_hypothesis", "updated_at"])
     _submit_assistant_job(session.pk, work, fallback=prior)
     return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+
+
+@login_required
+@require_POST
+def drop_requirement_skip_rule(request):
+    """Undo a learned "не участвует в подборе" — the row of this label goes
+    back to being checked by default in future tenders."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Менять правила может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        label_normalized = _normalized_requirement_label(str(payload.get("label", "")))[:200]
+        if not label_normalized:
+            raise ValueError
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return JsonResponse({"error": "Не удалось определить строку ТЗ."}, status=400)
+    removed = RequirementSkipRule.objects.filter(label_normalized=label_normalized).update(is_active=False)
+    return JsonResponse({"dropped": bool(removed)})
 
 
 @login_required
@@ -681,32 +711,72 @@ def confirm_production_type(request):
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         session_id = payload.get("session_id")
         if session_id:
-            # "Подтвердить и обучить" no longer learns a route (route is a
+            # "Принять и обучить" no longer learns a route (route is a
             # hardcoded placeholder while search is being tuned — see
-            # build_training_hypothesis) — it promotes this session's search
-            # rules to permanent, global CatalogSearchRule rows so every
-            # future search applies them, not just this line.
+            # build_training_hypothesis) — it accepts the calculation and
+            # promotes every block's session rules to permanent, global
+            # CatalogSearchRule rows so every future search applies them,
+            # not just this line. Accepting a run with nothing to learn
+            # (a product picked, no rules written) is fine — it just closes
+            # the session.
             session = ProductionTrainingSession.objects.get(pk=session_id, created_by=request.user, is_confirmed=False)
             hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
             rules = hypothesis.get("catalog_search_rules", [])
             rules = rules if isinstance(rules, list) else []
-            if not rules:
-                return JsonResponse({"error": "Нет правил поиска для сохранения — сначала оставьте хотя бы один комментарий к поиску."}, status=400)
             saved = 0
             for rule in rules:
                 if not isinstance(rule, dict):
                     continue
-                text = str(rule.get("text", "")).strip()[:300]
-                if not text:
+                action_text = str(rule.get("action_text", "")).strip()[:120]
+                if not action_text:
                     continue
+                action = str(rule.get("action", "exclude")).strip().lower()
+                action = action if action in {"include", "exclude", "prefer"} else "exclude"
+                trigger_scope = str(rule.get("trigger_scope", "any")).strip().lower()
+                trigger_scope = trigger_scope if trigger_scope in {"any", "name", "requirements"} else "any"
+                trigger_text = str(rule.get("trigger_text", "")).strip()[:300]
+                trigger_negate = bool(rule.get("trigger_negate")) and bool(trigger_text)
+                trigger_kind = str(rule.get("trigger_kind", "text")).strip().lower()
+                trigger_kind = trigger_kind if trigger_kind in {"text", "context"} else "text"
+                # Identity is the structured (trigger, action) tuple, not the
+                # display text — so re-confirming the same rule in a
+                # differently-worded session never creates a duplicate row.
                 _, created = CatalogSearchRule.objects.get_or_create(
-                    text=text, is_active=True,
-                    defaults={"source_phrase": str(rule.get("source_phrase", ""))[:300], "created_by": request.user},
+                    trigger_text=trigger_text, trigger_scope=trigger_scope, trigger_negate=trigger_negate,
+                    trigger_kind=trigger_kind, action=action, action_text=action_text, is_active=True,
+                    defaults={
+                        "text": str(rule.get("text", ""))[:300],
+                        "label": str(rule.get("label", ""))[:80],
+                        "source_phrase": str(rule.get("source_phrase", ""))[:300],
+                        "created_by": request.user,
+                    },
                 )
                 saved += int(created)
+            # Learn every ТЗ row the admin left unchecked — its label comes
+            # pre-unchecked in every future tender (RequirementSkipRule).
+            skipped = 0
+            selection = hypothesis.get("requirement_selection", [])
+            for row in selection if isinstance(selection, list) else []:
+                if not isinstance(row, dict) or row.get("selected") is not False:
+                    continue
+                label = str(row.get("label", "")).strip()[:200]
+                label_normalized = _normalized_requirement_label(label)
+                if not label_normalized:
+                    continue
+                _, created = RequirementSkipRule.objects.get_or_create(
+                    label_normalized=label_normalized,
+                    defaults={"label": label, "example_value": str(row.get("value", ""))[:500], "created_by": request.user, "is_active": True},
+                )
+                if not created:
+                    RequirementSkipRule.objects.filter(label_normalized=label_normalized, is_active=False).update(is_active=True)
+                skipped += int(created)
             session.is_confirmed = True
             session.save(update_fields=["is_confirmed", "updated_at"])
-            return JsonResponse({"message": f"Сохранено новых правил поиска: {saved}. Применяются во всех новых расчётах.", "rules_saved": saved})
+            parts = ["Расчёт принят."]
+            parts.append(f"Новых правил поиска: {saved}." if saved else "Новых правил поиска нет.")
+            if skipped:
+                parts.append(f"Строк ТЗ вынесено из подбора навсегда: {skipped}.")
+            return JsonResponse({"message": " ".join(parts), "rules_saved": saved, "requirement_skips_saved": skipped})
         production_type = ProductionType.objects.get(code=payload.get("production_type"), is_active=True)
         name = str(line.get("name", "")).strip()
         if not name:

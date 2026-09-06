@@ -5,8 +5,10 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
+from functools import lru_cache
 from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree
 from urllib.error import HTTPError, URLError
@@ -511,7 +513,16 @@ def sync_gifts_catalog(client=None, category=None, limit=None):
 
 
 def _text(value, limit=1000):
-    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+    # Same story as _normalized below: the same ТЗ requirement strings get
+    # passed in millions of times across a large pool search. str(value) is
+    # always defined and hashable, so cache on that rather than on `value`
+    # itself (which may not be hashable, e.g. a list).
+    return _text_cached(str(value or ""), limit)
+
+
+@lru_cache(maxsize=32_768)
+def _text_cached(raw, limit):
+    return re.sub(r"\s+", " ", raw).strip()[:limit]
 
 
 def _integer(value, default=0):
@@ -759,7 +770,37 @@ BRANDING_ALIASES = {
 
 
 def _normalized(value):
-    return re.sub(r"[^a-zа-я0-9%²³≥≤]+", " ", _text(value, 20_000).lower().replace("ё", "е")).strip()
+    # A catalog search compares the same ТЗ requirement text against every
+    # pool product (hundreds to thousands), so this is called millions of
+    # times per search with a small set of repeated strings — cache the
+    # regex work on the string form, never on the raw (possibly unhashable) value.
+    return _normalized_cached(_text(value, 20_000))
+
+
+@lru_cache(maxsize=16_384)
+def _normalized_cached(text):
+    return re.sub(r"[^a-zа-я0-9%²³≥≤]+", " ", text.lower().replace("ё", "е")).strip()
+
+
+_STEM_LEN = 5
+
+
+def _stems_match(a, b):
+    """True if two normalized words plausibly share a root — Russian
+    inflection means an admin's rule word ("детские") and the actual
+    catalog text ("детская") are rarely byte-identical even when they mean
+    the same thing; comparing a short prefix instead of the whole word
+    (falling back to exact equality for numbers/very short tokens, where
+    truncating would just invite false positives) catches that without a
+    real morphological analyzer."""
+    if not a or not b:
+        return False
+    if a.isdigit() or b.isdigit():
+        return a == b
+    length = min(len(a), len(b), _STEM_LEN)
+    if length < 3:
+        return a == b
+    return a[:length] == b[:length]
 
 
 REQUIREMENT_FIELD_MARKERS = (
@@ -789,7 +830,11 @@ MEASUREMENT_UNITS = {
 
 
 def _requirement_field(label):
-    normalized = _normalized(label)
+    return _requirement_field_cached(_normalized(label))
+
+
+@lru_cache(maxsize=4096)
+def _requirement_field_cached(normalized):
     return next((field for field, markers in REQUIREMENT_FIELD_MARKERS if any(marker in normalized for marker in markers)), normalized)
 
 
@@ -804,6 +849,11 @@ def _normalized_measurement(field, label, value):
     if field not in MEASUREMENT_UNITS:
         return None
     raw = f"{_text(label, 300)} {_text(value, 1000)}".lower().replace("ё", "е")
+    return _normalized_measurement_cached(field, raw)
+
+
+@lru_cache(maxsize=8192)
+def _normalized_measurement_cached(field, raw):
     match = re.search(r"-?\d+(?:[.,]\d+)?", raw.replace(" ", ""))
     if not match:
         return None
@@ -849,7 +899,12 @@ def _normalized_requirement(requirement):
 
 
 def _requirement_scope(label):
-    prefix, separator, suffix = _text(label, 300).partition(":")
+    return _requirement_scope_cached(_text(label, 300))
+
+
+@lru_cache(maxsize=4096)
+def _requirement_scope_cached(text):
+    prefix, separator, suffix = text.partition(":")
     if not separator or not _normalized(prefix) or not _normalized(suffix):
         return ""
     suffix_field = _requirement_field(suffix)
@@ -862,26 +917,63 @@ def _requirement_identity(requirement):
     return normalized["field"], normalized["operator"], normalized["value"], normalized["unit"], normalized.get("scope", "")
 
 
+# catalog_candidates_for_line asks for the SAME line/effective_line's
+# requirement list on the order of ten times per pool product (thousands of
+# products per search) — these two are pure functions of `line`, so cache by
+# object identity for the life of one search. `line` is a dict (unhashable),
+# hence a manual id()-keyed cache rather than lru_cache; thread-local so two
+# concurrent searches (the assistant job pool runs >1 worker) never share or
+# clobber each other's cache, and it's reset at the top of
+# catalog_candidates_for_line so a reused id() from a GC'd dict never serves
+# stale data.
+_requirement_values_cache = threading.local()
+
+
+def _reset_requirement_values_cache():
+    _requirement_values_cache.by_id = {}
+    _requirement_values_cache.by_product_id = {}
+
+
 def _requirement_values(line):
+    by_id = getattr(_requirement_values_cache, "by_id", None)
+    key = id(line) if isinstance(line, dict) else None
+    if by_id is not None and key is not None and key in by_id:
+        return by_id[key]
     requirements = line.get("requirements") if isinstance(line, dict) else {}
     if isinstance(requirements, dict):
         requirements = requirements.get("requirements", [])
     if not isinstance(requirements, list):
-        return []
-    result, seen = [], set()
-    for value in requirements:
-        if not isinstance(value, dict):
-            continue
-        key = _requirement_identity(value)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(value)
+        result = []
+    else:
+        result, seen = [], set()
+        for value in requirements:
+            if not isinstance(value, dict):
+                continue
+            # A row the admin unchecked in the ТЗ ("не участвует в подборе")
+            # is treated as if it were never in the ТЗ — no match / mismatch
+            # / unknown, no effect on the search terms or the ranking. It
+            # still shows in the panel, just greyed.
+            if value.get("selected") is False:
+                continue
+            k = _requirement_identity(value)
+            if k in seen:
+                continue
+            seen.add(k)
+            result.append(value)
+    if by_id is not None and key is not None:
+        by_id[key] = result
     return result
 
 
 def _product_requirement_values(line):
-    return [value for value in _requirement_values(line) if not _requirement_scope(value.get("label"))]
+    by_product_id = getattr(_requirement_values_cache, "by_product_id", None)
+    key = id(line) if isinstance(line, dict) else None
+    if by_product_id is not None and key is not None and key in by_product_id:
+        return by_product_id[key]
+    result = [value for value in _requirement_values(line) if not _requirement_scope(value.get("label"))]
+    if by_product_id is not None and key is not None:
+        by_product_id[key] = result
+    return result
 
 
 def _constraint_text(line, label_marker):
@@ -908,15 +1000,37 @@ def _expand_material_tokens(tokens):
     return expanded
 
 
+_GENDER_LABEL_RE = re.compile(r"\b(пол|гендер)\b")
+
+
+def _is_gender_label(label):
+    # A plain `"пол" in label` substring check also matches "поло" (as in
+    # "рубашка-ПОЛО") — every "Модели рубашки-поло"/"Цвет рубашки-поло"-style
+    # requirement was being swept into the gender check by accident. "пол"
+    # (sex/gender) is a real standalone word here, so it needs a word
+    # boundary, not a bare substring test.
+    return bool(_GENDER_LABEL_RE.search(_normalized(label)))
+
+
 def _required_gender(line):
-    text = _normalized(" ".join([
-        _constraint_text(line, "пол"), _constraint_text(line, "гендер"), _text(line.get("name", ""), 300),
-    ]))
-    if "унисекс" in text:
+    gender_values = " ".join(
+        _text(value.get("value"), 1000) for value in _product_requirement_values(line)
+        if _is_gender_label(value.get("label"))
+    )
+    text = _normalized(f"{gender_values} {_text(line.get('name', ''), 300)}")
+    has_unisex = "унисекс" in text
+    has_female = "женск" in text
+    has_male = "мужск" in text
+    # "мужская и женская" (a model range covering both) is not a request
+    # for women's only — it's the ТЗ saying either sex is acceptable, the
+    # same as "унисекс". Checking "женск" and returning immediately, before
+    # ever looking for "мужск" in the same text, was reading that as a
+    # strict women's-only requirement and hard-rejecting every men's item.
+    if has_unisex or (has_female and has_male):
         return "унисекс"
-    if "женск" in text:
+    if has_female:
         return "женский"
-    if "мужск" in text:
+    if has_male:
         return "мужской"
     return ""
 
@@ -1389,6 +1503,34 @@ def _canonical_gender(value):
     return ""
 
 
+def _rule_match_tokens(product):
+    """Every word a search rule ("исключи X", "приоритет X", "обязательно
+    X") is allowed to match against — not just the name, but the whole
+    text the catalogue carries for this product: category, name, material
+    and colour lists, and every attribute value. No per-field logic — one
+    flat bag of words, so any characteristic the admin types as text is
+    covered. Cached on the product instance (built once per search)."""
+    cached = getattr(product, "_rule_tokens", None)
+    if cached is not None:
+        return cached
+    parts = [
+        *(product.category_names if isinstance(product.category_names, list) else []),
+        product.name or "", product.full_name or "",
+        *(product.materials if isinstance(product.materials, list) else []),
+        *(product.colors if isinstance(product.colors, list) else []),
+        *(product.branding if isinstance(product.branding, list) else []),
+    ]
+    for attribute in product.attributes if isinstance(product.attributes, list) else []:
+        if isinstance(attribute, dict):
+            parts.append(_text(attribute.get("value"), 500))
+    tokens = _normalized(" ".join(str(part) for part in parts if part)).split()
+    try:
+        product._rule_tokens = tokens
+    except (AttributeError, TypeError):
+        pass
+    return tokens
+
+
 def _constraint_product_values(product, field):
     field = _criterion_key(field)
     attributes = product.attributes if isinstance(product.attributes, list) else []
@@ -1697,6 +1839,16 @@ def _requirement_matches_attribute(field, requirement, attribute):
     return _values_compatible(requirement.get("value"), attribute.get("value"))
 
 
+# "Честный Знак" / ЦРПТ marking is a labelling-compliance obligation the
+# supplier fulfils when producing the batch — never a catalogue attribute.
+# Checking it against products is pure noise: an "unknown" for every product,
+# or a FALSE mismatch where a catalogue reuses the field name "Маркировка" for
+# something unrelated (Oasis stores a certification date there, e.g.
+# "2024-04-01"). That false mismatch sank every Oasis product below every
+# Gifts one on any tender that requires Честный Знак — i.e. most of them.
+_COMPLIANCE_MARKING_RE = re.compile(r"честн\w*\s*знак|црпт|обязательн\w*\s+маркиров")
+
+
 def _fit_product(product, line, anchors, quantity, intent=None, from_selected_category=False, name_anchors=()):
     name_anchors = name_anchors or anchors
     matches, mismatches, unknown = [], [], []
@@ -1792,11 +1944,11 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
     if required_gender and product_gender and not (
         product_gender == required_gender
         or product_gender == "унисекс"
-        or (required_gender == "унисекс" and product_gender == "мужской")
+        or required_gender == "унисекс"
     ):
         mismatches.append(f"Пол не совпадает: требуется {required_gender}; товар {product_gender}")
 
-    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер", "пол", "гендер")
+    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер", "гендер")
     product_attributes = [
         attribute for attribute in product.attributes
         if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
@@ -1805,9 +1957,11 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
         label = _text(requirement.get("label"), 300)
         value = _text(requirement.get("value"), 1000)
         label_normalized = _normalized(label)
-        if not label_normalized or not value or any(marker in label_normalized for marker in handled_markers):
+        if not label_normalized or not value or _is_gender_label(label) or any(marker in label_normalized for marker in handled_markers):
             continue
         if any(marker in label_normalized for marker in ("коммент", "примеч")):
+            continue
+        if _COMPLIANCE_MARKING_RE.search(f"{label_normalized} {_normalized(value)}"):
             continue
         label_tokens = _meaningful_tokens(label_normalized)
         field = _requirement_field(label)
@@ -1944,11 +2098,23 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
 _OASIS_PAGE_CEILING = 6
 
 
-def _local_catalog_pool(supplier_code, selected_category_ids, terms, thin_threshold=40, category_limit=1500, text_limit=1200):
+def _local_catalog_pool(supplier_code, selected_category_ids, terms, thin_threshold=40, category_limit=200_000, text_limit=1200):
     """Search a locally-mirrored supplier catalogue: keyword-matched category
     rows first, full-text fallback when that's thin — exactly how Gifts has
     always been searched. Oasis uses this once `sync_oasis_catalog` has been
-    run at least once; both suppliers share the one code path."""
+    run at least once; both suppliers share the one code path.
+
+    category_limit used to be 1500 — a safety valve from when eligibility
+    checking was expensive per product (see the caching added elsewhere in
+    this file). Measured after that fix: an oversized category (Oasis
+    "Поло", 1607 products) cost the same ~5s capped or uncapped, but capping
+    silently dropped part of the category by raw database id, order_by("id")
+    having nothing to do with relevance — real Oasis matches were missing
+    from a search purely because of when they were synced, not how well
+    they fit. 200k is "no limit" for any category size seen in practice,
+    kept as a number rather than removed outright as a guard against a
+    truly corrupt category assignment turning one search into a full-table
+    scan."""
     base = CatalogProduct.objects.filter(supplier__code=supplier_code, is_active=True)
     cached, seen = [], set()
     if selected_category_ids:
@@ -2020,6 +2186,7 @@ def catalog_candidates_for_line(
     force_full_text=False,
 ):
     """Return a relevance-ranked shortlist from live Oasis and cached suppliers."""
+    _reset_requirement_values_cache()
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
@@ -2186,9 +2353,45 @@ def catalog_candidates_for_line(
         product._from_selected_category = bool(
             selected_category_ids & {str(cid) for cid in (product.category_ids or [])}
         )
+    # Admin search rules ("исключить детские") only steer the search-plan
+    # queries, which are additive — they can't stop a matching product from
+    # surfacing. Give them real teeth: any product whose text (name,
+    # category, material/colour lists, every attribute value — see
+    # _rule_match_tokens) contains an excluded word is dropped before it
+    # ever reaches scoring. Matched against the whole card, not just the
+    # name, so "исключи синтетику" works off the composition attribute.
+    exclude_terms = tuple(dict.fromkeys(
+        _normalized(value) for value in ((intent or {}).get("exclude", []) if isinstance(intent, dict) else [])
+        if _normalized(value)
+    ))
+    # Mirror of exclude_terms: a "+слово" rule (плюс-слово) is a hard
+    # requirement, not just an extra search term fed to the pool fetch above
+    # — otherwise a candidate that happened to surface through some other
+    # word could pass despite missing the word the admin insisted on.
+    include_terms = tuple(dict.fromkeys(
+        _normalized(value) for value in ((intent or {}).get("include", []) if isinstance(intent, dict) else [])
+        if _normalized(value)
+    ))
+    # A "prefer" rule (мягкий приоритет) never removes anything — it only
+    # nudges matching products earlier among otherwise-equal candidates in
+    # the ranking below, the same way an admin would eyeball two equally
+    # fitting offers and pick the one closer to what they actually want.
+    prefer_terms = tuple(dict.fromkeys(
+        _normalized(value) for value in ((intent or {}).get("prefer", []) if isinstance(intent, dict) else [])
+        if _normalized(value)
+    ))
+
+    def _term_hits_text(term, text_tokens):
+        # Stem match, not exact substring: a rule word like "детские" must
+        # still catch "детская"/"детский"/"детского" — Russian inflection
+        # means a plain `term in product_text` silently misses most real
+        # catalog names even when the rule genuinely applies.
+        return any(_stems_match(term, token) for token in text_tokens)
+
     rejections = {
         "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
         "product_type": 0, "colour": 0, "forbidden": 0, "missing_required": 0,
+        "excluded_by_rule": 0, "required_by_rule": 0,
     }
     eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
     rejection_reasons, partial_reasons = {}, {}
@@ -2198,6 +2401,21 @@ def catalog_candidates_for_line(
             eligibility_counts["rejected"] += 1
             rejection_reasons["Нулевой остаток"] = rejection_reasons.get("Нулевой остаток", 0) + 1
             continue
+        if exclude_terms or include_terms:
+            product_tokens = _rule_match_tokens(product)
+            excluded_hit = next((term for term in exclude_terms if _term_hits_text(term, product_tokens)), "") if exclude_terms else ""
+            if excluded_hit:
+                rejections["excluded_by_rule"] += 1
+                eligibility_counts["rejected"] += 1
+                label = f"Исключено по правилу поиска: {excluded_hit}"
+                rejection_reasons[label] = rejection_reasons.get(label, 0) + 1
+                continue
+            if include_terms and not any(_term_hits_text(term, product_tokens) for term in include_terms):
+                rejections["required_by_rule"] += 1
+                eligibility_counts["rejected"] += 1
+                label = f"Не найдено обязательное слово по правилу поиска: {', '.join(include_terms)}"
+                rejection_reasons[label] = rejection_reasons.get(label, 0) + 1
+                continue
         eligibility = _catalog_product_eligibility(
             product, line, effective_line, anchors, quantity, intent,
             from_selected_category=product._from_selected_category, name_anchors=name_anchors,
@@ -2225,11 +2443,27 @@ def catalog_candidates_for_line(
             eligibility["status"] == "partial_eligible", eligibility["status"], eligibility["reasons"],
         ))
 
-    # A product's place is simply how far it is from the requirements: fewest
-    # mismatches first, then fewest unknowns, then the cheaper one. No weights,
-    # no supplier bonus, no name similarity.
+    def _prefer_rank(product):
+        # Still binary, not a score: 0 (has the preferred word) or 1. But it
+        # sits HIGH in the sort key — right after the exact/partial split —
+        # so a "prefer мужск" rule really does put every men's item above
+        # every women's one, and the non-preferred ones just yield, they are
+        # not removed. The admin asked for that word explicitly; a slightly
+        # cleaner non-preferred match is not a reason to override it. The
+        # word is matched against the whole product text (name + material +
+        # colour + every attribute value), not just the name.
+        if not prefer_terms:
+            return 0
+        return 0 if any(_term_hits_text(term, _rule_match_tokens(product)) for term in prefer_terms) else 1
+
+    # A product's place: exact matches first, then (if a "prefer" rule is
+    # active) the preferred word, then fewest mismatches, then fewest
+    # unknowns, then the cheaper one. No weights, no supplier bonus, no name
+    # similarity — "prefer" is one more binary slot in the same tuple, not a
+    # reintroduction of scoring.
     ranked.sort(key=lambda value: (
         value[4],
+        _prefer_rank(value[0]),
         len(value[2]),
         len(value[3]),
         value[0].effective_price is None,
