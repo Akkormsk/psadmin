@@ -2181,6 +2181,39 @@ def _refresh_live_oasis_prices(client, candidates, quantity=0):
         )
 
 
+def _shortlist_rank_key(
+    is_exact, priority, mismatch_count, unknown_count, price, name, article, price_desc=False,
+):
+    """The one fixed ordering for a search shortlist — no weights, no
+    scores, read top to bottom like words in a dictionary:
+
+      1. exact (no mismatch AND no unknown) before partial
+      2. raised priority (0) before normal (1)
+      3. fewer mismatches
+      4. fewer unknowns
+      5. cheaper — or, session-only, dearer (``price_desc``)
+      6. name, then article, for a stable order
+
+    Used both for the first deterministic sort and for the re-sort after
+    the AI shortlist pass edits a card's verdicts or priority — the pass
+    changes this function's inputs, never the function."""
+    has_price = price is not None
+    if price_desc:
+        price_key = -price if has_price else Decimal(0)
+    else:
+        price_key = price if has_price else Decimal("Infinity")
+    return (
+        0 if is_exact else 1,
+        0 if priority == 0 else 1,
+        mismatch_count,
+        unknown_count,
+        0 if has_price else 1,
+        price_key,
+        name or "",
+        article or "",
+    )
+
+
 def catalog_candidates_for_line(
     line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
     force_full_text=False,
@@ -2444,32 +2477,24 @@ def catalog_candidates_for_line(
         ))
 
     def _prefer_rank(product):
-        # Still binary, not a score: 0 (has the preferred word) or 1. But it
-        # sits HIGH in the sort key — right after the exact/partial split —
-        # so a "prefer мужск" rule really does put every men's item above
-        # every women's one, and the non-preferred ones just yield, they are
-        # not removed. The admin asked for that word explicitly; a slightly
-        # cleaner non-preferred match is not a reason to override it. The
-        # word is matched against the whole product text (name + material +
-        # colour + every attribute value), not just the name.
+        # The "priority" slot of the sort key: 0 (raised) or 1 (normal).
+        # A "prefer" rule word raises a product; the AI shortlist pass can
+        # also raise one. Still binary, never a score.
         if not prefer_terms:
-            return 0
+            return 1
         return 0 if any(_term_hits_text(term, _rule_match_tokens(product)) for term in prefer_terms) else 1
 
-    # A product's place: exact matches first, then (if a "prefer" rule is
-    # active) the preferred word, then fewest mismatches, then fewest
-    # unknowns, then the cheaper one. No weights, no supplier bonus, no name
-    # similarity — "prefer" is one more binary slot in the same tuple, not a
-    # reintroduction of scoring.
-    ranked.sort(key=lambda value: (
-        value[4],
-        _prefer_rank(value[0]),
-        len(value[2]),
-        len(value[3]),
-        value[0].effective_price is None,
-        value[0].effective_price if value[0].effective_price is not None else Decimal("Infinity"),
-        _normalized(value[0].full_name or value[0].name),
-        _normalized(value[0].article),
+    ranking_override = (intent or {}).get("ranking_override", {}) if isinstance(intent, dict) else {}
+    price_desc = _normalized(ranking_override.get("price")) == "desc"
+    ranked.sort(key=lambda value: _shortlist_rank_key(
+        is_exact=not value[2] and not value[3],
+        priority=_prefer_rank(value[0]),
+        mismatch_count=len(value[2]),
+        unknown_count=len(value[3]),
+        price=value[0].effective_price,
+        name=_normalized(value[0].full_name or value[0].name),
+        article=_normalized(value[0].article),
+        price_desc=price_desc,
     ))
     display_ranked = ranked
     selected, seen_groups = [], set()

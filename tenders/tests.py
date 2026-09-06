@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
 from .services import _VisibleTextParser, _apply_search_rules, _collapse_requirements, _evaluate_context_rules, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _search_rules, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _trigger_matches, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
 
@@ -3453,3 +3453,18 @@ class TenderTests(TestCase):
         })
 
         self.assertEqual([value["supplier"] for value in sources], ["Берег"])
+
+    def test_lesson_row_stores_admin_words_and_learned_context(self):
+        lesson = Lesson.objects.create(
+            admin_text="подними мужские, женские не убирай",
+            summary="приоритет мужским поло",
+            item_word="поло",
+            tz_labels=["материал", "плотность"],
+            created_by=self.user,
+        )
+
+        self.assertEqual(lesson.scope, "catalog")
+        self.assertTrue(lesson.is_active)
+        self.assertEqual(lesson.outcome, {})
+        self.assertEqual(str(lesson), "приоритет мужским поло")
+        self.assertEqual(list(Lesson.objects.filter(scope="catalog", is_active=True)), [lesson])

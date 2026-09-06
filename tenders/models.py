@@ -182,6 +182,48 @@ class RequirementSkipRule(models.Model):
         return self.label
 
 
+class Lesson(models.Model):
+    """One thing the admin taught the assistant about a search, kept as the
+    admin's own words plus the AI's short restatement, tagged with the
+    context it was learned in — what kind of item, which ТЗ field labels
+    were present, which production step. "Принять и обучить" writes one row
+    per feedback phrase; every later search on a similar position feeds
+    every matching lesson back into the single AI pass over the shortlist,
+    so a pattern that repeats even once is already active. No weights, no
+    scores: the AI reads all matching lessons as plain text and decides by
+    the current context. This one table is meant to replace the older
+    trigger→action CatalogSearchRule and, in time, the RequirementSkipRule
+    checkboxes' stored value."""
+    SCOPE_CHOICES = [
+        ("catalog", "Подбор товара"),
+        ("requirements", "Строки ТЗ"),
+        ("route", "Маршрут"),
+        ("production_step", "Этап производства"),
+        ("cost", "Себестоимость"),
+    ]
+    scope = models.CharField("Область", max_length=32, choices=SCOPE_CHOICES, default="catalog")
+    admin_text = models.TextField("Слова администратора")
+    summary = models.CharField("Чистая формулировка от ИИ", max_length=300, blank=True)
+    item_word = models.CharField("Слово-товар", max_length=120, blank=True)
+    tz_labels = models.JSONField("Метки полей ТЗ", default=list, blank=True)
+    production_type = models.CharField("Тип производства", max_length=120, blank=True)
+    outcome = models.JSONField("Что вышло в прошлый раз", default=dict, blank=True)
+    is_active = models.BooleanField("Активно", default=True)
+    session = models.ForeignKey(ProductionTrainingSession, on_delete=models.SET_NULL, null=True, blank=True, related_name="lessons")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="assistant_lessons")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["scope", "is_active"])]
+        verbose_name = "Урок ассистента"
+        verbose_name_plural = "Уроки ассистента"
+
+    def __str__(self):
+        return self.summary or self.admin_text[:80]
+
+
 class ProductionTrainingTurn(models.Model):
     session = models.ForeignKey(ProductionTrainingSession, on_delete=models.CASCADE, related_name="turns")
     feedback = models.TextField("Комментарий администратора", blank=True)

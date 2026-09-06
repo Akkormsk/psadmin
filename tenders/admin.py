@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 
 
 class TenderLineInline(admin.TabularInline):
@@ -97,6 +97,15 @@ class CatalogSyncRunAdmin(admin.ModelAdmin):
     list_display = ("supplier", "status", "received_count", "created_count", "updated_count", "deactivated_count", "started_at", "finished_at")
     list_filter = ("supplier", "status")
     readonly_fields = ("supplier", "status", "started_at", "finished_at", "received_count", "created_count", "updated_count", "deactivated_count", "error")
+
+
+@admin.register(Lesson)
+class LessonAdmin(admin.ModelAdmin):
+    list_display = ("summary", "scope", "item_word", "production_type", "is_active", "created_by", "created_at")
+    list_filter = ("scope", "is_active", "created_by")
+    search_fields = ("summary", "admin_text", "item_word")
+    list_editable = ("is_active",)
+    readonly_fields = ("session", "tz_labels", "outcome", "created_at", "updated_at")
 
 
 @admin.register(CatalogMatchDecision)
