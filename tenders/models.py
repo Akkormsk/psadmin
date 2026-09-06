@@ -101,64 +101,6 @@ class ProductionTrainingSession(models.Model):
         return self.position_name
 
 
-class CatalogSearchRule(models.Model):
-    """A permanent, admin-confirmed instruction for the catalogue search
-    ("не искать детские размеры", "для маек всегда добавляй слово
-    футболка") — the "Принять и обучиться" button promotes a session-scoped
-    rule here; every search after that applies every active row.
-
-    Two trigger kinds, deliberately kept apart:
-    - "text" (the default): `trigger_text`/`trigger_scope`/`trigger_negate`
-      are parsed out ONCE, when the admin's feedback is first translated
-      into a rule (services._translate_search_feedback), and applied
-      afterwards by plain, deterministic token/stem matching
-      (services._apply_search_rules) — no LLM call, ever, at search time.
-      Right for "does this word appear" conditions.
-    - "context": `trigger_text` holds a full natural-language condition
-      ("Размерный ряд в ТЗ включает размеры больше 42") that genuinely
-      needs interpreting — numeric ranges, comparisons, "no explicit
-      mention of X" — a plain substring/stem check cannot verify these
-      correctly (matching the literal digit "42" says nothing about
-      whether a range actually exceeds it). Evaluated by one small, fast,
-      batched LLM call per search (services._evaluate_context_rules) —
-      the deliberate exception to "no LLM at apply time", scoped to
-      exactly the conditions text matching cannot honestly resolve."""
-    TRIGGER_SCOPE_CHOICES = [
-        ("any", "Название и ТЗ"),
-        ("name", "Только название"),
-        ("requirements", "Только ТЗ"),
-    ]
-    TRIGGER_KIND_CHOICES = [
-        ("text", "Слово/фраза (без ИИ)"),
-        ("context", "Числа/контекст (мини-ИИ на поиске)"),
-    ]
-    ACTION_CHOICES = [
-        ("exclude", "Минус-слово (исключить)"),
-        ("include", "Плюс-слово (обязательно искать)"),
-        ("prefer", "Мягкий приоритет (не исключает)"),
-    ]
-    text = models.CharField("Правило целиком", max_length=300)
-    label = models.CharField("Короткая подпись для плашки", max_length=80, blank=True)
-    trigger_text = models.CharField("Условие (если пусто — всегда)", max_length=300, blank=True)
-    trigger_scope = models.CharField("Где искать условие", max_length=20, choices=TRIGGER_SCOPE_CHOICES, default="any")
-    trigger_negate = models.BooleanField("Условие — это ОТСУТСТВИЕ слова", default=False)
-    trigger_kind = models.CharField("Тип условия", max_length=10, choices=TRIGGER_KIND_CHOICES, default="text")
-    action = models.CharField("Действие", max_length=10, choices=ACTION_CHOICES, default="exclude")
-    action_text = models.CharField("Слово/корень для действия", max_length=120, blank=True)
-    source_phrase = models.CharField("Из какой фразы обратной связи", max_length=300, blank=True)
-    is_active = models.BooleanField("Активно", default=True)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="catalog_search_rules")
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["-created_at"]
-        verbose_name = "Правило поиска по каталогу"
-        verbose_name_plural = "Правила поиска по каталогу"
-
-    def __str__(self):
-        return self.label or self.text
-
-
 class RequirementSkipRule(models.Model):
     """A ТЗ characteristic whose row the admin marked "не участвует в
     подборе" — a labelling/compliance/design detail, not a real product
@@ -191,9 +133,9 @@ class Lesson(models.Model):
     every matching lesson back into the single AI pass over the shortlist,
     so a pattern that repeats even once is already active. No weights, no
     scores: the AI reads all matching lessons as plain text and decides by
-    the current context. This one table is meant to replace the older
-    trigger→action CatalogSearchRule and, in time, the RequirementSkipRule
-    checkboxes' stored value."""
+    the current context. This one table replaced the older trigger→action
+    search-rule DSL; the RequirementSkipRule checkboxes stay separate for
+    now."""
     SCOPE_CHOICES = [
         ("catalog", "Подбор товара"),
         ("requirements", "Строки ТЗ"),

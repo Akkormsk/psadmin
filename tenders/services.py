@@ -1432,248 +1432,14 @@ def _short_text_list(values, limit=12):
     return [_cell_text(value)[:300] for value in values[:limit] if _cell_text(value)]
 
 
-_SEARCH_RULE_SCOPES = {"any", "name", "requirements"}
-_SEARCH_RULE_ACTIONS = {"include", "exclude", "prefer"}
-# Connective/comparison words stripped before matching a trigger phrase — a
-# ТЗ practically never repeats the admin's exact wording ("если размеры
-# больше 42" vs the ТЗ's own "Размерный ряд: от 42 до 62"), but it does
-# contain the actual checkable content (the number, the noun). Matching on
-# content tokens only, not the whole phrase verbatim, is what makes a
-# trigger fire in practice instead of silently never matching.
-_TRIGGER_STOPWORDS = {
-    "и", "в", "с", "со", "по", "от", "до", "на", "для", "или", "не", "нет", "есть",
-    "более", "менее", "больше", "меньше", "чем", "если", "когда", "явного", "явной",
-    "явный", "явная", "явно", "запроса", "запрос", "указано", "указан", "указана",
-    "требуется", "товар", "товары", "товара", "изделие", "изделия", "позиция", "позиции",
-}
-_STEM_LEN = 5
-
-
-def _content_tokens(text):
-    tokens = _normalized_text(text).split()
-    return [token for token in tokens if len(token) >= 2 and token not in _TRIGGER_STOPWORDS]
-
-
-def _stems_match(a, b):
-    """True if two normalized Russian words plausibly share a root — a
-    crude but effective fix for inflection ("детские" vs "детская",
-    "размеры" vs "размерный"): compare a short prefix instead of the whole
-    word. Numbers and very short tokens fall back to exact equality, where
-    prefix-truncation would just produce false positives."""
-    if not a or not b:
-        return False
-    if a.isdigit() or b.isdigit():
-        return a == b
-    length = min(len(a), len(b), _STEM_LEN)
-    if length < 3:
-        return a == b
-    return a[:length] == b[:length]
-
-
-_SEARCH_RULE_KINDS = {"text", "context"}
-
-
-def _search_rules(raw):
-    """Named, admin-visible search rules — session-scoped until promoted to
-    a permanent CatalogSearchRule via "Принять и обучиться".
-
-    Each rule is `trigger_text`/`trigger_scope` (when does it fire — empty
-    trigger_text means "always") + `action`/`action_text` (what it does:
-    force a word into the search, or drop any candidate containing one).
-    `trigger_kind` says how the trigger gets checked: "text" (default) is
-    plain deterministic token/stem matching (_apply_search_rules), never an
-    LLM. "context" is for conditions text matching cannot honestly answer
-    (numeric ranges, comparisons, "no explicit mention of X") — there,
-    trigger_text is a full natural-language condition evaluated by one
-    small batched call per search (_evaluate_context_rules), the one
-    deliberate exception to "no LLM at apply time"."""
-    result, seen = [], set()
-    for value in raw if isinstance(raw, list) else []:
-        if not isinstance(value, dict):
-            continue
-        action_text = _normalized_text(_cell_text(value.get("action_text"))[:120])
-        if not action_text:
-            continue
-        action = _cell_text(value.get("action")).strip().lower()
-        action = action if action in _SEARCH_RULE_ACTIONS else "exclude"
-        trigger_scope = _cell_text(value.get("trigger_scope")).strip().lower()
-        trigger_scope = trigger_scope if trigger_scope in _SEARCH_RULE_SCOPES else "any"
-        trigger_kind = _cell_text(value.get("trigger_kind")).strip().lower()
-        trigger_kind = trigger_kind if trigger_kind in _SEARCH_RULE_KINDS else "text"
-        # A "text" trigger is normalized for reliable token/stem matching; a
-        # "context" trigger is a sentence for an LLM to read, so it keeps
-        # its own casing/punctuation instead.
-        raw_trigger = _cell_text(value.get("trigger_text"))[:300]
-        trigger_text = raw_trigger if trigger_kind == "context" else _normalized_text(raw_trigger)
-        trigger_negate = bool(value.get("trigger_negate")) and bool(trigger_text)
-        text = _cell_text(value.get("text"))[:300].strip()
-        key = (trigger_scope, trigger_kind, trigger_text, trigger_negate, action, action_text)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append({
-            "id": _cell_text(value.get("id"))[:40] or hashlib.sha1("|".join(str(part) for part in key).encode("utf-8")).hexdigest()[:12],
-            "text": text or _search_rule_sentence(trigger_text, trigger_scope, trigger_negate, action, action_text),
-            "label": _cell_text(value.get("label"))[:60].strip() or _search_rule_label(trigger_text, trigger_negate, action, action_text, trigger_scope),
-            "trigger_text": trigger_text,
-            "trigger_scope": trigger_scope,
-            "trigger_negate": trigger_negate,
-            "trigger_kind": trigger_kind,
-            "action": action,
-            "action_text": action_text,
-            "source_phrase": _cell_text(value.get("source_phrase"))[:300],
-        })
-    return result[:20]
-
-
-_SEARCH_RULE_SIGNS = {"include": "+", "exclude": "−", "prefer": "↑"}
-
-
-def _search_rule_label(trigger_text, trigger_negate, action, action_text, trigger_scope="any"):
-    sign = _SEARCH_RULE_SIGNS.get(action, "−")
-    if not trigger_text:
-        return f"{sign}{action_text}"
-    prefix = "ТЗ:" if trigger_scope == "requirements" else ""
-    arrow = "⇏" if trigger_negate else "→"
-    negation = "нет " if trigger_negate else ""
-    return f"{prefix}{negation}{trigger_text} {arrow} {sign}{action_text}"
-
-
-def _search_rule_sentence(trigger_text, trigger_scope, trigger_negate, action, action_text):
-    verb = {
-        "include": "искать слово", "exclude": "исключать товары со словом",
-        "prefer": "поднимать выше (не исключая остальные) товары со словом",
-    }.get(action, "исключать товары со словом")
-    if not trigger_text:
-        return f"Всегда {verb} «{action_text}»."
-    where = {"name": "в названии позиции", "requirements": "в ТЗ", "any": "в названии или ТЗ"}[trigger_scope]
-    condition = f"НЕ встречается «{trigger_text}»" if trigger_negate else f"встречается «{trigger_text}»"
-    return f"Если {where} {condition} — {verb} «{action_text}»."
-
-
-def _trigger_matches(trigger_text, haystack_text):
-    """Token+stem overlap, not a verbatim substring: a ТЗ almost never
-    repeats an admin's exact phrasing back ("если размеры больше 42" vs the
-    ТЗ's own "Размерный ряд: от 42 до 62"), so requiring the whole phrase
-    as one contiguous substring meant most triggers could never fire. This
-    strips connective/comparison words and requires every remaining content
-    word to have a stem-match somewhere in the target text."""
-    trigger_tokens = _content_tokens(trigger_text)
-    if not trigger_tokens:
-        return False
-    haystack_tokens = _content_tokens(haystack_text)
-    return all(any(_stems_match(token, candidate) for candidate in haystack_tokens) for token in trigger_tokens)
-
-
-_SEARCH_RULE_ACTION_BUCKETS = {"include": 0, "exclude": 1, "prefer": 2}
-
-
-def _apply_search_rules(rules, name_text, requirements_text):
-    """Deterministically resolve "text"-kind rules into the things the
-    backend search can actually enforce — no LLM involved, so an
-    already-understood rule can never be misread or skipped on a later
-    search. "context"-kind rules are skipped here — see
-    _evaluate_context_rules. Returns (include_terms, exclude_terms,
-    prefer_terms, fired_rules). "prefer" is a soft tie-breaker (ranks a
-    matching product earlier among otherwise-equal candidates) — it never
-    removes anything, unlike exclude/include."""
-    name_norm = _normalized_text(name_text)
-    requirements_norm = _normalized_text(requirements_text)
-    buckets = ([], [], [])
-    fired = []
-    for rule in rules if isinstance(rules, list) else []:
-        if not isinstance(rule, dict) or rule.get("trigger_kind") == "context":
-            continue
-        action_text = rule.get("action_text", "")
-        if not action_text:
-            continue
-        trigger_text = rule.get("trigger_text", "")
-        scope = rule.get("trigger_scope", "any")
-        haystack = {
-            "name": name_norm, "requirements": requirements_norm, "any": f"{name_norm} {requirements_norm}",
-        }.get(scope, name_norm + " " + requirements_norm)
-        if trigger_text:
-            matched = _trigger_matches(trigger_text, haystack)
-            fires = (not matched) if rule.get("trigger_negate") else matched
-            if not fires:
-                continue
-        target = buckets[_SEARCH_RULE_ACTION_BUCKETS.get(rule.get("action"), 1)]
-        if action_text not in target:
-            target.append(action_text)
-        fired.append(rule)
-    include_terms, exclude_terms, prefer_terms = buckets
-    return include_terms, exclude_terms, prefer_terms, fired
-
-
-def _evaluate_context_rules(line, rules):
-    """The one deliberate exception to "no LLM at apply time": a rule whose
-    condition genuinely needs interpreting (a numeric range, a comparison,
-    "no explicit mention of X") rather than a word/stem match — matching
-    the literal digit "42" says nothing about whether a size range
-    actually exceeds it, only real reading comprehension can tell. One
-    small, batched call evaluates every such condition against this
-    position at once, so it costs the same ~1-2s no matter how many
-    context rules are active, and stays out of the loop entirely when
-    there are none. Returns (include_terms, exclude_terms, prefer_terms,
-    fired_rules, usage)."""
-    rules = [rule for rule in (rules if isinstance(rules, list) else []) if isinstance(rule, dict) and rule.get("trigger_text")]
-    if not rules:
-        return [], [], [], [], {}
-    name = _cell_text(line.get("name"))[:300] if isinstance(line, dict) else ""
-    requirements = line.get("requirements") if isinstance(line, dict) else None
-    if isinstance(requirements, dict):
-        requirements = requirements.get("requirements")
-    # No [:20]-style cap here: a real ТЗ table routinely runs past 30 rows
-    # (this exact case has the size row at index 20), and unlike
-    # _build_search_plan's synonym generation, a context condition can be
-    # about ANY characteristic — truncating the list risks silently hiding
-    # the one row the condition is actually about, producing a confident
-    # but wrong "doesn't match" with no error anywhere to notice.
-    req_lines = [
-        f"{_cell_text(value.get('label'))}: {_cell_text(value.get('value'))}"
-        for value in (requirements if isinstance(requirements, list) else [])
-        if isinstance(value, dict) and _cell_text(value.get("label")) and _cell_text(value.get("value"))
-    ][:80]
-    conditions = [{"id": rule.get("id"), "condition": _cell_text(rule.get("trigger_text"))[:300]} for rule in rules]
-    prompt = f"""Для позиции тендера определи, выполняется ли каждое условие ниже — используя смысл и контекст, а не точное совпадение слов. Например условие "размеры больше 42" выполняется, если размерный ряд в ТЗ включает значения больше 42, даже если сама фраза "больше 42" в тексте ТЗ не встречается буквально (например ТЗ пишет "от 42 до 62").
-
-Название позиции: {name}
-Характеристики из ТЗ: {'; '.join(req_lines) or 'нет'}
-
-Условия (проверь каждое независимо):
-{json.dumps(conditions, ensure_ascii=False)}
-
-Верни только JSON: {{"results":[{{"id":"...","matches":true|false}}, ...]}} — по одному объекту на каждое условие."""
-    result, usage = _ai_gateway_json(prompt, max_tokens=400, timeout=20, network_attempts=2)
-    matched_ids = {
-        _cell_text(item.get("id"))
-        for item in (result.get("results") if isinstance(result, dict) and isinstance(result.get("results"), list) else [])
-        if isinstance(item, dict) and item.get("matches") is True
-    }
-    buckets = ([], [], [])
-    fired = []
-    for rule in rules:
-        action_text = rule.get("action_text", "")
-        if not action_text:
-            continue
-        matched = _cell_text(rule.get("id")) in matched_ids
-        fires = (not matched) if rule.get("trigger_negate") else matched
-        if not fires:
-            continue
-        target = buckets[_SEARCH_RULE_ACTION_BUCKETS.get(rule.get("action"), 1)]
-        if action_text not in target:
-            target.append(action_text)
-        fired.append(rule)
-    include_terms, exclude_terms, prefer_terms = buckets
-    return include_terms, exclude_terms, prefer_terms, fired, usage
-
 
 def _normalize_catalog_intent(raw):
-    """A catalog_intent is now just what to search for: item, a category
-    hint, search phrases, and the recognised ТЗ requirements passed
-    straight through. No DSL, no per-source strategy, no structured
-    constraints — _build_search_plan and the backend keyword search handle
-    everything themselves."""
+    """A catalog_intent is just what to search for: item, a category hint,
+    search phrases, the recognised ТЗ requirements passed straight through,
+    and an optional session-only ranking_override. No DSL, no per-source
+    strategy, no structured constraints — _build_search_plan and the
+    backend keyword search handle everything themselves; free-text
+    instructions are handled by the AI shortlist pass afterwards."""
     raw = raw if isinstance(raw, dict) else {}
     item = _cell_text(raw.get("item"))[:200]
     categories = _short_text_list(raw.get("categories"), limit=8) or ([item] if item else [])
@@ -1683,16 +1449,15 @@ def _normalize_catalog_intent(raw):
             label, item_value = _cell_text(value.get("label"))[:120], _cell_text(value.get("value"))[:500]
             if label and item_value:
                 required.append({"label": label, "value": item_value})
+    ranking = raw.get("ranking_override") if isinstance(raw.get("ranking_override"), dict) else {}
     return {
         "item": item,
         "categories": categories,
         "synonyms": _short_text_list(raw.get("synonyms"), limit=12),
         "required": required,
-        "search_rules": _search_rules(raw.get("search_rules")),
-        "exclude": _short_text_list(raw.get("exclude"), limit=10),
-        "include": _short_text_list(raw.get("include"), limit=10),
-        "prefer": _short_text_list(raw.get("prefer"), limit=10),
+        "ranking_override": {"price": ranking["price"]} if ranking.get("price") in {"asc", "desc"} else {},
     }
+
 
 def _catalog_search_outcome(raw):
     if isinstance(raw, dict):
@@ -1709,51 +1474,6 @@ def _catalog_search_outcome(raw):
         "category_usage": {}, "category_errors": [], "review": {},
     }
 
-
-
-def _translate_search_feedback(line, feedback, current_rules=()):
-    """Turn an admin comment about the search into one or more structured
-    search rules. This is the ONLY place an LLM is involved in a "text"
-    rule's life — it runs once, when the comment is first typed, to pull
-    out a trigger (when does this apply — a word in the position name, a
-    word in the ТЗ, or always) and an action (force a word into the
-    search, or drop any candidate containing one). From then on a "text"
-    rule is applied by plain string matching (_apply_search_rules), never
-    re-interpreted. A "context" rule (numbers, comparisons, "no mention
-    of X") is re-evaluated by a small LLM call on every search instead
-    (_evaluate_context_rules) — plain matching cannot honestly answer
-    those, so pretending otherwise (e.g. matching a literal digit and
-    calling it a size comparison) is worse than admitting it needs a
-    real read."""
-    prompt = f"""Администратор оставил комментарий к поиску товара по позиции тендера. Разбей его на одно или несколько отдельных правил поиска.
-
-Каждое правило — это условие (когда оно срабатывает) и действие (что делать):
-- trigger_kind — "text", если условие проверяется присутствием конкретного слова/корня (материал, тип товара, конкретное слово в названии). "context", если условие — это число, диапазон, сравнение (больше/меньше/от-до) или отсутствие чего-либо, требующее понимания смысла, а не просто совпадения слова — например "размеры больше 42" НЕЛЬЗЯ проверить совпадением слова "42", потому что в ТЗ может быть написано "от 42 до 62" или "44-60", и здесь либо есть, либо нет размеров больше 42 — это нужно понять по смыслу.
-- trigger_text — для "text": 1 ключевое слово или короткий корень (например "хлопок", "рюкзак"), без слов-сравнений. Для "context": ПОЛНОЕ условие человеческим языком, которое можно проверить чтением ТЗ (например "Размерный ряд в ТЗ включает размеры больше 42-го"). Пусто в обоих случаях, если правило применяется ВСЕГДА.
-- trigger_scope — где искать условие: "name", "requirements", "any". Для "context" можно всегда "any" — модель сама прочитает и название, и ТЗ.
-- trigger_negate — true, если условие — это ОТСУТСТВИЕ ("если НЕ указано...", "нет явного запроса на...", "не упоминается..."). Для "context"-правил проще и надёжнее сформулировать отрицание прямо внутри trigger_text ("в ТЗ нет явного указания на детские размеры"), чем ставить этот флаг — но флаг тоже поддерживается.
-- action — "exclude" (убрать из результатов товары с этим словом), "include" (обязательно искать товары с этим словом, как плюс-слово) или "prefer" (МЯГКИЙ приоритет — товары с этим словом показать выше остальных, но НЕ убирать остальные из выдачи; используй, когда администратор просит "предпочесть"/"приоритет"/"сначала показывай X, но не убирай остальное").
-- action_text — короткий корень слова для действия (например "детск", а не "детские" или "детская" — корень покрывает все окончания сразу), 1 слово, без вводных.
-- label — короткая подпись для плашки в интерфейсе (например "рюкзак → −мешок", "ТЗ:размер>42 → −детск" или "↑мужск" для мягкого приоритета).
-
-Примеры:
-"исключить детские" → {{"trigger_kind":"text","trigger_text":"","trigger_scope":"any","trigger_negate":false,"action":"exclude","action_text":"детск","label":"−детск"}}
-"если рюкзак — не предлагай мешки" → {{"trigger_kind":"text","trigger_text":"рюкзак","trigger_scope":"name","trigger_negate":false,"action":"exclude","action_text":"мешок","label":"рюкзак → −мешок"}}
-"если в ТЗ материал хлопок — не предлагай синтетику" → {{"trigger_kind":"text","trigger_text":"хлопок","trigger_scope":"requirements","trigger_negate":false,"action":"exclude","action_text":"синтетик","label":"ТЗ:хлопок → −синтетик"}}
-"если в ТЗ размеры больше 42 и нет явного запроса на детские — исключи детские" → {{"trigger_kind":"context","trigger_text":"Размерный ряд в ТЗ включает размеры больше 42-го, и нигде явно не запрошены детские размеры","trigger_scope":"any","trigger_negate":false,"action":"exclude","action_text":"детск","label":"ТЗ: размер>42 → −детск"}}
-"исключи товары со словом детское, если в ТЗ нет упоминания детских размеров" → {{"trigger_kind":"context","trigger_text":"В ТЗ нигде не упоминаются детские размеры","trigger_scope":"any","trigger_negate":false,"action":"exclude","action_text":"детск","label":"ТЗ без «детские» → −детск"}}
-"повысь приоритет мужских, но не убирай женские" → {{"trigger_kind":"text","trigger_text":"","trigger_scope":"any","trigger_negate":false,"action":"prefer","action_text":"мужск","label":"↑мужск"}}
-
-Позиция: {json.dumps(line, ensure_ascii=False)}
-Уже действующие правила: {json.dumps([_cell_text(value.get("text")) for value in current_rules if isinstance(value, dict)], ensure_ascii=False)}
-Комментарий администратора: {feedback}
-
-Верни только JSON: {{"rules":[{{"trigger_kind":"text|context","trigger_text":"...","trigger_scope":"any|name|requirements","trigger_negate":true|false,"action":"exclude|include|prefer","action_text":"...","label":"..."}}]}}
-Не выдумывай условия и слова, которых нет в комментарии. Если комментарий не про поиск товара (например, про маршрут или цену), верни {{"rules":[]}}."""
-    result, usage = _ai_gateway_json(prompt, max_tokens=500, timeout=25, network_attempts=2)
-    raw_rules = result.get("rules", []) if isinstance(result, dict) and isinstance(result.get("rules"), list) else []
-    rules = _search_rules([{**value, "source_phrase": feedback} for value in raw_rules if isinstance(value, dict)])
-    return rules, usage
 
 
 def _requirement_list(values):
@@ -2756,11 +2476,10 @@ def _build_search_plan(line):
     """The one LLM call left in product search: turn a messy tender position
     name into a clean item + a few search phrases, the way a person would
     type into a supplier's own search box — not a route, not a catalog DSL,
-    nothing else. Kept deliberately tiny (no images, no card dumps, no rules
-    to weigh) so it stays fast: measured 0.5-2s per call against this
-    gateway. Admin rules are applied separately and deterministically
-    (_apply_search_rules) — this call never sees them, so it can't
-    reinterpret one differently from one search to the next."""
+    nothing else. Kept deliberately tiny (no images, no card dumps, no
+    feedback to weigh) so it stays fast: measured 0.5-2s per call against
+    this gateway. The admin's free-text feedback is handled separately, by
+    the AI shortlist pass — this call never sees it."""
     name = _cell_text(line.get("name"))[:300] if isinstance(line, dict) else ""
     requirements = line.get("requirements") if isinstance(line, dict) else None
     if isinstance(requirements, dict):
@@ -2795,21 +2514,6 @@ def _build_search_plan(line):
     if not item:
         item = _strip_procurement_boilerplate(name) or name
     return {"item": item, "queries": queries, "skip_labels": skip_labels}, usage
-
-
-def _global_search_rules():
-    """Permanent rules the admin promoted with "Принять и обучиться" —
-    applied to every search, not just the session that created them."""
-    from .models import CatalogSearchRule
-    return [
-        {
-            "id": f"g{row.pk}", "text": row.text, "label": row.label or row.text[:60],
-            "trigger_text": row.trigger_text, "trigger_scope": row.trigger_scope, "trigger_negate": row.trigger_negate,
-            "trigger_kind": row.trigger_kind, "action": row.action, "action_text": row.action_text,
-            "source_phrase": row.source_phrase, "permanent": True,
-        }
-        for row in CatalogSearchRule.objects.filter(is_active=True).order_by("-created_at")[:50]
-    ]
 
 
 _COMPLIANCE_MARKING_RE = re.compile(r"честн\w*\s*знак|црпт|обязательн\w*\s+маркиров")
@@ -2875,117 +2579,454 @@ def _frozen_route(reason=None, purchase_details=None):
     }
 
 
-def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, search_rules_override=None, recompute="all"):
-    """Product search, rebuilt from scratch as five small, separately
-    testable steps (see docs/assistant_protocol.md):
+# --- AI shortlist pass -----------------------------------------------------
+# After the deterministic search leaves a short list (~20-100 cards, usually
+# ~40), ONE small model call reads every card in full plus the admin's
+# free-text instructions — this session's feedback and lessons pulled from
+# earlier similar positions — and edits only three things per card: the
+# per-requirement verdicts (✓/✗/?), the 0/1 priority slot, and a "remove"
+# flag. The fixed math (_shortlist_rank_key) then re-sorts on those inputs.
+# The call is skipped entirely when there is nothing to apply, so a fresh
+# position with no feedback and no lessons costs zero extra tokens.
 
-    `recompute` scopes a rebuild to one dialogue block so a comment in the
-    catalog step's own feedback box changes only the product list, never
-    the route or another block's state:
+_VERDICT_ICON = {"match": "✓", "mismatch": "✗", "unknown": "?"}
+_VERDICT_FIELDS = {"match": "matches", "mismatch": "mismatches", "unknown": "unknown"}
+_POINT_STOPWORDS = {
+    "не", "в", "на", "по", "и", "с", "до", "от", "требуется", "каталоге",
+    "указан", "указана", "указано", "совпадает", "подходит", "нет", "данных",
+    "товара", "товар", "заявлено", "нужное", "достаточен", "подтвержден", "подтверждён",
+}
+
+
+def _verdict_subject(text):
+    """The leading subject of a verdict line ("Материал не совпадает: …" ->
+    "материал"), used to find which existing verdict an AI edit replaces."""
+    head = re.split(r"\bне\b|:", _normalized_text(text))[0]
+    words = [value for value in head.split() if len(value) > 2 and value not in _POINT_STOPWORDS]
+    return words[0] if words else ""
+
+
+def _subjects_match(a, b):
+    a, b = _normalized_text(a), _normalized_text(b)
+    if not a or not b:
+        return False
+    length = min(len(a), len(b), 5)
+    return a[:length] == b[:length] if length >= 4 else a == b
+
+
+def _shortlist_card_brief(card):
+    header = f"[{card.get('id')}] {_cell_text(card.get('name'))[:90]}"
+    meta = []
+    if _cell_text(card.get("article")):
+        meta.append(f"арт {_cell_text(card.get('article'))[:24]}")
+    if card.get("price") not in (None, ""):
+        meta.append(f"{card.get('price')} ₽")
+    materials = ", ".join(_cell_text(value)[:40] for value in (card.get("materials") or [])[:4] if _cell_text(value))
+    if materials:
+        meta.append(materials)
+    colors = ", ".join(_cell_text(value)[:24] for value in (card.get("colors") or [])[:6] if _cell_text(value))
+    if colors:
+        meta.append(colors)
+    attributes = "; ".join(
+        f"{_cell_text(value.get('name'))[:30]}: {_cell_text(value.get('value'))[:44]}"
+        for value in (card.get("attributes") or [])[:8]
+        if isinstance(value, dict) and _cell_text(value.get("name")) and _cell_text(value.get("value"))
+    )
+    if attributes:
+        meta.append(attributes)
+    verdicts = [
+        f"{_VERDICT_ICON[key]} {_cell_text(value)[:80]}"
+        for key, field in _VERDICT_FIELDS.items()
+        for value in (card.get(field) or [])[:8]
+        if _cell_text(value)
+    ]
+    lines = [header]
+    if meta:
+        lines.append("   " + " | ".join(meta))
+    if verdicts:
+        lines.append("   оценки: " + "; ".join(verdicts))
+    return "\n".join(lines)
+
+
+def _apply_card_edit(card, edit):
+    """Apply one card's AI edits in place: verdict set/fix/drop, priority,
+    remove. Recomputes the mismatch/unknown counts and the exact/partial
+    flag the fixed sort key reads."""
+    fields = {key: card.setdefault(field, []) for key, field in _VERDICT_FIELDS.items()}
+    touched = False
+    for item in edit.get("set", []) if isinstance(edit.get("set"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        point = _cell_text(item.get("point"))[:80]
+        if not point:
+            continue
+        verdict = _cell_text(item.get("verdict")).lower()
+        note = _cell_text(item.get("note"))[:140]
+        phrase = f"{point}: {note}" if note else point
+        subject = _verdict_subject(point) or _normalized_text(point)
+        for entries in fields.values():
+            kept = [
+                value for value in entries
+                if not (_verdict_subject(value) and _subjects_match(_verdict_subject(value), subject))
+            ]
+            if len(kept) != len(entries):
+                touched = True
+            entries[:] = kept
+        if verdict in fields:
+            fields[verdict].append(phrase)
+            touched = True
+        # verdict "none"/"drop"/"" — the point is simply removed, nothing added
+    if "priority" in edit:
+        new_priority = 0 if _cell_text(edit.get("priority")) in {"0", "raise", "up", "raised"} else 1
+        if card.get("priority", 1) != new_priority:
+            card["priority"] = new_priority
+            touched = True
+    if edit.get("remove") is True:
+        card["_removed"] = True
+        card["_removed_reason"] = _cell_text(edit.get("remove_reason"))[:160]
+        touched = True
+    card["mismatch_count"] = len(fields["mismatch"])
+    card["unknown_count"] = len(fields["unknown"])
+    card["fit"] = "exact" if not fields["mismatch"] and not fields["unknown"] else "partial"
+    if touched:
+        card["_ai_touched"] = True
+    return touched
+
+
+def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, timeout=30):
+    """Run the one AI pass over the ranked shortlist. Mutates the shortlist
+    card dicts in place. Returns a dict:
+      instructions — [{text, origin, applied, note}] for the UI
+      outcome      — {removed:[…], touched:[…]} for the lesson record
+      ranking      — {} or {"price": "asc"|"desc"} (session-only sort flip)
+      usage, error — token usage and, if the call failed, a short message
+                     (the deterministic order then stands unchanged)."""
+    instructions = [
+        value for value in (instructions or [])
+        if _cell_text(value.get("text") if isinstance(value, dict) else value)
+    ]
+    blank = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
+    if not instructions or not shortlist:
+        return blank
+    req_text = "; ".join(
+        f"{_cell_text(row.get('label'))}: {_cell_text(row.get('value'))}"
+        for row in (requirement_rows or [])
+        if isinstance(row, dict) and _cell_text(row.get("label")) and _cell_text(row.get("value"))
+    ) or "нет"
+    numbered = []
+    for index, value in enumerate(instructions, 1):
+        text = _cell_text(value.get("text") if isinstance(value, dict) else value)
+        origin = (value.get("origin") if isinstance(value, dict) else "") or "session"
+        tag = "эта сессия" if origin == "session" else "раньше на похожих позициях"
+        numbered.append(f"{index}. ({tag}) {text}")
+    cards_text = "\n".join(_shortlist_card_brief(card) for card in shortlist)
+    prompt = f"""Ты помогаешь администратору отобрать товары под позицию тендера. Ниже — короткий список карточек, уже найденных и оценённых кодом по пунктам ТЗ, и инструкции администратора свободным текстом. Применяй инструкции ТОЛЬКО через правку оценок карточек, приоритета и флага «убрать». Сам поиск и формулу сортировки ты не трогаешь.
+
+Позиция: {position_name}
+Учитываемые пункты ТЗ: {req_text}
+
+Карточки:
+{cards_text}
+
+Инструкции администратора:
+{chr(10).join(numbered)}
+
+Что можно сделать с карточкой:
+- поправить или добавить оценку по признаку: {{"point":"Пол","verdict":"mismatch","note":"в ТЗ нужен мужской"}}. verdict: match (совпало), mismatch (не совпадает — карточка опустится), unknown (нет данных в карточке), none (убрать этот признак из оценки совсем — как будто его нет в ТЗ).
+- поднять карточку выше остальных: "priority":0. СТАВЬ ТОЛЬКО при явном «подними / приоритет / в первую очередь / сначала». Мягкая формулировка («нужны мужские», «лучше хлопок») — это НЕ приоритет, а mismatch по этому признаку у тех, кто не подходит.
+- убрать карточку: "remove":true,"remove_reason":"короткая причина" — когда инструкция прямо просит убрать/исключить такой товар, либо оставить только определённые (а этот под них не подходит).
+
+Правь только карточки, которых инструкции реально касаются, остальные не упоминай.
+Если инструкция — про смену самой сортировки («сначала дорогие», «сначала дешёвые»), карточки не трогай, верни направление в "ranking" и пометь эту инструкцию "ranking_only":true.
+
+Для каждой инструкции верни: "summary" — короткая чистая формулировка сути (для плашки и запоминания, например «приоритет мужским», «плотность ниже 250 — несовпадение»), "note" — что конкретно сделано в этой выдаче.
+
+Верни только JSON:
+{{"cards":{{"<id>":{{"set":[{{"point":"...","verdict":"match|mismatch|unknown|none","note":"..."}}],"priority":0,"remove":true,"remove_reason":"..."}}}},"ranking":{{"price":"asc|desc"}},"instructions":[{{"n":1,"applied":true,"ranking_only":false,"summary":"...","note":"что сделано"}}]}}"""
+    try:
+        result, usage = _ai_gateway_json(prompt, max_tokens=1800, timeout=timeout, network_attempts=2)
+    except TenderAIError as exc:
+        return {**blank, "error": str(exc)[:200]}
+    if not isinstance(result, dict):
+        return {**blank, "usage": {}}
+    by_id = {str(card.get("id")): card for card in shortlist}
+    edits = result.get("cards")
+    if isinstance(edits, dict):
+        for card_id, edit in edits.items():
+            card = by_id.get(str(card_id))
+            if card is not None and isinstance(edit, dict):
+                _apply_card_edit(card, edit)
+    fired = {}
+    for item in result.get("instructions", []) if isinstance(result.get("instructions"), list) else []:
+        if isinstance(item, dict):
+            fired[str(item.get("n"))] = item
+    instruction_results = []
+    for index, value in enumerate(instructions, 1):
+        info = fired.get(str(index), {})
+        instruction_results.append({
+            "text": _cell_text(value.get("text") if isinstance(value, dict) else value),
+            "origin": (value.get("origin") if isinstance(value, dict) else "") or "session",
+            "applied": bool(info.get("applied")),
+            "ranking_only": bool(info.get("ranking_only")),
+            "summary": _cell_text(info.get("summary"))[:280],
+            "note": _cell_text(info.get("note"))[:200],
+        })
+    ranking = {}
+    raw_ranking = result.get("ranking") if isinstance(result.get("ranking"), dict) else {}
+    if _cell_text(raw_ranking.get("price")).lower() in {"asc", "desc"}:
+        ranking = {"price": _cell_text(raw_ranking.get("price")).lower()}
+    outcome = {
+        "removed": [
+            {
+                "article": _cell_text(card.get("article"))[:60],
+                "name": _cell_text(card.get("name"))[:80],
+                "reason": _cell_text(card.get("_removed_reason"))[:160],
+            }
+            for card in shortlist if card.get("_removed")
+        ][:20],
+        "touched": [
+            {"article": _cell_text(card.get("article"))[:60], "name": _cell_text(card.get("name"))[:80]}
+            for card in shortlist if card.get("_ai_touched") and not card.get("_removed")
+        ][:20],
+    }
+    return {
+        "instructions": instruction_results, "outcome": outcome,
+        "ranking": ranking, "usage": usage or {}, "error": "",
+    }
+
+
+def _price_decimal(value):
+    try:
+        return Decimal(str(value)) if value not in (None, "") else None
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _lesson_outcome_hint(outcome):
+    """One short phrase from a lesson's stored outcome ("убрали X; поправили
+    оценки у N карточек") so the shortlist pass sees that the instruction
+    already worked once and how."""
+    if not isinstance(outcome, dict):
+        return ""
+    parts = []
+    removed = outcome.get("removed") if isinstance(outcome.get("removed"), list) else []
+    names = ", ".join(
+        _cell_text(value.get("name") if isinstance(value, dict) else value)[:40]
+        for value in removed[:3]
+        if _cell_text(value.get("name") if isinstance(value, dict) else value)
+    )
+    if names:
+        parts.append(f"убрали {names}")
+    touched = outcome.get("touched") if isinstance(outcome.get("touched"), list) else []
+    if touched:
+        parts.append(f"поправили оценки у {len(touched)} карточек")
+    return "; ".join(parts)[:200]
+
+
+def _retrieve_lessons(scope, item_word, tz_labels, production_type="", limit=12):
+    """Pull the lessons that plausibly apply to this kind of position —
+    cheap: one filtered query, then a score by item-word stem match
+    (strong), ТЗ-label overlap (a bonus), and production type. Deliberately
+    loose: the shortlist pass re-reads each one against the real context
+    and ignores the ones that do not fit, so over-fetching here is
+    harmless and under-fetching is not. A lesson with no stored context is
+    an "always" lesson and is always pulled."""
+    from .models import Lesson
+    item_norm = _normalized_text(item_word)
+    item_stem = item_norm[:5]
+    label_set = {value for value in (tz_labels or []) if value}
+    prod_norm = _normalized_text(production_type)
+    scored = []
+    for lesson in Lesson.objects.filter(scope=scope, is_active=True).order_by("-created_at")[:200]:
+        score = 0
+        lesson_item = _normalized_text(lesson.item_word)
+        if lesson_item and item_norm and (
+            (item_stem and lesson_item[:5] == item_stem) or lesson_item in item_norm or item_norm in lesson_item
+        ):
+            score += 3
+        lesson_labels = {_normalized_text(value) for value in (lesson.tz_labels or []) if _normalized_text(value)}
+        score += len(label_set & lesson_labels)
+        if prod_norm and _normalized_text(lesson.production_type) == prod_norm:
+            score += 2
+        if not _normalized_text(lesson.item_word) and not lesson_labels:
+            score += 1
+        if score > 0:
+            scored.append((score, lesson))
+    scored.sort(key=lambda pair: (-pair[0], -pair[1].pk))
+    result = []
+    for _score, lesson in scored[:limit]:
+        instruction = _cell_text(lesson.summary) or _cell_text(lesson.admin_text)
+        hint = _lesson_outcome_hint(lesson.outcome)
+        if hint:
+            instruction = f"{instruction} (в прошлый раз: {hint})"
+        result.append({
+            "id": lesson.pk,
+            "instruction": instruction[:400],
+            "admin_text": _cell_text(lesson.admin_text),
+        })
+    return result
+
+
+def learn_lessons_from_session(hypothesis, session, user):
+    """"Принять и обучить": write one Lesson per catalog/requirements
+    instruction the admin gave this session, tagged with the context it was
+    learned in — the clean item word, the ТЗ field labels that were in
+    play, and (later, when routes unfreeze) the production type. The
+    shortlist pass's own restatement of the instruction becomes the
+    lesson's summary; its outcome (what was removed / re-scored) rides
+    along so the next pass sees "this already worked once". Idempotent on
+    the admin's exact words + item word."""
+    from .models import Lesson
+    if not isinstance(hypothesis, dict):
+        return 0
+    results = {
+        _normalized_text(row.get("text")): row
+        for row in (hypothesis.get("shortlist_instructions") or [])
+        if isinstance(row, dict) and _cell_text(row.get("text"))
+    }
+    plan = hypothesis.get("search_plan") if isinstance(hypothesis.get("search_plan"), dict) else {}
+    item_word = _cell_text(plan.get("item"))[:120]
+    tz_labels = [
+        _normalized_text(row.get("label"))
+        for row in (hypothesis.get("requirement_selection") or [])
+        if isinstance(row, dict) and row.get("selected") is not False and _cell_text(row.get("label"))
+    ][:20]
+    outcome = hypothesis.get("shortlist_outcome") if isinstance(hypothesis.get("shortlist_outcome"), dict) else {}
+    saved = 0
+    for entry in hypothesis.get("session_instructions") or []:
+        if not isinstance(entry, dict):
+            continue
+        if (_cell_text(entry.get("scope")) or "catalog") not in {"catalog", "requirements"}:
+            continue
+        admin_text = _cell_text(entry.get("text"))[:600]
+        if not admin_text:
+            continue
+        scope = _cell_text(entry.get("scope")) or "catalog"
+        result = results.get(_normalized_text(admin_text), {})
+        summary = _cell_text(result.get("summary"))[:300] or admin_text[:300]
+        lesson, created = Lesson.objects.get_or_create(
+            scope=scope, item_word=item_word, admin_text=admin_text,
+            defaults={
+                "summary": summary, "tz_labels": tz_labels, "outcome": outcome,
+                "session": session, "created_by": user,
+            },
+        )
+        if not created:
+            lesson.is_active = True
+            lesson.summary = summary or lesson.summary
+            lesson.tz_labels = tz_labels or lesson.tz_labels
+            lesson.outcome = outcome or lesson.outcome
+            lesson.save(update_fields=["is_active", "summary", "tz_labels", "outcome"])
+        saved += int(created)
+    return saved
+
+
+def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None):
+    """Product search + the AI shortlist pass (see docs/assistant_protocol.md):
+
+    `recompute` scopes a rebuild to one dialogue block:
     - "all" (default): full rebuild — re-derives the search plan and the
-      route from scratch. What "Начать заново" and route-scoped feedback do.
-    - "catalog": keep the prior route and the prior search plan verbatim
-      (the position name did not change, so re-asking the LLM for item +
-      queries would only add latency and drift); still re-translate this
-      turn's feedback, re-apply every rule, and re-run the backend search.
+      route from scratch. What "Начать заново" and route feedback do.
+    - "catalog": keep the prior route and search plan verbatim (position
+      name did not change); still re-run the backend search and the pass.
 
     1. ТЗ recognition already ran before this is called (document upload).
-    2. Route — hardcoded while search is the thing being perfected. No LLM,
-       no maybe-wrong guess: every position is "закупка готового изделия +
-       нанесение" until this comes back as its own brick.
+    2. Route — hardcoded while search is the thing being perfected.
     3. One tiny LLM call (_build_search_plan): messy position name -> clean
-       item + a few search phrases, the way a person would type into a
-       supplier's own search box. Applies admin search rules literally.
-    4. Backend search (catalog.catalog_candidates_for_line) — unchanged,
-       no LLM, already tuned to answer in a few seconds.
-    5. No reviewer. The admin is the reviewer: feedback becomes named,
-       removable "search rule" chips (session-scoped) that a green
-       "Подтвердить и обучить" click promotes to permanent + global.
+       item + a few search phrases. Never sees feedback or lessons.
+    4. Backend search (catalog.catalog_candidates_for_line) — no LLM, a
+       fixed keyword + hard-filter + ranking pipeline.
+    5. The AI shortlist pass (_run_shortlist_pass) — only when there is
+       session feedback or a matching lesson: one call reads the ~40 ranked
+       cards in full and edits their verdicts / priority / remove flag, and
+       the same fixed math re-sorts. Skipped (zero tokens) otherwise.
+    6. "Принять и обучить" writes each session instruction to a Lesson with
+       the context it was learned in.
     """
     started_at = time.perf_counter()
-    from .catalog import CatalogSyncError, catalog_candidates_for_line
+    from .catalog import CatalogSyncError, catalog_candidates_for_line, _shortlist_rank_key
 
     if progress_callback:
         progress_callback("cases")
-    current_intent = current.get("catalog_intent") if isinstance(current, dict) and isinstance(current.get("catalog_intent"), dict) else {}
-
-    # Step 5 (rule bookkeeping): session rules carried from the current
-    # hypothesis, minus whatever the UI just cleared with ×, plus whatever
-    # this feedback phrase adds. Global (permanently confirmed) rules are
-    # kept separate and always included in the search-plan call below.
-    new_rules, feedback_usage = ([], {})
-    if feedback:
-        new_rules, feedback_usage = _translate_search_feedback(line, feedback, current_rules=_search_rules(current_intent.get("search_rules")))
-    if search_rules_override is not None:
-        session_rules = _search_rules(search_rules_override)
+    # The admin's free-text feedback for the product shortlist, accumulated
+    # across turns. This replaces the old trigger→action rule DSL entirely:
+    # the AI shortlist pass (step 5) reads these as plain text alongside the
+    # lessons pulled from earlier similar positions, and edits the cards.
+    prior_instructions = [
+        value for value in ((current.get("session_instructions") if isinstance(current, dict) else None) or [])
+        if isinstance(value, dict) and _cell_text(value.get("text"))
+    ]
+    if instructions_override is not None:
+        session_instructions = [
+            {"text": _cell_text(value.get("text"))[:600], "scope": _cell_text(value.get("scope")) or "catalog"}
+            for value in instructions_override if isinstance(value, dict) and _cell_text(value.get("text"))
+        ]
     else:
-        session_rules = _search_rules([*_search_rules(current_intent.get("search_rules")), *new_rules])
-    global_rules = _global_search_rules()
+        session_instructions = list(prior_instructions)
+        if feedback:
+            # The catalog box triggers recompute="catalog"; the route box
+            # triggers a full rebuild. While the route is frozen only catalog
+            # feedback reaches the shortlist pass.
+            session_instructions.append({
+                "text": _cell_text(feedback)[:600],
+                "scope": "catalog" if recompute == "catalog" else "route",
+            })
 
-    # Step 3: the one LLM call — item/queries only. Rule application itself
-    # (below) never touches the LLM: a rule already understood once must
-    # behave exactly the same way every later search, not be reinterpreted.
+    # Session-only sort flip ("сначала дорогие") — carried between turns,
+    # never written to a lesson. Applied to the first deterministic sort
+    # (via catalog_intent) and again to the post-pass re-sort.
+    prior_ranking = current.get("ranking_override") if isinstance(current, dict) else None
+    ranking_override = prior_ranking if isinstance(prior_ranking, dict) and prior_ranking.get("price") in {"asc", "desc"} else {}
+
+    # Step 3: the one LLM call for search itself — messy position name ->
+    # clean item + a few queries. Never sees feedback or lessons.
     if progress_callback:
         progress_callback("ai")
     prior_plan = current.get("search_plan") if isinstance(current, dict) else None
     if recompute == "catalog" and isinstance(prior_plan, dict) and _cell_text(prior_plan.get("item")):
-        # Catalog-scoped feedback is about filtering and ordering the
-        # results, never about re-deciding what to search for — the
-        # position name has not changed, so reuse the plan as-is.
         plan, plan_usage, ai_seconds = prior_plan, {}, 0.0
     else:
         ai_started_at = time.perf_counter()
         plan, plan_usage = _build_search_plan(line)
         ai_seconds = round(time.perf_counter() - ai_started_at, 3)
     usage = {
-        "prompt_tokens": (plan_usage.get("prompt_tokens", 0) or 0) + (feedback_usage.get("prompt_tokens", 0) or 0),
-        "completion_tokens": (plan_usage.get("completion_tokens", 0) or 0) + (feedback_usage.get("completion_tokens", 0) or 0),
+        "prompt_tokens": plan_usage.get("prompt_tokens", 0) or 0,
+        "completion_tokens": plan_usage.get("completion_tokens", 0) or 0,
     }
     # Which ТЗ rows count as product criteria. A row the client already
     # ticked/unticked keeps its flag; the rest default from the plan's
     # skip_labels + the admin's saved skip rules. Everything downstream
-    # (search terms, matching, ranking) then ignores an unticked row.
+    # (search terms, matching, ranking, the shortlist pass) ignores an
+    # unticked row.
     tagged_requirements = _tag_requirement_selection(line, plan.get("skip_labels"))
     if tagged_requirements:
         _base_requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
         line = {**line, "requirements": {**_base_requirements, "requirements": tagged_requirements}}
     base_intent = _catalog_intent_from_requirements(line)
-    name_text = _cell_text(line.get("name")) if isinstance(line, dict) else ""
-    requirements_raw = line.get("requirements") if isinstance(line, dict) else None
-    requirements_raw = requirements_raw.get("requirements") if isinstance(requirements_raw, dict) else requirements_raw
-    requirements_text = " ".join(
-        f"{_cell_text(item.get('label'))} {_cell_text(item.get('value'))}" for item in _requirement_list(requirements_raw)
-    )
-    all_rules = [*global_rules, *session_rules]
-    include_terms, exclude_terms, prefer_terms, fired_rules = _apply_search_rules(all_rules, name_text, requirements_text)
-    # "context" rules (numbers, comparisons, "no mention of X") can't be
-    # honestly resolved by word matching — the deliberate, narrowly-scoped
-    # exception where a rule DOES go back through the LLM on every search,
-    # one small batched call regardless of how many such rules are active,
-    # and skipped entirely (zero cost) when there are none.
-    rules_started_at = time.perf_counter()
-    context_rules = [rule for rule in all_rules if isinstance(rule, dict) and rule.get("trigger_kind") == "context"]
-    context_usage = {}
-    if context_rules:
-        ctx_include, ctx_exclude, ctx_prefer, ctx_fired, context_usage = _evaluate_context_rules(line, context_rules)
-        include_terms = list(dict.fromkeys([*include_terms, *ctx_include]))
-        exclude_terms = list(dict.fromkeys([*exclude_terms, *ctx_exclude]))
-        prefer_terms = list(dict.fromkeys([*prefer_terms, *ctx_prefer]))
-        fired_rules = [*fired_rules, *ctx_fired]
-    rules_seconds = round(time.perf_counter() - rules_started_at, 3)
-    usage["prompt_tokens"] += context_usage.get("prompt_tokens", 0) or 0
-    usage["completion_tokens"] += context_usage.get("completion_tokens", 0) or 0
     catalog_intent = _normalize_catalog_intent({
         "item": plan.get("item") or base_intent.get("item", ""),
         "categories": [plan.get("item")] if plan.get("item") else base_intent.get("categories", []),
-        "synonyms": [*plan.get("queries", []), *include_terms],
+        "synonyms": list(plan.get("queries", [])),
         "required": base_intent.get("required", []),
-        "exclude": exclude_terms,
-        "include": include_terms,
-        "prefer": prefer_terms,
     })
-    catalog_intent["search_rules"] = session_rules
-    catalog_intent["search_rules_fired"] = fired_rules
+    catalog_intent["ranking_override"] = ranking_override
+
+    # Step 5 inputs: this session's catalog feedback + every lesson that
+    # matches this kind of position. Both are plain-text instructions for
+    # the one AI pass over the shortlist.
+    selected_rows = [
+        row for row in tagged_requirements
+        if isinstance(row, dict) and row.get("selected") is not False and _cell_text(row.get("label"))
+    ]
+    tz_labels = [_normalized_text(row.get("label")) for row in selected_rows]
+    catalog_instructions = [value for value in session_instructions if value.get("scope") in {"catalog", "requirements"}]
+    lessons = _retrieve_lessons("catalog", _cell_text(plan.get("item")), tz_labels)
+    pass_instructions = [
+        {"text": value["text"], "origin": "session"} for value in catalog_instructions
+    ] + [
+        {"text": lesson["instruction"], "origin": "lesson", "lesson_id": lesson["id"]} for lesson in lessons
+    ]
+    rules_seconds = 0.0
 
     # Step 2: route, hardcoded for now. Catalog-scoped feedback keeps the
     # prior route verbatim — it must not disturb another block.
@@ -2995,7 +3036,9 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     else:
         route = _frozen_route()
 
-    # Step 4: backend search, no LLM, no reviewer.
+    # Step 4: backend search, no LLM. Ask for the wide shortlist (~40) when
+    # the pass is going to run — it needs cards it can resurrect, not just
+    # the visible ten.
     if progress_callback:
         progress_callback("catalog")
     catalog_started_at = time.perf_counter()
@@ -3004,6 +3047,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     try:
         catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
             line, limit=10, intent=catalog_intent, include_diagnostics=True,
+            shortlist_limit=40 if pass_instructions else None,
         ))
     except CatalogSyncError as exc:
         catalog_warning = str(exc)[:300]
@@ -3012,6 +3056,50 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         catalog_warning = "Не удалось проверить каталог. Попробуйте ещё раз."
     catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
     catalog_candidates = catalog_outcome["candidates"]
+
+    # Step 5: the AI shortlist pass. One call, only when there is something
+    # to apply. It mutates the card dicts (verdicts, priority, _removed);
+    # the same fixed math then re-sorts on those inputs and we trim to the
+    # ten shown. A failed call leaves the deterministic order untouched.
+    shortlist_seconds = 0.0
+    pass_result = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
+    shortlist_removed = []
+    if pass_instructions and catalog_candidates:
+        if progress_callback:
+            progress_callback("shortlist")
+        shortlist_started_at = time.perf_counter()
+        pass_result = _run_shortlist_pass(
+            _cell_text(line.get("name")), selected_rows, catalog_candidates, pass_instructions,
+        )
+        shortlist_seconds = round(time.perf_counter() - shortlist_started_at, 3)
+        usage["prompt_tokens"] += pass_result["usage"].get("prompt_tokens", 0) or 0
+        usage["completion_tokens"] += pass_result["usage"].get("completion_tokens", 0) or 0
+        if pass_result["ranking"].get("price") in {"asc", "desc"}:
+            ranking_override = pass_result["ranking"]
+        # A "сначала дорогие" instruction is a one-shot sort-mechanism change:
+        # its effect now lives in ranking_override (carried between turns),
+        # so drop it from the pass inputs — no point re-sending it every
+        # recompute. catalog_instructions entries are the same dict objects
+        # as in session_instructions, so retagging here propagates.
+        for index, result_row in enumerate(pass_result["instructions"]):
+            if result_row.get("ranking_only") and index < len(catalog_instructions):
+                catalog_instructions[index]["scope"] = "ranking"
+        price_desc = ranking_override.get("price") == "desc"
+        catalog_candidates.sort(key=lambda card: _shortlist_rank_key(
+            is_exact=card.get("fit") == "exact",
+            priority=card.get("priority", 1),
+            mismatch_count=card.get("mismatch_count", len(card.get("mismatches") or [])),
+            unknown_count=card.get("unknown_count", len(card.get("unknown") or [])),
+            price=_price_decimal(card.get("price")),
+            name=_normalized_text(card.get("name")),
+            article=_normalized_text(card.get("article")),
+            price_desc=price_desc,
+        ))
+        shortlist_removed = [card for card in catalog_candidates if card.get("_removed")]
+        catalog_candidates = [card for card in catalog_candidates if not card.get("_removed")][:10]
+        catalog_intent["ranking_override"] = ranking_override
+    else:
+        catalog_candidates = catalog_candidates[:10]
 
     if progress_callback:
         progress_callback("finalizing")
@@ -3027,12 +3115,22 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         "questions": [],
         "assumptions": ["Маршрут временно принят по умолчанию — идёт настройка поиска."],
         "matched_example_ids": [],
-        # The full accumulated session list, not just this turn's addition —
-        # "Ваши корректировки" is titled "ранее принятые изменения ЭТОГО
-        # расчёта" (plural, cumulative); showing only the newest rule made
-        # every earlier one invisible the moment a second piece of feedback
-        # was submitted, even though its chip stayed active in step 3.
-        "understood_changes": [_cell_text(rule.get("text")) for rule in session_rules if _cell_text(rule.get("text"))],
+        # The admin's own words, cumulative across the session — shown as
+        # "Ваши корректировки". The per-instruction "applied / not applied"
+        # verdict from the pass rides separately in shortlist_instructions.
+        "understood_changes": [_cell_text(value.get("text")) for value in catalog_instructions if _cell_text(value.get("text"))],
+        "session_instructions": session_instructions,
+        "ranking_override": ranking_override,
+        "shortlist_instructions": pass_result["instructions"],
+        "shortlist_outcome": pass_result["outcome"],
+        "shortlist_removed": [
+            {
+                "id": card.get("id"), "name": _cell_text(card.get("name"))[:120],
+                "article": _cell_text(card.get("article"))[:60],
+                "reason": _cell_text(card.get("_removed_reason"))[:200],
+            }
+            for card in shortlist_removed
+        ],
         "search_plan": {"item": _cell_text(plan.get("item")), "queries": [_cell_text(value) for value in (plan.get("queries") or []) if _cell_text(value)]},
         "requirement_selection": [
             {"label": _cell_text(row.get("label")), "value": _cell_text(row.get("value")), "selected": row.get("selected") is not False}
@@ -3045,13 +3143,12 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         "catalog_candidates": catalog_candidates,
         "catalog_sources": catalog_outcome["sources"],
         "catalog_attempts": catalog_outcome["attempts"],
-        "catalog_search_rules": session_rules,
-        "catalog_search_rules_global": global_rules,
-        "catalog_search_rules_fired": fired_rules,
         "usage": usage,
-        "timings": {"ai_seconds": ai_seconds, "rules_seconds": rules_seconds, "catalog_seconds": catalog_seconds, "total_seconds": round(time.perf_counter() - started_at, 3)},
+        "timings": {"ai_seconds": ai_seconds, "rules_seconds": rules_seconds, "shortlist_seconds": shortlist_seconds, "catalog_seconds": catalog_seconds, "total_seconds": round(time.perf_counter() - started_at, 3)},
         "production_types": [],
     }
+    if pass_result["error"]:
+        hypothesis["shortlist_warning"] = f"ИИ-проход по подбору не выполнился ({pass_result['error']}). Показан порядок без учёта ваших замечаний — попробуйте пересчитать."
     if catalog_warning:
         hypothesis["catalog_warning"] = catalog_warning
     if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
@@ -3158,7 +3255,7 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     normalized["production_types"] = [{"code": value.code, "name": value.name} for value in production_types]
     if isinstance(hypothesis, dict) and isinstance(hypothesis.get("catalog_intent"), dict):
         normalized["catalog_intent"] = hypothesis["catalog_intent"]
-    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors", "catalog_search_rules", "catalog_search_rules_global", "catalog_search_rules_fired", "search_plan", "requirement_selection", "requirement_skip_rules", "timings", "usage"):
+    for key in ("catalog_sources", "catalog_attempts", "catalog_operations_applied", "catalog_contract_errors", "session_instructions", "ranking_override", "shortlist_instructions", "shortlist_outcome", "shortlist_removed", "shortlist_warning", "search_plan", "requirement_selection", "requirement_skip_rules", "timings", "usage"):
         if isinstance(hypothesis, dict) and key in hypothesis:
             normalized[key] = hypothesis[key]
     existing_sources = hypothesis.get("sources", []) if isinstance(hypothesis, dict) and isinstance(hypothesis.get("sources"), list) else []

@@ -782,27 +782,6 @@ def _normalized_cached(text):
     return re.sub(r"[^a-zа-я0-9%²³≥≤]+", " ", text.lower().replace("ё", "е")).strip()
 
 
-_STEM_LEN = 5
-
-
-def _stems_match(a, b):
-    """True if two normalized words plausibly share a root — Russian
-    inflection means an admin's rule word ("детские") and the actual
-    catalog text ("детская") are rarely byte-identical even when they mean
-    the same thing; comparing a short prefix instead of the whole word
-    (falling back to exact equality for numbers/very short tokens, where
-    truncating would just invite false positives) catches that without a
-    real morphological analyzer."""
-    if not a or not b:
-        return False
-    if a.isdigit() or b.isdigit():
-        return a == b
-    length = min(len(a), len(b), _STEM_LEN)
-    if length < 3:
-        return a == b
-    return a[:length] == b[:length]
-
-
 REQUIREMENT_FIELD_MARKERS = (
     ("volume", ("объем", "вместимост")),
     ("material", ("материал", "состав")),
@@ -1503,34 +1482,6 @@ def _canonical_gender(value):
     return ""
 
 
-def _rule_match_tokens(product):
-    """Every word a search rule ("исключи X", "приоритет X", "обязательно
-    X") is allowed to match against — not just the name, but the whole
-    text the catalogue carries for this product: category, name, material
-    and colour lists, and every attribute value. No per-field logic — one
-    flat bag of words, so any characteristic the admin types as text is
-    covered. Cached on the product instance (built once per search)."""
-    cached = getattr(product, "_rule_tokens", None)
-    if cached is not None:
-        return cached
-    parts = [
-        *(product.category_names if isinstance(product.category_names, list) else []),
-        product.name or "", product.full_name or "",
-        *(product.materials if isinstance(product.materials, list) else []),
-        *(product.colors if isinstance(product.colors, list) else []),
-        *(product.branding if isinstance(product.branding, list) else []),
-    ]
-    for attribute in product.attributes if isinstance(product.attributes, list) else []:
-        if isinstance(attribute, dict):
-            parts.append(_text(attribute.get("value"), 500))
-    tokens = _normalized(" ".join(str(part) for part in parts if part)).split()
-    try:
-        product._rule_tokens = tokens
-    except (AttributeError, TypeError):
-        pass
-    return tokens
-
-
 def _constraint_product_values(product, field):
     field = _criterion_key(field)
     attributes = product.attributes if isinstance(product.attributes, list) else []
@@ -2216,9 +2167,14 @@ def _shortlist_rank_key(
 
 def catalog_candidates_for_line(
     line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
-    force_full_text=False,
+    force_full_text=False, shortlist_limit=None,
 ):
-    """Return a relevance-ranked shortlist from live Oasis and cached suppliers."""
+    """Return a relevance-ranked shortlist from live Oasis and cached suppliers.
+
+    ``shortlist_limit`` widens how many ranked cards are serialised and
+    returned (default: just ``limit``). The AI shortlist pass in
+    services.py asks for the wider set — ~40 cards it can read in full and
+    re-order — then trims back to what the admin actually sees."""
     _reset_requirement_values_cache()
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
@@ -2386,45 +2342,14 @@ def catalog_candidates_for_line(
         product._from_selected_category = bool(
             selected_category_ids & {str(cid) for cid in (product.category_ids or [])}
         )
-    # Admin search rules ("исключить детские") only steer the search-plan
-    # queries, which are additive — they can't stop a matching product from
-    # surfacing. Give them real teeth: any product whose text (name,
-    # category, material/colour lists, every attribute value — see
-    # _rule_match_tokens) contains an excluded word is dropped before it
-    # ever reaches scoring. Matched against the whole card, not just the
-    # name, so "исключи синтетику" works off the composition attribute.
-    exclude_terms = tuple(dict.fromkeys(
-        _normalized(value) for value in ((intent or {}).get("exclude", []) if isinstance(intent, dict) else [])
-        if _normalized(value)
-    ))
-    # Mirror of exclude_terms: a "+слово" rule (плюс-слово) is a hard
-    # requirement, not just an extra search term fed to the pool fetch above
-    # — otherwise a candidate that happened to surface through some other
-    # word could pass despite missing the word the admin insisted on.
-    include_terms = tuple(dict.fromkeys(
-        _normalized(value) for value in ((intent or {}).get("include", []) if isinstance(intent, dict) else [])
-        if _normalized(value)
-    ))
-    # A "prefer" rule (мягкий приоритет) never removes anything — it only
-    # nudges matching products earlier among otherwise-equal candidates in
-    # the ranking below, the same way an admin would eyeball two equally
-    # fitting offers and pick the one closer to what they actually want.
-    prefer_terms = tuple(dict.fromkeys(
-        _normalized(value) for value in ((intent or {}).get("prefer", []) if isinstance(intent, dict) else [])
-        if _normalized(value)
-    ))
-
-    def _term_hits_text(term, text_tokens):
-        # Stem match, not exact substring: a rule word like "детские" must
-        # still catch "детская"/"детский"/"детского" — Russian inflection
-        # means a plain `term in product_text` silently misses most real
-        # catalog names even when the rule genuinely applies.
-        return any(_stems_match(term, token) for token in text_tokens)
-
+    # "Исключить детские", "только хлопок", "подними мужские" and every
+    # other free-text instruction are no longer backend keyword filters —
+    # they are handled by the AI shortlist pass (services._run_shortlist_pass),
+    # which reads the whole card and edits its verdicts / priority / remove
+    # flag. The backend here does only the objective, deterministic work.
     rejections = {
         "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
         "product_type": 0, "colour": 0, "forbidden": 0, "missing_required": 0,
-        "excluded_by_rule": 0, "required_by_rule": 0,
     }
     eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
     rejection_reasons, partial_reasons = {}, {}
@@ -2434,21 +2359,6 @@ def catalog_candidates_for_line(
             eligibility_counts["rejected"] += 1
             rejection_reasons["Нулевой остаток"] = rejection_reasons.get("Нулевой остаток", 0) + 1
             continue
-        if exclude_terms or include_terms:
-            product_tokens = _rule_match_tokens(product)
-            excluded_hit = next((term for term in exclude_terms if _term_hits_text(term, product_tokens)), "") if exclude_terms else ""
-            if excluded_hit:
-                rejections["excluded_by_rule"] += 1
-                eligibility_counts["rejected"] += 1
-                label = f"Исключено по правилу поиска: {excluded_hit}"
-                rejection_reasons[label] = rejection_reasons.get(label, 0) + 1
-                continue
-            if include_terms and not any(_term_hits_text(term, product_tokens) for term in include_terms):
-                rejections["required_by_rule"] += 1
-                eligibility_counts["rejected"] += 1
-                label = f"Не найдено обязательное слово по правилу поиска: {', '.join(include_terms)}"
-                rejection_reasons[label] = rejection_reasons.get(label, 0) + 1
-                continue
         eligibility = _catalog_product_eligibility(
             product, line, effective_line, anchors, quantity, intent,
             from_selected_category=product._from_selected_category, name_anchors=name_anchors,
@@ -2476,19 +2386,14 @@ def catalog_candidates_for_line(
             eligibility["status"] == "partial_eligible", eligibility["status"], eligibility["reasons"],
         ))
 
-    def _prefer_rank(product):
-        # The "priority" slot of the sort key: 0 (raised) or 1 (normal).
-        # A "prefer" rule word raises a product; the AI shortlist pass can
-        # also raise one. Still binary, never a score.
-        if not prefer_terms:
-            return 1
-        return 0 if any(_term_hits_text(term, _rule_match_tokens(product)) for term in prefer_terms) else 1
-
+    # The "priority" slot (0 = raised) is only ever set by the AI shortlist
+    # pass, on the serialised card dict, after this function returns — the
+    # first deterministic sort treats every card as normal priority.
     ranking_override = (intent or {}).get("ranking_override", {}) if isinstance(intent, dict) else {}
     price_desc = _normalized(ranking_override.get("price")) == "desc"
     ranked.sort(key=lambda value: _shortlist_rank_key(
         is_exact=not value[2] and not value[3],
-        priority=_prefer_rank(value[0]),
+        priority=1,
         mismatch_count=len(value[2]),
         unknown_count=len(value[3]),
         price=value[0].effective_price,
@@ -2530,6 +2435,11 @@ def catalog_candidates_for_line(
                 "matches": matches,
                 "mismatches": mismatches,
                 "unknown": unknown,
+                "mismatch_count": len(mismatches),
+                "unknown_count": len(unknown),
+                # 0 = raised, 1 = normal. Only the AI shortlist pass raises a
+                # card; fed straight into _shortlist_rank_key on the re-sort.
+                "priority": 1,
                 "eligibility": eligibility_status,
                 "eligibility_reasons": eligibility_reasons,
                 "synced_at": timezone.now().isoformat(),
@@ -2559,7 +2469,7 @@ def catalog_candidates_for_line(
             # whole shortlist — skip it and keep ranking the rest.
             logger.exception("Skipped a catalogue candidate that failed to serialise")
             continue
-        if len(selected) >= max(1, min(60, limit)):
+        if len(selected) >= max(1, min(60, max(limit, shortlist_limit or 0))):
             break
     if oasis_used_mirror:
         # The mirror can be hours old; the price and stock actually quoted to

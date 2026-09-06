@@ -16,7 +16,7 @@ from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _apply_search_rules, _collapse_requirements, _evaluate_context_rules, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _search_rules, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _trigger_matches, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items
+from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _run_shortlist_pass, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
 
 
 class TenderTests(TestCase):
@@ -1668,261 +1668,220 @@ class TenderTests(TestCase):
 
         self.assertEqual([value["external_id"] for value in result], ["travel-mug"])
 
-    def test_search_rule_trigger_matches_paraphrased_ts_text(self):
-        # An admin's condition almost never repeats a ТЗ's exact wording
-        # ("если размеры больше 42" vs the ТЗ's own "Размерный ряд: от 42 до
-        # 62") — a rule whose trigger only matched a verbatim substring
-        # could never fire on a real ТЗ. This reproduces exactly that.
-        rules = _search_rules([{
-            "trigger_text": "размеры больше 42", "trigger_scope": "requirements",
-            "action": "exclude", "action_text": "детск",
-        }])
-        include, exclude, prefer, fired = _apply_search_rules(
-            rules, "Сувенир рубашка-поло", "Размерный ряд: от 42 до 62 по согласованию",
-        )
-        self.assertEqual(exclude, ["детск"])
-        self.assertEqual(len(fired), 1)
 
-    def test_search_rule_trigger_does_not_match_unrelated_ts_text(self):
-        rules = _search_rules([{
-            "trigger_text": "размеры больше 42", "trigger_scope": "requirements",
-            "action": "exclude", "action_text": "детск",
-        }])
-        include, exclude, prefer, fired = _apply_search_rules(
-            rules, "Сувенир рубашка-поло", "Цвет: тёмно-синий",
-        )
-        self.assertEqual(exclude, [])
-        self.assertEqual(fired, [])
-
-    def test_search_rule_negated_trigger_fires_only_when_word_absent(self):
-        rules = _search_rules([{
-            "trigger_text": "детск", "trigger_scope": "requirements", "trigger_negate": True,
-            "action": "exclude", "action_text": "синтетик",
-        }])
-        include, exclude, prefer, fired = _apply_search_rules(rules, "Футболка", "Цвет: белый")
-        self.assertEqual(exclude, ["синтетик"], "absent trigger word should fire a negated rule")
-        include, exclude, prefer, fired = _apply_search_rules(rules, "Футболка", "Размер: детский")
-        self.assertEqual(exclude, [], "present trigger word should NOT fire a negated rule")
-
-    def test_trigger_matches_uses_stems_not_verbatim_phrase(self):
-        self.assertTrue(_trigger_matches("детск", "в размере детского"))
-        self.assertFalse(_trigger_matches("синий", "красный товар"))
-
-    def test_search_rule_exclude_matches_inflected_catalog_name(self):
-        # The exact bug reported live: a rule built from the word "детские"
-        # (plural) must still catch a catalog product named with a
-        # different inflection ("детская", feminine singular) — a plain
-        # substring check silently let this through.
-        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogCategory.objects.create(
-            supplier=gifts, external_id="polo", name="Рубашки поло", path="Одежда / Рубашки поло",
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="kids-polo", article="G-1",
-            name="Рубашка поло детская Virma Kids", full_name="Рубашка поло детская Virma Kids, темно-синяя",
-            category_ids=["polo"], total_stock=100, discount_price=464, search_text="рубашка поло детская",
-        )
-
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                return []
-
-        result = catalog_candidates_for_line(
-            {"name": "Рубашка поло", "quantity": 10},
-            intent={"item": "рубашка поло", "categories": ["рубашки поло"], "exclude": ["детские"]},
-            client=Client(),
-        )
-        self.assertEqual(result, [], "exclude:['детские'] must also reject a 'детская'-named product")
-
-    def test_search_rules_match_any_card_text_not_only_the_name(self):
-        # The admin can put any word into exclude/include/prefer and it is
-        # matched against the whole card — material list, colour list, every
-        # attribute value — not just the product name. No per-field logic.
-        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogCategory.objects.create(
-            supplier=gifts, external_id="polo", name="Рубашки поло", path="Одежда / Рубашки поло",
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="cotton", article="C-1",
-            name="Рубашка поло Alfa", full_name="Рубашка поло Alfa",  # composition not in the name
-            category_ids=["polo"], total_stock=100, discount_price=500, search_text="рубашка поло",
-            materials=["хлопок"], colors=["синий"],
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="poly", article="P-1",
-            name="Рубашка поло Beta", full_name="Рубашка поло Beta",
-            category_ids=["polo"], total_stock=100, discount_price=400, search_text="рубашка поло",
-            attributes=[{"name": "Состав", "value": "100% полиэстер"}], colors=["синий"],
-        )
-
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                return []
-
-        base = {"name": "Рубашка поло", "quantity": 10}
-        cat = {"item": "рубашка поло", "categories": ["рубашки поло"]}
-
-        excluded = catalog_candidates_for_line(base, intent={**cat, "exclude": ["полиэстер"]}, client=Client())
-        self.assertEqual([c["external_id"] for c in excluded], ["cotton"], "exclude by composition attribute")
-
-        preferred = catalog_candidates_for_line(base, intent={**cat, "prefer": ["хлопок"]}, client=Client())
-        self.assertEqual([c["external_id"] for c in preferred][0], "cotton", "prefer by material list even though poly is cheaper")
-
-    def test_both_genders_requested_does_not_hard_reject_either_gender(self):
-        # Exact live failure: "Модели рубашки-поло: мужская и женская" (both
-        # models offered) was being read as "требуется женский" — a bare
-        # `"пол" in label` substring check also matched inside "поло", and
-        # even a correctly-scoped label saw "женск" before "мужск" in the
-        # same string and returned "женский" without ever checking further.
-        # Every men's product then failed a hard gender check that ТЗ never
-        # actually asked for.
-        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogCategory.objects.create(
-            supplier=gifts, external_id="polo", name="Рубашки поло", path="Одежда / Рубашки поло",
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="men-polo", article="M-1",
-            name="Рубашка поло мужская Gent", full_name="Рубашка поло мужская Gent",
-            category_ids=["polo"], total_stock=100, discount_price=500, search_text="рубашка поло мужская",
-        )
-        line = {
-            "name": "Рубашка поло", "quantity": 10,
-            "requirements": {"requirements": [{"label": "Модели рубашки-поло", "value": "мужская и женская"}]},
+    @staticmethod
+    def _shortlist_card(**overrides):
+        card = {
+            "id": "1", "name": "Товар", "article": "A-1", "price": "100",
+            "materials": [], "colors": [], "attributes": [],
+            "matches": [], "mismatches": [], "unknown": [],
+            "mismatch_count": 0, "unknown_count": 0, "priority": 1, "fit": "exact",
         }
+        card.update(overrides)
+        return card
 
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                return []
-
-        result = catalog_candidates_for_line(
-            line, intent={"item": "рубашка поло", "categories": ["рубашки поло"]}, client=Client(),
-        )
-
-        self.assertEqual(len(result), 1, "the men's item must not be hard-rejected")
-        self.assertNotIn("Пол не совпадает", " ".join(result[0]["mismatches"]))
-
-    def test_prefer_rule_sorts_without_excluding_the_other_option(self):
-        # "prefer" is the non-destructive counterpart to exclude/include:
-        # every preferred item ranks above every non-preferred one (they
-        # yield, not disappear) — even when the non-preferred item is the
-        # slightly cleaner match. The admin asked for that word explicitly.
-        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogCategory.objects.create(
-            supplier=gifts, external_id="polo", name="Рубашки поло", path="Одежда / Рубашки поло",
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="women-clean", article="W-1",
-            name="Рубашка поло женская Lady", full_name="Рубашка поло женская Lady",
-            category_ids=["polo"], total_stock=100, discount_price=300, search_text="рубашка поло женская",
-            attributes=[{"name": "Плотность", "value": "190 г/м²"}, {"name": "Материал", "value": "хлопок"}],
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="men-unknown", article="M-1",
-            name="Рубашка поло мужская Gent", full_name="Рубашка поло мужская Gent",
-            category_ids=["polo"], total_stock=100, discount_price=500, search_text="рубашка поло мужская",
-        )
-
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                return []
-
-        line = {"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": [
-            {"label": "Плотность", "value": "не менее 180 г/м²"},
-            {"label": "Стойкость окраски", "value": "не менее 4 баллов"},
-        ]}}
-
-        without_prefer = catalog_candidates_for_line(
-            line, intent={"item": "рубашка поло", "categories": ["рубашки поло"]}, client=Client(),
-        )
-        self.assertEqual(
-            [c["external_id"] for c in without_prefer][0], "women-clean",
-            "with no preference the cleaner match (density known) sorts first",
-        )
-
-        with_prefer = catalog_candidates_for_line(
-            line,
-            intent={"item": "рубашка поло", "categories": ["рубашки поло"], "prefer": ["мужск"]},
-            client=Client(),
-        )
-        ids = [c["external_id"] for c in with_prefer]
-        self.assertEqual(ids[0], "men-unknown", "the preferred word wins even though the other is the cleaner match")
-        self.assertIn("women-clean", ids, "prefer must never remove the non-preferred item from the results")
-
-    def test_apply_search_rules_skips_context_rules(self):
-        # "context" rules are never resolved by word/stem matching, no
-        # matter what trigger_text happens to contain — only
-        # _evaluate_context_rules (an LLM call) may fire them, so a
-        # digit like "42" sitting in trigger_text can't accidentally match
-        # here and produce a result nobody actually verified.
-        rules = _search_rules([{
-            "trigger_kind": "context", "trigger_text": "Размерный ряд в ТЗ включает размеры больше 42-го",
-            "trigger_scope": "any", "action": "exclude", "action_text": "детск",
-        }])
-        include, exclude, prefer, fired = _apply_search_rules(rules, "Футболка", "Размерный ряд: от 42 до 62")
-        self.assertEqual(exclude, [])
-        self.assertEqual(fired, [])
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_evaluate_context_rules_fires_only_matched_ids(self, gateway):
-        rules = _search_rules([
-            {
-                "trigger_kind": "context", "trigger_text": "Размерный ряд в ТЗ включает размеры больше 42-го",
-                "trigger_scope": "any", "action": "exclude", "action_text": "детск",
-            },
-            {
-                "trigger_kind": "context", "trigger_text": "В ТЗ явно запрошены сумки, а не рюкзаки",
-                "trigger_scope": "any", "action": "exclude", "action_text": "рюкзак",
-            },
-        ])
-        gateway.return_value = ({"results": [
-            {"id": rules[0]["id"], "matches": True},
-            {"id": rules[1]["id"], "matches": False},
-        ]}, {"prompt_tokens": 120, "completion_tokens": 20})
-
-        include, exclude, prefer, fired, usage = _evaluate_context_rules(
-            {"name": "Рубашка поло", "requirements": {"requirements": [{"label": "Размерный ряд", "value": "от 42 до 62"}]}},
-            rules,
-        )
-
-        self.assertEqual(exclude, ["детск"])
-        self.assertEqual([rule["action_text"] for rule in fired], ["детск"])
-        self.assertEqual(usage["prompt_tokens"], 120)
-        # One batched call regardless of how many context rules are active.
-        self.assertEqual(gateway.call_count, 1)
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_evaluate_context_rules_sends_the_full_ts_not_a_truncated_prefix(self, gateway):
-        # Exact live failure: a 32-row ТЗ with the size row at index 20 —
-        # an earlier [:20] cap silently hid it from the prompt, so the LLM
-        # correctly (given what it was shown) answered "no match" even
-        # though the condition was actually true. Never truncate this list
-        # again without a test catching it.
-        gateway.return_value = ({"results": [{"id": "r1", "matches": True}]}, {})
-        requirements = [{"label": f"Свойство {i}", "value": f"значение {i}"} for i in range(20)]
-        requirements.append({"label": "Размерный ряд", "value": "от 42 до 62 по согласованию"})
-        rules = _search_rules([{
-            "id": "r1", "trigger_kind": "context", "trigger_text": "Размерный ряд включает размеры больше 42",
-            "trigger_scope": "any", "action": "exclude", "action_text": "детск",
-        }])
-
-        _evaluate_context_rules({"name": "Рубашка поло", "requirements": {"requirements": requirements}}, rules)
-
-        prompt = gateway.call_args.args[0]
-        self.assertIn("Размерный ряд: от 42 до 62", prompt)
-
-    def test_evaluate_context_rules_is_a_noop_with_no_context_rules(self):
+    def test_shortlist_pass_is_skipped_when_there_is_nothing_to_apply(self):
+        cards = [self._shortlist_card()]
         with patch("tenders.services._ai_gateway_json") as gateway:
-            include, exclude, prefer, fired, usage = _evaluate_context_rules({"name": "Футболка"}, [])
-            self.assertEqual((include, exclude, prefer, fired, usage), ([], [], [], [], {}))
-            gateway.assert_not_called()
+            result = _run_shortlist_pass("Поло", [], cards, [])
+        gateway.assert_not_called()
+        self.assertEqual(result["instructions"], [])
+        self.assertEqual(result["ranking"], {})
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_adds_a_mismatch_and_flips_the_card_to_partial(self, gateway):
+        gateway.return_value = (
+            {"cards": {"1": {"set": [{"point": "Пол", "verdict": "mismatch", "note": "нужен мужской"}]}},
+             "instructions": [{"n": 1, "applied": True, "note": "женским проставлен пол"}]},
+            {"prompt_tokens": 200, "completion_tokens": 30},
+        )
+        cards = [self._shortlist_card(matches=["Тип товара: поло"])]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "нужны мужские", "origin": "session"}])
+
+        self.assertIn("Пол: нужен мужской", cards[0]["mismatches"])
+        self.assertEqual(cards[0]["mismatch_count"], 1)
+        self.assertEqual(cards[0]["fit"], "partial")
+        self.assertTrue(cards[0]["_ai_touched"])
+        self.assertTrue(result["instructions"][0]["applied"])
+        self.assertEqual(result["outcome"]["touched"], [{"article": "A-1", "name": "Товар"}])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_raises_priority_only_when_asked(self, gateway):
+        gateway.return_value = ({"cards": {"1": {"priority": 0}}}, {})
+        cards = [self._shortlist_card()]
+
+        _run_shortlist_pass("Поло", [], cards, [{"text": "подними мужские в первую очередь", "origin": "session"}])
+
+        self.assertEqual(cards[0]["priority"], 0)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_marks_a_card_removed_with_a_reason(self, gateway):
+        gateway.return_value = ({"cards": {"1": {"remove": True, "remove_reason": "детская модель"}}}, {})
+        cards = [self._shortlist_card()]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские", "origin": "session"}])
+
+        self.assertTrue(cards[0]["_removed"])
+        self.assertEqual(cards[0]["_removed_reason"], "детская модель")
+        self.assertEqual(result["outcome"]["removed"][0]["reason"], "детская модель")
+        self.assertEqual(result["outcome"]["touched"], [])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_drops_a_verdict_when_told_to_ignore_a_point(self, gateway):
+        gateway.return_value = ({"cards": {"1": {"set": [{"point": "Маркировка", "verdict": "none"}]}}}, {})
+        cards = [self._shortlist_card(unknown=["Маркировка не указана в каталоге"], unknown_count=1, fit="partial")]
+
+        _run_shortlist_pass("Поло", [], cards, [{"text": "маркировку не учитывай", "origin": "session"}])
+
+        self.assertEqual(cards[0]["unknown"], [])
+        self.assertEqual(cards[0]["unknown_count"], 0)
+        self.assertEqual(cards[0]["fit"], "exact")
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_fixes_an_existing_mismatch(self, gateway):
+        gateway.return_value = (
+            {"cards": {"1": {"set": [{"point": "Плотность", "verdict": "match", "note": "220 г считаем нормой"}]}}}, {},
+        )
+        cards = [self._shortlist_card(
+            mismatches=["Плотность 220 г/м²; требуется не менее 250 г/м²"], mismatch_count=1, fit="partial",
+        )]
+
+        _run_shortlist_pass("Поло", [], cards, [{"text": "220 г это норм", "origin": "session"}])
+
+        self.assertEqual(cards[0]["mismatches"], [])
+        self.assertIn("Плотность: 220 г считаем нормой", cards[0]["matches"])
+        self.assertEqual(cards[0]["fit"], "exact")
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_returns_a_session_only_ranking_flip(self, gateway):
+        gateway.return_value = ({"ranking": {"price": "desc"}}, {})
+        cards = [self._shortlist_card()]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "сначала показывай дорогие", "origin": "session"}])
+
+        self.assertEqual(result["ranking"], {"price": "desc"})
+        self.assertNotIn("_ai_touched", cards[0])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_survives_a_broken_model_reply(self, gateway):
+        gateway.return_value = ("не json", {})
+        cards = [self._shortlist_card(mismatches=["x"], mismatch_count=1)]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские", "origin": "session"}])
+
+        self.assertEqual(result["error"], "")
+        self.assertEqual(cards[0]["mismatches"], ["x"])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_reports_a_failed_call_and_keeps_the_order(self, gateway):
+        gateway.side_effect = TenderAIError("AI Gateway не ответил")
+        cards = [self._shortlist_card()]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские", "origin": "session"}])
+
+        self.assertIn("не ответил", result["error"])
+        self.assertNotIn("_removed", cards[0])
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_fresh_position_without_feedback_or_lessons_runs_no_shortlist_pass(self, gateway, catalog_search):
+        catalog_search.return_value = {"candidates": [
+            {"id": "a", "name": "Поло синее", "article": "A", "price": "500", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "mismatches": [], "unknown": []},
+        ], "sources": {}, "attempts": []}
+        gateway.side_effect = [({"item": "поло", "queries": ["поло"]}, {})]
+
+        result = build_training_hypothesis({"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": []}})
+
+        self.assertEqual(gateway.call_count, 1)  # search plan only
+        self.assertEqual(result["shortlist_instructions"], [])
+        self.assertEqual(catalog_search.call_args.kwargs.get("shortlist_limit"), None)
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_feedback_runs_the_pass_and_the_fixed_math_reorders(self, gateway, catalog_search):
+        catalog_search.return_value = {"candidates": [
+            {"id": "w", "name": "Поло женское", "article": "W", "price": "500", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+            {"id": "m", "name": "Поло мужское", "article": "M", "price": "500", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+        ], "sources": {}, "attempts": []}
+        gateway.side_effect = [
+            ({"item": "поло", "queries": ["поло"]}, {}),
+            ({"cards": {"m": {"priority": 0}}, "instructions": [{"n": 1, "applied": True, "note": "мужское поднято"}]}, {}),
+        ]
+
+        result = build_training_hypothesis(
+            {"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": []}},
+            feedback="сначала показывай мужские", recompute="catalog",
+        )
+
+        self.assertEqual(gateway.call_count, 2)
+        self.assertEqual(catalog_search.call_args.kwargs.get("shortlist_limit"), 40)
+        self.assertEqual([card["id"] for card in result["catalog_candidates"]], ["m", "w"])
+        self.assertTrue(result["shortlist_instructions"][0]["applied"])
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_a_matching_lesson_is_fed_into_the_pass_without_new_feedback(self, gateway, catalog_search):
+        Lesson.objects.create(
+            scope="catalog", admin_text="всегда убирай детские", summary="убрать детские модели",
+            item_word="поло", created_by=self.user,
+        )
+        catalog_search.return_value = {"candidates": [
+            {"id": "k", "name": "Поло детское", "article": "K", "price": "300", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+            {"id": "a", "name": "Поло мужское", "article": "A", "price": "500", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+        ], "sources": {}, "attempts": []}
+        gateway.side_effect = [
+            ({"item": "поло", "queries": ["поло"]}, {}),
+            ({"cards": {"k": {"remove": True, "remove_reason": "детская модель"}},
+              "instructions": [{"n": 1, "applied": True}]}, {}),
+        ]
+
+        result = build_training_hypothesis({"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": []}})
+
+        self.assertEqual(gateway.call_count, 2)  # lesson triggers the pass with no feedback
+        pass_prompt = gateway.call_args.args[0]
+        self.assertIn("убрать детские модели", pass_prompt)
+        self.assertEqual([card["id"] for card in result["catalog_candidates"]], ["a"])
+        self.assertEqual(result["shortlist_removed"][0]["reason"], "детская модель")
+        self.assertEqual(result["shortlist_instructions"][0]["origin"], "lesson")
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_session_ranking_flip_is_carried_between_turns(self, gateway, catalog_search):
+        catalog_search.return_value = {"candidates": [
+            {"id": "cheap", "name": "Поло A", "article": "A", "price": "300", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+            {"id": "dear", "name": "Поло B", "article": "B", "price": "900", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+        ], "sources": {}, "attempts": []}
+        gateway.side_effect = [
+            ({"item": "поло", "queries": ["поло"]}, {}),
+            ({"ranking": {"price": "desc"}, "instructions": [{"n": 1, "applied": True, "ranking_only": True}]}, {}),
+        ]
+
+        first = build_training_hypothesis(
+            {"name": "Поло", "quantity": 10, "requirements": {"requirements": []}},
+            feedback="сначала показывай дорогие", recompute="catalog",
+        )
+
+        self.assertEqual(first["ranking_override"], {"price": "desc"})
+        self.assertEqual([card["id"] for card in first["catalog_candidates"]], ["dear", "cheap"])
+
+        # The one-shot sort instruction is retagged, so the next plain
+        # recompute keeps the flip and makes no pass call.
+        gateway.side_effect = []
+        second = build_training_hypothesis(
+            {"name": "Поло", "quantity": 10, "requirements": {"requirements": []}},
+            current=first, recompute="catalog",
+        )
+        self.assertEqual(second["ranking_override"], {"price": "desc"})
+        self.assertEqual(second["catalog_intent"]["ranking_override"], {"price": "desc"})
+        self.assertEqual(gateway.call_count, 2)  # no third call
 
     def test_selected_gifts_category_is_filtered_before_candidate_limit(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
@@ -2166,43 +2125,26 @@ class TenderTests(TestCase):
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
     def test_understood_changes_accumulates_across_feedback_turns(self, gateway, catalog_search):
-        # Exact bug reported live: submitting a second piece of feedback
-        # made the first rule's sentence vanish from "Ваши корректировки"
-        # even though its chip stayed active in step 3 — understood_changes
-        # only ever reflected the newest turn's addition.
+        # Every piece of catalog feedback stays in "Ваши корректировки" — a
+        # second comment must never hide the first.
         catalog_search.return_value = {"candidates": [], "sources": {}, "attempts": []}
         line = {"name": "Рубашка поло", "quantity": 50, "requirements": {"requirements": []}}
 
-        gateway.side_effect = [
-            ({"rules": [{
-                "trigger_kind": "text", "trigger_text": "", "trigger_scope": "any", "trigger_negate": False,
-                "action": "exclude", "action_text": "детск", "label": "−детск",
-            }]}, {}),
-            ({"item": "рубашка поло", "queries": ["рубашка поло"]}, {}),
-        ]
-        first = build_training_hypothesis(line, feedback="исключи детские")
+        gateway.side_effect = [({"item": "рубашка поло", "queries": ["поло"]}, {})]
+        first = build_training_hypothesis(line, feedback="исключи детские", recompute="catalog")
 
-        gateway.side_effect = [
-            ({"rules": [{
-                "trigger_kind": "text", "trigger_text": "", "trigger_scope": "any", "trigger_negate": False,
-                "action": "prefer", "action_text": "мужск", "label": "↑мужск",
-            }]}, {}),
-            ({"item": "рубашка поло", "queries": ["рубашка поло"]}, {}),
-        ]
-        second = build_training_hypothesis(line, current=first, feedback="повысь приоритет мужских")
+        second = build_training_hypothesis(line, current=first, feedback="подними мужских", recompute="catalog")
 
-        self.assertEqual(len(second["understood_changes"]), 2, second["understood_changes"])
-        joined = " ".join(second["understood_changes"])
-        self.assertIn("детск", joined)
-        self.assertIn("мужск", joined)
+        self.assertEqual(second["understood_changes"], ["исключи детские", "подними мужских"])
+        self.assertEqual([v["text"] for v in second["session_instructions"]], ["исключи детские", "подними мужских"])
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
     def test_catalog_scoped_recompute_keeps_route_and_reuses_search_plan(self, gateway, catalog_search):
-        # A comment in the catalog step's own feedback box changes only the
-        # product list: the route is kept verbatim and the search plan is
-        # not re-derived (the position name has not changed), so the only
-        # LLM call is the one that turns this comment into a rule.
+        # A comment in the catalog step's feedback box changes only the
+        # product list: route kept verbatim, search plan not re-derived (the
+        # position name has not changed). With an empty shortlist the AI
+        # pass does not run either — so no LLM call at all on the recompute.
         catalog_search.return_value = {"candidates": [], "sources": {}, "attempts": []}
         line = {"name": "Рубашка поло", "quantity": 50, "requirements": {"requirements": []}}
 
@@ -2210,16 +2152,12 @@ class TenderTests(TestCase):
         first = build_training_hypothesis(line)
         self.assertEqual(gateway.call_count, 1)
 
-        gateway.side_effect = [({"rules": [{
-            "trigger_kind": "text", "trigger_text": "", "trigger_scope": "any", "trigger_negate": False,
-            "action": "exclude", "action_text": "детск", "label": "−детск",
-        }]}, {})]
         second = build_training_hypothesis(line, current=first, feedback="исключи детские", recompute="catalog")
 
-        self.assertEqual(gateway.call_count, 2)  # +1 feedback translation, no new search-plan call
+        self.assertEqual(gateway.call_count, 1)
         self.assertEqual(second["route"], first["route"])
         self.assertEqual(second["search_plan"]["item"], "рубашка поло")
-        self.assertIn("детск", second["catalog_intent"]["exclude"])
+        self.assertEqual(second["understood_changes"], ["исключи детские"])
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
@@ -2230,13 +2168,10 @@ class TenderTests(TestCase):
         gateway.side_effect = [({"item": "рубашка поло", "queries": ["поло"]}, {})]
         first = build_training_hypothesis(line)
 
-        gateway.side_effect = [
-            ({"rules": []}, {}),
-            ({"item": "рубашка поло классическая", "queries": ["поло"]}, {}),
-        ]
+        gateway.side_effect = [({"item": "рубашка поло классическая", "queries": ["поло"]}, {})]
         second = build_training_hypothesis(line, current=first, feedback="уточни, что классическая", recompute="all")
 
-        self.assertEqual(gateway.call_count, 3)  # plan, then feedback + plan again
+        self.assertEqual(gateway.call_count, 2)  # plan, then plan again on the full rebuild
         self.assertEqual(second["search_plan"]["item"], "рубашка поло классическая")
 
     def test_catalog_search_does_not_repeat_color_variants_as_alternatives(self):
