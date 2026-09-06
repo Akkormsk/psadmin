@@ -852,7 +852,7 @@ class TenderTests(TestCase):
         session = ProductionTrainingSession.objects.create(
             created_by=self.user, position_name="Поло", requirements={"requirements": []},
             current_hypothesis={
-                "stage": "training_dialogue", "catalog_search_rules": [],
+                "stage": "training_dialogue",
                 "route": {"steps": ["Закупка готового изделия", "Нанесение"]},
             },
         )
@@ -874,7 +874,7 @@ class TenderTests(TestCase):
         session = ProductionTrainingSession.objects.create(
             created_by=self.user, position_name="Жилет", requirements={"requirements": []},
             current_hypothesis={
-                "stage": "training_dialogue", "catalog_search_rules": [],
+                "stage": "training_dialogue",
                 "route": {"steps": ["Закупка готового изделия", "Нанесение"]},
                 "requirement_selection": [
                     {"label": "Цвет", "value": "синий", "selected": True},
