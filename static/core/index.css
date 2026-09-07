@@ -1041,7 +1041,7 @@ h1 {
    #tender-requirements-body (a plain descendant, not the containing block)
    scrolls — that keeps the drawer's box motionless, which is what the fixed
    bottom bar below is actually anchored to. */
-.tender-requirements-drawer { position:absolute; top:0; right:0; width:min(470px,calc(100vw - 28px)); height:100%; box-sizing:border-box; display:flex; flex-direction:column; padding:20px 20px 0; overflow:hidden; background:#fff; box-shadow:-16px 0 40px rgba(15,23,42,.16); transform:translateX(100%); transition:transform .18s ease; }
+.tender-requirements-drawer { position:absolute; top:0; right:0; width:min(600px,calc(100vw - 32px)); height:100%; box-sizing:border-box; display:flex; flex-direction:column; padding:20px 22px 0; overflow:hidden; background:#fff; box-shadow:-16px 0 40px rgba(15,23,42,.16); transform:translateX(100%); transition:transform .18s ease; }
 .tender-requirements-overlay.is-open .tender-requirements-drawer { transform:translateX(0); }
 .tender-requirements-drawer .modal-header { flex:0 0 auto; align-items:flex-start; }
 #tender-requirements-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding-bottom:84px; }
@@ -1179,58 +1179,59 @@ h1 {
 .training-catalog { overflow:hidden; border:1px solid #d8e8dd; border-radius:9px; background:#fbfefc; }
 .training-catalog > header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-bottom:1px solid #e6eee8; }
 .training-catalog > header span { display:grid; gap:1px; }
-.training-catalog > header b { color:#176b3a; font-size:10px; }
-.training-catalog > header small { color:#78828e; font-size:8px; }
-.training-catalog > header button { padding:2px 0; border:0; background:none; color:#168245; font-size:9px; cursor:pointer; }
-.training-catalog-card { display:grid; grid-template-columns:34px minmax(0,1fr) auto; gap:7px; align-items:center; padding:7px 8px; border-bottom:1px solid #edf2ee; }
+.training-catalog > header b { color:#176b3a; font-size:11px; }
+.training-catalog > header small { color:#78828e; font-size:9px; }
+.training-catalog > header button { padding:2px 0; border:0; background:none; color:#168245; font-size:10px; cursor:pointer; }
+.training-catalog-card { display:grid; grid-template-columns:40px minmax(0,1fr) auto; gap:9px; align-items:center; padding:9px 10px; border-bottom:1px solid #edf2ee; }
 .training-catalog-card[hidden] { display:none; }
 .training-catalog-card:last-child { border-bottom:0; }
-.training-catalog-card img { width:34px; height:34px; border-radius:6px; object-fit:contain; background:#fff; }
-.training-catalog-card:not(:has(img)) { grid-template-columns:34px minmax(0,1fr) auto; }
-.training-catalog-card:not(:has(img))::before { content:""; display:block; width:34px; height:34px; border-radius:6px; background:#f1f4f2; }
-.training-catalog-card > span { display:grid; gap:1px; min-width:0; }
-.training-catalog-card a { overflow:hidden; color:#263442; font-size:10px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
-.training-catalog-card small, .training-catalog-card em { color:#6f7b87; font-size:8px; font-style:normal; }
+.training-catalog-card img { width:40px; height:40px; border-radius:6px; object-fit:contain; background:#fff; }
+.training-catalog-card:not(:has(img)) { grid-template-columns:40px minmax(0,1fr) auto; }
+.training-catalog-card:not(:has(img))::before { content:""; display:block; width:40px; height:40px; border-radius:6px; background:#f1f4f2; }
+.training-catalog-card > span { display:grid; gap:2px; min-width:0; }
+.training-catalog-card a { overflow:hidden; color:#263442; font-size:11px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.training-catalog-card small, .training-catalog-card em { color:#6f7b87; font-size:9px; font-style:normal; }
 .training-catalog-card .training-catalog-supplier { color:#176b3a; font-weight:650; }
-.training-catalog-card .training-catalog-price { margin:2px 0; color:#176b3a; font-size:11px; font-weight:750; }
+.training-catalog-card .training-catalog-price { margin:2px 0; color:#176b3a; font-size:12px; font-weight:750; }
 .training-catalog-card em { color:#247445; }
 .training-catalog-card em.is-warning { color:#936516; }
-.training-catalog-card button { min-height:27px; padding:4px 8px; font-size:9px; }
-.training-catalog-review { margin-top:4px; }
-details.training-catalog-review > summary { cursor:pointer; font-size:9px; list-style:none; display:flex; align-items:baseline; gap:4px; }
+.training-catalog-card button { min-height:28px; padding:5px 10px; font-size:10px; }
+.training-catalog-review { margin-top:5px; }
+details.training-catalog-review > summary { cursor:pointer; font-size:10px; list-style:none; display:flex; align-items:baseline; gap:5px; }
 details.training-catalog-review > summary::-webkit-details-marker { display:none; }
-details.training-catalog-review > summary::before { content:"▸"; color:#8a94a0; font-size:8px; }
+details.training-catalog-review > summary::before { content:"▸"; color:#8a94a0; font-size:9px; }
 details.training-catalog-review[open] > summary::before { content:"▾"; }
 details.training-catalog-review > summary .is-warning { color:#b23b3b; font-weight:650; }
 details.training-catalog-review > summary .is-ok { color:#247445; font-weight:650; }
 details.training-catalog-review > summary small { color:#98a1ad; font-weight:400; }
-.training-catalog-review p { margin:3px 0 0; color:#5f6b77; font-size:8px; }
-.training-catalog-review ul { margin:3px 0 0; padding:0; display:grid; gap:2px; list-style:none; }
-.training-catalog-review li { display:grid; grid-template-columns:12px minmax(0,1fr); gap:4px; align-items:start; font-size:8px; color:#5f6b77; }
+.training-catalog-review p { margin:3px 0 0; color:#5f6b77; font-size:9px; }
+.training-catalog-review ul { margin:4px 0 0; padding:0; display:grid; gap:3px; list-style:none; }
+.training-catalog-review li { display:grid; grid-template-columns:13px minmax(0,1fr); gap:5px; align-items:start; font-size:9px; line-height:1.4; color:#5f6b77; }
 .training-catalog-review li b { font-style:normal; font-weight:700; }
-.training-catalog-review li small { grid-column:2; color:#8a94a0; font-size:8px; }
+.training-catalog-review li small { grid-column:2; color:#8a94a0; font-size:9px; }
 .training-catalog-review li.rv-match b { color:#247445; }
 .training-catalog-review li.rv-mismatch b { color:#b23b3b; }
 .training-catalog-review li.rv-mismatch span { color:#8a2f2f; }
 .training-catalog-review li.rv-unclear b { color:#936516; }
-.training-catalog-rules { display:flex; flex-wrap:wrap; align-items:center; gap:5px; padding:6px 8px; border:1px solid #e2e6ea; border-bottom:0; border-radius:9px 9px 0 0; background:#f7f9fa; }
-.training-catalog-rules small { width:100%; color:#78828e; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
-.training-catalog-rule { display:inline-flex; align-items:center; gap:4px; padding:3px 4px 3px 8px; border:1px solid #d5dde3; border-radius:12px; background:#fff; color:#344151; font-size:9px; }
+.training-catalog-rules { display:flex; flex-wrap:wrap; align-items:center; gap:5px; padding:7px 10px; border:1px solid #e2e6ea; border-bottom:0; border-radius:9px 9px 0 0; background:#f7f9fa; }
+.training-catalog-rules small { width:100%; color:#78828e; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.training-catalog-rule { display:inline-flex; align-items:center; gap:4px; padding:3px 5px 3px 9px; border:1px solid #d5dde3; border-radius:12px; background:#fff; color:#344151; font-size:10px; }
 .training-catalog-rule button { min-height:0; padding:0; width:15px; height:15px; border:0; border-radius:50%; background:#eef1f3; color:#68727d; font-size:11px; line-height:1; cursor:pointer; }
 .training-catalog-rule button:hover { background:#f0d8d8; color:#b23b3b; }
 .training-catalog-rule.is-fired { border-color:#8fcba3; background:#eef8f1; color:#1f6b3a; }
+.training-catalog-rule.is-dormant { border-style:dashed; color:#8a94a0; opacity:.75; }
 .training-catalog-rule--permanent { padding:3px 8px; border-style:dashed; color:#5b6472; background:#f7f9fa; }
 .training-catalog-actions { display:grid; justify-items:end; gap:4px; }
-.training-catalog-selected, .training-catalog-mismatch { padding:3px 6px; border-radius:6px; background:#e9f7ee; color:#168245; font-size:8px; white-space:nowrap; }
+.training-catalog-selected, .training-catalog-mismatch { padding:3px 7px; border-radius:6px; background:#e9f7ee; color:#168245; font-size:9px; white-space:nowrap; }
 .training-catalog-mismatch { background:#fff5df; color:#8a621b; }
-.training-section-label { margin-bottom:-3px; color:#78828e; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.training-section-label { margin-bottom:-3px; color:#78828e; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .training-dialogue__costs { overflow:hidden; border:1px solid #e1e6ea; border-radius:9px; }
-.training-dialogue__costs > header { padding:8px 10px; border-bottom:1px solid #dfe6ea; background:#eef2f4; color:#3a4653; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.training-dialogue__costs > header { padding:9px 11px; border-bottom:1px solid #dfe6ea; background:#eef2f4; color:#3a4653; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .tender-requirements-drawer .training-dialogue__costs .training-cost-group { margin-top:0; }
-.training-cost-group h4 { margin:0; padding:5px 9px; border-bottom:1px solid #e7ecef; background:#f5f7f8; color:#526071; font-size:9px; }
-.training-cost-row, .training-dialogue__costs footer { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; padding:6px 9px; border-bottom:1px solid #edf0f2; font-size:10px; }
+.training-cost-group h4 { margin:0; padding:5px 10px; border-bottom:1px solid #e7ecef; background:#f5f7f8; color:#526071; font-size:10px; }
+.training-cost-row, .training-dialogue__costs footer { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; padding:7px 10px; border-bottom:1px solid #edf0f2; font-size:11px; }
 .training-cost-row > strong { white-space:nowrap; }
-.training-dialogue__costs .training-cost-trace { display:grid; gap:2px; margin-top:2px; color:#7b8490; font-size:8px; font-weight:400; line-height:1.3; }
+.training-dialogue__costs .training-cost-trace { display:grid; gap:2px; margin-top:2px; color:#7b8490; font-size:9px; font-weight:400; line-height:1.35; }
 .training-dialogue__costs .training-cost-trace i { font-style:normal; }
 .training-dialogue__costs .training-cost-trace i b { color:#647080; font-size:inherit; }
 .training-dialogue__costs .training-cost-trace ol { display:grid; gap:1px; margin:1px 0; padding-left:16px; }
@@ -1311,7 +1312,7 @@ details.training-catalog-review > summary small { color:#98a1ad; font-weight:400
 .training-route__fix[open] > summary::after { content:'▴'; }
 .training-route__fix[open] > summary { border-bottom:1px dashed #d3e6d9; }
 .training-route__fix .training-feedback { padding:10px; }
-.training-block-changes { display:grid; gap:3px; padding:8px 10px; border-radius:8px; background:#eef4f0; color:#3f5a49; font-size:10px; }
+.training-block-changes { display:grid; gap:4px; padding:9px 11px; border-radius:8px; background:#eef4f0; color:#3f5a49; font-size:10.5px; }
 .training-block-changes b { font-size:9px; text-transform:uppercase; letter-spacing:.04em; }
 .training-block-changes ul { margin:0; padding:0; list-style:none; display:grid; gap:6px; }
 .training-block-changes li { display:flex; align-items:flex-start; gap:8px; }
@@ -1319,10 +1320,10 @@ details.training-catalog-review > summary small { color:#98a1ad; font-weight:400
 .training-block-changes li span { display:block; }
 .training-block-changes li.is-skipped span { opacity:.5; text-decoration:line-through; }
 .training-block-changes li small { display:block; margin-top:1px; color:#7a8f83; }
-.training-rule-scope { font-style:normal; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#4f7a63; background:#dcebe2; padding:1px 4px; border-radius:4px; white-space:nowrap; }
+.training-rule-scope { font-style:normal; font-size:8.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#4f7a63; background:#dcebe2; padding:1px 4px; border-radius:4px; white-space:nowrap; }
 .training-block-changes li button { min-height:0; padding:0; width:15px; height:15px; border:0; border-radius:50%; background:#dfe8e2; color:#5c6f63; font-size:11px; line-height:1; cursor:pointer; flex:none; margin-top:1px; }
 .training-block-changes li button:hover { background:#f0d8d8; color:#b23b3b; }
-.training-catalog-removed { margin:6px 0 0; font-size:9px; color:#78828e; }
+.training-catalog-removed { margin:6px 0 0; font-size:10px; color:#78828e; }
 .training-catalog-removed summary { cursor:pointer; }
 .training-catalog-removed ul { margin:4px 0 0; padding-left:16px; }
 .training-feedback { display:grid; gap:6px; }

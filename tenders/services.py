@@ -2800,6 +2800,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         instruction_results.append({
             "text": _cell_text(value.get("text") if isinstance(value, dict) else value),
             "origin": (value.get("origin") if isinstance(value, dict) else "") or "session",
+            "lesson_id": value.get("lesson_id") if isinstance(value, dict) else None,
             "type": itype,
             "criterion": criterion,
             "applies_to": applies_to,

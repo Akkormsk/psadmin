@@ -25,7 +25,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, recognize_tender_items, refresh_training_example_embedding
@@ -432,6 +432,9 @@ def revise_production_hypothesis(request):
         # Removing a correction chip resends the reduced instruction list.
         instructions_override = payload.get("instructions") if isinstance(payload.get("instructions"), list) else None
         clear_ranking = bool(payload.get("clear_ranking"))
+        # A bare recompute after a server-side change the payload does not
+        # itself carry (a lesson was just deactivated).
+        refresh = bool(payload.get("refresh"))
         # Which dialogue block's "Учесть и пересчитать" was pressed. The box
         # the admin typed in decides the scope — no LLM guesses which block a
         # comment belongs to. "catalog" keeps the route and search plan
@@ -446,7 +449,7 @@ def revise_production_hypothesis(request):
         # A "requirements" recompute carries its change in the line payload
         # (the ТЗ-row `selected` flags); a chip removal carries it in
         # instructions_override or clear_ranking — none need feedback text.
-        if not feedback and instructions_override is None and not clear_ranking and scope != "requirements":
+        if not feedback and instructions_override is None and not clear_ranking and not refresh and scope != "requirements":
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
@@ -489,6 +492,22 @@ def drop_requirement_skip_rule(request):
         return JsonResponse({"error": "Не удалось определить строку ТЗ."}, status=400)
     removed = RequirementSkipRule.objects.filter(label_normalized=label_normalized).update(is_active=False)
     return JsonResponse({"dropped": bool(removed)})
+
+
+@login_required
+@require_POST
+def drop_lesson(request):
+    """Deactivate a learned lesson (the "Учтён прошлый опыт" chip) — it
+    stops being fed into the shortlist pass on every position. Reversible
+    from the admin (is_active), never hard-deleted here."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Менять уроки может только администратор."}, status=403)
+    try:
+        lesson_id = int(json.loads(request.POST.get("payload", "{}")).get("lesson_id"))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return JsonResponse({"error": "Не удалось определить урок."}, status=400)
+    dropped = Lesson.objects.filter(pk=lesson_id, is_active=True).update(is_active=False)
+    return JsonResponse({"dropped": bool(dropped)})
 
 
 @login_required

@@ -1864,7 +1864,7 @@ class TenderTests(TestCase):
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
     def test_a_matching_lesson_is_fed_into_the_pass_without_new_feedback(self, gateway, catalog_search):
-        Lesson.objects.create(
+        lesson = Lesson.objects.create(
             scope="catalog", admin_text="всегда убирай детские", summary="убрать детские модели",
             item_word="поло", created_by=self.user,
         )
@@ -1888,6 +1888,34 @@ class TenderTests(TestCase):
         self.assertEqual([card["id"] for card in result["catalog_candidates"]], ["a"])
         self.assertEqual(result["shortlist_removed"][0]["reason"], "не детская модель")
         self.assertEqual(result["shortlist_instructions"][0]["origin"], "lesson")
+        self.assertEqual(result["shortlist_instructions"][0]["lesson_id"], lesson.pk)
+
+    def test_drop_lesson_deactivates_it_and_removes_it_from_recall(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        lesson = Lesson.objects.create(
+            scope="catalog", admin_text="убрать детские", summary="убрать детские",
+            item_word="", tz_labels=[], created_by=self.user,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_drop_lesson"), {"payload": json.dumps({"lesson_id": lesson.pk})})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["dropped"])
+        lesson.refresh_from_db()
+        self.assertFalse(lesson.is_active)
+        self.assertEqual(_retrieve_lessons("catalog", "кружка", ["объём"]), [])
+
+    def test_drop_lesson_is_superuser_only(self):
+        lesson = Lesson.objects.create(scope="catalog", admin_text="x", created_by=self.user)
+        self.client.force_login(self.user)  # not a superuser
+
+        response = self.client.post(reverse("tender_drop_lesson"), {"payload": json.dumps({"lesson_id": lesson.pk})})
+
+        self.assertEqual(response.status_code, 403)
+        lesson.refresh_from_db()
+        self.assertTrue(lesson.is_active)
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
