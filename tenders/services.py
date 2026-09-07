@@ -3201,27 +3201,32 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         hypothesis["shortlist_warning"] = f"ИИ-проход по подбору не выполнился ({pass_result['error']}). Показан порядок без учёта ваших замечаний — попробуйте пересчитать."
     if catalog_warning:
         hypothesis["catalog_warning"] = catalog_warning
-    if isinstance(current, dict) and isinstance(current.get("catalog_selection"), dict):
-        selected_id = current["catalog_selection"].get("id")
-        if any(value.get("id") == selected_id and value.get("fit") == "exact" for value in catalog_candidates):
-            hypothesis["catalog_selection"] = current["catalog_selection"]
-    # A fully matching live offer is an executable backend price source, not
-    # merely a visual suggestion. Apply it immediately so the displayed total
-    # and the tender material field cannot remain zero while showing a product.
-    exact_candidate = next((
-        value for value in catalog_candidates
-        if value.get("fit") == "exact" and value.get("price") not in (None, "")
-    ), None)
-    if exact_candidate and not hypothesis.get("catalog_selection"):
-        preserved_usage = hypothesis.get("usage", {})
-        preserved_warning = hypothesis.get("catalog_warning")
-        hypothesis = apply_catalog_candidate(hypothesis, line, exact_candidate.get("id"))
-        hypothesis["catalog_selection"]["selection_mode"] = "automatic"
-        hypothesis["usage"] = preserved_usage
-        if preserved_warning:
-            hypothesis["catalog_warning"] = preserved_warning
+    # The search is trusted to rank the best fit first — so the top card
+    # that carries a price is taken into the calculation automatically, and
+    # the total is never "product shown, cost 0". The admin can click any
+    # other card (→ manual selection); a manual pick then sticks across
+    # recomputes as long as it stays in the shortlist. An automatic pick
+    # always re-tracks whatever is #1 now.
+    prior_selection = current.get("catalog_selection") if isinstance(current, dict) else None
+    manual_id = (
+        prior_selection.get("id")
+        if isinstance(prior_selection, dict) and prior_selection.get("selection_mode") == "manual"
+        else None
+    )
+    priced = [value for value in catalog_candidates if value.get("price") not in (None, "")]
+    target_id, target_mode = None, "automatic"
+    if manual_id and any(str(value.get("id")) == str(manual_id) for value in priced):
+        target_id, target_mode = manual_id, "manual"
+    elif priced:
+        target_id = priced[0].get("id")
+    if target_id is not None and not hypothesis.get("catalog_selection"):
+        preserved = {key: hypothesis.get(key) for key in ("usage", "catalog_warning", "shortlist_warning")}
+        hypothesis = apply_catalog_candidate(hypothesis, line, target_id, selection_mode=target_mode)
+        for key, value in preserved.items():
+            if value:
+                hypothesis[key] = value
     return _attach_memory_preview(hypothesis)
-def apply_catalog_candidate(hypothesis, line, product_id):
+def apply_catalog_candidate(hypothesis, line, product_id, selection_mode="manual"):
     from .models import ProductionType
 
     candidates = hypothesis.get("catalog_candidates", []) if isinstance(hypothesis, dict) else []
@@ -3266,10 +3271,16 @@ def apply_catalog_candidate(hypothesis, line, product_id):
     # fills in the purchase step's supplier detail and its reason line; it
     # must not drop "Нанесение" or let the general normalizer's route/type
     # guesses (which would show 55% + "Другой тип производства") surface.
-    if candidate.get("fit") == "exact":
-        route_reason = f"Готовое изделие найдено у поставщика {supplier_name} и соответствует проверенным требованиям ТЗ. Его актуальная цена автоматически включена в закупочную себестоимость; нанесение считается отдельным процессом."
+    fit_exact = candidate.get("fit") == "exact"
+    mismatch_text = "; ".join(_short_text_list(candidate.get("mismatches"), limit=3))
+    if selection_mode == "automatic":
+        if fit_exact:
+            route_reason = f"Автоматически взят лучший по подбору товар: {supplier_name}, полностью соответствует проверенным требованиям ТЗ. Его цена включена в закупочную себестоимость; нанесение — отдельный процесс."
+        else:
+            route_reason = f"Автоматически взят первый по подбору товар: {supplier_name}. Проверьте расхождения: {mismatch_text or 'часть характеристик требует проверки'}. При необходимости выберите в списке другой."
+    elif fit_exact:
+        route_reason = f"Готовое изделие найдено у поставщика {supplier_name} и соответствует проверенным требованиям ТЗ. Его актуальная цена включена в закупочную себестоимость; нанесение считается отдельным процессом."
     else:
-        mismatch_text = "; ".join(_short_text_list(candidate.get("mismatches"), limit=3))
         route_reason = f"Товар поставщика {supplier_name} выбран администратором как рабочая альтернатива. Расхождения, которые нужно учитывать: {mismatch_text or 'часть характеристик требует проверки'}."
     purchase_details = [f"{supplier_name}, арт. {candidate.get('article', '')}".strip().strip(",")]
     raw["route"] = _frozen_route(reason=route_reason, purchase_details=purchase_details)
@@ -3298,7 +3309,7 @@ def apply_catalog_candidate(hypothesis, line, product_id):
         **candidate,
         "price": str(price),
         "cost_total": str(_money(price * quantity)),
-        "selection_mode": "manual",
+        "selection_mode": selection_mode,
         "accepted_mismatches": candidate.get("mismatches", []) if candidate.get("fit") != "exact" else [],
         "selected_at": timezone.now().isoformat(),
     }

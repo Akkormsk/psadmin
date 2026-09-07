@@ -1930,6 +1930,54 @@ class TenderTests(TestCase):
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
+    def test_top_priced_card_is_auto_applied_even_when_it_is_a_partial_match(self, gateway, catalog_search):
+        catalog_search.return_value = {"candidates": [
+            {"id": "top", "name": "Поло A", "article": "A", "price": "500", "fit": "partial",
+             "supplier_code": "gifts", "supplier_name": "gifts.ru", "url": "https://g/1",
+             "priority": 1, "mismatch_count": 1, "unknown_count": 0,
+             "matches": [], "mismatches": ["Плотность 200 г/м²; требуется не менее 250 г/м²"], "unknown": []},
+            {"id": "next", "name": "Поло B", "article": "B", "price": "900", "fit": "partial",
+             "supplier_code": "gifts", "supplier_name": "gifts.ru", "url": "https://g/2",
+             "priority": 1, "mismatch_count": 2, "unknown_count": 0,
+             "matches": [], "mismatches": ["x", "y"], "unknown": []},
+        ], "sources": {}, "attempts": []}
+        gateway.side_effect = [({"item": "поло", "queries": ["поло"]}, {})]
+
+        result = build_training_hypothesis({"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": []}})
+
+        self.assertEqual(result["catalog_selection"]["id"], "top")
+        self.assertEqual(result["catalog_selection"]["selection_mode"], "automatic")
+        self.assertTrue(any(c.get("category") == "material" for c in result["costs"]))
+        self.assertIn("Автоматически взят первый по подбору", result["route"]["reason"])
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_a_manual_pick_sticks_across_recompute_but_auto_pick_re_tracks_the_top(self, gateway, catalog_search):
+        cards = [
+            {"id": "a", "name": "Поло A", "article": "A", "price": "500", "fit": "exact", "supplier_code": "gifts",
+             "supplier_name": "g", "url": "https://g/a", "priority": 1, "mismatch_count": 0, "unknown_count": 0,
+             "matches": [], "mismatches": [], "unknown": []},
+            {"id": "b", "name": "Поло B", "article": "B", "price": "700", "fit": "exact", "supplier_code": "gifts",
+             "supplier_name": "g", "url": "https://g/b", "priority": 1, "mismatch_count": 0, "unknown_count": 0,
+             "matches": [], "mismatches": [], "unknown": []},
+        ]
+        catalog_search.return_value = {"candidates": [dict(c) for c in cards], "sources": {}, "attempts": []}
+        gateway.side_effect = [({"item": "поло", "queries": ["поло"]}, {})]
+        first = build_training_hypothesis({"name": "Поло", "quantity": 10, "requirements": {"requirements": []}})
+        self.assertEqual(first["catalog_selection"]["id"], "a")  # top, auto
+
+        manual = apply_catalog_candidate(first, {"name": "Поло", "quantity": 10}, "b", selection_mode="manual")
+        self.assertEqual(manual["catalog_selection"]["selection_mode"], "manual")
+
+        catalog_search.return_value = {"candidates": [dict(c) for c in cards], "sources": {}, "attempts": []}
+        second = build_training_hypothesis(
+            {"name": "Поло", "quantity": 10, "requirements": {"requirements": []}},
+            current=manual, recompute="catalog",
+        )
+        self.assertEqual(second["catalog_selection"]["id"], "b")  # manual pick kept
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
     def test_finalize_stores_a_general_rule_without_an_item_word(self, gateway, catalog_search):
         self.user.is_superuser = True
         self.user.is_staff = True
