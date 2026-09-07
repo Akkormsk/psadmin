@@ -1423,18 +1423,76 @@ def _product_sizes(product):
     return values
 
 
-def _aggregate_color_variants(products):
+_SIZE_SUFFIX_RE = re.compile(r",?\s*размер\s+[0-9a-zа-яё./\-–\s]+$", re.I)
+_SIZE_IN_NAME_RE = re.compile(r"размер\s+([0-9a-zа-яё./\-–]+)", re.I)
+
+
+def _variant_size(product):
+    """The size of one SKU — from a ", размер XL" tail in the name (Gifts)
+    or the `size` field / an attribute (Oasis)."""
+    match = _SIZE_IN_NAME_RE.search(_text(product.name, 300))
+    if match:
+        return match.group(1).strip(" .,")
+    sizes = _product_sizes(product)
+    return sizes[0] if sizes else ""
+
+
+def _gifts_variant_keys(products):
+    """Map each Gifts product to its colour-family key. Gifts has no
+    `color_group_id`; the size SKUs of one colour share an article prefix
+    with the parent row ("Ветровка Kivach, ярко-красная" `7102.51` →
+    "…красная, размер L" `7102.513`) and their colour name can drift
+    ("ярко-красная" vs "красная"), so the article is the reliable link.
+    Group by the shortest article another row of the same product line
+    extends; if nothing extends it, by the size-stripped name."""
+    head6_by_article = {}
+    for product in products:
+        article = _text(product.article, 60)
+        if article and article not in head6_by_article:
+            head6_by_article[article] = _normalized(_SIZE_SUFFIX_RE.sub("", _text(product.name, 300)))[:6]
+    keys = {}
+    for product in products:
+        article = _text(product.article, 60)
+        head6 = _normalized(_SIZE_SUFFIX_RE.sub("", _text(product.name, 300)))[:6]
+        parent = ""
+        for cut in range(len(article) - 1, 4, -1):
+            candidate = article[:cut]
+            if candidate != article and head6_by_article.get(candidate) == head6 and head6:
+                parent = candidate
+                break
+        # A parent row keys on its own article so its size children (which
+        # resolve to that same article) join it.
+        keys[id(product)] = f"gifts:{parent or article}" if article else f"gifts:name:{_normalized(product.name)[:44]}"
+    return keys
+
+
+def _aggregate_color_variants(products, supplier_code="oasis"):
     """Represent one colour family as one offer instead of one card per size SKU."""
+    gifts_keys = _gifts_variant_keys(products) if supplier_code == "gifts" else {}
     grouped = {}
     for product in products:
-        grouped.setdefault(product.color_group_id or product.external_id, []).append(product)
+        if _text(product.color_group_id, 120):
+            key = product.color_group_id
+        elif supplier_code == "gifts":
+            key = gifts_keys.get(id(product), product.external_id)
+        else:
+            key = product.external_id
+        grouped.setdefault(key, []).append(product)
     result = []
     for family_id, variants in grouped.items():
-        representative = next((value for value in variants if value.external_id == family_id), variants[0])
+        # Prefer the parent row: it carries the image and the colour list;
+        # a size SKU row usually has neither and a ", размер XL" name.
+        representative = (
+            next((value for value in variants if value.color_group_id and value.color_group_id == family_id), None)
+            or next((value for value in variants if not _SIZE_SUFFIX_RE.search(_text(value.name, 300)) and _text(value.image_url, 500)), None)
+            or next((value for value in variants if _text(value.image_url, 500)), None)
+            or next((value for value in variants if value.external_id == family_id), None)
+            or variants[0]
+        )
         variant_ids = [value.external_id for value in variants]
         prices = [value.effective_price for value in variants if value.effective_price is not None]
         variant_details = [{
-            "size": _product_sizes(value)[0] if _product_sizes(value) else "",
+            "size": _variant_size(value),
             "product_id": value.external_id,
             "article": value.article,
             "stock": max(0, value.total_stock),
@@ -1442,13 +1500,22 @@ def _aggregate_color_variants(products):
         } for value in variants]
         sizes = []
         for value in variants:
-            for size in _product_sizes(value):
-                if size not in sizes:
-                    sizes.append(size)
-        representative.external_id = family_id
+            size = _variant_size(value)
+            if size and size not in sizes:
+                sizes.append(size)
         representative.total_stock = sum(max(0, value.total_stock) for value in variants)
         representative.is_on_order = any(value.is_on_order for value in variants)
-        representative.product_url = f"https://www.oasiscatalog.com/item/{family_id}"
+        if len(variants) > 1:
+            # The card is now one colour, all sizes — drop a ", размер XL"
+            # tail if the representative row happens to be a size SKU.
+            representative.name = _SIZE_SUFFIX_RE.sub("", _text(representative.name, 300)).rstrip(" ,")
+            representative.full_name = _SIZE_SUFFIX_RE.sub("", _text(representative.full_name, 300)).rstrip(" ,")
+        # Only a real Oasis color_group_id gives a stable per-family URL
+        # (`/item/<id>`); the synthetic "supplier:name" key and every Gifts
+        # group keep the representative's own id and product_url.
+        if supplier_code == "oasis" and ":" not in str(family_id):
+            representative.external_id = family_id
+            representative.product_url = f"https://www.oasiscatalog.com/item/{family_id}"
         if prices:
             # Use the highest variant price to avoid silently understating a
             # mixed-size tender when a supplier prices sizes differently.
@@ -2355,7 +2422,7 @@ def catalog_candidates_for_line(
             # price and stock for the handful of cards actually shown are
             # refreshed in one batched call right before returning (see below).
             oasis_used_mirror = True
-            oasis_pool = _aggregate_color_variants(_text_search_pool("oasis", query_phrases))
+            oasis_pool = _aggregate_color_variants(_text_search_pool("oasis", query_phrases), "oasis")
             pool.extend(oasis_pool)
             source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
         else:
@@ -2412,7 +2479,7 @@ def catalog_candidates_for_line(
             oasis_pool = _aggregate_color_variants([value for value in (
                 _product_from_payload(supplier, raw, category_map, marker)
                 for raw in rows if isinstance(raw, dict)
-            ) if value and value.is_active])
+            ) if value and value.is_active], "oasis")
             pool.extend(oasis_pool)
             source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
     except CatalogSyncError as exc:
@@ -2426,9 +2493,11 @@ def catalog_candidates_for_line(
         }
 
     # Gifts: full-text over the stored name + description, like typing into
-    # gifts.ru's own search box.
+    # gifts.ru's own search box. Collapse the per-size rows into one card
+    # per colour (Gifts has no color_group_id, so this groups by the name
+    # with the ", размер …" tail stripped).
     gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
-    cached_products = _text_search_pool("gifts", query_phrases)
+    cached_products = _aggregate_color_variants(_text_search_pool("gifts", query_phrases), "gifts")
     pool.extend(cached_products)
     source_status["gifts"] = {
         "status": "success" if gifts_supplier_exists else "not_configured",

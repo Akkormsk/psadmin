@@ -2543,6 +2543,46 @@ class TenderTests(TestCase):
 
         self.assertEqual(len(candidates), 1)
 
+    def test_gifts_size_rows_collapse_to_one_card_that_keeps_the_parent_image(self):
+        # Gifts has no color_group_id: the parent row ("Ветровка Kivach,
+        # ярко-красная", art 7102.51, with the photo) and its size SKUs
+        # ("…красная, размер L", art 7102.513, no photo) must show as ONE
+        # card — grouped by the shared article prefix, not the name (the
+        # colour name drifts: "ярко-красная" vs "красная").
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="p", article="7102.51", name="Ветровка Kivach, ярко-красная",
+            full_name="Ветровка Kivach, ярко-красная", size="XS–3XL", colors=["красный"],
+            image_url="https://files.gifts.ru/7102.51.jpg", total_stock=0, discount_price=740,
+            search_text="ветровка kivach ярко-красная",
+        )
+        CatalogProduct.objects.bulk_create([
+            CatalogProduct(
+                supplier=gifts, external_id=f"c{n}", article=f"7102.51{n}",
+                name=f"Ветровка Kivach красная, размер {size}", full_name=f"Ветровка Kivach красная, размер {size}",
+                total_stock=150, discount_price=740, search_text=f"ветровка kivach красная размер {size}",
+            )
+            for n, size in enumerate(["S", "M", "L", "XL"], 1)
+        ])
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                return []
+
+        result = catalog_candidates_for_line(
+            {"name": "Ветровка", "quantity": "100", "requirements": {"requirements": []}},
+            limit=10, intent={"item": "ветровка", "categories": ["ветровка"], "synonyms": []},
+            client=Client(),
+        )
+
+        kivach = [value for value in result if "kivach" in value["name"].lower()]
+        self.assertEqual(len(kivach), 1)
+        self.assertTrue(kivach[0]["image_url"])
+        self.assertNotIn("размер", kivach[0]["name"])
+        self.assertGreaterEqual(len(kivach[0]["variants"]), 4)
+
     def test_catalog_search_reads_later_pages_and_matches_lime_to_green_apple(self):
         target = {
             "id": "00000008300", "article": "3100868S", "group_id": "apple-shirt", "color_group_id": "00000008300",
