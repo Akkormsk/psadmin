@@ -1748,6 +1748,48 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["external_id"], "sack")
 
+    def test_confirmed_item_type_outranks_a_spec_clean_looser_match(self):
+        # "Кружка с пробковым дном" ТЗ: the real cork-bottom mugs — even with
+        # a spec deviation — must beat a plain mug that has zero mismatches
+        # only because we cannot verify anything about it, and a "cork
+        # coaster" mug that is a looser type match.
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
+        CatalogProduct.objects.bulk_create([
+            CatalogProduct(
+                supplier=gifts, external_id=f"plain-{i}", article=f"P-{i}",
+                name=f"Кружка керамическая Alpha {i}", full_name=f"Кружка керамическая Alpha {i}, белая",
+                colors=["белый"], materials=["керамика"], total_stock=500, discount_price=250,
+                search_text=f"кружка керамическая alpha {i} белая",
+            )
+            for i in range(15)
+        ])
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="cork", article="C-1",
+            name="Кружка с пробковым дном Denpasar", full_name="Кружка с пробковым дном Denpasar, белая",
+            colors=["белый"], materials=["керамика"], total_stock=500, discount_price=370,
+            search_text="кружка с пробковым дном denpasar керамическая белая объём 300 мл",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                return []
+
+        result = catalog_candidates_for_line(
+            {"name": "Кружка", "quantity": "100", "requirements": {"requirements": [
+                {"label": "Тип изделия", "value": "кружка с пробковым дном"},
+                {"label": "Объём", "value": "400 мл"},
+            ]}},
+            limit=10,
+            intent={"item": "кружка с пробковым дном", "categories": ["кружка с пробковым дном"], "synonyms": ["керамическая кружка"]},
+            client=Client(),
+        )
+
+        self.assertEqual(result[0]["external_id"], "cork")
+        self.assertEqual(result[0]["type_rank"], 0)
+        self.assertEqual(result[1]["type_rank"], 1)
+
     @staticmethod
     def _shortlist_card(**overrides):
         card = {
