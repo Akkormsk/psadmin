@@ -2704,8 +2704,12 @@ def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered):
 - "soften" — «220 г это норм», «цвет считай совпавшим», «это несовпадение не критично». Критерий = какой признак смягчить, "cards" = id карточек, у которых расхождение по этому признаку теперь считать допустимым.
 - "ranking" — «сначала дорогие / дешёвые». Верни "price":"asc" или "desc". Карточки не трогай.
 
+Инструкция бывает УСЛОВНОЙ: «если в ТЗ <условие> — <действие>», «если в ТЗ НЕ указано <…> — <действие>». Проверь условие по разделу «Учитываемые пункты ТЗ» выше. Условие НЕ выполняется для этой позиции → верни "applied":false, "cards":[], в "note" объясни почему («в ТЗ запрошены детские размеры — правило не применяется»); тип и критерий всё равно укажи. Условие выполняется → действуй как обычно.
+
+"applies_to" — насколько широко ЗАПОМНИТЬ инструкцию: "item" (по умолчанию) — про этот конкретный вид товара; "any" — общее правило, не привязанное к товару (условная формулировка про ТЗ вообще: «если в ТЗ нет запроса на детские — убирай детские»; «Честный Знак никогда не учитывай»).
+
 Верни только JSON:
-{{"instructions":[{{"n":1,"type":"priority|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","summary":"короткая формулировка сути","applied":true,"note":"что вышло: скольким карточкам подошло"}}]}}
+{{"instructions":[{{"n":1,"type":"priority|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","applies_to":"item|any","summary":"короткая формулировка сути","applied":true,"note":"что вышло / почему не применилось"}}]}}
 "cards" нужен для priority/exclude/soften; "price" — только для ranking. "summary" — для плашки и запоминания."""
 
 
@@ -2759,8 +2763,15 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         criterion = _cell_text(info.get("criterion"))[:120]
         card_ids = info.get("cards")
         ids = {str(value) for value in card_ids} if isinstance(card_ids, list) else set()
+        applies_to = "any" if _cell_text(info.get("applies_to")).lower() == "any" else "item"
+        # A conditional instruction whose condition does not hold for THIS
+        # position: the model returns applied:false — do nothing here, but
+        # still keep it (and learn it) for positions where it will fire.
+        condition_blocked = info.get("applied") is False
         applied = False
-        if itype == "ranking":
+        if condition_blocked:
+            pass
+        elif itype == "ranking":
             price = _cell_text(info.get("price")).lower()
             if price in {"asc", "desc"}:
                 ranking = {"price": price}
@@ -2791,7 +2802,9 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
             "origin": (value.get("origin") if isinstance(value, dict) else "") or "session",
             "type": itype,
             "criterion": criterion,
+            "applies_to": applies_to,
             "applied": applied,
+            "condition_blocked": condition_blocked,
             "ranking_only": itype == "ranking",
             "summary": _cell_text(info.get("summary"))[:280] or criterion or _cell_text(value.get("text") if isinstance(value, dict) else value)[:120],
             "note": _cell_text(info.get("note"))[:200],
@@ -2879,7 +2892,7 @@ def _retrieve_lessons(scope, item_word, tz_labels, production_type="", limit=12)
         if prod_norm and _normalized_text(lesson.production_type) == prod_norm:
             score += 2
         if not lesson_item_stems and not lesson_label_stems:
-            score += 1
+            score += 2  # a general rule (applies_to="any") — pull it for every position
         if score > 0:
             scored.append((score, lesson))
     scored.sort(key=lambda pair: (-pair[0], -pair[1].pk))
@@ -2915,8 +2928,8 @@ def learn_lessons_from_session(hypothesis, session, user):
         if isinstance(row, dict) and _cell_text(row.get("text"))
     }
     plan = hypothesis.get("search_plan") if isinstance(hypothesis.get("search_plan"), dict) else {}
-    item_word = _cell_text(plan.get("item"))[:120]
-    tz_labels = [
+    position_item = _cell_text(plan.get("item"))[:120]
+    position_labels = [
         _normalized_text(row.get("label"))
         for row in (hypothesis.get("requirement_selection") or [])
         if isinstance(row, dict) and row.get("selected") is not False and _cell_text(row.get("label"))
@@ -2934,6 +2947,13 @@ def learn_lessons_from_session(hypothesis, session, user):
         scope = _cell_text(entry.get("scope")) or "catalog"
         result = results.get(_normalized_text(admin_text), {})
         summary = _cell_text(result.get("summary"))[:300] or admin_text[:300]
+        # A general rule (the pass marked it applies_to="any" — a condition
+        # about the ТЗ in general, "Честный Знак не учитывай" …) is stored
+        # with NO item word / labels so _retrieve_lessons pulls it for every
+        # position, not just ones that look like this one.
+        general = _cell_text(result.get("applies_to")).lower() == "any"
+        item_word = "" if general else position_item
+        tz_labels = [] if general else position_labels
         lesson, created = Lesson.objects.get_or_create(
             scope=scope, item_word=item_word, admin_text=admin_text,
             defaults={

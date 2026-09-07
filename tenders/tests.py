@@ -16,7 +16,7 @@ from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, _category_candidates, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _run_shortlist_pass, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
+from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _retrieve_lessons, _run_shortlist_pass, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
 
 
 class TenderTests(TestCase):
@@ -1757,6 +1757,49 @@ class TenderTests(TestCase):
         self.assertEqual(gateway.call_args.kwargs.get("model"), "anthropic/claude-haiku-4-5")
 
     @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_skips_a_conditional_instruction_whose_condition_fails(self, gateway):
+        # "если в ТЗ нет запроса на детские — убери детские" — but this ТЗ
+        # DOES ask for kids' sizes, so the model returns applied:false and
+        # nothing is removed. The instruction is still kept (and learned).
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "exclude", "criterion": "не детская модель", "cards": [],
+             "applies_to": "any", "applied": False, "summary": "убрать детские, если их нет в ТЗ",
+             "note": "в ТЗ запрошены детские размеры — правило не применяется"},
+        ]}, {})
+        cards = [self._shortlist_card(name="Поло детское")]
+
+        result = _run_shortlist_pass(
+            "Поло", [{"label": "Размерный ряд", "value": "детский 28-40"}], cards,
+            [{"text": "если в ТЗ нет запроса на детские — убери детские", "origin": "session"}],
+        )
+
+        self.assertNotIn("_removed", cards[0])
+        self.assertFalse(result["instructions"][0]["applied"])
+        self.assertTrue(result["instructions"][0]["condition_blocked"])
+        self.assertEqual(result["instructions"][0]["applies_to"], "any")
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_reports_a_general_rule(self, gateway):
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "exclude", "criterion": "не детская", "cards": ["1"],
+             "applies_to": "any", "applied": True, "summary": "детских нет в ТЗ — убрать"},
+        ]}, {})
+        cards = [self._shortlist_card(name="Поло детское")]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "если в ТЗ нет детских — убери детские", "origin": "session"}])
+
+        self.assertTrue(cards[0]["_removed"])
+        self.assertEqual(result["instructions"][0]["applies_to"], "any")
+
+    def test_a_general_lesson_is_retrieved_for_any_position(self):
+        Lesson.objects.create(
+            scope="catalog", admin_text="если в ТЗ нет детских — убери детские",
+            summary="детских нет в ТЗ — убрать детские", item_word="", tz_labels=[], created_by=self.user,
+        )
+        pulled = _retrieve_lessons("catalog", "кружка керамическая", ["объём", "материал"])
+        self.assertEqual([p["admin_text"] for p in pulled], ["если в ТЗ нет детских — убери детские"])
+
+    @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_survives_a_broken_model_reply(self, gateway):
         gateway.return_value = ("не json", {})
         cards = [self._shortlist_card(mismatches=["x"], mismatch_count=1)]
@@ -1884,6 +1927,41 @@ class TenderTests(TestCase):
         )
         self.assertEqual(third["ranking_override"], {})
         self.assertEqual(third["catalog_intent"]["ranking_override"], {})
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_finalize_stores_a_general_rule_without_an_item_word(self, gateway, catalog_search):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        catalog_search.return_value = {"candidates": [
+            {"id": "k", "name": "Поло детское", "article": "K", "price": "300", "fit": "exact",
+             "priority": 1, "mismatch_count": 0, "unknown_count": 0, "matches": [], "mismatches": [], "unknown": []},
+        ], "sources": {}, "attempts": []}
+        gateway.side_effect = [
+            ({"item": "рубашка поло", "queries": ["поло"]}, {}),
+            ({"instructions": [{"n": 1, "type": "exclude", "criterion": "не детская",
+                               "cards": ["k"], "applies_to": "any",
+                               "summary": "если в ТЗ нет детских — убрать детские", "applied": True}]}, {}),
+        ]
+        line = {"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": []}}
+        hypothesis = build_training_hypothesis(
+            line, feedback="если в ТЗ нет запроса на детские — убери детские", recompute="catalog",
+        )
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Рубашка поло", current_hypothesis=hypothesis,
+        )
+        self.client.force_login(self.user)
+
+        self.client.post(reverse("tender_confirm_production_type"), {
+            "payload": json.dumps({"session_id": session.pk, "line": line})
+        })
+
+        from .models import Lesson
+        lesson = Lesson.objects.get()
+        self.assertEqual(lesson.item_word, "")
+        self.assertEqual(lesson.tz_labels, [])
+        self.assertEqual(lesson.summary, "если в ТЗ нет детских — убрать детские")
 
     def test_selected_gifts_category_is_filtered_before_candidate_limit(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")

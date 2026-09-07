@@ -1304,12 +1304,14 @@ details.training-catalog-review[open] > summary { color:#263442; font-weight:650
 .training-route__fix .training-feedback { padding:10px; }
 .training-block-changes { display:grid; gap:3px; padding:8px 10px; border-radius:8px; background:#eef4f0; color:#3f5a49; font-size:10px; }
 .training-block-changes b { font-size:9px; text-transform:uppercase; letter-spacing:.04em; }
-.training-block-changes ul { margin:0; padding:0; list-style:none; display:grid; gap:4px; }
-.training-block-changes li { display:flex; align-items:baseline; gap:6px; }
-.training-block-changes li > span { flex:1; }
-.training-block-changes li.is-skipped > span { opacity:.5; text-decoration:line-through; }
-.training-block-changes li small { color:#6c7f72; }
-.training-block-changes li button { min-height:0; padding:0; width:15px; height:15px; border:0; border-radius:50%; background:#dfe8e2; color:#5c6f63; font-size:11px; line-height:1; cursor:pointer; flex:none; }
+.training-block-changes ul { margin:0; padding:0; list-style:none; display:grid; gap:6px; }
+.training-block-changes li { display:flex; align-items:flex-start; gap:8px; }
+.training-block-changes li > div { flex:1; min-width:0; }
+.training-block-changes li span { display:block; }
+.training-block-changes li.is-skipped span { opacity:.5; text-decoration:line-through; }
+.training-block-changes li small { display:block; margin-top:1px; color:#7a8f83; }
+.training-rule-scope { font-style:normal; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#4f7a63; background:#dcebe2; padding:1px 4px; border-radius:4px; white-space:nowrap; }
+.training-block-changes li button { min-height:0; padding:0; width:15px; height:15px; border:0; border-radius:50%; background:#dfe8e2; color:#5c6f63; font-size:11px; line-height:1; cursor:pointer; flex:none; margin-top:1px; }
 .training-block-changes li button:hover { background:#f0d8d8; color:#b23b3b; }
 .training-catalog-removed { margin:6px 0 0; font-size:9px; color:#78828e; }
 .training-catalog-removed summary { cursor:pointer; }
