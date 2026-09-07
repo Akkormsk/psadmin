@@ -1718,7 +1718,7 @@ class TenderTests(TestCase):
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_marks_a_card_removed_with_a_reason(self, gateway):
         gateway.return_value = ({"cards": {"1": {"remove": True, "remove_reason": "детская модель"}}}, {})
-        cards = [self._shortlist_card()]
+        cards = [self._shortlist_card(name="Поло детское Kids")]
 
         result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские", "origin": "session"}])
 
@@ -1726,6 +1726,23 @@ class TenderTests(TestCase):
         self.assertEqual(cards[0]["_removed_reason"], "детская модель")
         self.assertEqual(result["outcome"]["removed"][0]["reason"], "детская модель")
         self.assertEqual(result["outcome"]["touched"], [])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_ignores_a_removal_it_cannot_tie_to_an_exclusion(self, gateway):
+        # The model over-applies "remove" to any ТЗ deviation. A card
+        # removed for "плотность ниже нормы" when the admin only said "убери
+        # детские" is kept — it just stays a lower-ranked alternative.
+        gateway.return_value = ({"cards": {
+            "1": {"remove": True, "remove_reason": "детская модель"},
+            "2": {"remove": True, "remove_reason": "плотность ниже нормы"},
+        }}, {})
+        cards = [self._shortlist_card(id="1", name="Поло детское"), self._shortlist_card(id="2", name="Поло мужское Laguna")]
+
+        result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские модели", "origin": "session"}])
+
+        self.assertTrue(cards[0].get("_removed"))
+        self.assertNotIn("_removed", cards[1])
+        self.assertEqual([r["name"] for r in result["outcome"]["removed"]], ["Поло детское"])
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_drops_a_verdict_when_told_to_ignore_a_point(self, gateway):

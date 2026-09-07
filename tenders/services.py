@@ -2693,6 +2693,38 @@ def _apply_card_edit(card, edit):
     return touched
 
 
+# Broad enough to catch the admin's phrasing AND the pass's own restatement
+# of it ("убери" / "убрать" / "убраны" / "убрали", "только", "без", …).
+_EXCLUSION_RE = re.compile(r"убер|убра|исключ|\bтольк|\bбез\b|не предлаг|не показыв|снять|не нужн|не бери|лишн|оставь тольк|оставить тольк")
+# ТЗ characteristics the deterministic matcher already scores. A hard
+# removal justified by one of these is really a mismatch — the card stays
+# as a ranked (lower) alternative, since a good alternative shown lower is
+# valuable. Type / age / category exclusions ("детская модель", "синтетика")
+# don't hit this and are honoured.
+_HANDLED_FIELD_RE = re.compile(
+    r"плотн|грамм|г\s*/?\s*м|цвет|оттен|материал|состав|ткан|размер|\bшв[аоуы]|\bшов|строчк|стежк|вышив|молни|нанесен"
+)
+
+
+def _gate_removals(shortlist, instructions):
+    """Undo a hallucinated hard-removal: the model over-applies "remove" to
+    any ТЗ deviation. A removal is kept only if its reason is a genuine
+    type/category exclusion AND some instruction actually asked to exclude
+    something. Everything else goes back to being a ranked alternative —
+    the verdict edits the pass made still stand."""
+    any_exclusion = any(
+        _EXCLUSION_RE.search(_normalized_text(value.get("text") if isinstance(value, dict) else value))
+        for value in instructions
+    )
+    for card in shortlist:
+        if not card.get("_removed"):
+            continue
+        reason = _normalized_text(card.get("_removed_reason", ""))
+        if _HANDLED_FIELD_RE.search(reason) or not any_exclusion:
+            card.pop("_removed", None)
+            card.pop("_removed_reason", None)
+
+
 def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, timeout=30):
     """Run the one AI pass over the ranked shortlist. Mutates the shortlist
     card dicts in place. Returns a dict:
@@ -2732,11 +2764,11 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
 {chr(10).join(numbered)}
 
 Что можно сделать с карточкой:
-- поправить или добавить оценку по признаку: {{"point":"Пол","verdict":"mismatch","note":"в ТЗ нужен мужской"}}. verdict: match (совпало), mismatch (не совпадает — карточка опустится), unknown (нет данных в карточке), none (убрать этот признак из оценки совсем — как будто его нет в ТЗ).
+- поправить или добавить оценку по признаку: {{"point":"Пол","verdict":"mismatch","note":"в ТЗ нужен мужской"}}. verdict: match (совпало), mismatch (не совпадает — карточка опустится, но останется в выдаче как альтернатива), unknown (нет данных в карточке), none (убрать этот признак из оценки совсем — как будто его нет в ТЗ).
 - поднять карточку выше остальных: "priority":0. СТАВЬ ТОЛЬКО при явном «подними / приоритет / в первую очередь / сначала». Мягкая формулировка («нужны мужские», «лучше хлопок») — это НЕ приоритет, а mismatch по этому признаку у тех, кто не подходит.
-- убрать карточку: "remove":true,"remove_reason":"короткая причина" — когда инструкция прямо просит убрать/исключить такой товар, либо оставить только определённые (а этот под них не подходит).
+- убрать карточку: "remove":true,"remove_reason":"короткая причина". ТОЛЬКО когда инструкция ПРЯМО называет такой товар лишним: «убери детские», «без синтетики», «только длинный рукав», «оставь только мужские». Расхождение с ТЗ само по себе (плотность ниже нормы, не тот оттенок, не тот состав) — это mismatch, НЕ remove: код уже посчитал такие расхождения, хорошая альтернатива ниже в списке ценна. Не выдумывай причин убрать, которых нет в инструкциях.
 
-Правь только карточки, которых инструкции реально касаются, остальные не упоминай.
+Правь только карточки, которых инструкции реально касаются. Карточки, которых инструкции не касаются, вообще не упоминай — код уже их оценил.
 Если инструкция — про смену самой сортировки («сначала дорогие», «сначала дешёвые»), карточки не трогай, верни направление в "ranking" и пометь эту инструкцию "ranking_only":true.
 
 Для каждой инструкции верни: "summary" — короткая чистая формулировка сути (для плашки и запоминания, например «приоритет мужским», «плотность ниже 250 — несовпадение»), "note" — что конкретно сделано в этой выдаче.
@@ -2756,6 +2788,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
             card = by_id.get(str(card_id))
             if card is not None and isinstance(edit, dict):
                 _apply_card_edit(card, edit)
+    _gate_removals(shortlist, instructions)
     fired = {}
     for item in result.get("instructions", []) if isinstance(result.get("instructions"), list) else []:
         if isinstance(item, dict):
@@ -2823,32 +2856,38 @@ def _lesson_outcome_hint(outcome):
     return "; ".join(parts)[:200]
 
 
+def _lesson_stems(text):
+    """Word stems of a label or item name — "рубашка-поло" -> {"рубаш",
+    "поло"}, "материал ткани" -> {"матер", "ткани"}. Lesson recall compares
+    these sets, not whole phrases, so word order ("поло рубашка" vs
+    "рубашка поло") and a trailing noun ("материал" vs "материал ткани")
+    don't stop a genuine match."""
+    return {word[:5] for word in _normalized_text(text).split() if len(word) >= 3}
+
+
 def _retrieve_lessons(scope, item_word, tz_labels, production_type="", limit=12):
     """Pull the lessons that plausibly apply to this kind of position —
-    cheap: one filtered query, then a score by item-word stem match
-    (strong), ТЗ-label overlap (a bonus), and production type. Deliberately
-    loose: the shortlist pass re-reads each one against the real context
-    and ignores the ones that do not fit, so over-fetching here is
-    harmless and under-fetching is not. A lesson with no stored context is
-    an "always" lesson and is always pulled."""
+    cheap: one filtered query, then a score by item-word stem overlap
+    (strong), ТЗ-label stem overlap (a bonus, capped), and production
+    type. Deliberately loose: the shortlist pass re-reads each one against
+    the real context and ignores the ones that do not fit, so
+    over-fetching here is harmless and under-fetching is not. A lesson
+    with no stored context is an "always" lesson and is always pulled."""
     from .models import Lesson
-    item_norm = _normalized_text(item_word)
-    item_stem = item_norm[:5]
-    label_set = {value for value in (tz_labels or []) if value}
+    item_stems = _lesson_stems(item_word)
+    label_stems = set().union(*(_lesson_stems(value) for value in (tz_labels or []))) if tz_labels else set()
     prod_norm = _normalized_text(production_type)
     scored = []
     for lesson in Lesson.objects.filter(scope=scope, is_active=True).order_by("-created_at")[:200]:
         score = 0
-        lesson_item = _normalized_text(lesson.item_word)
-        if lesson_item and item_norm and (
-            (item_stem and lesson_item[:5] == item_stem) or lesson_item in item_norm or item_norm in lesson_item
-        ):
+        lesson_item_stems = _lesson_stems(lesson.item_word)
+        if item_stems & lesson_item_stems:
             score += 3
-        lesson_labels = {_normalized_text(value) for value in (lesson.tz_labels or []) if _normalized_text(value)}
-        score += len(label_set & lesson_labels)
+        lesson_label_stems = set().union(*(_lesson_stems(value) for value in (lesson.tz_labels or []))) if lesson.tz_labels else set()
+        score += min(3, len(label_stems & lesson_label_stems))
         if prod_norm and _normalized_text(lesson.production_type) == prod_norm:
             score += 2
-        if not _normalized_text(lesson.item_word) and not lesson_labels:
+        if not lesson_item_stems and not lesson_label_stems:
             score += 1
         if score > 0:
             scored.append((score, lesson))
