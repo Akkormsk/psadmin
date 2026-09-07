@@ -105,12 +105,13 @@ class TenderTests(TestCase):
         styles = (Path(__file__).resolve().parents[1] / "static" / "core" / "index.css").read_text(encoding="utf-8")
 
         self.assertContains(response, "function uniqueAssistantQuestions")
-        # The route is one block-diagram now — a vertical column of numbered
-        # blocks joined by connectors, each anchor-linking to its own step
-        # section — not a route-name string plus a duplicate row of numbered
-        # chips. Each production step is its own collapsible block.
-        self.assertIn(".training-route__flow", styles)
-        self.assertIn(".training-step-block", styles)
+        # The route is one block-diagram: a vertical column of numbered
+        # steps joined by connectors, and each step is itself the collapsible
+        # <details> that expands its tool in place — no separate flow diagram
+        # + duplicate step-block list.
+        self.assertIn(".training-route__steps", styles)
+        self.assertIn(".training-route__step-body", styles)
+        self.assertNotIn(".training-step-block", styles)
         self.assertNotIn(".training-dialogue__route span b", styles)
 
     def test_line_assistant_button_matches_compact_metric_height(self):
@@ -125,13 +126,14 @@ class TenderTests(TestCase):
         fn = content[content.index("function trainingDialogueHtml"):][:5000]
         markup = fn[fn.index("return `"):]
 
-        # Route block in the rendered markup: reason text, then the flow
-        # diagram, then a collapsed "Исправить маршрут" — the feedback box is
-        # tucked away, not on screen at rest.
-        r, f, x = markup.index("training-route__reason"), markup.index("${flowHtml}"), markup.index("training-route__fix")
-        self.assertLess(r, f)
-        self.assertLess(f, x)
-        # Accepted search rules ("Ваши корректировки") sit with the catalog
+        # Route block in the rendered markup: reason text, then the steps
+        # (each an expand-in-place <details>), then a collapsed "Исправить
+        # маршрут". The price detail follows the whole route section.
+        r, s, x = markup.index("training-route__reason"), markup.index("${stepsHtml}"), markup.index("training-route__fix")
+        self.assertLess(r, s)
+        self.assertLess(s, x)
+        self.assertLess(markup.index("training-route__fix"), markup.index("training-dialogue__costs"))
+        # Accepted corrections ("Ваши корректировки") sit with the catalog
         # feedback box inside the product step, not in the route block.
         self.assertIn("${catalogSuggestionsHtml(result)}${changesHtml}${feedbackWidgetHtml('catalog'", fn)
         self.assertIn("Ваши корректировки", fn)
