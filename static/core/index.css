@@ -1196,10 +1196,14 @@ h1 {
 .training-catalog-card em { color:#247445; }
 .training-catalog-card em.is-warning { color:#936516; }
 .training-catalog-card button { min-height:27px; padding:4px 8px; font-size:9px; }
-.training-catalog-review { margin-top:3px; display:grid; gap:2px; }
-details.training-catalog-review > summary { cursor:pointer; color:#5b6672; font-size:8px; list-style:none; }
+.training-catalog-review { margin-top:4px; }
+details.training-catalog-review > summary { cursor:pointer; font-size:9px; list-style:none; display:flex; align-items:baseline; gap:4px; }
 details.training-catalog-review > summary::-webkit-details-marker { display:none; }
-details.training-catalog-review[open] > summary { color:#263442; font-weight:650; }
+details.training-catalog-review > summary::before { content:"▸"; color:#8a94a0; font-size:8px; }
+details.training-catalog-review[open] > summary::before { content:"▾"; }
+details.training-catalog-review > summary .is-warning { color:#b23b3b; font-weight:650; }
+details.training-catalog-review > summary .is-ok { color:#247445; font-weight:650; }
+details.training-catalog-review > summary small { color:#98a1ad; font-weight:400; }
 .training-catalog-review p { margin:3px 0 0; color:#5f6b77; font-size:8px; }
 .training-catalog-review ul { margin:3px 0 0; padding:0; display:grid; gap:2px; list-style:none; }
 .training-catalog-review li { display:grid; grid-template-columns:12px minmax(0,1fr); gap:4px; align-items:start; font-size:8px; color:#5f6b77; }
