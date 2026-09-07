@@ -2095,7 +2095,7 @@ def _text_search_pool(supplier_code, phrases):
     and then only its top two categories were searched. Text-first has no
     category to get wrong: every product whose name or description carries
     a word of the query is a candidate, and relevance (see
-    `_relevance_tier`) decides the order."""
+    `_score_pool_relevance`) decides the order."""
     terms = []
     for phrase in phrases:
         value = _text(phrase, 120)
@@ -2116,73 +2116,57 @@ def _text_search_pool(supplier_code, phrases):
     return list(base.filter(text_query).order_by("id")[:4000])
 
 
-def _relevance_tier(name_words, body_words, item_stems, distinctive_stems, generic_stems):
-    """How well the product NAME answers the query — the first thing a
-    site search sorts on:
+def _score_pool_relevance(pool, item_phrase, phrases):
+    """Rank the pool the way a site search does — by where the query words
+    land in the product NAME — and tag every product with `_relevance`:
 
-      0  the whole item phrase, or one of its distinctive words, is in
-         the name  ("...шопер..." for «Сумка шопер»); or a generic word
-         is in the name and a distinctive word is in the description
-      1  only a generic word of the item is in the name  ("Спортивная
+      0  the whole item phrase, or one of its *distinctive* words, is in
+         the name  ("...шопер..." for «Сумка шопер»)
+      1  only a *generic* word of the item is in the name  ("Спортивная
          сумка" — has «сумка», nothing shopper-specific)
-      2  no query word in the name, only in the description
-      3  nothing matched — drop it
+      dropped: no query word in the name at all (it only matched a stray
+         mention in the description — not a real candidate)
 
     "Distinctive" vs "generic" is decided per search from how common each
-    query word is across the results themselves (see the caller): «сумка»
-    is in almost every hit so it is generic, «шопер» in a few so it is
-    distinctive. No hardcoded word lists."""
-    name_has = lambda stems: any(_stem_in_words(stem, name_words) for stem in stems)
-    body_has = lambda stems: any(_stem_in_words(stem, body_words) for stem in stems)
-    if item_stems and all(_stem_in_words(stem, name_words) for stem in item_stems):
-        return 0
-    if name_has(distinctive_stems):
-        return 0
-    name_generic = name_has(generic_stems)
-    if name_generic and body_has(distinctive_stems):
-        return 0
-    if name_generic:
-        return 1
-    if body_has(distinctive_stems) or body_has(generic_stems):
-        return 2
-    return 3
+    query word is among the name-matching results: «сумка» is in almost
+    every hit so it is generic, «шопер» in a few so it is distinctive.
+    No hardcoded word lists.
 
-
-def _score_pool_relevance(pool, item_phrase, phrases):
-    """Split the query's words into distinctive / generic by how common
-    each is in the pool, then tag every product with `_relevance` (0-3).
-    Products that matched nothing in name or description (tier 3) are
-    dropped. Returns the surviving pool, best-first."""
+    Only the (short) name is normalised here — never the multi-KB
+    search_text — so this stays cheap over a pool of thousands."""
     all_stems = _query_stems(phrases)
     item_stems = _query_stems([item_phrase]) if item_phrase else all_stems
     if not all_stems:
         for product in pool:
             product._relevance = 1
         return pool
-    words_by_product = []
+    named = []
     document_frequency = {stem: 0 for stem in all_stems}
     for product in pool:
         name_words = _normalized(f"{product.name} {product.full_name}").split()
-        body_words = _normalized(product.search_text or f"{product.name} {product.full_name} {product.description}").split()
-        words_by_product.append((name_words, body_words))
-        for stem in all_stems:
-            if _stem_in_words(stem, body_words):
-                document_frequency[stem] += 1
+        hits = {stem for stem in all_stems if _stem_in_words(stem, name_words)}
+        if not hits:
+            continue  # matched only the description — drop
+        named.append((product, name_words, hits))
+        for stem in hits:
+            document_frequency[stem] += 1
     ceiling = max(document_frequency.values()) or 1
-    distinctive = {stem for stem, count in document_frequency.items() if count <= 0.6 * ceiling} or set(all_stems)
-    generic = set(all_stems) - distinctive
+    distinctive = {stem for stem, count in document_frequency.items() if 0 < count <= 0.6 * ceiling} or {
+        stem for stem, count in document_frequency.items() if count > 0
+    }
+    generic = {stem for stem in all_stems if document_frequency[stem] > 0} - distinctive
+    item_stem_set = set(item_stems)
     survivors = []
-    for product, (name_words, body_words) in zip(pool, words_by_product):
-        product._relevance = _relevance_tier(name_words, body_words, item_stems, distinctive, generic)
-        if product._relevance < 3:
-            # how many query words the NAME carries — a tiebreak inside a
-            # tier so the cap below keeps the closest-named products, not
-            # whichever happened to be synced first
-            name_cover = (
-                2 * sum(1 for stem in distinctive if _stem_in_words(stem, name_words))
-                + sum(1 for stem in generic if _stem_in_words(stem, name_words))
-            )
-            survivors.append((product._relevance, -name_cover, product))
+    for product, name_words, hits in named:
+        full_phrase = bool(item_stem_set) and item_stem_set <= hits
+        product._relevance = 0 if (full_phrase or hits & distinctive) else 1
+        # Tiebreak for the cap below: how much of the ITEM the name covers
+        # comes first (a product literally named «Жилет» must not lose its
+        # place to «Спортивный жилет» just because the plan listed
+        # «спортивный» as a synonym), then a small nudge for a distinctive
+        # word that is not part of the item itself.
+        name_cover = 3 * len(hits & item_stem_set) + len((hits & distinctive) - item_stem_set)
+        survivors.append((product._relevance, -name_cover, product))
     survivors.sort(key=lambda value: (value[0], value[1]))
     return [product for _, _, product in survivors]
 
@@ -2423,13 +2407,15 @@ def catalog_candidates_for_line(
         "received": len(cached_products),
     }
     ranked = []
-    # Tag every product with a relevance tier (0-3) from where the query
-    # words land in its name / description, drop the ones that matched
-    # nothing real (tier 3), and keep the best 600 for the eligibility
-    # pass. Live-crawl products (no mirror) skip this and stay neutral.
+    # Tag every product with a relevance tier (0 = distinctive query word
+    # in the name, 1 = only a generic one) and drop products whose name
+    # matched nothing. The eligibility pass over what's left is cheap
+    # (~0.4s for 2000 products, the per-requirement work is cached), so
+    # there is no hard cap — 2500 is a guard against a pathological query.
+    # Live-crawl products (no mirror) skip this and stay neutral.
     relevance_scored = bool(oasis_used_mirror or gifts_supplier_exists)
     if relevance_scored:
-        pool = _score_pool_relevance(pool, (intent or {}).get("item", "") if isinstance(intent, dict) else "", query_phrases)[:600]
+        pool = _score_pool_relevance(pool, (intent or {}).get("item", "") if isinstance(intent, dict) else "", query_phrases)[:2500]
     for product in pool:
         if not hasattr(product, "_relevance"):
             product._relevance = 1

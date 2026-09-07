@@ -758,7 +758,7 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, timeout=90, network_attempts=3, model=None):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, model=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
@@ -776,7 +776,7 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
                 for image in _scan_pdf_images(upload, max_side=max_side, quality=quality)
             )
         if image_data_urls:
-            content.extend({"type": "image_url", "image_url": {"url": image, "detail": "high"}} for image in image_data_urls)
+            content.extend({"type": "image_url", "image_url": {"url": image, "detail": image_detail}} for image in image_data_urls)
         return content
 
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -2647,7 +2647,7 @@ def _shortlist_card_brief(card):
     )
     if attributes:
         meta.append(attributes)
-    description = _cell_text(card.get("description"))[:200]
+    description = _cell_text(card.get("description"))[:360]
     verdicts = [
         f"{_VERDICT_ICON[key]} {_cell_text(value)[:80]}"
         for key, field in _VERDICT_FIELDS.items()
@@ -2686,7 +2686,28 @@ def _soften_card_criterion(card, subject):
     return changed
 
 
-def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered):
+def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolve_unknowns=False, image_order=None):
+    instructions_block = (
+        f"Инструкции администратора:\n{chr(10).join(numbered)}\n\n"
+        if numbered else
+        "Инструкций от администратора в этот раз нет — раздел \"instructions\" верни пустым списком.\n\n"
+    )
+    resolve_block = ""
+    if resolve_unknowns:
+        resolve_block = """
+Отдельная задача — доразбор «?». У карточек в строке «оценки кода» некоторые пункты ТЗ помечены «?» — код не нашёл их в отдельных полях каталога. Прочитай ПОЛНЫЙ текст карточки (название, описание, характеристики) и по каждому такому «?» реши:
+- "match" — текст карточки ЯВНО подтверждает пункт (в описании кружки сказано «пробковое дно», а в ТЗ требуется пробковое основание);
+- "mismatch" — текст ЯВНО противоречит (в описании «пластиковое дно» при требовании «пробковое»);
+- иначе не упоминай — в тексте про это не сказано, пусть остаётся «?».
+Не трогай пункты, которые код уже пометил ✓ или ✗. Возвращай в "verdicts" ТОЛЬКО реальные изменения (match / mismatch).
+ВАЖНО: пункт ТЗ (например «без крышки», «плотность ≥ 300 г») — это НЕ инструкция администратора. Несоответствие карточки пункту ТЗ — это всегда verdict «mismatch», никогда не instruction "exclude"/"priority". В "instructions" отвечай строго по пронумерованному списку выше и только про то, что в нём написано; критерий бери из текста инструкции.
+"""
+    if image_order:
+        resolve_block += (
+            "\nК запросу приложены фото карточек в этом порядке: "
+            + ", ".join(f"[{value}]" for value in image_order)
+            + ". Используй их для проверки типа и вида товара (например, детский рюкзак-ранец против мешка на шнурке).\n"
+        )
     return f"""Ты помогаешь администратору отобрать товары под позицию тендера. Ниже — короткий список карточек (их уже нашёл и оценил по пунктам ТЗ обычный код) и инструкции администратора свободным текстом. Твоя работа — превратить каждую инструкцию в ОДИН именованный критерий и сказать, каким карточкам он подходит. Ты НЕ решаешь «убрать» или «поднять» сам и НЕ переписываешь оценки кода — это делает код по твоему ответу. Сам поиск и формулу сортировки ты не трогаешь.
 
 Позиция: {position_name}
@@ -2695,9 +2716,7 @@ def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered):
 Карточки:
 {cards_text}
 
-Инструкции администратора:
-{chr(10).join(numbered)}
-
+{instructions_block}{resolve_block}
 Определи для каждой инструкции её тип:
 - "priority" — «подними / опусти / сначала покажи / приоритет / предпочти / нужны X / лучше X» и ЛЮБАЯ нечёткая формулировка (по умолчанию — сюда). Заведи критерий (например «Пол: мужской», «Материал: хлопок») и перечисли в "cards" id тех карточек, у которых по их тексту и характеристикам этот критерий ЯВНО выполняется. Не уверен — не включай. «Опусти женские» = критерий «Пол: не женский».
 - "exclude" — ТОЛЬКО явное «убери / исключи / спрячь / не показывай / только X / без X». Заведи критерий и перечисли в "cards" id тех карточек, которые ЯВНО ему противоречат (их уберут). Если по карточке непонятно — НЕ включай её (нет данных = не противоречит = оставляем). Никогда не пиши сюда карточку из-за расхождения с ТЗ по плотности/цвету/составу/размеру — это код уже посчитал, такая карточка остаётся альтернативой ниже.
@@ -2709,24 +2728,112 @@ def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered):
 "applies_to" — насколько широко ЗАПОМНИТЬ инструкцию: "item" (по умолчанию) — про этот конкретный вид товара; "any" — общее правило, не привязанное к товару (условная формулировка про ТЗ вообще: «если в ТЗ нет запроса на детские — убирай детские»; «Честный Знак никогда не учитывай»).
 
 Верни только JSON:
-{{"instructions":[{{"n":1,"type":"priority|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","applies_to":"item|any","summary":"короткая формулировка сути","applied":true,"note":"что вышло / почему не применилось"}}]}}
-"cards" нужен для priority/exclude/soften; "price" — только для ranking. "summary" — для плашки и запоминания."""
+{{"instructions":[{{"n":1,"type":"priority|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","applies_to":"item|any","summary":"короткая формулировка сути","applied":true,"note":"что вышло / почему не применилось"}}],"verdicts":[{{"card":"id","point":"пункт ТЗ как в списке","verdict":"match|mismatch"}}]}}
+"cards" нужен для priority/exclude/soften; "price" — только для ranking. "summary" — для плашки и запоминания. "verdicts" — только доразбор «?» по тексту карточки (пустой список, если нечего менять)."""
 
 
-def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, timeout=45):
+def _resolve_card_unknown(card, point, verdict):
+    """Move a "?" verdict the AI could read from the card's prose into ✓ or
+    ✗, and recompute the counts the sort key uses. The deterministic check
+    only reads structured catalogue fields; this fills the gap for
+    requirements written out in the description ("пробковое дно",
+    "плотность 340 г/м²")."""
+    point_n = _normalized_text(point)
+    if not point_n or verdict not in {"match", "mismatch"}:
+        return False
+    unknowns = card.get("unknown") or []
+    hit = next(
+        (value for value in unknowns
+         if point_n[:10] in _normalized_text(value) or _normalized_text(value).startswith(point_n[:6])),
+        None,
+    )
+    if hit is None:
+        return False
+    card["unknown"] = [value for value in unknowns if value is not hit]
+    label = point.rstrip(":").strip() or hit
+    target = "matches" if verdict == "match" else "mismatches"
+    card.setdefault(target, []).append(
+        f"{label}: {'подтверждено по описанию' if verdict == 'match' else 'не соответствует по описанию'}"
+    )
+    card["unknown_count"] = len(card["unknown"])
+    card["mismatch_count"] = len(card.get("mismatches") or [])
+    card["fit"] = "exact" if not card["mismatch_count"] and not card["unknown_count"] else "partial"
+    card["_verdict_resolved"] = True
+    return True
+
+
+def _exclude_criterion_drifted(instruction_value, criterion):
+    """True when the model classified an instruction as "exclude" but gave
+    a criterion that has nothing to do with the instruction's own words —
+    it drifted (e.g. turned a ТЗ point like "без крышки", noticed during
+    the verdict pass, into a removal). A conditional-ТЗ rule ("если в ТЗ
+    …") legitimately carries a criterion not in its text, so it is
+    exempt. Removal is the one destructive action, so this guards only it."""
+    text = _normalized_text(instruction_value.get("text") if isinstance(instruction_value, dict) else instruction_value)
+    if "если" in text:
+        return False
+    instruction_stems = {word[:4] for word in text.split() if len(word) >= 4}
+    criterion_stems = {word[:4] for word in _normalized_text(criterion).split() if len(word) >= 4}
+    return bool(instruction_stems) and bool(criterion_stems) and not (instruction_stems & criterion_stems)
+
+
+def _shortlist_card_images(shortlist, limit=8, side=300):
+    """Thumbnails for the top cards, fetched in parallel and shrunk so the
+    vision pass stays cheap. Returns (data_urls, ids) in the same order —
+    a card whose image fails to load is skipped from both lists."""
+    targets = [
+        (str(card.get("id")), _cell_text(card.get("image_url")))
+        for card in shortlist[:limit]
+        if _cell_text(card.get("image_url")).startswith("http")
+    ]
+    if not targets:
+        return [], []
+
+    def fetch(target):
+        card_id, url = target
+        try:
+            request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urlopen(request, timeout=4) as response:
+                raw = response.read(3_000_000)
+            image = Image.open(BytesIO(raw)).convert("RGB")
+            image.thumbnail((side, side))
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=70)
+            return card_id, "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
+        except Exception:
+            return card_id, None
+
+    resolved = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for card_id, data_url in executor.map(fetch, targets):
+            if data_url:
+                resolved[card_id] = data_url
+    ids = [card_id for card_id, _ in targets if card_id in resolved]
+    return [resolved[card_id] for card_id in ids], ids
+
+
+def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, resolve_unknowns=False, image_data_urls=None, image_order=None, timeout=45):
     """Run the one AI pass over the ranked shortlist. Mutates the shortlist
-    card dicts in place (priority / _removed / softened verdicts). Returns:
+    card dicts in place (priority / _removed / softened / resolved-from-prose
+    verdicts). Returns:
       instructions - [{text, origin, type, criterion, applied, summary, note}]
-      outcome      - {removed:[...], raised:[...], softened:[...]} for the lesson
+      outcome      - {removed:[...], raised:[...], softened:[...], verdicts:N}
       ranking      - {} or {"price": "asc"|"desc"} (session-only)
       usage, error - token usage; on failure a short message and the
-                     deterministic order stands unchanged."""
+                     deterministic order stands unchanged.
+
+    ``resolve_unknowns`` adds a second job to the same call: read each
+    card's full text and turn the "?" verdicts the deterministic check
+    left (a requirement written out in prose, not a catalogue field) into
+    ✓ / ✗. ``image_data_urls`` (+ ``image_order``, the card ids in the
+    same order) feed the model the card thumbnails so it can also judge
+    type and look — used on the feedback path."""
     instructions = [
         value for value in (instructions or [])
         if _cell_text(value.get("text") if isinstance(value, dict) else value)
     ]
     blank = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
-    if not instructions or not shortlist:
+    if (not instructions and not resolve_unknowns) or not shortlist:
         return blank
     req_text = "; ".join(
         f"{_cell_text(row.get('label'))}: {_cell_text(row.get('value'))}"
@@ -2740,10 +2847,17 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         tag = "эта сессия" if origin == "session" else "раньше на похожих позициях"
         numbered.append(f"{index}. ({tag}) {text}")
     cards_text = "\n".join(_shortlist_card_brief(card) for card in shortlist)
-    prompt = _shortlist_pass_prompt(position_name, req_text, cards_text, numbered)
+    prompt = _shortlist_pass_prompt(
+        position_name, req_text, cards_text, numbered,
+        resolve_unknowns=resolve_unknowns, image_order=image_order if image_data_urls else None,
+    )
     model = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or _SHORTLIST_MODEL_DEFAULT
     try:
-        result, usage = _ai_gateway_json(prompt, max_tokens=1600, timeout=timeout, network_attempts=2, model=model)
+        result, usage = _ai_gateway_json(
+            prompt, max_tokens=2600 if resolve_unknowns else 1600, timeout=timeout,
+            network_attempts=2, model=model, image_data_urls=image_data_urls or None,
+            image_detail="low",
+        )
     except TenderAIError as exc:
         return {**blank, "error": str(exc)[:200]}
     if not isinstance(result, dict):
@@ -2783,7 +2897,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
                     card["priority"] = 0
                     card["_ai_priority_reason"] = criterion
             applied = True
-        elif itype == "exclude" and criterion:
+        elif itype == "exclude" and criterion and not _exclude_criterion_drifted(value, criterion):
             for card_id in ids:
                 card = by_id.get(card_id)
                 if card is not None:
@@ -2810,6 +2924,16 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
             "summary": _cell_text(info.get("summary"))[:280] or criterion or _cell_text(value.get("text") if isinstance(value, dict) else value)[:120],
             "note": _cell_text(info.get("note"))[:200],
         })
+    verdict_changes = 0
+    if resolve_unknowns:
+        for entry in (result.get("verdicts") if isinstance(result.get("verdicts"), list) else []):
+            if not isinstance(entry, dict):
+                continue
+            card = by_id.get(str(entry.get("card")))
+            if card is not None and _resolve_card_unknown(
+                card, _cell_text(entry.get("point")), _cell_text(entry.get("verdict")).lower(),
+            ):
+                verdict_changes += 1
     raised_cards = [card for card in shortlist if card.get("priority") == 0]
     softened_cards = [card for card in shortlist if card.get("_ai_touched") and not card.get("_removed") and card.get("priority") != 0]
     outcome = {
@@ -2823,6 +2947,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         "raised": [_cell_text(card.get("name"))[:70] for card in raised_cards[:4]],
         "softened_count": len(softened_cards),
         "softened": [_cell_text(card.get("name"))[:70] for card in softened_cards[:4]],
+        "verdict_changes": verdict_changes,
     }
     return {
         "instructions": instruction_results, "outcome": outcome,
@@ -3099,7 +3224,9 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     try:
         catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
             line, limit=10, intent=catalog_intent, include_diagnostics=True,
-            shortlist_limit=40 if pass_instructions else None,
+            # The wider set feeds the AI pass — which runs on feedback and,
+            # now, whenever there is a ТЗ (its "?" rows may need prose review).
+            shortlist_limit=40 if (pass_instructions or selected_rows) else None,
         ))
     except CatalogSyncError as exc:
         catalog_warning = str(exc)[:300]
@@ -3109,19 +3236,29 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
     catalog_candidates = catalog_outcome["candidates"]
 
-    # Step 5: the AI shortlist pass. One call, only when there is something
-    # to apply. It mutates the card dicts (verdicts, priority, _removed);
-    # the same fixed math then re-sorts on those inputs and we trim to the
-    # ten shown. A failed call leaves the deterministic order untouched.
+    # Step 5: the AI shortlist pass. ONE call — it runs when the admin has
+    # given feedback / a lesson matches, OR when the deterministic check
+    # left "?" on ТЗ rows a card's prose might answer ("пробковое дно" in
+    # the description). It resolves those "?" from the card text into ✓/✗,
+    # applies the feedback, and on the feedback path also looks at the card
+    # photos. The same fixed math then re-sorts and we trim to the ten
+    # shown. A failed call leaves the deterministic order untouched.
     shortlist_seconds = 0.0
     pass_result = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
     shortlist_removed = []
-    if pass_instructions and catalog_candidates:
+    resolvable_unknowns = bool(selected_rows) and any(card.get("unknown") for card in catalog_candidates[:25])
+    if (pass_instructions or resolvable_unknowns) and catalog_candidates:
         if progress_callback:
             progress_callback("shortlist")
         shortlist_started_at = time.perf_counter()
+        # Photos go in only when the admin has actually written feedback
+        # this session — not for a fresh position or a bare lesson match,
+        # where the extra fetch + vision tokens would not earn their keep.
+        card_images, image_order = _shortlist_card_images(catalog_candidates) if catalog_instructions else ([], [])
         pass_result = _run_shortlist_pass(
             _cell_text(line.get("name")), selected_rows, catalog_candidates, pass_instructions,
+            resolve_unknowns=resolvable_unknowns,
+            image_data_urls=card_images or None, image_order=image_order or None,
         )
         shortlist_seconds = round(time.perf_counter() - shortlist_started_at, 3)
         usage["prompt_tokens"] += pass_result["usage"].get("prompt_tokens", 0) or 0

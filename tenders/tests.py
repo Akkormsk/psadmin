@@ -1816,6 +1816,51 @@ class TenderTests(TestCase):
         self.assertEqual(cards[0]["fit"], "exact")
 
     @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_resolves_an_unknown_from_the_card_description(self, gateway):
+        # The deterministic check can only read structured fields, so
+        # "пробковое основание" came out as "?" for every mug. The pass
+        # reads the prose and turns it into ✓ / leaves it alone.
+        gateway.return_value = ({"instructions": [], "verdicts": [
+            {"card": "cork", "point": "Комплектация", "verdict": "match"},
+        ]}, {})
+        cards = [
+            self._shortlist_card(
+                id="plain", name="Кружка Alpha, белая", description="Керамическая кружка, белая матовая",
+                unknown=["Комплектация не указан в каталоге"], unknown_count=1, fit="partial",
+            ),
+            self._shortlist_card(
+                id="cork", name="Кружка Denpasar, белая",
+                description="Керамическая кружка с пробковым дном, белая матовая",
+                unknown=["Комплектация не указан в каталоге"], unknown_count=1, fit="partial",
+            ),
+        ]
+
+        result = _run_shortlist_pass(
+            "Кружка", [{"label": "Комплектация", "value": "натуральное пробковое основание"}],
+            cards, [], resolve_unknowns=True,
+        )
+
+        cork = next(card for card in cards if card["id"] == "cork")
+        self.assertEqual(cork["unknown_count"], 0)
+        self.assertEqual(cork["fit"], "exact")
+        self.assertTrue(any("подтверждено" in value for value in cork["matches"]))
+        self.assertEqual(result["outcome"]["verdict_changes"], 1)
+        plain = next(card for card in cards if card["id"] == "plain")
+        self.assertEqual(plain["unknown_count"], 1)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_runs_for_unknowns_alone_without_any_feedback(self, gateway):
+        gateway.return_value = ({"instructions": [], "verdicts": []}, {})
+        cards = [self._shortlist_card(unknown=["Высота не указан в каталоге"], unknown_count=1)]
+
+        result = _run_shortlist_pass(
+            "Кружка", [{"label": "Высота", "value": "12 см"}], cards, [], resolve_unknowns=True,
+        )
+
+        gateway.assert_called_once()
+        self.assertEqual(result["instructions"], [])
+
+    @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_returns_a_session_only_ranking_flip(self, gateway):
         gateway.return_value = ({"instructions": [
             {"n": 1, "type": "ranking", "price": "desc", "summary": "сначала дорогие", "applied": True},
