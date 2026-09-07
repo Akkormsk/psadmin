@@ -758,10 +758,10 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, timeout=90, network_attempts=3):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, timeout=90, network_attempts=3, model=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
-    model = os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
+    model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
     if not api_key:
         raise TenderAIError("AI Gateway ещё не настроен.")
     has_images = bool(scan_ocr or image_data_urls)
@@ -2580,28 +2580,41 @@ def _frozen_route(reason=None, purchase_details=None):
 
 
 # --- AI shortlist pass -----------------------------------------------------
-# After the deterministic search leaves a short list (~20-100 cards, usually
-# ~40), ONE small model call reads every card in full plus the admin's
-# free-text instructions — this session's feedback and lessons pulled from
-# earlier similar positions — and edits only three things per card: the
-# per-requirement verdicts (✓/✗/?), the 0/1 priority slot, and a "remove"
-# flag. The fixed math (_shortlist_rank_key) then re-sorts on those inputs.
-# The call is skipped entirely when there is nothing to apply, so a fresh
-# position with no feedback and no lessons costs zero extra tokens.
+# After the deterministic search leaves a short list (~40 cards), ONE small
+# model call turns each free-text instruction — this session's feedback and
+# the lessons pulled from earlier similar positions — into a NAMED criterion
+# and a per-card yes/no against it. The model never decides "remove" or
+# "priority" directly and never rewrites the deterministic verdicts: it only
+# says what the criterion is and which cards clearly match it. Plain code
+# then applies the action, and the same fixed key re-sorts. Skipped (0
+# tokens) when there is nothing to apply.
+#
+# Three instruction types the model classifies each phrase into:
+#   priority — "подними / опусти / сначала / приоритет / нужны X / лучше X"
+#              and anything ambiguous: a criterion + the cards that CLEARLY
+#              match it -> those get the raised-priority slot.
+#   exclude  — only an explicit "убери / исключи / спрячь / только X / без X":
+#              a criterion + the cards that CLEARLY contradict it (unclear =
+#              kept) -> those are filtered out of the list before ranking.
+#   soften   — "220 г это норм", "цвет считай совпавшим": a criterion + the
+#              cards whose deterministic mismatch on it is now acceptable.
+#   ranking  — "сначала дорогие / дешёвые": a session-only price-sort flip,
+#              never written to a lesson.
 
-_VERDICT_ICON = {"match": "✓", "mismatch": "✗", "unknown": "?"}
 _VERDICT_FIELDS = {"match": "matches", "mismatch": "mismatches", "unknown": "unknown"}
+_VERDICT_ICON = {"match": "✓", "mismatch": "✗", "unknown": "?"}
 _POINT_STOPWORDS = {
     "не", "в", "на", "по", "и", "с", "до", "от", "требуется", "каталоге",
     "указан", "указана", "указано", "совпадает", "подходит", "нет", "данных",
     "товара", "товар", "заявлено", "нужное", "достаточен", "подтвержден", "подтверждён",
 }
+_SHORTLIST_MODEL_DEFAULT = "anthropic/claude-haiku-4-5"
 
 
 def _verdict_subject(text):
-    """The leading subject of a verdict line ("Материал не совпадает: …" ->
-    "материал"), used to find which existing verdict an AI edit replaces."""
-    head = re.split(r"\bне\b|:", _normalized_text(text))[0]
+    """The leading subject of a verdict / criterion line, used to find which
+    existing deterministic verdict a "soften" criterion refers to."""
+    head = re.split(r"\bне\b|:|<|>|≥|≤", _normalized_text(text))[0]
     words = [value for value in head.split() if len(value) > 2 and value not in _POINT_STOPWORDS]
     return words[0] if words else ""
 
@@ -2634,6 +2647,7 @@ def _shortlist_card_brief(card):
     )
     if attributes:
         meta.append(attributes)
+    description = _cell_text(card.get("description"))[:200]
     verdicts = [
         f"{_VERDICT_ICON[key]} {_cell_text(value)[:80]}"
         for key, field in _VERDICT_FIELDS.items()
@@ -2643,145 +2657,66 @@ def _shortlist_card_brief(card):
     lines = [header]
     if meta:
         lines.append("   " + " | ".join(meta))
+    if description:
+        lines.append("   " + description)
     if verdicts:
-        lines.append("   оценки: " + "; ".join(verdicts))
+        lines.append("   оценки кода: " + "; ".join(verdicts))
     return "\n".join(lines)
 
 
-def _apply_card_edit(card, edit):
-    """Apply one card's AI edits in place: verdict set/fix/drop, priority,
-    remove. Recomputes the mismatch/unknown counts and the exact/partial
-    flag the fixed sort key reads."""
-    fields = {key: card.setdefault(field, []) for key, field in _VERDICT_FIELDS.items()}
-    touched = False
-    for item in edit.get("set", []) if isinstance(edit.get("set"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        point = _cell_text(item.get("point"))[:80]
-        if not point:
-            continue
-        verdict = _cell_text(item.get("verdict")).lower()
-        note = _cell_text(item.get("note"))[:140]
-        phrase = f"{point}: {note}" if note else point
-        subject = _verdict_subject(point) or _normalized_text(point)
-        for entries in fields.values():
-            kept = [
-                value for value in entries
-                if not (_verdict_subject(value) and _subjects_match(_verdict_subject(value), subject))
-            ]
-            if len(kept) != len(entries):
-                touched = True
-            entries[:] = kept
-        if verdict in fields:
-            fields[verdict].append(phrase)
-            touched = True
-        # verdict "none"/"drop"/"" — the point is simply removed, nothing added
-    if "priority" in edit:
-        new_priority = 0 if _cell_text(edit.get("priority")) in {"0", "raise", "up", "raised"} else 1
-        if card.get("priority", 1) != new_priority:
-            card["priority"] = new_priority
-            touched = True
-    if edit.get("remove") is True:
-        card["_removed"] = True
-        card["_removed_reason"] = _cell_text(edit.get("remove_reason"))[:160]
-        touched = True
-    card["mismatch_count"] = len(fields["mismatch"])
-    card["unknown_count"] = len(fields["unknown"])
-    card["fit"] = "exact" if not fields["mismatch"] and not fields["unknown"] else "partial"
-    if touched:
+def _soften_card_criterion(card, subject):
+    """"220 г это норм", "цвет считай совпавшим": drop the deterministic
+    mismatch / unknown about this subject from the card, as if the ТЗ point
+    were satisfied. Recomputes the counts the sort key reads."""
+    changed = False
+    for field_key in ("mismatches", "unknown"):
+        entries = card.get(field_key) or []
+        kept = [
+            entry for entry in entries
+            if not (_verdict_subject(entry) and _subjects_match(_verdict_subject(entry), subject))
+        ]
+        if len(kept) != len(entries):
+            changed = True
+        card[field_key] = kept
+    card["mismatch_count"] = len(card.get("mismatches") or [])
+    card["unknown_count"] = len(card.get("unknown") or [])
+    card["fit"] = "exact" if not card["mismatch_count"] and not card["unknown_count"] else "partial"
+    if changed:
         card["_ai_touched"] = True
-    return touched
+    return changed
 
 
-# Broad enough to catch the admin's phrasing AND the pass's own restatement
-# of it ("убери" / "убрать" / "убраны" / "убрали", "только", "без", …).
-_EXCLUSION_RE = re.compile(r"убер|убра|исключ|\bтольк|\bбез\b|не предлаг|не показыв|снять|не нужн|не бери|лишн|оставь тольк|оставить тольк")
-# ТЗ characteristics the deterministic matcher already scores. A hard
-# removal justified by one of these is really a mismatch — the card stays
-# as a ranked (lower) alternative, since a good alternative shown lower is
-# valuable. Type / age / category exclusions ("детская модель", "синтетика")
-# don't hit this and are honoured.
-_HANDLED_FIELD_RE = re.compile(
-    r"плотн|грамм|г\s*/?\s*м|цвет|оттен|материал|состав|ткан|размер|\bшв[аоуы]|\bшов|строчк|стежк|вышив|молни|нанесен"
-)
-# The model sometimes returns remove:true with a reason that itself says
-# the card is being KEPT ("мужская, ниже по цене, не убирается") — a
-# straight contradiction; honour the words, not the flag.
-_NOT_REMOVED_RE = re.compile(r"не убир|не удал|не трог|остаетс|остаётс|оставл|сохран|ниже по цен")
-_EXCLUSION_STOPWORDS = {
-    "убери", "убрать", "убраны", "убрали", "исключи", "исключить", "только",
-    "без", "не", "предлагай", "показывай", "снять", "нужны", "нужно", "нужен",
-    "бери", "модели", "модель", "вариант", "варианты", "товар", "товары",
-    "оставь", "оставить", "лишние", "лишний", "сначала", "показывать", "самые",
-    "дорогие", "дешевые", "дешёвые", "дороже", "дешевле", "цене", "цены",
-}
+def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered):
+    return f"""Ты помогаешь администратору отобрать товары под позицию тендера. Ниже — короткий список карточек (их уже нашёл и оценил по пунктам ТЗ обычный код) и инструкции администратора свободным текстом. Твоя работа — превратить каждую инструкцию в ОДИН именованный критерий и сказать, каким карточкам он подходит. Ты НЕ решаешь «убрать» или «поднять» сам и НЕ переписываешь оценки кода — это делает код по твоему ответу. Сам поиск и формулу сортировки ты не трогаешь.
+
+Позиция: {position_name}
+Учитываемые пункты ТЗ: {req_text}
+
+Карточки:
+{cards_text}
+
+Инструкции администратора:
+{chr(10).join(numbered)}
+
+Определи для каждой инструкции её тип:
+- "priority" — «подними / опусти / сначала покажи / приоритет / предпочти / нужны X / лучше X» и ЛЮБАЯ нечёткая формулировка (по умолчанию — сюда). Заведи критерий (например «Пол: мужской», «Материал: хлопок») и перечисли в "cards" id тех карточек, у которых по их тексту и характеристикам этот критерий ЯВНО выполняется. Не уверен — не включай. «Опусти женские» = критерий «Пол: не женский».
+- "exclude" — ТОЛЬКО явное «убери / исключи / спрячь / не показывай / только X / без X». Заведи критерий и перечисли в "cards" id тех карточек, которые ЯВНО ему противоречат (их уберут). Если по карточке непонятно — НЕ включай её (нет данных = не противоречит = оставляем). Никогда не пиши сюда карточку из-за расхождения с ТЗ по плотности/цвету/составу/размеру — это код уже посчитал, такая карточка остаётся альтернативой ниже.
+- "soften" — «220 г это норм», «цвет считай совпавшим», «это несовпадение не критично». Критерий = какой признак смягчить, "cards" = id карточек, у которых расхождение по этому признаку теперь считать допустимым.
+- "ranking" — «сначала дорогие / дешёвые». Верни "price":"asc" или "desc". Карточки не трогай.
+
+Верни только JSON:
+{{"instructions":[{{"n":1,"type":"priority|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","summary":"короткая формулировка сути","applied":true,"note":"что вышло: скольким карточкам подошло"}}]}}
+"cards" нужен для priority/exclude/soften; "price" — только для ranking. "summary" — для плашки и запоминания."""
 
 
-# A few exclusion words whose catalogue wording differs from the admin's,
-# so "убери детские" still verifies against a "… Kids" card name. Every
-# probe is >= 4 chars — a 3-letter stem like "дет" hits "будет"/"одетый"
-# in any long description.
-_EXCLUSION_SYNONYMS = {
-    "детск": ("kids", "ребен", "ребён", "школьн", "подростк", "детях"),
-    "взросл": ("adult",),
-    "синтет": ("полиэстер", "полиэфир", "нейлон", "акрил", "эластан", "полиамид", "вискоз"),
-    "хлопок": ("cotton", "хлопков"),
-    "мужск": ("муж",),
-    "женск": ("women", "lady", "жен"),
-    "длинн": ("лонгслив",),
-}
-
-
-def _gate_removals(shortlist, instructions):
-    """Undo a hallucinated hard-removal. The model over-applies "remove" to
-    any ТЗ deviation, and sometimes misclassifies a card outright ("Pulse
-    кобальт — детская рубашка"). A removal survives only when: an
-    exclusion instruction exists; its reason is not a ТЗ deviation the
-    matcher already scores; the reason does not itself say the card is
-    kept; and the CARD's own text (not the model's reason) actually
-    carries a word the exclusion instruction named."""
-    exclusion_words = set()
-    for value in instructions:
-        text = _normalized_text(value.get("text") if isinstance(value, dict) else value)
-        if _EXCLUSION_RE.search(text):
-            exclusion_words |= {word for word in text.split() if len(word) >= 4 and word not in _EXCLUSION_STOPWORDS}
-    probes = set()
-    for word in exclusion_words:
-        if len(word) >= 4:
-            probes.add(word[:5])
-        for stem, synonyms in _EXCLUSION_SYNONYMS.items():
-            if word.startswith(stem[:5]) or stem.startswith(word[:5]):
-                probes.update(synonyms)
-    probes = {probe for probe in probes if len(probe) >= 4}
-    for card in [card for card in shortlist if card.get("_removed")]:
-        reason = _normalized_text(card.get("_removed_reason", ""))
-        card_tokens = _normalized_text(
-            f"{card.get('name', '')} {card.get('description', '')} {card.get('category', '')} "
-            f"{' '.join(str(value) for value in (card.get('materials') or []))} "
-            f"{' '.join(str(value) for value in (card.get('colors') or []))}"
-        ).split()
-        card_matches_exclusion = any(
-            token.startswith(probe) or (len(probe) >= 6 and probe in token)
-            for probe in probes for token in card_tokens
-        )
-        if (
-            not exclusion_words
-            or _HANDLED_FIELD_RE.search(reason)
-            or _NOT_REMOVED_RE.search(reason)
-            or not card_matches_exclusion
-        ):
-            card.pop("_removed", None)
-            card.pop("_removed_reason", None)
-
-
-def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, timeout=30):
+def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, timeout=45):
     """Run the one AI pass over the ranked shortlist. Mutates the shortlist
-    card dicts in place. Returns a dict:
-      instructions — [{text, origin, applied, note}] for the UI
-      outcome      — {removed:[…], touched:[…]} for the lesson record
-      ranking      — {} or {"price": "asc"|"desc"} (session-only sort flip)
-      usage, error — token usage and, if the call failed, a short message
-                     (the deterministic order then stands unchanged)."""
+    card dicts in place (priority / _removed / softened verdicts). Returns:
+      instructions - [{text, origin, type, criterion, applied, summary, note}]
+      outcome      - {removed:[...], raised:[...], softened:[...]} for the lesson
+      ranking      - {} or {"price": "asc"|"desc"} (session-only)
+      usage, error - token usage; on failure a short message and the
+                     deterministic order stands unchanged."""
     instructions = [
         value for value in (instructions or [])
         if _cell_text(value.get("text") if isinstance(value, dict) else value)
@@ -2801,75 +2736,79 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         tag = "эта сессия" if origin == "session" else "раньше на похожих позициях"
         numbered.append(f"{index}. ({tag}) {text}")
     cards_text = "\n".join(_shortlist_card_brief(card) for card in shortlist)
-    prompt = f"""Ты помогаешь администратору отобрать товары под позицию тендера. Ниже — короткий список карточек, уже найденных и оценённых кодом по пунктам ТЗ, и инструкции администратора свободным текстом. Применяй инструкции ТОЛЬКО через правку оценок карточек, приоритета и флага «убрать». Сам поиск и формулу сортировки ты не трогаешь.
-
-Позиция: {position_name}
-Учитываемые пункты ТЗ: {req_text}
-
-Карточки:
-{cards_text}
-
-Инструкции администратора:
-{chr(10).join(numbered)}
-
-Что можно сделать с карточкой:
-- поправить или добавить оценку по признаку: {{"point":"Пол","verdict":"mismatch","note":"в ТЗ нужен мужской"}}. verdict: match (совпало), mismatch (не совпадает — карточка опустится, но останется в выдаче как альтернатива), unknown (нет данных в карточке), none (убрать этот признак из оценки совсем — как будто его нет в ТЗ).
-- поднять карточку выше остальных: "priority":0. СТАВЬ ТОЛЬКО при явном «подними / приоритет / в первую очередь / сначала». Мягкая формулировка («нужны мужские», «лучше хлопок») — это НЕ приоритет, а mismatch по этому признаку у тех, кто не подходит.
-- убрать карточку: "remove":true,"remove_reason":"короткая причина". ТОЛЬКО когда инструкция ПРЯМО называет такой товар лишним: «убери детские», «без синтетики», «только длинный рукав», «оставь только мужские». Расхождение с ТЗ само по себе (плотность ниже нормы, не тот оттенок, не тот состав) — это mismatch, НЕ remove: код уже посчитал такие расхождения, хорошая альтернатива ниже в списке ценна. Не выдумывай причин убрать, которых нет в инструкциях.
-
-Правь только карточки, которых инструкции реально касаются. Карточки, которых инструкции не касаются, вообще не упоминай — код уже их оценил. Никогда не ставь "remove":true карточке, которую оставляешь — если оставляешь, просто не упоминай её или поправь оценку.
-Если инструкция ПОЛНОСТЬЮ про смену самой сортировки («сначала дорогие», «сначала дешёвые») — верни направление в "ranking" и пометь "ranking_only":true, карточки не трогай. Если инструкция содержит И смену сортировки, И правку карточек («сначала дорогие, и убери детские») — верни "ranking", но "ranking_only":false, и сделай правки карточек как обычно.
-
-Для каждой инструкции верни: "summary" — короткая чистая формулировка сути (для плашки и запоминания, например «приоритет мужским», «плотность ниже 250 — несовпадение»), "note" — что конкретно сделано в этой выдаче.
-
-Верни только JSON:
-{{"cards":{{"<id>":{{"set":[{{"point":"...","verdict":"match|mismatch|unknown|none","note":"..."}}],"priority":0,"remove":true,"remove_reason":"..."}}}},"ranking":{{"price":"asc|desc"}},"instructions":[{{"n":1,"applied":true,"ranking_only":false,"summary":"...","note":"что сделано"}}]}}"""
+    prompt = _shortlist_pass_prompt(position_name, req_text, cards_text, numbered)
+    model = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or _SHORTLIST_MODEL_DEFAULT
     try:
-        result, usage = _ai_gateway_json(prompt, max_tokens=1800, timeout=timeout, network_attempts=2)
+        result, usage = _ai_gateway_json(prompt, max_tokens=1600, timeout=timeout, network_attempts=2, model=model)
     except TenderAIError as exc:
         return {**blank, "error": str(exc)[:200]}
     if not isinstance(result, dict):
-        return {**blank, "usage": {}}
+        return blank
     by_id = {str(card.get("id")): card for card in shortlist}
-    edits = result.get("cards")
-    if isinstance(edits, dict):
-        for card_id, edit in edits.items():
-            card = by_id.get(str(card_id))
-            if card is not None and isinstance(edit, dict):
-                _apply_card_edit(card, edit)
-    _gate_removals(shortlist, instructions)
-    fired = {}
-    for item in result.get("instructions", []) if isinstance(result.get("instructions"), list) else []:
-        if isinstance(item, dict):
-            fired[str(item.get("n"))] = item
+    ai_by_n = {
+        str(item.get("n")): item
+        for item in (result.get("instructions") if isinstance(result.get("instructions"), list) else [])
+        if isinstance(item, dict)
+    }
+    ranking = {}
     instruction_results = []
     for index, value in enumerate(instructions, 1):
-        info = fired.get(str(index), {})
+        info = ai_by_n.get(str(index), {})
+        itype = _cell_text(info.get("type")).lower()
+        itype = itype if itype in {"priority", "exclude", "soften", "ranking"} else ""
+        criterion = _cell_text(info.get("criterion"))[:120]
+        card_ids = info.get("cards")
+        ids = {str(value) for value in card_ids} if isinstance(card_ids, list) else set()
+        applied = False
+        if itype == "ranking":
+            price = _cell_text(info.get("price")).lower()
+            if price in {"asc", "desc"}:
+                ranking = {"price": price}
+                applied = True
+        elif itype == "priority" and criterion:
+            for card_id in ids:
+                card = by_id.get(card_id)
+                if card is not None:
+                    card["priority"] = 0
+                    card["_ai_priority_reason"] = criterion
+            applied = True
+        elif itype == "exclude" and criterion:
+            for card_id in ids:
+                card = by_id.get(card_id)
+                if card is not None:
+                    card["_removed"] = True
+                    card["_removed_reason"] = criterion
+            applied = True
+        elif itype == "soften" and criterion:
+            subject = _verdict_subject(criterion) or _normalized_text(criterion)
+            for card_id in ids:
+                card = by_id.get(card_id)
+                if card is not None:
+                    _soften_card_criterion(card, subject)
+            applied = True
         instruction_results.append({
             "text": _cell_text(value.get("text") if isinstance(value, dict) else value),
             "origin": (value.get("origin") if isinstance(value, dict) else "") or "session",
-            "applied": bool(info.get("applied")),
-            "ranking_only": bool(info.get("ranking_only")),
-            "summary": _cell_text(info.get("summary"))[:280],
+            "type": itype,
+            "criterion": criterion,
+            "applied": applied,
+            "ranking_only": itype == "ranking",
+            "summary": _cell_text(info.get("summary"))[:280] or criterion or _cell_text(value.get("text") if isinstance(value, dict) else value)[:120],
             "note": _cell_text(info.get("note"))[:200],
         })
-    ranking = {}
-    raw_ranking = result.get("ranking") if isinstance(result.get("ranking"), dict) else {}
-    if _cell_text(raw_ranking.get("price")).lower() in {"asc", "desc"}:
-        ranking = {"price": _cell_text(raw_ranking.get("price")).lower()}
+    raised_cards = [card for card in shortlist if card.get("priority") == 0]
+    softened_cards = [card for card in shortlist if card.get("_ai_touched") and not card.get("_removed") and card.get("priority") != 0]
     outcome = {
+        # Names matter most for the removed ones ("и это сработало");
+        # raised/softened just carry a count + a couple of examples.
         "removed": [
-            {
-                "article": _cell_text(card.get("article"))[:60],
-                "name": _cell_text(card.get("name"))[:80],
-                "reason": _cell_text(card.get("_removed_reason"))[:160],
-            }
+            {"article": _cell_text(card.get("article"))[:60], "name": _cell_text(card.get("name"))[:80], "reason": _cell_text(card.get("_removed_reason"))[:120]}
             for card in shortlist if card.get("_removed")
-        ][:20],
-        "touched": [
-            {"article": _cell_text(card.get("article"))[:60], "name": _cell_text(card.get("name"))[:80]}
-            for card in shortlist if card.get("_ai_touched") and not card.get("_removed")
-        ][:20],
+        ][:15],
+        "raised_count": len(raised_cards),
+        "raised": [_cell_text(card.get("name"))[:70] for card in raised_cards[:4]],
+        "softened_count": len(softened_cards),
+        "softened": [_cell_text(card.get("name"))[:70] for card in softened_cards[:4]],
     }
     return {
         "instructions": instruction_results, "outcome": outcome,
@@ -2899,9 +2838,12 @@ def _lesson_outcome_hint(outcome):
     )
     if names:
         parts.append(f"убрали {names}")
-    touched = outcome.get("touched") if isinstance(outcome.get("touched"), list) else []
-    if touched:
-        parts.append(f"поправили оценки у {len(touched)} карточек")
+    raised = outcome.get("raised_count") or len(outcome.get("raised") or [])
+    if raised:
+        parts.append(f"подняли {raised} карточек")
+    softened = outcome.get("softened_count") or len(outcome.get("softened") or [])
+    if softened:
+        parts.append(f"смягчили оценку у {softened}")
     return "; ".join(parts)[:200]
 
 
@@ -3175,7 +3117,6 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
                 catalog_instructions[index]["scope"] = "ranking"
         price_desc = ranking_override.get("price") == "desc"
         catalog_candidates.sort(key=lambda card: _shortlist_rank_key(
-            is_exact=card.get("fit") == "exact",
             priority=card.get("priority", 1),
             mismatch_count=card.get("mismatch_count", len(card.get("mismatches") or [])),
             unknown_count=card.get("unknown_count", len(card.get("unknown") or [])),

@@ -1689,92 +1689,43 @@ class TenderTests(TestCase):
         self.assertEqual(result["ranking"], {})
 
     @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_adds_a_mismatch_and_flips_the_card_to_partial(self, gateway):
-        gateway.return_value = (
-            {"cards": {"1": {"set": [{"point": "Пол", "verdict": "mismatch", "note": "нужен мужской"}]}},
-             "instructions": [{"n": 1, "applied": True, "note": "женским проставлен пол"}]},
-            {"prompt_tokens": 200, "completion_tokens": 30},
-        )
-        cards = [self._shortlist_card(matches=["Тип товара: поло"])]
+    def test_shortlist_pass_raises_the_cards_a_priority_criterion_matches(self, gateway):
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "priority", "criterion": "Пол: мужской", "cards": ["m"],
+             "summary": "приоритет мужским", "applied": True},
+        ]}, {"prompt_tokens": 200, "completion_tokens": 30})
+        cards = [self._shortlist_card(id="w", name="Поло женское"), self._shortlist_card(id="m", name="Поло мужское")]
 
         result = _run_shortlist_pass("Поло", [], cards, [{"text": "нужны мужские", "origin": "session"}])
 
-        self.assertIn("Пол: нужен мужской", cards[0]["mismatches"])
-        self.assertEqual(cards[0]["mismatch_count"], 1)
-        self.assertEqual(cards[0]["fit"], "partial")
-        self.assertTrue(cards[0]["_ai_touched"])
+        self.assertEqual(cards[0]["priority"], 1)
+        self.assertEqual(cards[1]["priority"], 0)
+        self.assertEqual(result["outcome"]["raised_count"], 1)
+        self.assertEqual(result["outcome"]["raised"], ["Поло мужское"])
+        self.assertEqual(result["instructions"][0]["summary"], "приоритет мужским")
         self.assertTrue(result["instructions"][0]["applied"])
-        self.assertEqual(result["outcome"]["touched"], [{"article": "A-1", "name": "Товар"}])
 
     @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_raises_priority_only_when_asked(self, gateway):
-        gateway.return_value = ({"cards": {"1": {"priority": 0}}}, {})
-        cards = [self._shortlist_card()]
-
-        _run_shortlist_pass("Поло", [], cards, [{"text": "подними мужские в первую очередь", "origin": "session"}])
-
-        self.assertEqual(cards[0]["priority"], 0)
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_marks_a_card_removed_with_a_reason(self, gateway):
-        gateway.return_value = ({"cards": {"1": {"remove": True, "remove_reason": "детская модель"}}}, {})
-        cards = [self._shortlist_card(name="Поло детское Kids")]
+    def test_shortlist_pass_excludes_only_the_cards_the_model_lists(self, gateway):
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "exclude", "criterion": "не детская модель", "cards": ["k"],
+             "summary": "убрать детские", "applied": True},
+        ]}, {})
+        cards = [self._shortlist_card(id="k", name="Поло детское"), self._shortlist_card(id="a", name="Поло мужское")]
 
         result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские", "origin": "session"}])
 
         self.assertTrue(cards[0]["_removed"])
-        self.assertEqual(cards[0]["_removed_reason"], "детская модель")
-        self.assertEqual(result["outcome"]["removed"][0]["reason"], "детская модель")
-        self.assertEqual(result["outcome"]["touched"], [])
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_ignores_a_removal_it_cannot_tie_to_an_exclusion(self, gateway):
-        # The model over-applies "remove" to any ТЗ deviation. A card
-        # removed for "плотность ниже нормы" when the admin only said "убери
-        # детские" is kept — it just stays a lower-ranked alternative.
-        gateway.return_value = ({"cards": {
-            "1": {"remove": True, "remove_reason": "детская модель"},
-            "2": {"remove": True, "remove_reason": "плотность ниже нормы"},
-        }}, {})
-        cards = [self._shortlist_card(id="1", name="Поло детское"), self._shortlist_card(id="2", name="Поло мужское Laguna")]
-
-        result = _run_shortlist_pass("Поло", [], cards, [{"text": "убери детские модели", "origin": "session"}])
-
-        self.assertTrue(cards[0].get("_removed"))
+        self.assertEqual(cards[0]["_removed_reason"], "не детская модель")
         self.assertNotIn("_removed", cards[1])
         self.assertEqual([r["name"] for r in result["outcome"]["removed"]], ["Поло детское"])
 
     @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_ignores_a_bulk_of_contradictory_removals(self, gateway):
-        # Live failure: "сначала дорогие; убери детские" made the model mark
-        # 31/40 cards remove:true with reasons like "мужская, ниже по цене,
-        # не убирается" — a straight contradiction. Only the real детская
-        # removal survives.
-        edits = {str(i): {"remove": True, "remove_reason": "мужская, ниже по цене, не убирается"} for i in range(2, 9)}
-        edits["1"] = {"remove": True, "remove_reason": "детская модель"}
-        gateway.return_value = ({"cards": edits}, {})
-        cards = [self._shortlist_card(id=str(i), name=("Поло детское" if i == 1 else f"Поло мужское {i}")) for i in range(1, 9)]
-
-        _run_shortlist_pass("Поло", [], cards, [{"text": "сначала дорогие; убери детские", "origin": "session"}])
-
-        self.assertEqual([c["id"] for c in cards if c.get("_removed")], ["1"])
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_drops_a_verdict_when_told_to_ignore_a_point(self, gateway):
-        gateway.return_value = ({"cards": {"1": {"set": [{"point": "Маркировка", "verdict": "none"}]}}}, {})
-        cards = [self._shortlist_card(unknown=["Маркировка не указана в каталоге"], unknown_count=1, fit="partial")]
-
-        _run_shortlist_pass("Поло", [], cards, [{"text": "маркировку не учитывай", "origin": "session"}])
-
-        self.assertEqual(cards[0]["unknown"], [])
-        self.assertEqual(cards[0]["unknown_count"], 0)
-        self.assertEqual(cards[0]["fit"], "exact")
-
-    @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_fixes_an_existing_mismatch(self, gateway):
-        gateway.return_value = (
-            {"cards": {"1": {"set": [{"point": "Плотность", "verdict": "match", "note": "220 г считаем нормой"}]}}}, {},
-        )
+    def test_shortlist_pass_softens_a_deterministic_mismatch(self, gateway):
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "soften", "criterion": "Плотность", "cards": ["1"],
+             "summary": "220 г — норма", "applied": True},
+        ]}, {})
         cards = [self._shortlist_card(
             mismatches=["Плотность 220 г/м²; требуется не менее 250 г/м²"], mismatch_count=1, fit="partial",
         )]
@@ -1782,18 +1733,28 @@ class TenderTests(TestCase):
         _run_shortlist_pass("Поло", [], cards, [{"text": "220 г это норм", "origin": "session"}])
 
         self.assertEqual(cards[0]["mismatches"], [])
-        self.assertIn("Плотность: 220 г считаем нормой", cards[0]["matches"])
+        self.assertEqual(cards[0]["mismatch_count"], 0)
         self.assertEqual(cards[0]["fit"], "exact")
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_returns_a_session_only_ranking_flip(self, gateway):
-        gateway.return_value = ({"ranking": {"price": "desc"}}, {})
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "ranking", "price": "desc", "summary": "сначала дорогие", "applied": True},
+        ]}, {})
         cards = [self._shortlist_card()]
 
         result = _run_shortlist_pass("Поло", [], cards, [{"text": "сначала показывай дорогие", "origin": "session"}])
 
         self.assertEqual(result["ranking"], {"price": "desc"})
+        self.assertTrue(result["instructions"][0]["ranking_only"])
         self.assertNotIn("_ai_touched", cards[0])
+        self.assertNotIn("_removed", cards[0])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_uses_the_configured_model(self, gateway):
+        gateway.return_value = ({"instructions": []}, {})
+        _run_shortlist_pass("Поло", [], [self._shortlist_card()], [{"text": "убери детские", "origin": "session"}])
+        self.assertEqual(gateway.call_args.kwargs.get("model"), "anthropic/claude-haiku-4-5")
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_survives_a_broken_model_reply(self, gateway):
@@ -1841,7 +1802,8 @@ class TenderTests(TestCase):
         ], "sources": {}, "attempts": []}
         gateway.side_effect = [
             ({"item": "поло", "queries": ["поло"]}, {}),
-            ({"cards": {"m": {"priority": 0}}, "instructions": [{"n": 1, "applied": True, "note": "мужское поднято"}]}, {}),
+            ({"instructions": [{"n": 1, "type": "priority", "criterion": "Пол: мужской",
+                               "cards": ["m"], "summary": "приоритет мужским", "applied": True}]}, {}),
         ]
 
         result = build_training_hypothesis(
@@ -1869,8 +1831,8 @@ class TenderTests(TestCase):
         ], "sources": {}, "attempts": []}
         gateway.side_effect = [
             ({"item": "поло", "queries": ["поло"]}, {}),
-            ({"cards": {"k": {"remove": True, "remove_reason": "детская модель"}},
-              "instructions": [{"n": 1, "applied": True}]}, {}),
+            ({"instructions": [{"n": 1, "type": "exclude", "criterion": "не детская модель",
+                               "cards": ["k"], "summary": "убрать детские", "applied": True}]}, {}),
         ]
 
         result = build_training_hypothesis({"name": "Рубашка поло", "quantity": 10, "requirements": {"requirements": []}})
@@ -1879,7 +1841,7 @@ class TenderTests(TestCase):
         pass_prompt = gateway.call_args.args[0]
         self.assertIn("убрать детские модели", pass_prompt)
         self.assertEqual([card["id"] for card in result["catalog_candidates"]], ["a"])
-        self.assertEqual(result["shortlist_removed"][0]["reason"], "детская модель")
+        self.assertEqual(result["shortlist_removed"][0]["reason"], "не детская модель")
         self.assertEqual(result["shortlist_instructions"][0]["origin"], "lesson")
 
     @patch("tenders.catalog.catalog_candidates_for_line")
@@ -1893,7 +1855,8 @@ class TenderTests(TestCase):
         ], "sources": {}, "attempts": []}
         gateway.side_effect = [
             ({"item": "поло", "queries": ["поло"]}, {}),
-            ({"ranking": {"price": "desc"}, "instructions": [{"n": 1, "applied": True, "ranking_only": True}]}, {}),
+            ({"instructions": [{"n": 1, "type": "ranking", "price": "desc",
+                               "summary": "сначала дорогие", "applied": True}]}, {}),
         ]
 
         first = build_training_hypothesis(

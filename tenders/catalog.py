@@ -2133,20 +2133,23 @@ def _refresh_live_oasis_prices(client, candidates, quantity=0):
 
 
 def _shortlist_rank_key(
-    is_exact, priority, mismatch_count, unknown_count, price, name, article, price_desc=False,
+    priority, mismatch_count, unknown_count, price, name, article, price_desc=False,
 ):
     """The one fixed ordering for a search shortlist — no weights, no
     scores, read top to bottom like words in a dictionary:
 
-      1. exact (no mismatch AND no unknown) before partial
-      2. raised priority (0) before normal (1)
-      3. fewer mismatches
-      4. fewer unknowns
-      5. cheaper — or, session-only, dearer (``price_desc``)
-      6. name, then article, for a stable order
+      1. raised priority (0) before normal (1)
+      2. fewer mismatches
+      3. fewer unknowns
+      4. a card with a price before one without; then cheaper — or,
+         session-only, dearer (``price_desc``)
+      5. name, then article — a stable tiebreak, not a ranking signal
+
+    (An "exact vs partial" split used to sit on top; it is fully implied
+    by 2+3 — a 0-mismatch-0-unknown card always sorts first there.)
 
     Used both for the first deterministic sort and for the re-sort after
-    the AI shortlist pass edits a card's verdicts or priority — the pass
+    the AI shortlist pass raises / removes / softens a card — the pass
     changes this function's inputs, never the function."""
     has_price = price is not None
     if price_desc:
@@ -2154,7 +2157,6 @@ def _shortlist_rank_key(
     else:
         price_key = price if has_price else Decimal("Infinity")
     return (
-        0 if is_exact else 1,
         0 if priority == 0 else 1,
         mismatch_count,
         unknown_count,
@@ -2392,7 +2394,6 @@ def catalog_candidates_for_line(
     ranking_override = (intent or {}).get("ranking_override", {}) if isinstance(intent, dict) else {}
     price_desc = _normalized(ranking_override.get("price")) == "desc"
     ranked.sort(key=lambda value: _shortlist_rank_key(
-        is_exact=not value[2] and not value[3],
         priority=1,
         mismatch_count=len(value[2]),
         unknown_count=len(value[3]),
