@@ -1745,6 +1745,21 @@ class TenderTests(TestCase):
         self.assertEqual([r["name"] for r in result["outcome"]["removed"]], ["Поло детское"])
 
     @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_ignores_a_bulk_of_contradictory_removals(self, gateway):
+        # Live failure: "сначала дорогие; убери детские" made the model mark
+        # 31/40 cards remove:true with reasons like "мужская, ниже по цене,
+        # не убирается" — a straight contradiction. Only the real детская
+        # removal survives.
+        edits = {str(i): {"remove": True, "remove_reason": "мужская, ниже по цене, не убирается"} for i in range(2, 9)}
+        edits["1"] = {"remove": True, "remove_reason": "детская модель"}
+        gateway.return_value = ({"cards": edits}, {})
+        cards = [self._shortlist_card(id=str(i), name=("Поло детское" if i == 1 else f"Поло мужское {i}")) for i in range(1, 9)]
+
+        _run_shortlist_pass("Поло", [], cards, [{"text": "сначала дорогие; убери детские", "origin": "session"}])
+
+        self.assertEqual([c["id"] for c in cards if c.get("_removed")], ["1"])
+
+    @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_drops_a_verdict_when_told_to_ignore_a_point(self, gateway):
         gateway.return_value = ({"cards": {"1": {"set": [{"point": "Маркировка", "verdict": "none"}]}}}, {})
         cards = [self._shortlist_card(unknown=["Маркировка не указана в каталоге"], unknown_count=1, fit="partial")]
@@ -1899,6 +1914,13 @@ class TenderTests(TestCase):
         self.assertEqual(second["ranking_override"], {"price": "desc"})
         self.assertEqual(second["catalog_intent"]["ranking_override"], {"price": "desc"})
         self.assertEqual(gateway.call_count, 2)  # no third call
+
+        third = build_training_hypothesis(
+            {"name": "Поло", "quantity": 10, "requirements": {"requirements": []}},
+            current=second, recompute="catalog", clear_ranking=True,
+        )
+        self.assertEqual(third["ranking_override"], {})
+        self.assertEqual(third["catalog_intent"]["ranking_override"], {})
 
     def test_selected_gifts_category_is_filtered_before_candidate_limit(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")

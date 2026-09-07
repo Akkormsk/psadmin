@@ -431,6 +431,7 @@ def revise_production_hypothesis(request):
         feedback = str(payload.get("feedback", "")).strip()
         # Removing a correction chip resends the reduced instruction list.
         instructions_override = payload.get("instructions") if isinstance(payload.get("instructions"), list) else None
+        clear_ranking = bool(payload.get("clear_ranking"))
         # Which dialogue block's "Учесть и пересчитать" was pressed. The box
         # the admin typed in decides the scope — no LLM guesses which block a
         # comment belongs to. "catalog" keeps the route and search plan
@@ -444,8 +445,8 @@ def revise_production_hypothesis(request):
             raise ValueError
         # A "requirements" recompute carries its change in the line payload
         # (the ТЗ-row `selected` flags); a chip removal carries it in
-        # instructions_override — neither needs feedback text.
-        if not feedback and instructions_override is None and scope != "requirements":
+        # instructions_override or clear_ranking — none need feedback text.
+        if not feedback and instructions_override is None and not clear_ranking and scope != "requirements":
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
@@ -456,6 +457,7 @@ def revise_production_hypothesis(request):
             line, current=prior, feedback=feedback,
             progress_callback=lambda stage: _record_stage(session.pk, stage),
             instructions_override=instructions_override, recompute=recompute,
+            clear_ranking=clear_ranking,
         )
         session.position_name = str(line.get("name", ""))[:500]
         session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}

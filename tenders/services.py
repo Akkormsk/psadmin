@@ -2704,23 +2704,72 @@ _EXCLUSION_RE = re.compile(r"убер|убра|исключ|\bтольк|\bбе�
 _HANDLED_FIELD_RE = re.compile(
     r"плотн|грамм|г\s*/?\s*м|цвет|оттен|материал|состав|ткан|размер|\bшв[аоуы]|\bшов|строчк|стежк|вышив|молни|нанесен"
 )
+# The model sometimes returns remove:true with a reason that itself says
+# the card is being KEPT ("мужская, ниже по цене, не убирается") — a
+# straight contradiction; honour the words, not the flag.
+_NOT_REMOVED_RE = re.compile(r"не убир|не удал|не трог|остаетс|остаётс|оставл|сохран|ниже по цен")
+_EXCLUSION_STOPWORDS = {
+    "убери", "убрать", "убраны", "убрали", "исключи", "исключить", "только",
+    "без", "не", "предлагай", "показывай", "снять", "нужны", "нужно", "нужен",
+    "бери", "модели", "модель", "вариант", "варианты", "товар", "товары",
+    "оставь", "оставить", "лишние", "лишний", "сначала", "показывать", "самые",
+    "дорогие", "дешевые", "дешёвые", "дороже", "дешевле", "цене", "цены",
+}
+
+
+# A few exclusion words whose catalogue wording differs from the admin's,
+# so "убери детские" still verifies against a "… Kids" card name. Every
+# probe is >= 4 chars — a 3-letter stem like "дет" hits "будет"/"одетый"
+# in any long description.
+_EXCLUSION_SYNONYMS = {
+    "детск": ("kids", "ребен", "ребён", "школьн", "подростк", "детях"),
+    "взросл": ("adult",),
+    "синтет": ("полиэстер", "полиэфир", "нейлон", "акрил", "эластан", "полиамид", "вискоз"),
+    "хлопок": ("cotton", "хлопков"),
+    "мужск": ("муж",),
+    "женск": ("women", "lady", "жен"),
+    "длинн": ("лонгслив",),
+}
 
 
 def _gate_removals(shortlist, instructions):
-    """Undo a hallucinated hard-removal: the model over-applies "remove" to
-    any ТЗ deviation. A removal is kept only if its reason is a genuine
-    type/category exclusion AND some instruction actually asked to exclude
-    something. Everything else goes back to being a ranked alternative —
-    the verdict edits the pass made still stand."""
-    any_exclusion = any(
-        _EXCLUSION_RE.search(_normalized_text(value.get("text") if isinstance(value, dict) else value))
-        for value in instructions
-    )
-    for card in shortlist:
-        if not card.get("_removed"):
-            continue
+    """Undo a hallucinated hard-removal. The model over-applies "remove" to
+    any ТЗ deviation, and sometimes misclassifies a card outright ("Pulse
+    кобальт — детская рубашка"). A removal survives only when: an
+    exclusion instruction exists; its reason is not a ТЗ deviation the
+    matcher already scores; the reason does not itself say the card is
+    kept; and the CARD's own text (not the model's reason) actually
+    carries a word the exclusion instruction named."""
+    exclusion_words = set()
+    for value in instructions:
+        text = _normalized_text(value.get("text") if isinstance(value, dict) else value)
+        if _EXCLUSION_RE.search(text):
+            exclusion_words |= {word for word in text.split() if len(word) >= 4 and word not in _EXCLUSION_STOPWORDS}
+    probes = set()
+    for word in exclusion_words:
+        if len(word) >= 4:
+            probes.add(word[:5])
+        for stem, synonyms in _EXCLUSION_SYNONYMS.items():
+            if word.startswith(stem[:5]) or stem.startswith(word[:5]):
+                probes.update(synonyms)
+    probes = {probe for probe in probes if len(probe) >= 4}
+    for card in [card for card in shortlist if card.get("_removed")]:
         reason = _normalized_text(card.get("_removed_reason", ""))
-        if _HANDLED_FIELD_RE.search(reason) or not any_exclusion:
+        card_tokens = _normalized_text(
+            f"{card.get('name', '')} {card.get('description', '')} {card.get('category', '')} "
+            f"{' '.join(str(value) for value in (card.get('materials') or []))} "
+            f"{' '.join(str(value) for value in (card.get('colors') or []))}"
+        ).split()
+        card_matches_exclusion = any(
+            token.startswith(probe) or (len(probe) >= 6 and probe in token)
+            for probe in probes for token in card_tokens
+        )
+        if (
+            not exclusion_words
+            or _HANDLED_FIELD_RE.search(reason)
+            or _NOT_REMOVED_RE.search(reason)
+            or not card_matches_exclusion
+        ):
             card.pop("_removed", None)
             card.pop("_removed_reason", None)
 
@@ -2768,8 +2817,8 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
 - поднять карточку выше остальных: "priority":0. СТАВЬ ТОЛЬКО при явном «подними / приоритет / в первую очередь / сначала». Мягкая формулировка («нужны мужские», «лучше хлопок») — это НЕ приоритет, а mismatch по этому признаку у тех, кто не подходит.
 - убрать карточку: "remove":true,"remove_reason":"короткая причина". ТОЛЬКО когда инструкция ПРЯМО называет такой товар лишним: «убери детские», «без синтетики», «только длинный рукав», «оставь только мужские». Расхождение с ТЗ само по себе (плотность ниже нормы, не тот оттенок, не тот состав) — это mismatch, НЕ remove: код уже посчитал такие расхождения, хорошая альтернатива ниже в списке ценна. Не выдумывай причин убрать, которых нет в инструкциях.
 
-Правь только карточки, которых инструкции реально касаются. Карточки, которых инструкции не касаются, вообще не упоминай — код уже их оценил.
-Если инструкция — про смену самой сортировки («сначала дорогие», «сначала дешёвые»), карточки не трогай, верни направление в "ranking" и пометь эту инструкцию "ranking_only":true.
+Правь только карточки, которых инструкции реально касаются. Карточки, которых инструкции не касаются, вообще не упоминай — код уже их оценил. Никогда не ставь "remove":true карточке, которую оставляешь — если оставляешь, просто не упоминай её или поправь оценку.
+Если инструкция ПОЛНОСТЬЮ про смену самой сортировки («сначала дорогие», «сначала дешёвые») — верни направление в "ranking" и пометь "ranking_only":true, карточки не трогай. Если инструкция содержит И смену сортировки, И правку карточек («сначала дорогие, и убери детские») — верни "ranking", но "ranking_only":false, и сделай правки карточек как обычно.
 
 Для каждой инструкции верни: "summary" — короткая чистая формулировка сути (для плашки и запоминания, например «приоритет мужским», «плотность ниже 250 — несовпадение»), "note" — что конкретно сделано в этой выдаче.
 
@@ -2960,7 +3009,7 @@ def learn_lessons_from_session(hypothesis, session, user):
     return saved
 
 
-def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None):
+def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None, clear_ranking=False):
     """Product search + the AI shortlist pass (see docs/assistant_protocol.md):
 
     `recompute` scopes a rebuild to one dialogue block:
@@ -3013,9 +3062,10 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
 
     # Session-only sort flip ("сначала дорогие") — carried between turns,
     # never written to a lesson. Applied to the first deterministic sort
-    # (via catalog_intent) and again to the post-pass re-sort.
+    # (via catalog_intent) and again to the post-pass re-sort. The × on its
+    # chip sends clear_ranking.
     prior_ranking = current.get("ranking_override") if isinstance(current, dict) else None
-    ranking_override = prior_ranking if isinstance(prior_ranking, dict) and prior_ranking.get("price") in {"asc", "desc"} else {}
+    ranking_override = {} if clear_ranking else (prior_ranking if isinstance(prior_ranking, dict) and prior_ranking.get("price") in {"asc", "desc"} else {})
 
     # Step 3: the one LLM call for search itself — messy position name ->
     # clean item + a few queries. Never sees feedback or lessons.
