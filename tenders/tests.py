@@ -1842,6 +1842,41 @@ class TenderTests(TestCase):
         self.assertEqual([r["name"] for r in result["outcome"]["removed"]], ["Поло детское"])
 
     @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_keep_only_drops_everything_not_on_the_list(self, gateway):
+        # "оставь только мешки" is a white list — a card the model is unsure
+        # about ("Рюкзак детский Kiddo": a рюкзак, maybe a мешок?) must be
+        # dropped, not kept. The old "exclude" reading kept it.
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "keep_only", "criterion": "тип: рюкзак-мешок", "cards": ["sack1", "sack2"],
+             "summary": "оставить только рюкзаки-мешки", "applied": True},
+        ]}, {})
+        cards = [
+            self._shortlist_card(id="sack1", name="Рюкзак-мешок Clobber"),
+            self._shortlist_card(id="kiddo", name="Рюкзак детский Kiddo"),
+            self._shortlist_card(id="sack2", name="Рюкзак-мешок Oriole"),
+            self._shortlist_card(id="belt", name="Поясная сумка Marble"),
+        ]
+
+        _run_shortlist_pass("Рюкзак мешок", [], cards, [{"text": "оставь только мешки", "origin": "session"}])
+
+        self.assertNotIn("_removed", cards[0])
+        self.assertNotIn("_removed", cards[2])
+        self.assertTrue(cards[1]["_removed"])  # the uncertain kids' backpack
+        self.assertTrue(cards[3]["_removed"])
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_keep_only_with_an_empty_list_changes_nothing(self, gateway):
+        gateway.return_value = ({"instructions": [
+            {"n": 1, "type": "keep_only", "criterion": "тип: рюкзак-мешок", "cards": [], "applied": True},
+        ]}, {})
+        cards = [self._shortlist_card(id="a", name="Рюкзак A"), self._shortlist_card(id="b", name="Рюкзак B")]
+
+        _run_shortlist_pass("Рюкзак", [], cards, [{"text": "оставь только мешки", "origin": "session"}])
+
+        self.assertNotIn("_removed", cards[0])
+        self.assertNotIn("_removed", cards[1])
+
+    @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_softens_a_deterministic_mismatch(self, gateway):
         gateway.return_value = ({"instructions": [
             {"n": 1, "type": "soften", "criterion": "Плотность", "cards": ["1"],

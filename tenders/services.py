@@ -2589,17 +2589,21 @@ def _frozen_route(reason=None, purchase_details=None):
 # then applies the action, and the same fixed key re-sorts. Skipped (0
 # tokens) when there is nothing to apply.
 #
-# Three instruction types the model classifies each phrase into:
-#   priority — "подними / опусти / сначала / приоритет / нужны X / лучше X"
-#              and anything ambiguous: a criterion + the cards that CLEARLY
-#              match it -> those get the raised-priority slot.
-#   exclude  — only an explicit "убери / исключи / спрячь / только X / без X":
-#              a criterion + the cards that CLEARLY contradict it (unclear =
-#              kept) -> those are filtered out of the list before ranking.
-#   soften   — "220 г это норм", "цвет считай совпавшим": a criterion + the
-#              cards whose deterministic mismatch on it is now acceptable.
-#   ranking  — "сначала дорогие / дешёвые": a session-only price-sort flip,
-#              never written to a lesson.
+# Instruction types the model classifies each phrase into:
+#   priority  — "подними / опусти / сначала / приоритет / нужны X / лучше X"
+#               and anything ambiguous: a criterion + the cards that CLEARLY
+#               match it -> those get the raised-priority slot.
+#   keep_only — "оставь только X / только X / всё кроме X": a WHITE list. The
+#               model lists the cards that ARE X; code drops every other card,
+#               the uncertain ones included. "Оставь только мешки" must leave
+#               only sacks — `exclude` kept a card it was unsure about.
+#   exclude   — an explicit "убери / исключи / спрячь / без X" (no "только"):
+#               a criterion + the cards that CLEARLY contradict it (unclear =
+#               kept) -> those are filtered out of the list before ranking.
+#   soften    — "220 г это норм", "цвет считай совпавшим": a criterion + the
+#               cards whose deterministic mismatch on it is now acceptable.
+#   ranking   — "сначала дорогие / дешёвые": a session-only price-sort flip,
+#               never written to a lesson.
 
 _VERDICT_FIELDS = {"match": "matches", "mismatch": "mismatches", "unknown": "unknown"}
 _VERDICT_ICON = {"match": "✓", "mismatch": "✗", "unknown": "?"}
@@ -2719,7 +2723,8 @@ def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolv
 {instructions_block}{resolve_block}
 Определи для каждой инструкции её тип:
 - "priority" — «подними / опусти / сначала покажи / приоритет / предпочти / нужны X / лучше X» и ЛЮБАЯ нечёткая формулировка (по умолчанию — сюда). Заведи критерий (например «Пол: мужской», «Материал: хлопок») и перечисли в "cards" id тех карточек, у которых по их тексту и характеристикам этот критерий ЯВНО выполняется. Не уверен — не включай. «Опусти женские» = критерий «Пол: не женский».
-- "exclude" — ТОЛЬКО явное «убери / исключи / спрячь / не показывай / только X / без X». Заведи критерий и перечисли в "cards" id тех карточек, которые ЯВНО ему противоречат (их уберут). Если по карточке непонятно — НЕ включай её (нет данных = не противоречит = оставляем). Никогда не пиши сюда карточку из-за расхождения с ТЗ по плотности/цвету/составу/размеру — это код уже посчитал, такая карточка остаётся альтернативой ниже.
+- "keep_only" — «оставь только X / только X / нужны только X / убери всё кроме X / ничего кроме X». Это БЕЛЫЙ СПИСОК: заведи критерий (например «Тип: рюкзак-мешок») и перечисли в "cards" id ВСЕХ карточек, которые ЯВНО подходят под X по своему тексту. Код уберёт все остальные, включая те, по которым непонятно. Поэтому включи всё, что действительно подходит, и не включай сомнительное.
+- "exclude" — явное «убери / исключи / спрячь / не показывай / без X» (без слова «только»). Заведи критерий и перечисли в "cards" id тех карточек, которые ЯВНО ему противоречат (их уберут). Непонятно по карточке — НЕ включай (нет данных = не противоречит = оставляем). Никогда не пиши сюда карточку из-за расхождения с ТЗ по плотности/цвету/составу/размеру — это код уже посчитал, такая карточка остаётся альтернативой ниже.
 - "soften" — «220 г это норм», «цвет считай совпавшим», «это несовпадение не критично». Критерий = какой признак смягчить, "cards" = id карточек, у которых расхождение по этому признаку теперь считать допустимым.
 - "ranking" — «сначала дорогие / дешёвые». Верни "price":"asc" или "desc". Карточки не трогай.
 
@@ -2728,8 +2733,8 @@ def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolv
 "applies_to" — насколько широко ЗАПОМНИТЬ инструкцию: "item" (по умолчанию) — про этот конкретный вид товара; "any" — общее правило, не привязанное к товару (условная формулировка про ТЗ вообще: «если в ТЗ нет запроса на детские — убирай детские»; «Честный Знак никогда не учитывай»).
 
 Верни только JSON:
-{{"instructions":[{{"n":1,"type":"priority|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","applies_to":"item|any","summary":"короткая формулировка сути","applied":true,"note":"что вышло / почему не применилось"}}],"verdicts":[{{"card":"id","point":"пункт ТЗ как в списке","verdict":"match|mismatch"}}]}}
-"cards" нужен для priority/exclude/soften; "price" — только для ranking. "summary" — для плашки и запоминания. "verdicts" — только доразбор «?» по тексту карточки (пустой список, если нечего менять)."""
+{{"instructions":[{{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","applies_to":"item|any","summary":"короткая формулировка сути","applied":true,"note":"что вышло / почему не применилось"}}],"verdicts":[{{"card":"id","point":"пункт ТЗ как в списке","verdict":"match|mismatch"}}]}}
+"cards" нужен для priority/keep_only/exclude/soften (для keep_only — это те, что ОСТАВИТЬ); "price" — только для ranking. "summary" — для плашки и запоминания. "verdicts" — только доразбор «?» по тексту карточки (пустой список, если нечего менять)."""
 
 
 def _resolve_card_unknown(card, point, verdict):
@@ -2878,7 +2883,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     for index, value in enumerate(instructions, 1):
         info = ai_by_n.get(str(index), {})
         itype = _cell_text(info.get("type")).lower()
-        itype = itype if itype in {"priority", "exclude", "soften", "ranking"} else ""
+        itype = itype if itype in {"priority", "keep_only", "exclude", "soften", "ranking"} else ""
         criterion = _cell_text(info.get("criterion"))[:120]
         card_ids = info.get("cards")
         ids = {str(value) for value in card_ids} if isinstance(card_ids, list) else set()
@@ -2901,6 +2906,19 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
                 if card is not None:
                     card["priority"] = 0
                     card["_ai_priority_reason"] = criterion
+            applied = True
+        elif itype == "keep_only" and criterion and ids:
+            # White list: the model listed the cards that ARE X; drop every
+            # other card, the uncertain ones included. "Оставь только мешки"
+            # must leave only sacks — the blacklist "exclude" kept a card
+            # it was unsure about ("Рюкзак детский Kiddo" — a рюкзак, maybe
+            # a мешок?), which is the loop this fixes. No drift guard: the
+            # intent ("только X") is explicit and a wrong list only removes
+            # too much, which a plain recompute brings back.
+            for card_id, card in by_id.items():
+                if card_id not in ids:
+                    card["_removed"] = True
+                    card["_removed_reason"] = f"не {criterion}"
             applied = True
         elif itype == "exclude" and criterion and not _exclude_criterion_drifted(value, criterion):
             for card_id in ids:
