@@ -1645,15 +1645,16 @@ class TenderTests(TestCase):
         self.assertEqual(result["candidates"][0]["external_id"], "right")
         self.assertEqual(result["category_errors"], [])
 
-    def test_selected_gifts_category_does_not_depend_on_cached_search_text(self):
+    def test_gifts_product_is_found_by_its_name_text_without_a_category(self):
+        # Search is text-first now: no category node is picked, the product
+        # is retrieved because a query word is in its search_text (name +
+        # description), exactly like typing into gifts.ru's own search.
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogCategory.objects.create(
-            supplier=gifts, external_id="vacuum", name="Термокружки", path="Посуда / Термокружки",
-        )
         CatalogProduct.objects.create(
             supplier=gifts, external_id="travel-mug", article="G-1", name="Термокружка Voyager",
-            full_name="Термокружка Voyager, 500 мл", category_ids=["vacuum"],
-            total_stock=100, discount_price=500, search_text="",
+            full_name="Термокружка Voyager, 500 мл",
+            total_stock=100, discount_price=500,
+            search_text="термокружка voyager 500 мл нержавеющая сталь",
         )
 
         class Client:
@@ -1664,12 +1665,88 @@ class TenderTests(TestCase):
 
         result = catalog_candidates_for_line(
             {"name": "Термокружка", "quantity": 10},
-            intent={"item": "термокружка", "categories": ["термокружки"]},
+            intent={"item": "термокружка", "categories": ["термокружка"]},
             client=Client(),
         )
 
         self.assertEqual([value["external_id"] for value in result], ["travel-mug"])
+        self.assertEqual(result[0]["relevance"], 0)
 
+    def test_text_search_surfaces_the_item_even_without_a_matching_category(self):
+        # The "Сумка шопер" regression: the keyword category picker used to
+        # land on спортивные / поясные сумки and the real shoppers — which
+        # live in a category it never nominated — never entered the pool.
+        # Text-first search has no category to get wrong.
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
+        CatalogProduct.objects.bulk_create([
+            CatalogProduct(
+                supplier=gifts, external_id=f"sport-{i}", article=f"S-{i}",
+                name=f"Спортивная сумка Ligero {i}", full_name=f"Спортивная сумка Ligero {i}",
+                colors=["черный"], total_stock=500, discount_price=800,
+                search_text=f"спортивная сумка ligero {i} нейлон для зала",
+            )
+            for i in range(20)
+        ])
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="shopper", article="SHP-1",
+            name="Сумка-шоппер Grossbag из хлопка", full_name="Сумка-шоппер Grossbag из хлопка, натуральный",
+            colors=["натуральный"], total_stock=500, discount_price=300,
+            search_text="сумка шоппер grossbag из переработанного хлопка 340 г для покупок",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                return []
+
+        result = catalog_candidates_for_line(
+            {"name": "Сумка шопер", "quantity": "100", "requirements": {"requirements": []}},
+            limit=30,
+            intent={"item": "сумка шопер", "categories": ["сумка шопер"], "synonyms": ["шоппер", "эко сумка"]},
+            client=Client(),
+        )
+
+        ids = [value["external_id"] for value in result]
+        self.assertIn("shopper", ids)
+        # "шоппер" is in the shopper's name and in almost none of the sports
+        # bags, so it is the distinctive word — the shopper sorts first.
+        self.assertEqual(result[0]["external_id"], "shopper")
+        self.assertEqual(result[0]["relevance"], 0)
+
+    def test_a_name_that_matches_the_requested_type_outranks_a_spec_clean_wrong_type(self):
+        # The "рюкзак мешок" regression: a plain kids' backpack with a clean
+        # spec sheet (0 mismatches) used to sit above the real drawstring
+        # sack that had one spec quibble, because type was not a ranking
+        # signal. Now the sack's name carries the distinctive word.
+        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="kiddo", article="K-1",
+            name="Рюкзак детский Kiddo", full_name="Рюкзак детский Kiddo, синий",
+            colors=["синий"], materials=["полиэстер"], total_stock=500, discount_price=680,
+            search_text="рюкзак детский kiddo синий полиэстер для школы",
+        )
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="sack", article="C-1",
+            name="Рюкзак-мешок Clobber", full_name="Рюкзак-мешок Clobber, красный",
+            colors=["красный"], materials=["полиэстер"], total_stock=500, discount_price=170,
+            search_text="рюкзак мешок clobber красный шнурок компактный",
+        )
+
+        class Client:
+            base_url = "https://api.oasiscatalog.com"
+
+            def get(self, path, params=None):
+                return []
+
+        result = catalog_candidates_for_line(
+            {"name": "Рюкзак мешок", "quantity": "100", "requirements": {"requirements": [{"label": "Цвет", "value": "красный"}]}},
+            limit=10,
+            intent={"item": "рюкзак мешок", "categories": ["рюкзак мешок"], "synonyms": ["мешок для обуви"]},
+            client=Client(),
+        )
+
+        self.assertEqual(result[0]["external_id"], "sack")
 
     @staticmethod
     def _shortlist_card(**overrides):

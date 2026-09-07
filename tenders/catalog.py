@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import uuid
+from collections import Counter
 from functools import lru_cache
 from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree
@@ -1800,7 +1801,7 @@ def _requirement_matches_attribute(field, requirement, attribute):
 _COMPLIANCE_MARKING_RE = re.compile(r"честн\w*\s*знак|црпт|обязательн\w*\s+маркиров")
 
 
-def _fit_product(product, line, anchors, quantity, intent=None, from_selected_category=False, name_anchors=()):
+def _fit_product(product, line, anchors, quantity, intent=None, name_matched_query=False, name_anchors=()):
     name_anchors = name_anchors or anchors
     matches, mismatches, unknown = [], [], []
     type_text = _normalized(" ".join([
@@ -1811,11 +1812,12 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
     anchor_hit = next((value for value in anchors if _entity_phrase_matches(value, type_text)), "")
     if anchor_hit:
         matches.append(f"Тип товара: {anchor_hit}")
-    elif from_selected_category and _shares_product_token(name_anchors, type_text):
-        # The category was picked for this search and the name shares a word with
-        # the planned item ("снуд" in a "шарфы" node) — trust it over an exact
-        # phrase miss. A card with nothing in common (напульсник for бафф) is
-        # still the wrong type.
+    elif name_matched_query and _shares_product_token(name_anchors, type_text):
+        # Text search put this card here because a query word is in its name
+        # ("снуд" for a «шарф» query, "холщовая сумка" for «сумка шопер») —
+        # trust it as plausibly the right kind of thing over an exact-phrase
+        # miss; relevance has already ranked the phrase matches above it. A
+        # card whose name shares nothing (напульсник for бафф) is still wrong.
         unknown.append("Тип товара не подтверждён по названию")
     else:
         mismatches.append("Не совпадает тип товара")
@@ -1958,10 +1960,10 @@ def _fit_product(product, line, anchors, quantity, intent=None, from_selected_ca
     return matches, mismatches, unknown
 
 
-def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, from_selected_category=False, name_anchors=()):
+def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, name_matched_query=False, name_anchors=()):
     matches, mismatches, unknown = _fit_product(
         product, effective_line, anchors, quantity, intent=intent,
-        from_selected_category=from_selected_category, name_anchors=name_anchors,
+        name_matched_query=name_matched_query, name_anchors=name_anchors,
     )
     hard_reasons, hard_codes, partial_reasons = [], [], []
     if "Не совпадает тип товара" in mismatches:
@@ -2049,54 +2051,140 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
 _OASIS_PAGE_CEILING = 6
 
 
-def _local_catalog_pool(supplier_code, selected_category_ids, terms, thin_threshold=40, category_limit=200_000, text_limit=1200):
-    """Search a locally-mirrored supplier catalogue: keyword-matched category
-    rows first, full-text fallback when that's thin — exactly how Gifts has
-    always been searched. Oasis uses this once `sync_oasis_catalog` has been
-    run at least once; both suppliers share the one code path.
+def _query_stems(phrases):
+    """The meaningful words of the query, stemmed to 6 chars, deduped —
+    the unit both retrieval and relevance work in."""
+    stems = []
+    for phrase in phrases:
+        for token in _meaningful_tokens(phrase):
+            stem = token[:6]
+            if stem not in stems:
+                stems.append(stem)
+    return stems
 
-    category_limit used to be 1500 — a safety valve from when eligibility
-    checking was expensive per product (see the caching added elsewhere in
-    this file). Measured after that fix: an oversized category (Oasis
-    "Поло", 1607 products) cost the same ~5s capped or uncapped, but capping
-    silently dropped part of the category by raw database id, order_by("id")
-    having nothing to do with relevance — real Oasis matches were missing
-    from a search purely because of when they were synced, not how well
-    they fit. 200k is "no limit" for any category size seen in practice,
-    kept as a number rather than removed outright as a guard against a
-    truly corrupt category assignment turning one search into a full-table
-    scan."""
+
+def _stem_in_words(stem, words):
+    """A query stem (a query word cut to 6 chars) matches a product word
+    when they share a long-enough leading run — bridges ordinary Russian
+    inflection (сумка / сумки / сумке, рубашка / рубашке) without a full
+    morphology library. Does NOT bridge fleeting-vowel pairs (мешок /
+    мешка) or spelling variants (шопер / шоппер) — the search plan is
+    expected to supply those word forms itself. A short stem (< 5 chars,
+    e.g. "поло") only matches exactly, so "поло" never matches
+    "полотенце"."""
+    for word in words:
+        if word == stem:
+            return True
+        shared = min(len(word), len(stem))
+        if shared >= 5 and word[: shared - 1] == stem[: shared - 1]:
+            return True
+        if len(stem) == 6 and word.startswith(stem):
+            return True
+    return False
+
+
+def _text_search_pool(supplier_code, phrases):
+    """Search a locally-mirrored supplier catalogue the way the supplier's
+    own site search works: one full-text query over search_text (name +
+    description + attributes) for every phrase of the plan and every
+    meaningful word in it, OR-ed together. No category step.
+
+    The keyword category picker it replaces (`_category_candidates`) kept
+    landing on a sibling node — for "Сумка шопер" it offered пляжные /
+    спортивные / поясные сумки and never even nominated "Для шопинга" —
+    and then only its top two categories were searched. Text-first has no
+    category to get wrong: every product whose name or description carries
+    a word of the query is a candidate, and relevance (see
+    `_relevance_tier`) decides the order."""
+    terms = []
+    for phrase in phrases:
+        value = _text(phrase, 120)
+        if value and value.lower() not in {existing.lower() for existing in terms}:
+            terms.append(value)
+        for token in _meaningful_tokens(phrase):
+            if token not in terms:
+                terms.append(token)
+    if not terms:
+        return []
+    text_query = Q()
+    for term in terms:
+        text_query |= Q(search_text__icontains=term)
     base = CatalogProduct.objects.filter(supplier__code=supplier_code, is_active=True)
-    cached, seen = [], set()
-    if selected_category_ids:
-        if connection.features.supports_json_field_contains:
-            category_query = Q()
-            for category_id in selected_category_ids:
-                category_query |= Q(category_ids__contains=[category_id])
-            cached.extend(base.filter(category_query).order_by("id")[:category_limit])
-        else:
-            # SQLite has no JSON-containment lookup (Postgres does, and takes
-            # the branch above). Scanning the full table is still needed, but
-            # scan only id+category_ids — a few bytes each — instead of full
-            # rows (search_text/description/attributes run to tens of KB each
-            # and were being deserialised for every one of 30k+ products on
-            # every search). Fetch full rows only for the ones that match.
-            matched_ids = []
-            for pk, category_ids in base.order_by("id").values_list("id", "category_ids").iterator(chunk_size=2000):
-                if selected_category_ids & {str(cid) for cid in (category_ids or [])}:
-                    matched_ids.append(pk)
-                    if len(matched_ids) >= category_limit:
-                        break
-            if matched_ids:
-                by_pk = {value.pk: value for value in base.filter(pk__in=matched_ids)}
-                cached.extend(by_pk[pk] for pk in matched_ids if pk in by_pk)
-        seen = {value.pk for value in cached}
-    if terms and len(cached) < thin_threshold:
-        text_query = Q()
-        for term in terms:
-            text_query |= Q(search_text__icontains=term)
-        cached.extend(value for value in base.filter(text_query).order_by("id")[:text_limit] if value.pk not in seen)
-    return cached
+    # 4000 is "no cap" for any real query; the guard only stops a
+    # single very common word (e.g. "сумка") from loading the whole table
+    # before relevance has had a chance to rank it down.
+    return list(base.filter(text_query).order_by("id")[:4000])
+
+
+def _relevance_tier(name_words, body_words, item_stems, distinctive_stems, generic_stems):
+    """How well the product NAME answers the query — the first thing a
+    site search sorts on:
+
+      0  the whole item phrase, or one of its distinctive words, is in
+         the name  ("...шопер..." for «Сумка шопер»); or a generic word
+         is in the name and a distinctive word is in the description
+      1  only a generic word of the item is in the name  ("Спортивная
+         сумка" — has «сумка», nothing shopper-specific)
+      2  no query word in the name, only in the description
+      3  nothing matched — drop it
+
+    "Distinctive" vs "generic" is decided per search from how common each
+    query word is across the results themselves (see the caller): «сумка»
+    is in almost every hit so it is generic, «шопер» in a few so it is
+    distinctive. No hardcoded word lists."""
+    name_has = lambda stems: any(_stem_in_words(stem, name_words) for stem in stems)
+    body_has = lambda stems: any(_stem_in_words(stem, body_words) for stem in stems)
+    if item_stems and all(_stem_in_words(stem, name_words) for stem in item_stems):
+        return 0
+    if name_has(distinctive_stems):
+        return 0
+    name_generic = name_has(generic_stems)
+    if name_generic and body_has(distinctive_stems):
+        return 0
+    if name_generic:
+        return 1
+    if body_has(distinctive_stems) or body_has(generic_stems):
+        return 2
+    return 3
+
+
+def _score_pool_relevance(pool, item_phrase, phrases):
+    """Split the query's words into distinctive / generic by how common
+    each is in the pool, then tag every product with `_relevance` (0-3).
+    Products that matched nothing in name or description (tier 3) are
+    dropped. Returns the surviving pool, best-first."""
+    all_stems = _query_stems(phrases)
+    item_stems = _query_stems([item_phrase]) if item_phrase else all_stems
+    if not all_stems:
+        for product in pool:
+            product._relevance = 1
+        return pool
+    words_by_product = []
+    document_frequency = {stem: 0 for stem in all_stems}
+    for product in pool:
+        name_words = _normalized(f"{product.name} {product.full_name}").split()
+        body_words = _normalized(product.search_text or f"{product.name} {product.full_name} {product.description}").split()
+        words_by_product.append((name_words, body_words))
+        for stem in all_stems:
+            if _stem_in_words(stem, body_words):
+                document_frequency[stem] += 1
+    ceiling = max(document_frequency.values()) or 1
+    distinctive = {stem for stem, count in document_frequency.items() if count <= 0.6 * ceiling} or set(all_stems)
+    generic = set(all_stems) - distinctive
+    survivors = []
+    for product, (name_words, body_words) in zip(pool, words_by_product):
+        product._relevance = _relevance_tier(name_words, body_words, item_stems, distinctive, generic)
+        if product._relevance < 3:
+            # how many query words the NAME carries — a tiebreak inside a
+            # tier so the cap below keeps the closest-named products, not
+            # whichever happened to be synced first
+            name_cover = (
+                2 * sum(1 for stem in distinctive if _stem_in_words(stem, name_words))
+                + sum(1 for stem in generic if _stem_in_words(stem, name_words))
+            )
+            survivors.append((product._relevance, -name_cover, product))
+    survivors.sort(key=lambda value: (value[0], value[1]))
+    return [product for _, _, product in survivors]
 
 
 def _refresh_live_oasis_prices(client, candidates, quantity=0):
@@ -2133,20 +2221,22 @@ def _refresh_live_oasis_prices(client, candidates, quantity=0):
 
 
 def _shortlist_rank_key(
-    priority, mismatch_count, unknown_count, price, name, article, price_desc=False,
+    priority, mismatch_count, unknown_count, price, name, article, price_desc=False, relevance=1,
 ):
     """The one fixed ordering for a search shortlist — no weights, no
     scores, read top to bottom like words in a dictionary:
 
       1. raised priority (0) before normal (1)
-      2. fewer mismatches
-      3. fewer unknowns
-      4. a card with a price before one without; then cheaper — or,
+      2. text relevance — how well the product NAME answers the query
+         (0 = the item / its distinctive word is in the name, 1 = only a
+         generic word of the item is in the name, 2 = matched only in the
+         description). This is what a supplier-site search sorts on first;
+         it puts the right kind of thing above a spec-clean wrong one.
+      3. fewer mismatches
+      4. fewer unknowns
+      5. a card with a price before one without; then cheaper — or,
          session-only, dearer (``price_desc``)
-      5. name, then article — a stable tiebreak, not a ranking signal
-
-    (An "exact vs partial" split used to sit on top; it is fully implied
-    by 2+3 — a 0-mismatch-0-unknown card always sorts first there.)
+      6. name, then article — a stable tiebreak, not a ranking signal
 
     Used both for the first deterministic sort and for the re-sort after
     the AI shortlist pass raises / removes / softens a card — the pass
@@ -2158,6 +2248,7 @@ def _shortlist_rank_key(
         price_key = price if has_price else Decimal("Infinity")
     return (
         0 if priority == 0 else 1,
+        relevance,
         mismatch_count,
         unknown_count,
         0 if has_price else 1,
@@ -2238,49 +2329,49 @@ def catalog_candidates_for_line(
         "gifts": {"status": "not_searched", "message": "", "received": 0},
     }
 
+    query_phrases = list(name_anchors)
+
     # Oasis is optional: an API/category failure must not suppress Gifts.
     oasis_used_mirror = False
+    oasis_mirror_exists = CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists()
     try:
         client = client or OasisClient()
-        categories = _oasis_category_snapshot(client)
-        category_map = {value["id"]: value["path"] or value["name"] for value in categories}
-        gifts_categories = list(CatalogCategory.objects.filter(
-            supplier__code="gifts", supplier__is_active=True, is_active=True,
-        ).values("external_id", "parent_external_id", "name", "path"))
-        # Best keyword-matched categories per source — no LLM. Full-text search
-        # over item + synonyms (below) covers anything the trees misname.
-        if not force_full_text:
-            per_source = {}
-            for option in _category_candidates({"oasis": categories, "gifts": gifts_categories}, line, intent or {}):
-                per_source.setdefault(option["source"], []).append(option)
-            category_tasks = [
-                {**option, "priority": index + 1}
-                for options in per_source.values()
-                for index, option in enumerate(options[:2])
-            ]
-        selected_oasis_categories = [
-            next((value for value in categories if value["id"] == task["category_id"]), None)
-            for task in sorted(category_tasks, key=lambda value: value.get("priority", 1))
-            if task.get("source") == "oasis"
-        ]
-        selected_oasis_categories = [value for value in selected_oasis_categories if value]
-        category = selected_oasis_categories[0] if selected_oasis_categories else None
-        search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(name_anchors)))[:6]
-
-        if CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists():
+        if oasis_mirror_exists:
             # A local mirror exists (`python manage.py sync_oasis_catalog`) —
-            # search it exactly like Gifts, instant, no live crawl. Live price
-            # and stock for the handful of cards actually shown are refreshed
-            # in one batched call right before returning (see below).
+            # search its text like Gifts, no categories, no live crawl. Live
+            # price and stock for the handful of cards actually shown are
+            # refreshed in one batched call right before returning (see below).
             oasis_used_mirror = True
-            selected_oasis_ids = {str(value["id"]) for value in selected_oasis_categories}
-            oasis_pool = _aggregate_color_variants(_local_catalog_pool("oasis", selected_oasis_ids, search_terms))
+            oasis_pool = _aggregate_color_variants(_text_search_pool("oasis", query_phrases))
             pool.extend(oasis_pool)
             source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
         else:
-            # No mirror synced yet in this environment — fall back to the live
-            # crawl (respects Oasis's 1 request/second API limit; slow on a
-            # broad, unspecific category).
+            # No mirror synced in this environment — legacy live crawl. It
+            # still leans on the keyword category picker because the Oasis API
+            # has no usable relevance search; kept only as a cold-start
+            # fallback (prod and dev both run the mirror, so text search wins).
+            categories = _oasis_category_snapshot(client)
+            category_map = {value["id"]: value["path"] or value["name"] for value in categories}
+            gifts_categories = list(CatalogCategory.objects.filter(
+                supplier__code="gifts", supplier__is_active=True, is_active=True,
+            ).values("external_id", "parent_external_id", "name", "path"))
+            if not force_full_text:
+                per_source = {}
+                for option in _category_candidates({"oasis": categories, "gifts": gifts_categories}, line, intent or {}):
+                    per_source.setdefault(option["source"], []).append(option)
+                category_tasks = [
+                    {**option, "priority": index + 1}
+                    for options in per_source.values()
+                    for index, option in enumerate(options[:2])
+                ]
+            selected_oasis_categories = [
+                next((value for value in categories if value["id"] == task["category_id"]), None)
+                for task in sorted(category_tasks, key=lambda value: value.get("priority", 1))
+                if task.get("source") == "oasis"
+            ]
+            selected_oasis_categories = [value for value in selected_oasis_categories if value]
+            category = selected_oasis_categories[0] if selected_oasis_categories else None
+            search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(name_anchors)))[:6]
             oasis_search_categories = selected_oasis_categories or [None]
             for selected_category in oasis_search_categories:
                 offset = 0
@@ -2321,14 +2412,10 @@ def catalog_candidates_for_line(
             "received": 0,
         }
 
-    # Gifts: full-text over the stored name/description (like typing into
-    # gifts.ru) plus the products of the keyword-matched Gifts categories.
-    gifts_terms = list(dict.fromkeys(_planner_source_terms(intent, "gifts") + list(name_anchors)))
+    # Gifts: full-text over the stored name + description, like typing into
+    # gifts.ru's own search box.
     gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
-    selected_gifts_ids = {
-        str(value.get("category_id")) for value in category_tasks if value.get("source") == "gifts"
-    }
-    cached_products = _local_catalog_pool("gifts", selected_gifts_ids, gifts_terms)
+    cached_products = _text_search_pool("gifts", query_phrases)
     pool.extend(cached_products)
     source_status["gifts"] = {
         "status": "success" if gifts_supplier_exists else "not_configured",
@@ -2336,14 +2423,16 @@ def catalog_candidates_for_line(
         "received": len(cached_products),
     }
     ranked = []
-    # A product counts as "from a selected category" when it actually belongs to
-    # one of the keyword-matched categories — full-text hits get the strict type
-    # check so a plain t-shirt cannot pass as a polo.
-    selected_category_ids = {str(task["category_id"]) for task in category_tasks}
+    # Tag every product with a relevance tier (0-3) from where the query
+    # words land in its name / description, drop the ones that matched
+    # nothing real (tier 3), and keep the best 600 for the eligibility
+    # pass. Live-crawl products (no mirror) skip this and stay neutral.
+    relevance_scored = bool(oasis_used_mirror or gifts_supplier_exists)
+    if relevance_scored:
+        pool = _score_pool_relevance(pool, (intent or {}).get("item", "") if isinstance(intent, dict) else "", query_phrases)[:600]
     for product in pool:
-        product._from_selected_category = bool(
-            selected_category_ids & {str(cid) for cid in (product.category_ids or [])}
-        )
+        if not hasattr(product, "_relevance"):
+            product._relevance = 1
     # "Исключить детские", "только хлопок", "подними мужские" and every
     # other free-text instruction are no longer backend keyword filters —
     # they are handled by the AI shortlist pass (services._run_shortlist_pass),
@@ -2363,7 +2452,8 @@ def catalog_candidates_for_line(
             continue
         eligibility = _catalog_product_eligibility(
             product, line, effective_line, anchors, quantity, intent,
-            from_selected_category=product._from_selected_category, name_anchors=name_anchors,
+            name_matched_query=relevance_scored and getattr(product, "_relevance", 1) <= 1,
+            name_anchors=name_anchors,
         )
         if eligibility["status"] == "rejected":
             eligibility_counts["rejected"] += 1
@@ -2395,6 +2485,7 @@ def catalog_candidates_for_line(
     price_desc = _normalized(ranking_override.get("price")) == "desc"
     ranked.sort(key=lambda value: _shortlist_rank_key(
         priority=1,
+        relevance=getattr(value[0], "_relevance", 1),
         mismatch_count=len(value[2]),
         unknown_count=len(value[3]),
         price=value[0].effective_price,
@@ -2441,6 +2532,9 @@ def catalog_candidates_for_line(
                 # 0 = raised, 1 = normal. Only the AI shortlist pass raises a
                 # card; fed straight into _shortlist_rank_key on the re-sort.
                 "priority": 1,
+                # Text-relevance tier (0 best .. 2) — how well the name answers
+                # the query. Carried so the pass re-sort keeps the same order.
+                "relevance": getattr(product, "_relevance", 1),
                 "eligibility": eligibility_status,
                 "eligibility_reasons": eligibility_reasons,
                 "synced_at": timezone.now().isoformat(),
@@ -2482,10 +2576,12 @@ def catalog_candidates_for_line(
             "candidates": selected,
             "sources": source_status,
             "attempts": [{
-                "mode": "full_text" if force_full_text or not category_tasks else "selected_categories",
+                "mode": "selected_categories" if category_tasks else "text_search",
                 "category_tasks": category_tasks,
                 "categories": planner_categories,
                 "terms": text_terms,
+                "query_phrases": list(query_phrases),
+                "relevance_tiers": sorted(Counter(getattr(product, "_relevance", 1) for product in pool).items()),
                 "pool_count": len(pool),
                 "rejections": rejections,
                 "eligibility_counts": eligibility_counts,

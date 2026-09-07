@@ -3139,6 +3139,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         price_desc = ranking_override.get("price") == "desc"
         catalog_candidates.sort(key=lambda card: _shortlist_rank_key(
             priority=card.get("priority", 1),
+            relevance=card.get("relevance", 1),
             mismatch_count=card.get("mismatch_count", len(card.get("mismatches") or [])),
             unknown_count=card.get("unknown_count", len(card.get("unknown") or [])),
             price=_price_decimal(card.get("price")),
