@@ -1429,12 +1429,28 @@ _SIZE_IN_NAME_RE = re.compile(r"размер\s+([0-9a-zа-яё./\-–]+)", re.I)
 
 def _variant_size(product):
     """The size of one SKU — from a ", размер XL" tail in the name (Gifts)
-    or the `size` field / an attribute (Oasis)."""
+    or the `size` field / an attribute (Oasis). A "Размер" that is really a
+    dimension string ("4 х 1,2 х 0,4 см") is not a variant label — skip it."""
     match = _SIZE_IN_NAME_RE.search(_text(product.name, 300))
     if match:
         return match.group(1).strip(" .,")
-    sizes = _product_sizes(product)
-    return sizes[0] if sizes else ""
+    for size in _product_sizes(product):
+        if _looks_like_variant_size(size):
+            return size
+    return ""
+
+
+def _looks_like_variant_size(text):
+    """True for "32ГБ" / "XL" / "48-50" / "M"; false for "5,8 х 1,8 х 0,8 см"
+    (a dimensions string a supplier happened to file under "Размер")."""
+    value = _text(text, 60).strip()
+    if not value:
+        return False
+    if _capacity_mb(value) is not None:
+        return True
+    if re.search(r"\d\s*[x×х*]\s*\d", value) or re.search(r"\d\s*(?:см|мм|cm|mm)\b", value, re.I):
+        return False
+    return len(value) <= 8
 
 
 def _gifts_variant_keys(products):
@@ -1528,6 +1544,28 @@ def _aggregate_color_variants(products, supplier_code="oasis"):
         }
         result.append(representative)
     return result
+
+
+_VARIANT_AXIS_MARKERS = (
+    "объем", "гб", "тб", "мб", "памят", "мкост", "накопит",
+    "размер", "длин", "ширин", "высот", "диаметр", "толщин", "габарит",
+)
+
+
+def _variant_axis_signature(mismatches, unknown):
+    """The subset of a card's verdicts that concern a size / capacity /
+    dimension — the axes a товарная-группа's SKUs differ on. Two SKUs of one
+    group with the SAME signature are the same offer (collapse to one card,
+    keep the rest as picker options); a DIFFERENT signature means one variant
+    genuinely fits the ТЗ and another does not (16 ГБ vs 32 ГБ), so they must
+    stay as separate candidates. When the ТЗ says nothing about size the
+    signature is empty for every SKU → clothing collapses to one card."""
+    keys = []
+    for text in list(mismatches or []) + list(unknown or []):
+        normalized = _normalized(text)
+        if any(marker in normalized for marker in _VARIANT_AXIS_MARKERS):
+            keys.append(normalized)
+    return tuple(sorted(keys))
 
 
 CONSTRAINT_FIELD_LABELS = {
@@ -1851,11 +1889,102 @@ def _requirement_matches_attribute(field, requirement, attribute):
     required_measurement = _normalized_measurement(field, requirement.get("label"), requirement.get("value"))
     offered_measurement = _normalized_measurement(field, attribute.get("name"), attribute.get("value"))
     if required_measurement and offered_measurement:
-        return (
-            required_measurement["unit"] == offered_measurement["unit"]
-            and required_measurement["value"] == offered_measurement["value"]
-        )
+        comparator = _requirement_comparator(requirement.get("label"), requirement.get("value"))
+        return _measure_satisfies(
+            Decimal(required_measurement["value"]), Decimal(offered_measurement["value"]),
+            comparator, field,
+        ) is True
     return _values_compatible(requirement.get("value"), attribute.get("value"))
+
+
+_CAPACITY_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(гигабайт|гбайт|гб|gb|терабайт|тбайт|тб|tb|мегабайт|мбайт|мб|mb)(?![а-яa-z])",
+    re.I,
+)
+_CAPACITY_TO_MB = {
+    "мб": 1, "мбайт": 1, "мегабайт": 1, "mb": 1,
+    "гб": 1024, "гбайт": 1024, "гигабайт": 1024, "gb": 1024,
+    "тб": 1048576, "тбайт": 1048576, "терабайт": 1048576, "tb": 1048576,
+}
+_DIM_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?")
+_SIZE_ATTR_RE = re.compile(r"размер|габарит|dimension")
+
+
+def _capacity_mb(text):
+    """Memory capacity of a string ("32 ГБ", "…, 16 Gb, …") in megabytes, or None."""
+    match = _CAPACITY_RE.search(_normalized(text))
+    if not match:
+        return None
+    try:
+        return Decimal(match.group(1).replace(",", ".")) * _CAPACITY_TO_MB[match.group(2).lower()]
+    except (InvalidOperation, KeyError):
+        return None
+
+
+def _capacity_label(megabytes):
+    if megabytes is None:
+        return ""
+    if megabytes >= 1048576 and megabytes % 1048576 == 0:
+        return f"{_decimal_text(megabytes / 1048576)} ТБ"
+    if megabytes >= 1024:
+        return f"{_decimal_text(megabytes / 1024)} ГБ"
+    return f"{_decimal_text(megabytes)} МБ"
+
+
+def _requirement_comparator(label, value):
+    """'gte' / 'lte' / 'eq' read from the requirement text — "не менее 250",
+    "от 32 ГБ", "≥ 200" → gte; "не более", "до", "≤" → lte; otherwise eq.
+    A ТЗ number is almost always a bound, not an exact spec."""
+    raw = f"{_text(label, 300)} {_text(value, 1000)}"
+    text = _normalized(raw)
+    if "≥" in raw or ">=" in raw or any(
+        marker in text for marker in ("не менее", "не меньше", "не ниже", "больше или равно", "как минимум", "минимум")
+    ):
+        return "gte"
+    if "≤" in raw or "<=" in raw or any(
+        marker in text for marker in ("не более", "не больше", "не выше", "меньше или равно", "как максимум", "максимум")
+    ):
+        return "lte"
+    return "eq"
+
+
+def _measure_satisfies(required, offered, comparator, field=""):
+    """Does `offered` meet `required`? None when either is missing.
+    'eq' allows a tolerance band — a ТЗ dimension of "6 см" is met by a
+    catalogue "5,8 см" (manufacturing / rounding); a linear size gets a
+    wider band than a capacity or a mass."""
+    if required is None or offered is None:
+        return None
+    if comparator == "gte":
+        return offered >= required
+    if comparator == "lte":
+        return offered <= required
+    ratio = Decimal("0.12") if field in {"length", "width", "height", "diameter", "thickness"} else Decimal("0.05")
+    band = max(required * ratio, Decimal("1"))
+    return abs(offered - required) <= band
+
+
+def _linear_dimensions_mm(product_attributes, product):
+    """Every linear measurement we can read off the card, in millimetres —
+    from a "Размер товара (см): 5,8 х 1,8 х 0,8" style attribute (units from
+    the attribute name) or a `size` field. Used when the ТЗ asks for a
+    length / width the catalogue never spells out as its own field."""
+    numbers = []
+    for attribute in product_attributes:
+        name = _normalized(attribute.get("name"))
+        if not _SIZE_ATTR_RE.search(name):
+            continue
+        factor = Decimal("10") if "см" in name or "cm" in name else (
+            Decimal("1") if "мм" in name or "mm" in name else None
+        )
+        if factor is None:
+            continue
+        for token in _DIM_NUMBER_RE.findall(_text(attribute.get("value"), 200)):
+            try:
+                numbers.append(Decimal(token.replace(",", ".")) * factor)
+            except InvalidOperation:
+                continue
+    return [value for value in numbers if value > 0]
 
 
 # "Честный Знак" / ЦРПТ marking is a labelling-compliance obligation the
@@ -1969,15 +2098,22 @@ def _fit_product(product, line, anchors, quantity, intent=None, name_matched_que
         mismatches.append(f"Пол не совпадает: требуется {required_gender}; товар {product_gender}")
 
     handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер", "гендер")
+    # A "Вид продукции / Тип изделия / Наименование товара" row asks the same
+    # question the type check at the top of this function already answered —
+    # do not count it a second time as its own "не указан" unknown.
+    type_like_markers = ("вид продукци", "вид издели", "вид товара", "тип издели", "тип товара", "наименование товара", "категория товара")
     product_attributes = [
         attribute for attribute in product.attributes
         if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
     ] if isinstance(product.attributes, list) else []
+    card_prose = " ".join(filter(None, [product.name, product.full_name, product.description]))
     for requirement in _product_requirement_values(line):
         label = _text(requirement.get("label"), 300)
         value = _text(requirement.get("value"), 1000)
         label_normalized = _normalized(label)
         if not label_normalized or not value or _is_gender_label(label) or any(marker in label_normalized for marker in handled_markers):
+            continue
+        if any(marker in label_normalized for marker in type_like_markers):
             continue
         if any(marker in label_normalized for marker in ("коммент", "примеч")):
             continue
@@ -1985,6 +2121,7 @@ def _fit_product(product, line, anchors, quantity, intent=None, name_matched_que
             continue
         label_tokens = _meaningful_tokens(label_normalized)
         field = _requirement_field(label)
+        comparator = _requirement_comparator(label, value)
         related = [
             attribute for attribute in product_attributes
             if (
@@ -1993,22 +2130,89 @@ def _fit_product(product, line, anchors, quantity, intent=None, name_matched_que
             )
         ]
         display_label = REQUIREMENT_DISPLAY_LABELS.get(field, label.rstrip(":"))
-        if not related:
-            unknown.append(f"{display_label} не указан в каталоге")
+
+        # Memory capacity: "Объём памяти: не менее 32 ГБ" reads as field
+        # "volume" (millilitres) but is a capacity in GB. Compare it as a
+        # capacity against the size field / attributes / the card text.
+        required_capacity = _capacity_mb(value)
+        if required_capacity is not None:
+            offered_capacity = next((
+                capacity for capacity in (
+                    _capacity_mb(product.size),
+                    *(_capacity_mb(_text(attribute.get("value"), 200)) for attribute in product_attributes),
+                    _capacity_mb(card_prose),
+                ) if capacity is not None
+            ), None)
+            if offered_capacity is None:
+                unknown.append(f"{display_label} не указан в каталоге")
+            elif _measure_satisfies(required_capacity, offered_capacity, comparator, "volume"):
+                matches.append(f"{display_label}: {_capacity_label(offered_capacity)}")
+            else:
+                mismatches.append(
+                    f"{display_label} не совпадает: требуется {value}; в каталоге {_capacity_label(offered_capacity)}"
+                )
             continue
-        offered_values = [_text(attribute.get("value"), 1000) for attribute in related]
-        if any(_requirement_matches_attribute(field, requirement, attribute) for attribute in related):
-            matches.append(f"{display_label}: {', '.join(offered_values)}")
-        else:
-            mismatches.append(f"{display_label} не совпадает: требуется {value}; в каталоге {', '.join(offered_values)}")
+
+        if related:
+            offered_values = [_text(attribute.get("value"), 1000) for attribute in related]
+            if any(_requirement_matches_attribute(field, requirement, attribute) for attribute in related):
+                matches.append(f"{display_label}: {', '.join(offered_values)}")
+            else:
+                mismatches.append(f"{display_label} не совпадает: требуется {value}; в каталоге {', '.join(offered_values)}")
+            continue
+
+        # No attribute lines up by name. For a linear dimension the catalogue
+        # often packs it into one "Размер товара (см): 5,8 х 1,8 х 0,8"
+        # string — read the numbers off that instead of giving up.
+        if field in {"length", "width", "height", "diameter", "thickness"}:
+            required_mm = _normalized_measurement(field, label, value)
+            dimensions = _linear_dimensions_mm(product_attributes, product)
+            if required_mm and dimensions:
+                required_mm = Decimal(required_mm["value"])
+                closest = min(dimensions, key=lambda value_mm: abs(value_mm - required_mm))
+                blob = ", ".join(sorted({
+                    _text(attribute.get("value"), 80) for attribute in product_attributes
+                    if _SIZE_ATTR_RE.search(_normalized(attribute.get("name")))
+                }))
+                if _measure_satisfies(required_mm, closest, comparator, field):
+                    matches.append(f"{display_label}: подтверждено габаритами ({blob})")
+                elif required_mm > 0 and abs(closest - required_mm) <= required_mm * Decimal("0.3"):
+                    # A ТЗ dimension is nominal; a catalogue value within ~30 %
+                    # is a "проверьте, допустимо ли" note (weighted like an
+                    # unknown), not a hard deviation that sinks the card.
+                    unknown.append(
+                        f"{display_label}: в каталоге ≈{_decimal_text(closest / 10)} см при требуемых {value} — проверьте допуск"
+                    )
+                else:
+                    mismatches.append(f"{display_label} не совпадает: требуется {value}; габариты в каталоге — {blob}")
+                continue
+
+        unknown.append(f"{display_label} не указан в каталоге")
 
     if quantity > 0:
+        # These tenders are "изготовление / нанесение под заказ": the supplier
+        # makes and brands the item to order, so a warehouse balance below the
+        # tirage is a "check the delivery date" note (weighted like one
+        # unknown), NEVER a spec mismatch that sinks the card, and stock in
+        # transit counts toward availability. Only a listing with nothing on
+        # hand, nothing in transit and no on-order flag is a real problem (and
+        # it is hard-rejected upstream before this runs).
+        transit = max(0, _integer(getattr(product, "stock_transit", 0)))
         if product.total_stock >= quantity:
             matches.append(f"Остаток достаточен: {product.total_stock} шт.")
+        elif product.total_stock + transit >= quantity:
+            matches.append(
+                f"Хватает с учётом поставки в пути: {product.total_stock} шт. на складе + {transit} шт. в пути"
+            )
+        elif product.total_stock > 0 or transit > 0:
+            tail = f", ещё {transit} шт. в пути" if transit else ""
+            unknown.append(
+                f"На складе {product.total_stock} из {quantity} шт.{tail} — остальное под заказ, уточните срок"
+            )
         elif product.is_on_order:
-            mismatches.append(f"На складе {product.total_stock} из {quantity} шт.; товар доступен только под заказ")
+            unknown.append(f"На складе нет, товар под заказ — уточните срок поставки {quantity} шт.")
         else:
-            mismatches.append(f"Недостаточный остаток: {product.total_stock} из {quantity} шт.")
+            mismatches.append(f"Нет на складе; поставку под заказ нужно подтвердить у поставщика (требуется {quantity} шт.)")
 
     size_quantities = _requested_size_quantities(line)
     if size_quantities:
@@ -2040,9 +2244,23 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
     if colour_reason:
         hard_reasons.append(colour_reason)
         hard_codes.append("colour")
-    if quantity > 0 and product.total_stock < quantity:
-        hard_reasons.append(f"Недостаточный общий остаток: требуется {quantity}, доступно {product.total_stock}")
-        hard_codes.append("insufficient_total_stock")
+    # Stock shortage is no longer a hard reject: the assistant works on
+    # "изготовление / нанесение под заказ" tenders where the supplier makes
+    # and brands the item to order, so a warehouse balance below the tirage
+    # (and a mirror that may be hours stale) must not delete the best-fitting
+    # product — it stays as a ranked alternative with the shortage shown by
+    # _fit_product ("на складе N из Q, недостающее под заказ"). Only a SKU with
+    # nothing on hand, nothing in transit and no on-order flag is dropped, as
+    # a likely-dead listing (handled by the out_of_stock check upstream).
+    transit_stock = max(0, _integer(getattr(product, "stock_transit", 0)))
+    if (
+        quantity > 0
+        and product.total_stock <= 0
+        and transit_stock <= 0
+        and not product.is_on_order
+    ):
+        hard_reasons.append("Нет ни на складе, ни в пути, ни под заказ")
+        hard_codes.append("out_of_stock")
 
     allowed_sources = {
         _normalized(value) for value in intent.get("allowed_sources", [])
@@ -2501,7 +2719,11 @@ def catalog_candidates_for_line(
     eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
     rejection_reasons, partial_reasons = {}, {}
     for product in pool:
-        if product.total_stock <= 0:
+        if (
+            product.total_stock <= 0
+            and max(0, _integer(getattr(product, "stock_transit", 0))) <= 0
+            and not product.is_on_order
+        ):
             rejections["out_of_stock"] += 1
             eligibility_counts["rejected"] += 1
             rejection_reasons["Нулевой остаток"] = rejection_reasons.get("Нулевой остаток", 0) + 1
@@ -2550,12 +2772,34 @@ def catalog_candidates_for_line(
         price_desc=price_desc,
     ))
     display_ranked = ranked
-    selected, seen_groups = [], set()
+    selected, group_cards = [], {}
     for product, matches, mismatches, unknown, _, eligibility_status, eligibility_reasons in display_ranked:
-        group_key = product.group_id or product.external_id
-        if group_key in seen_groups:
+        # One card per товарная-группа PER size/capacity verdict: SKUs that
+        # the ТЗ judges the same (all clothing sizes, when size is not asked)
+        # collapse; SKUs it judges differently (16 ГБ fails «≥ 32», 32 ГБ
+        # passes) stay as separate candidates so the fitting one is not
+        # silently dropped as a "duplicate" of a worse sibling.
+        group_key = (
+            product.group_id or product.external_id,
+            _variant_axis_signature(mismatches, unknown),
+        )
+        if group_key in group_cards:
+            # A true twin (same group, same verdict): keep it only as a
+            # pickable option on the card already shown, never a second row.
+            kept = group_cards[group_key]
+            twin_size = _variant_size(product)
+            if twin_size and twin_size not in kept["sizes"]:
+                kept["sizes"].append(twin_size)
+            if product.external_id not in kept["variant_ids"]:
+                kept["variant_ids"].append(product.external_id)
+                kept["variants"].append({
+                    "size": twin_size,
+                    "product_id": product.external_id,
+                    "article": product.article,
+                    "stock": max(0, product.total_stock),
+                    "price": str(product.effective_price.quantize(Decimal("0.01"))) if product.effective_price is not None else None,
+                })
             continue
-        seen_groups.add(group_key)
         try:
             price = product.effective_price
             product_url = product.product_url
@@ -2600,10 +2844,10 @@ def catalog_candidates_for_line(
                     if isinstance(product.category_names, list) and product.category_names else
                     (category["path"] or category["name"]) if category else "Поиск по названию и описанию"
                 ),
-                "sizes": product.raw_data.get("sizes", []) if isinstance(product.raw_data, dict) else [],
-                "variant_ids": product.raw_data.get("variant_ids", []) if isinstance(product.raw_data, dict) else [],
+                "sizes": list(product.raw_data.get("sizes", []) or ([_variant_size(product)] if _variant_size(product) else [])) if isinstance(product.raw_data, dict) else [],
+                "variant_ids": list(product.raw_data.get("variant_ids", []) or [product.external_id]) if isinstance(product.raw_data, dict) else [product.external_id],
                 "color_group_id": product.color_group_id or product.external_id,
-                "variants": _product_variants(product),
+                "variants": list(_product_variants(product)),
                 "normalized_requirements": normalized_requirements,
                 "normalized_product_values": normalized_product_values,
                 # Full card text for the semantic review step (LLM reads these, not the backend).
@@ -2621,6 +2865,7 @@ def catalog_candidates_for_line(
             # whole shortlist — skip it and keep ranking the rest.
             logger.exception("Skipped a catalogue candidate that failed to serialise")
             continue
+        group_cards[group_key] = selected[-1]
         if len(selected) >= max(1, min(60, max(limit, shortlist_limit or 0))):
             break
     if oasis_used_mirror:

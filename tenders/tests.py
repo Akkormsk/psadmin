@@ -1954,9 +1954,11 @@ class TenderTests(TestCase):
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_uses_the_configured_model(self, gateway):
+        # The card-reading pass gets the strong model by default — the fast
+        # model's job is only the search-plan step.
         gateway.return_value = ({"instructions": []}, {})
         _run_shortlist_pass("Поло", [], [self._shortlist_card()], [{"text": "убери детские", "origin": "session"}])
-        self.assertEqual(gateway.call_args.kwargs.get("model"), "anthropic/claude-haiku-4-5")
+        self.assertEqual(gateway.call_args.kwargs.get("model"), "anthropic/claude-sonnet-4-5")
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_skips_a_conditional_instruction_whose_condition_fails(self, gateway):
@@ -2794,7 +2796,11 @@ class TenderTests(TestCase):
         self.assertEqual(without_sizes["eligibility"], "exact_eligible")
         self.assertFalse(any("Размер " in value for value in without_sizes["matches"] + without_sizes["mismatches"] + without_sizes["unknown"]))
 
-    def test_catalog_eligibility_rejects_insufficient_color_group_total_stock(self):
+    def test_catalog_stock_shortage_is_kept_as_a_make_to_order_alternative(self):
+        # These tenders are "изготовление под заказ" — a warehouse balance
+        # below the tirage is a delivery-timing note, not a reason to delete
+        # the best-fitting product. The card stays, as a ranked alternative
+        # with the shortage shown; it is not counted as a spec mismatch.
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -2818,9 +2824,10 @@ class TenderTests(TestCase):
             limit=3, intent={"item": "поло"}, client=Client(), include_diagnostics=True,
         )
 
-        self.assertEqual(result["candidates"], [])
-        self.assertEqual(result["attempts"][0]["eligibility_counts"]["rejected"], 1)
-        self.assertEqual(result["attempts"][0]["rejection_reasons"]["Недостаточный общий остаток"], 1)
+        self.assertEqual([value["external_id"] for value in result["candidates"]], ["polo-white"])
+        card = result["candidates"][0]
+        self.assertEqual(card["mismatch_count"], 0)
+        self.assertTrue(any("под заказ" in str(value) for value in card["unknown"]))
 
     def test_catalog_eligibility_keeps_positive_required_mismatch_but_rejects_prohibition(self):
         class Client:
@@ -3356,7 +3363,9 @@ class TenderTests(TestCase):
         self.assertEqual(candidates[0]["external_id"], "shirt")
         self.assertEqual(candidates[0]["supplier_code"], "gifts")
 
-    def test_catalog_search_rejects_zero_stock_and_total_stock_shortage(self):
+    def test_catalog_search_drops_only_truly_unavailable_stock(self):
+        # A stock shortage keeps the card (order-to-make); only a listing with
+        # nothing on hand, nothing in transit and no on-order flag is dropped.
         class Client:
             base_url = "https://api.oasiscatalog.com"
 
@@ -3365,15 +3374,19 @@ class TenderTests(TestCase):
                     return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
                 return [
                     {"id": "available", "article": "A", "group_id": "available", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["хлопок"], "categories": [10], "total_stock": 100, "price": 900},
-                    {"id": "shortage", "article": "S", "group_id": "shortage", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["полиэстер"], "categories": [10], "total_stock": 5, "price": 100},
+                    {"id": "shortage", "article": "S", "group_id": "shortage", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["хлопок"], "categories": [10], "total_stock": 5, "price": 100},
                     {"id": "empty", "article": "E", "group_id": "empty", "name": "Футболка", "full_name": "Футболка белая", "colors": ["белый"], "materials": ["хлопок"], "categories": [10], "total_stock": 0, "price": 1},
                 ]
 
         line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}, {"label": "Цвет", "value": "белый"}]}}
-        candidates = catalog_candidates_for_line(line, limit=3, intent={"product_class": "футболка"}, client=Client())
+        candidates = catalog_candidates_for_line(line, limit=5, intent={"product_class": "футболка"}, client=Client())
 
-        self.assertEqual([value["external_id"] for value in candidates], ["available"])
-        self.assertEqual(candidates[0]["eligibility"], "exact_eligible")
+        ids = [value["external_id"] for value in candidates]
+        self.assertIn("available", ids)
+        self.assertIn("shortage", ids)
+        self.assertNotIn("empty", ids)
+        shortage = next(value for value in candidates if value["external_id"] == "shortage")
+        self.assertEqual(shortage["mismatch_count"], 0)
 
     def test_catalog_search_does_not_call_a_shirt_with_long_sleeves_a_longsleeve(self):
         class Client:

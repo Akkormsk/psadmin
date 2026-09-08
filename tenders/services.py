@@ -790,10 +790,16 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
         last_network_error = None
         network_attempt = 0
         while network_attempt < network_attempts:
-            payload = json.dumps({
+            body = {
                 "model": model, "temperature": 0, "max_tokens": max_tokens,
                 "messages": [{"role": "system", "content": system_content}, {"role": "user", "content": user_content}],
-            }, ensure_ascii=False).encode("utf-8")
+            }
+            # Newer Anthropic models on the gateway (sonnet-5 / opus-5 …) reject
+            # an explicit temperature; older ones and the OpenAI models need it
+            # at 0 for stable JSON. Drop it only for the families that refuse.
+            if re.search(r"(?:sonnet|opus)-5\b", model):
+                body.pop("temperature")
+            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
             request = Request(f"{base_url}/chat/completions", data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
             try:
                 with urlopen(request, timeout=timeout) as response:
@@ -2612,7 +2618,13 @@ _POINT_STOPWORDS = {
     "указан", "указана", "указано", "совпадает", "подходит", "нет", "данных",
     "товара", "товар", "заявлено", "нужное", "достаточен", "подтвержден", "подтверждён",
 }
-_SHORTLIST_MODEL_DEFAULT = "anthropic/claude-haiku-4-5"
+# The shortlist pass READS product cards and judges them against the ТЗ —
+# that is the one place we want the strong model, not the fast/cheap one
+# (the fast model's job is only synonyms and stripping procurement
+# boilerplate in the search-plan step). Split into small parallel batches
+# (see _run_shortlist_pass), so a strong per-batch model still returns in a
+# few seconds. Override with TIMEWEB_AI_MODEL_SHORTLIST.
+_SHORTLIST_MODEL_DEFAULT = "anthropic/claude-sonnet-4-5"
 
 
 def _verdict_subject(text):
@@ -2690,7 +2702,12 @@ def _soften_card_criterion(card, subject):
     return changed
 
 
-def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolve_unknowns=False, image_order=None):
+def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolve_unknowns=False, image_order=None, batch_ids=""):
+    batch_block = (
+        f"\nЭто одна пачка из общего списка. Работай ТОЛЬКО с карточками этой пачки ({batch_ids}); "
+        "в \"verdicts\" и в \"cards\" у инструкций указывай только их id.\n"
+        if batch_ids else ""
+    )
     instructions_block = (
         f"Инструкции администратора:\n{chr(10).join(numbered)}\n\n"
         if numbered else
@@ -2716,7 +2733,7 @@ def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolv
 
 Позиция: {position_name}
 Учитываемые пункты ТЗ: {req_text}
-
+{batch_block}
 Карточки:
 {cards_text}
 
@@ -2851,28 +2868,81 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         origin = (value.get("origin") if isinstance(value, dict) else "") or "session"
         tag = "эта сессия" if origin == "session" else "раньше на похожих позициях"
         numbered.append(f"{index}. ({tag}) {text}")
-    cards_text = "\n".join(_shortlist_card_brief(card) for card in shortlist)
-    prompt = _shortlist_pass_prompt(
-        position_name, req_text, cards_text, numbered,
-        resolve_unknowns=resolve_unknowns, image_order=image_order if image_data_urls else None,
-    )
     model = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or _SHORTLIST_MODEL_DEFAULT
-    try:
-        result, usage = _ai_gateway_json(
-            prompt, max_tokens=2600 if resolve_unknowns else 1600, timeout=timeout,
-            network_attempts=2, model=model, image_data_urls=image_data_urls or None,
-            image_detail="low",
+
+    # Read the cards in small parallel batches rather than one giant call: a
+    # strong model over ~40 cards × several unclear rows in a single request
+    # routinely truncates its JSON and the whole result is discarded. ~10
+    # cards per call keeps every response short and reliable; the calls run
+    # concurrently, so wall time is roughly one call, not N.
+    batches = [shortlist[i:i + 10] for i in range(0, len(shortlist), 10)] or [shortlist]
+
+    def run_batch(numbered_batch):
+        index, batch = numbered_batch
+        cards_text = "\n".join(_shortlist_card_brief(card) for card in batch)
+        with_images = bool(image_data_urls) and index == 0
+        prompt = _shortlist_pass_prompt(
+            position_name, req_text, cards_text, numbered,
+            resolve_unknowns=resolve_unknowns,
+            image_order=image_order if with_images else None,
+            batch_ids=", ".join(str(card.get("id")) for card in batch) if len(batches) > 1 else "",
         )
-    except TenderAIError as exc:
-        return {**blank, "error": str(exc)[:200]}
-    if not isinstance(result, dict):
-        return blank
+        try:
+            return _ai_gateway_json(
+                prompt, max_tokens=2600 if resolve_unknowns else 1600, timeout=timeout,
+                network_attempts=2, model=model,
+                image_data_urls=image_data_urls if with_images else None, image_detail="low",
+            )
+        except TenderAIError as exc:
+            return {"_error": str(exc)[:200]}, {}
+        except Exception:
+            logger.exception("Shortlist pass batch failed")
+            return {"_error": "Ошибка обработки пачки карточек."}, {}
+
+    if len(batches) == 1:
+        batch_results = [run_batch((0, batches[0]))]
+    else:
+        with ThreadPoolExecutor(max_workers=min(5, len(batches))) as executor:
+            batch_results = list(executor.map(run_batch, list(enumerate(batches))))
+
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    merged, merged_verdicts, any_ok, some_failed, first_error = {}, [], False, False, ""
+    for raw, batch_usage in batch_results:
+        if isinstance(batch_usage, dict):
+            usage["prompt_tokens"] += batch_usage.get("prompt_tokens", 0) or 0
+            usage["completion_tokens"] += batch_usage.get("completion_tokens", 0) or 0
+        if not isinstance(raw, dict) or raw.get("_error"):
+            some_failed = True
+            first_error = first_error or (raw.get("_error", "") if isinstance(raw, dict) else "")
+            continue
+        any_ok = True
+        for item in (raw.get("instructions") if isinstance(raw.get("instructions"), list) else []):
+            if not isinstance(item, dict):
+                continue
+            slot = merged.setdefault(str(item.get("n")), {"cards": [], "_applied": [], "_blocked": []})
+            for field in ("type", "criterion", "price", "applies_to", "summary", "note"):
+                if item.get(field) and not slot.get(field):
+                    slot[field] = item.get(field)
+            for card_id in item.get("cards") if isinstance(item.get("cards"), list) else []:
+                if str(card_id) not in {str(value) for value in slot["cards"]}:
+                    slot["cards"].append(card_id)
+            (slot["_blocked"] if item.get("applied") is False else slot["_applied"]).append(True)
+        for entry in (raw.get("verdicts") if isinstance(raw.get("verdicts"), list) else []):
+            if isinstance(entry, dict):
+                merged_verdicts.append(entry)
+
+    if not any_ok:
+        return {**blank, "error": first_error}
+    result = {"verdicts": merged_verdicts, "instructions": [
+        {
+            "n": key, "cards": slot["cards"],
+            "applied": not (slot["_blocked"] and not slot["_applied"]),
+            **{field: slot[field] for field in ("type", "criterion", "price", "applies_to", "summary", "note") if slot.get(field)},
+        }
+        for key, slot in merged.items()
+    ]}
     by_id = {str(card.get("id")): card for card in shortlist}
-    ai_by_n = {
-        str(item.get("n")): item
-        for item in (result.get("instructions") if isinstance(result.get("instructions"), list) else [])
-        if isinstance(item, dict)
-    }
+    ai_by_n = {str(item.get("n")): item for item in result["instructions"] if isinstance(item, dict)}
     ranking = {}
     instruction_results = []
     for index, value in enumerate(instructions, 1):
@@ -2902,14 +2972,16 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
                     card["priority"] = 0
                     card["_ai_priority_reason"] = criterion
             applied = True
-        elif itype == "keep_only" and criterion and ids:
+        elif itype == "keep_only" and criterion and ids and not some_failed:
             # White list: the model listed the cards that ARE X; drop every
             # other card, the uncertain ones included. "Оставь только мешки"
             # must leave only sacks — the blacklist "exclude" kept a card
             # it was unsure about ("Рюкзак детский Kiddo" — a рюкзак, maybe
             # a мешок?), which is the loop this fixes. No drift guard: the
             # intent ("только X") is explicit and a wrong list only removes
-            # too much, which a plain recompute brings back.
+            # too much, which a plain recompute brings back. Skipped when a
+            # batch failed — a missing batch's keep-votes would wrongly drop
+            # its cards.
             for card_id, card in by_id.items():
                 if card_id not in ids:
                     card["_removed"] = True
