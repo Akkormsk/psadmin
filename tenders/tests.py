@@ -1900,22 +1900,21 @@ class TenderTests(TestCase):
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_grades_every_card_against_the_tz(self, gateway):
-        # The verdict pass reads each card in full and grades EVERY ТЗ row
-        # (y/n/m) — that grid replaces the card's verdicts and drives the
-        # ranking. The deterministic check only got the pass a candidate.
+        # The verdict pass reads each card in full and grades every ТЗ row.
+        # The model returns ONLY the problem cells (n / m); every other row
+        # of a card its batch covered is "y". That grid replaces the card's
+        # verdicts and drives the ranking.
         gateway.return_value = ({"grid": [
-            {"c": "cork", "r": 1, "v": "y"},
-            {"c": "cork", "r": 2, "v": "y", "w": "пробковое дно в описании"},
-            {"c": "plain", "r": 1, "v": "y"},
-            {"c": "plain", "r": 2, "v": "n", "w": "дно керамическое"},
+            {"c": "plain", "r": 1, "v": "n", "w": "дно керамическое"},
+            {"c": "cork", "r": 2, "v": "m", "w": "материал клипа не указан"},
         ]}, {})
         cards = [
             self._shortlist_card(
-                id="plain", name="Кружка Alpha, белая", description="Керамическая кружка, белая матовая",
+                id="plain", name="Кружка Alpha", description="Керамическая кружка, белая матовая",
                 unknown=["что-то не указано"], unknown_count=1, fit="partial",
             ),
             self._shortlist_card(
-                id="cork", name="Кружка Denpasar, белая",
+                id="cork", name="Кружка Denpasar",
                 description="Керамическая кружка с пробковым дном, белая матовая",
                 unknown=["что-то не указано"], unknown_count=1, fit="partial",
             ),
@@ -1923,17 +1922,19 @@ class TenderTests(TestCase):
 
         result = _run_shortlist_pass(
             "Кружка", [
-                {"label": "Цвет", "value": "белый"},
-                {"label": "Комплектация", "value": "натуральное пробковое основание"},
+                {"label": "Основание", "value": "натуральная пробка"},
+                {"label": "Материал", "value": "керамика"},
             ],
             cards, [], resolve_unknowns=True,
         )
 
         cork = next(card for card in cards if card["id"] == "cork")
         plain = next(card for card in cards if card["id"] == "plain")
-        self.assertEqual(cork["match_count"], 2)
+        # cork: row 1 not flagged -> y; row 2 flagged m
+        self.assertEqual(cork["match_count"], 1)
         self.assertEqual(cork["mismatch_count"], 0)
-        self.assertEqual(cork["fit"], "exact")
+        self.assertEqual(cork["unknown_count"], 1)
+        # plain: row 1 flagged n; row 2 not flagged -> y
         self.assertEqual(plain["mismatch_count"], 1)
         self.assertEqual(plain["match_count"], 1)
         self.assertEqual(result["outcome"]["verdict_changes"], 2)

@@ -2702,13 +2702,24 @@ def _soften_card_criterion(card, subject):
     return changed
 
 
-def _apply_shortlist_grid(shortlist, grid, tz_rows):
-    """The agent's verdict table BECOMES the card's verdicts — this is the
-    ranking input now, not a "?" patch. `grid` entries are {c: card id,
-    r: 1-based ТЗ row number, v: y|n|m, w: short reason}. For every card that
-    got graded, rebuild matches / mismatches / unknown from scratch; any ТЗ
-    row the agent skipped falls back to "нет данных". Returns the count of
-    re-graded cards."""
+def _code_row_verdict(card, label):
+    """The deterministic verdict for a "код проверил" ТЗ row (colour) — read
+    from the card's existing verdicts before the grid overwrites them."""
+    def hit(field):
+        return any("цвет" in _normalized_text(value) for value in (card.get(field) or []))
+    if hit("mismatches"):
+        return "n", "код: цвет не подходит"
+    if hit("matches"):
+        return "y", ""
+    return "m", "цвет в карточке не указан"
+
+
+def _apply_shortlist_grid(shortlist, grid, tz_rows, code_rows, covered_ids):
+    """The agent's verdict table BECOMES the card's verdicts — the ranking
+    input now, not a "?" patch. The model returns only the PROBLEM cells
+    ({c, r, v: n|m, w}); every other row of a card its batch covered is
+    "y" by default. `code_rows` (colour) come from the deterministic check,
+    not the model. A card whose batch failed keeps its old verdicts."""
     if not tz_rows:
         return 0
     by_id = {str(card.get("id")): card for card in shortlist}
@@ -2725,11 +2736,19 @@ def _apply_shortlist_grid(shortlist, grid, tz_rows):
         if card_id not in by_id or not (1 <= row <= len(tz_rows)) or verdict not in {"y", "n", "m"}:
             continue
         per_card.setdefault(card_id, {})[row] = (verdict, _cell_text(entry.get("w"))[:90])
-    for card_id, rows in per_card.items():
-        card = by_id[card_id]
+    graded = 0
+    for card_id in covered_ids:
+        card = by_id.get(card_id)
+        if card is None:
+            continue
+        flagged = per_card.get(card_id, {})
+        code_verdicts = {i: _code_row_verdict(card, tz_rows[i - 1][0]) for i in code_rows}
         matches, mismatches, unknown = [], [], []
         for index, (label, value) in enumerate(tz_rows, 1):
-            verdict, reason = rows.get(index, ("m", ""))
+            if index in code_rows:
+                verdict, reason = code_verdicts[index]
+            else:
+                verdict, reason = flagged.get(index, ("y", ""))
             tail = f" — {reason}" if reason else ""
             if verdict == "y":
                 matches.append(f"{label}: {value}{tail}")
@@ -2743,7 +2762,8 @@ def _apply_shortlist_grid(shortlist, grid, tz_rows):
         card["match_count"] = len(matches)
         card["fit"] = "exact" if not mismatches and not unknown else "partial"
         card["_ai_graded"] = True
-    return len(per_card)
+        graded += 1
+    return graded
 
 
 def _shortlist_pass_prompt(position_name, tz_numbered, cards_text, instr_numbered, image_order=None, batch_ids=""):
@@ -2781,20 +2801,19 @@ def _shortlist_pass_prompt(position_name, tz_numbered, cards_text, instr_numbere
 Карточки:
 {cards_text}
 {photos}
-Для КАЖДОЙ карточки и КАЖДОГО пункта чек-листа реши, прочитав ВЕСЬ текст карточки (название, описание, ВСЕ характеристики, материалы, цвет):
-- "y" — карточка СООТВЕТСТВУЕТ пункту;
+Мысленно оцени КАЖДЫЙ пункт чек-листа для КАЖДОЙ карточки, прочитав ВЕСЬ её текст (название, описание, ВСЕ характеристики, материалы, цвет):
+- "y" — карточка СООТВЕТСТВУЕТ пункту (это НЕ пишем в ответ);
 - "n" — карточка ПРЯМО ПРОТИВОРЕЧИТ пункту (известно и не совпадает);
 - "m" — в карточке про это НИЧЕГО нет.
 
-Ставь "m" ТОЛЬКО если информации реально нет. НЕ ставь "m" из-за сомнений — реши "y" или "n".
+Ставь "m" ТОЛЬКО если информации реально нет. НЕ ставь "m" из-за сомнений — тогда это "y" или "n". Пункты, помеченные «(проверил код)» — НЕ оценивай, их код уже посчитал.
 
 Числовой допуск (габариты, вес и т.п. — если в ТЗ нет «не менее»/«не более»): отклонение до 10% — это "y"; 10–25% — "m" (пометь в w «≈X vs Y, проверить»); больше 25% — "n". «Не менее N» → меньше N это "n". «Не более N» → больше N это "n".
 
 Синонимы и факты в свободном тексте — твоё суждение как человека: «Флеш-карта USB 2.0» = «USB-флеш-накопитель» → y; «плотность 200 г» в строке состава при требовании «не менее 250» → n. Строка «оценки кода» в карточке — ЧЕРНОВАЯ подсказка, можешь не согласиться.
 {instr_block}
-Верни только JSON, КОРОТКО:
-{{"grid":[{{"c":"id","r":1,"v":"y"}},{{"c":"id","r":2,"v":"n","w":"почему ≤6 слов"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}
-Одна запись на каждую пару (карточка × пункт), по всем карточкам пачки и всем пунктам. Поле "w" — ТОЛЬКО для "n" и "m" (для "y" не пиши)."""
+Верни только JSON — ТОЛЬКО ПРОБЛЕМНЫЕ клетки (вердикт "n" или "m"). Всё, что ты НЕ вернул, считается "y" (карточка соответствует пункту). По полностью подходящей карточке не пиши ничего.
+{{"grid":[{{"c":"id","r":2,"v":"n","w":"почему ≤6 слов"}},{{"c":"id","r":5,"v":"m","w":"нет данных о чём"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}"""
 
 
 def _resolve_card_unknown(card, point, verdict):
@@ -2915,7 +2934,18 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     ]
     if (not instructions and not tz_rows) or not shortlist:
         return blank
-    tz_numbered = [f"{index}. {label}: {value}" for index, (label, value) in enumerate(tz_rows, 1)]
+    # Colour is the one ТЗ axis the deterministic check does reliably from a
+    # structured field — don't spend the model's output on it (and don't let
+    # it hallucinate a colour). The model is told to skip these rows; their
+    # verdict comes from the card's existing deterministic verdict.
+    code_rows = {
+        index for index, (label, _) in enumerate(tz_rows, 1)
+        if "цвет" in _normalized_text(label)
+    }
+    tz_numbered = [
+        f"{index}. {label}: {value}" + (" (проверил код)" if index in code_rows else "")
+        for index, (label, value) in enumerate(tz_rows, 1)
+    ]
     numbered = []
     for index, value in enumerate(instructions, 1):
         text = _cell_text(value.get("text") if isinstance(value, dict) else value)
@@ -2924,13 +2954,13 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         numbered.append(f"{index}. ({tag}) {text}")
     model = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or _SHORTLIST_MODEL_DEFAULT
 
-    # Read the cards in small parallel batches rather than one giant call: a
-    # strong model over ~40 cards × several unclear rows in a single request
-    # routinely truncates its JSON and the whole result is discarded. ~10
-    # cards per call keeps every response short and reliable; the calls run
-    # concurrently, so wall time is roughly one call, not N.
-    batch_size = 4 if tz_rows else 10
+    # Parallel batches. The model returns ONLY the problem cells (n / m),
+    # everything else is "y" by default — so the output stays tiny and a
+    # batch of ~8 never truncates. The shared prompt prefix (the ТЗ
+    # checklist) is identical across batches so the gateway caches it.
+    batch_size = 8 if tz_rows else 10
     batches = [shortlist[i:i + batch_size] for i in range(0, len(shortlist), batch_size)] or [shortlist]
+    covered_ids = set()
 
     def run_batch(numbered_batch):
         index, batch = numbered_batch
@@ -2942,11 +2972,14 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
             batch_ids=", ".join(str(card.get("id")) for card in batch) if len(batches) > 1 else "",
         )
         try:
-            return _ai_gateway_json(
-                prompt, max_tokens=800 + len(batch) * max(1, len(tz_rows)) * 40, timeout=timeout,
+            raw, batch_usage = _ai_gateway_json(
+                prompt, max_tokens=600 + len(batch) * max(2, len(tz_rows) - len(code_rows)) * 20, timeout=timeout,
                 network_attempts=3, model=model,
                 image_data_urls=image_data_urls if with_images else None, image_detail="low",
             )
+            if isinstance(raw, dict):
+                covered_ids.update(str(card.get("id")) for card in batch)
+            return raw, batch_usage
         except TenderAIError as exc:
             return {"_error": str(exc)[:200]}, {}
         except Exception:
@@ -2956,7 +2989,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     if len(batches) == 1:
         batch_results = [run_batch((0, batches[0]))]
     else:
-        with ThreadPoolExecutor(max_workers=min(8, len(batches))) as executor:
+        with ThreadPoolExecutor(max_workers=min(10, len(batches))) as executor:
             batch_results = list(executor.map(run_batch, list(enumerate(batches))))
 
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -2987,7 +3020,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
 
     if not any_ok:
         return {**blank, "error": first_error}
-    verdict_changes = _apply_shortlist_grid(shortlist, merged_grid, tz_rows)
+    verdict_changes = _apply_shortlist_grid(shortlist, merged_grid, tz_rows, code_rows, covered_ids)
     result = {"instructions": [
         {
             "n": key, "cards": slot["cards"],
