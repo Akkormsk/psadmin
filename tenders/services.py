@@ -2657,17 +2657,17 @@ def _shortlist_card_brief(card):
     if colors:
         meta.append(colors)
     attributes = "; ".join(
-        f"{_cell_text(value.get('name'))[:30]}: {_cell_text(value.get('value'))[:44]}"
-        for value in (card.get("attributes") or [])[:8]
+        f"{_cell_text(value.get('name'))[:40]}: {_cell_text(value.get('value'))[:70]}"
+        for value in (card.get("attributes") or [])[:16]
         if isinstance(value, dict) and _cell_text(value.get("name")) and _cell_text(value.get("value"))
     )
     if attributes:
         meta.append(attributes)
-    description = _cell_text(card.get("description"))[:360]
+    description = _cell_text(card.get("description"))[:700]
     verdicts = [
         f"{_VERDICT_ICON[key]} {_cell_text(value)[:80]}"
         for key, field in _VERDICT_FIELDS.items()
-        for value in (card.get(field) or [])[:8]
+        for value in (card.get(field) or [])[:10]
         if _cell_text(value)
     ]
     lines = [header]
@@ -2702,56 +2702,99 @@ def _soften_card_criterion(card, subject):
     return changed
 
 
-def _shortlist_pass_prompt(position_name, req_text, cards_text, numbered, resolve_unknowns=False, image_order=None, batch_ids=""):
+def _apply_shortlist_grid(shortlist, grid, tz_rows):
+    """The agent's verdict table BECOMES the card's verdicts — this is the
+    ranking input now, not a "?" patch. `grid` entries are {c: card id,
+    r: 1-based ТЗ row number, v: y|n|m, w: short reason}. For every card that
+    got graded, rebuild matches / mismatches / unknown from scratch; any ТЗ
+    row the agent skipped falls back to "нет данных". Returns the count of
+    re-graded cards."""
+    if not tz_rows:
+        return 0
+    by_id = {str(card.get("id")): card for card in shortlist}
+    per_card = {}
+    for entry in grid:
+        if not isinstance(entry, dict):
+            continue
+        card_id = str(entry.get("c") or entry.get("card") or "")
+        try:
+            row = int(entry.get("r"))
+        except (TypeError, ValueError):
+            continue
+        verdict = _cell_text(entry.get("v")).lower()[:1]
+        if card_id not in by_id or not (1 <= row <= len(tz_rows)) or verdict not in {"y", "n", "m"}:
+            continue
+        per_card.setdefault(card_id, {})[row] = (verdict, _cell_text(entry.get("w"))[:90])
+    for card_id, rows in per_card.items():
+        card = by_id[card_id]
+        matches, mismatches, unknown = [], [], []
+        for index, (label, value) in enumerate(tz_rows, 1):
+            verdict, reason = rows.get(index, ("m", ""))
+            tail = f" — {reason}" if reason else ""
+            if verdict == "y":
+                matches.append(f"{label}: {value}{tail}")
+            elif verdict == "n":
+                mismatches.append(f"{label}: требуется {value}{tail}")
+            else:
+                unknown.append(f"{label}{tail or ' — нет данных в карточке'}")
+        card["matches"], card["mismatches"], card["unknown"] = matches, mismatches, unknown
+        card["mismatch_count"] = len(mismatches)
+        card["unknown_count"] = len(unknown)
+        card["match_count"] = len(matches)
+        card["fit"] = "exact" if not mismatches and not unknown else "partial"
+        card["_ai_graded"] = True
+    return len(per_card)
+
+
+def _shortlist_pass_prompt(position_name, tz_numbered, cards_text, instr_numbered, image_order=None, batch_ids=""):
+    tz_block = "\n".join(tz_numbered) if tz_numbered else "1. (пунктов ТЗ нет)"
     batch_block = (
-        f"\nЭто одна пачка из общего списка. Работай ТОЛЬКО с карточками этой пачки ({batch_ids}); "
-        "в \"verdicts\" и в \"cards\" у инструкций указывай только их id.\n"
+        f"\nЭто одна пачка из общего списка. Отвечай ТОЛЬКО по карточкам этой пачки ({batch_ids}).\n"
         if batch_ids else ""
     )
-    instructions_block = (
-        f"Инструкции администратора:\n{chr(10).join(numbered)}\n\n"
-        if numbered else
-        "Инструкций от администратора в этот раз нет — раздел \"instructions\" верни пустым списком.\n\n"
-    )
-    resolve_block = ""
-    if resolve_unknowns:
-        resolve_block = """
-Отдельная задача — доразбор «?». У карточек в строке «оценки кода» некоторые пункты ТЗ помечены «?» — код не нашёл их в отдельных полях каталога. Прочитай ПОЛНЫЙ текст карточки (название, описание, характеристики) и по каждому такому «?» реши:
-- "match" — текст карточки ЯВНО подтверждает пункт (в описании кружки сказано «пробковое дно», а в ТЗ требуется пробковое основание);
-- "mismatch" — текст ЯВНО противоречит (в описании «пластиковое дно» при требовании «пробковое»);
-- иначе не упоминай — в тексте про это не сказано, пусть остаётся «?».
-Не трогай пункты, которые код уже пометил ✓ или ✗. Возвращай в "verdicts" ТОЛЬКО реальные изменения (match / mismatch).
-ВАЖНО: пункт ТЗ (например «без крышки», «плотность ≥ 300 г») — это НЕ инструкция администратора. Несоответствие карточки пункту ТЗ — это всегда verdict «mismatch», никогда не instruction "exclude"/"priority". В "instructions" отвечай строго по пронумерованному списку выше и только про то, что в нём написано; критерий бери из текста инструкции.
+    instr_block = ""
+    if instr_numbered:
+        instr_block = f"""
+ОТДЕЛЬНО — замечания администратора (свободный текст):
+{chr(10).join(instr_numbered)}
+
+По каждому замечанию верни в "instructions" его тип и id карточек:
+- "priority" — «подними / нужны X / лучше X» и любая нечёткая фраза (по умолчанию сюда). "cards" = id карточек, у которых критерий ЯВНО выполняется.
+- "keep_only" — «оставь только X». "cards" = id ВСЕХ карточек, которые ЯВНО подходят под X (остальные уберут).
+- "exclude" — «убери / без X» (без слова «только»). "cards" = id карточек, которые ЯВНО противоречат.
+- "soften" — «220 г это норм», «цвет считай совпавшим». "cards" = id карточек, у которых это расхождение теперь допустимо.
+- "ranking" — «сначала дорогие / дешёвые» → "price":"asc"|"desc".
+Условное замечание («если в ТЗ …») — проверь условие по чек-листу ТЗ; не выполняется → "applied":false, "cards":[]. "applies_to": "item" (по умолчанию) или "any" (общее правило про ТЗ).
 """
+    photos = ""
     if image_order:
-        resolve_block += (
-            "\nК запросу приложены фото карточек в этом порядке: "
-            + ", ".join(f"[{value}]" for value in image_order)
-            + ". Используй их для проверки типа и вида товара (например, детский рюкзак-ранец против мешка на шнурке).\n"
-        )
-    return f"""Ты помогаешь администратору отобрать товары под позицию тендера. Ниже — короткий список карточек (их уже нашёл и оценил по пунктам ТЗ обычный код) и инструкции администратора свободным текстом. Твоя работа — превратить каждую инструкцию в ОДИН именованный критерий и сказать, каким карточкам он подходит. Ты НЕ решаешь «убрать» или «поднять» сам и НЕ переписываешь оценки кода — это делает код по твоему ответу. Сам поиск и формулу сортировки ты не трогаешь.
+        photos = ("\nК запросу приложены фото карточек в порядке: "
+                  + ", ".join(f"[{value}]" for value in image_order)
+                  + ". Смотри их для проверки формы и вида товара.\n")
+    return f"""Ты — эксперт по подбору товаров под тендер. Проверяешь каждую карточку по чек-листу требований (ТЗ) — так, как это сделал бы человек, читая карточку целиком.
 
 Позиция: {position_name}
-Учитываемые пункты ТЗ: {req_text}
+
+Чек-лист ТЗ (пронумерован):
+{tz_block}
 {batch_block}
 Карточки:
 {cards_text}
+{photos}
+Для КАЖДОЙ карточки и КАЖДОГО пункта чек-листа реши, прочитав ВЕСЬ текст карточки (название, описание, ВСЕ характеристики, материалы, цвет):
+- "y" — карточка СООТВЕТСТВУЕТ пункту;
+- "n" — карточка ПРЯМО ПРОТИВОРЕЧИТ пункту (известно и не совпадает);
+- "m" — в карточке про это НИЧЕГО нет.
 
-{instructions_block}{resolve_block}
-Определи для каждой инструкции её тип:
-- "priority" — «подними / опусти / сначала покажи / приоритет / предпочти / нужны X / лучше X» и ЛЮБАЯ нечёткая формулировка (по умолчанию — сюда). Заведи критерий (например «Пол: мужской», «Материал: хлопок») и перечисли в "cards" id тех карточек, у которых по их тексту и характеристикам этот критерий ЯВНО выполняется. Не уверен — не включай. «Опусти женские» = критерий «Пол: не женский».
-- "keep_only" — «оставь только X / только X / нужны только X / убери всё кроме X / ничего кроме X». Это БЕЛЫЙ СПИСОК: заведи критерий (например «Тип: рюкзак-мешок») и перечисли в "cards" id ВСЕХ карточек, которые ЯВНО подходят под X по своему тексту. Код уберёт все остальные, включая те, по которым непонятно. Поэтому включи всё, что действительно подходит, и не включай сомнительное.
-- "exclude" — явное «убери / исключи / спрячь / не показывай / без X» (без слова «только»). Заведи критерий и перечисли в "cards" id тех карточек, которые ЯВНО ему противоречат (их уберут). Непонятно по карточке — НЕ включай (нет данных = не противоречит = оставляем). Никогда не пиши сюда карточку из-за расхождения с ТЗ по плотности/цвету/составу/размеру — это код уже посчитал, такая карточка остаётся альтернативой ниже.
-- "soften" — «220 г это норм», «цвет считай совпавшим», «это несовпадение не критично». Критерий = какой признак смягчить, "cards" = id карточек, у которых расхождение по этому признаку теперь считать допустимым.
-- "ranking" — «сначала дорогие / дешёвые». Верни "price":"asc" или "desc". Карточки не трогай.
+Ставь "m" ТОЛЬКО если информации реально нет. НЕ ставь "m" из-за сомнений — реши "y" или "n".
 
-Инструкция бывает УСЛОВНОЙ: «если в ТЗ <условие> — <действие>», «если в ТЗ НЕ указано <…> — <действие>». Проверь условие по разделу «Учитываемые пункты ТЗ» выше. Условие НЕ выполняется для этой позиции → верни "applied":false, "cards":[], в "note" объясни почему («в ТЗ запрошены детские размеры — правило не применяется»); тип и критерий всё равно укажи. Условие выполняется → действуй как обычно.
+Числовой допуск (габариты, вес и т.п. — если в ТЗ нет «не менее»/«не более»): отклонение до 10% — это "y"; 10–25% — "m" (пометь в w «≈X vs Y, проверить»); больше 25% — "n". «Не менее N» → меньше N это "n". «Не более N» → больше N это "n".
 
-"applies_to" — насколько широко ЗАПОМНИТЬ инструкцию: "item" (по умолчанию) — про этот конкретный вид товара; "any" — общее правило, не привязанное к товару (условная формулировка про ТЗ вообще: «если в ТЗ нет запроса на детские — убирай детские»; «Честный Знак никогда не учитывай»).
-
-Верни только JSON:
-{{"instructions":[{{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id",...],"price":"asc|desc","applies_to":"item|any","summary":"короткая формулировка сути","applied":true,"note":"что вышло / почему не применилось"}}],"verdicts":[{{"card":"id","point":"пункт ТЗ как в списке","verdict":"match|mismatch"}}]}}
-"cards" нужен для priority/keep_only/exclude/soften (для keep_only — это те, что ОСТАВИТЬ); "price" — только для ranking. "summary" — для плашки и запоминания. "verdicts" — только доразбор «?» по тексту карточки (пустой список, если нечего менять)."""
+Синонимы и факты в свободном тексте — твоё суждение как человека: «Флеш-карта USB 2.0» = «USB-флеш-накопитель» → y; «плотность 200 г» в строке состава при требовании «не менее 250» → n. Строка «оценки кода» в карточке — ЧЕРНОВАЯ подсказка, можешь не согласиться.
+{instr_block}
+Верни только JSON, КОРОТКО:
+{{"grid":[{{"c":"id","r":1,"v":"y"}},{{"c":"id","r":2,"v":"n","w":"почему ≤6 слов"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}
+Одна запись на каждую пару (карточка × пункт), по всем карточкам пачки и всем пунктам. Поле "w" — ТОЛЬКО для "n" и "m" (для "y" не пиши)."""
 
 
 def _resolve_card_unknown(card, point, verdict):
@@ -2843,33 +2886,36 @@ def _shortlist_card_images(shortlist, limit=8, side=300):
 
 
 def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, resolve_unknowns=False, image_data_urls=None, image_order=None, timeout=45):
-    """Run the one AI pass over the ranked shortlist. Mutates the shortlist
-    card dicts in place (priority / _removed / softened / resolved-from-prose
-    verdicts). Returns:
+    """The AI verdict pass: the strong model reads every shortlist card in
+    full and grades it against the ТЗ checklist (✓/✗/? per row) — that grid
+    becomes the card's verdicts, which the fixed sort key then ranks by.
+    Runs in parallel batches. Mutates the card dicts in place. Returns:
       instructions - [{text, origin, type, criterion, applied, summary, note}]
-      outcome      - {removed:[...], raised:[...], softened:[...], verdicts:N}
+                     (only on the feedback path — free-text admin notes)
+      outcome      - {removed, raised, softened, verdict_changes}
       ranking      - {} or {"price": "asc"|"desc"} (session-only)
-      usage, error - token usage; on failure a short message and the
-                     deterministic order stands unchanged.
+      usage, error - token usage; on total failure the deterministic order
+                     stands unchanged.
 
-    ``resolve_unknowns`` adds a second job to the same call: read each
-    card's full text and turn the "?" verdicts the deterministic check
-    left (a requirement written out in prose, not a catalogue field) into
-    ✓ / ✗. ``image_data_urls`` (+ ``image_order``, the card ids in the
-    same order) feed the model the card thumbnails so it can also judge
-    type and look — used on the feedback path."""
+    ``resolve_unknowns`` is kept for the caller's signature; the grid job
+    now runs whenever there is a ТЗ. ``image_data_urls`` (+ ``image_order``)
+    feed the model the card thumbnails — used on the feedback path."""
     instructions = [
         value for value in (instructions or [])
         if _cell_text(value.get("text") if isinstance(value, dict) else value)
     ]
     blank = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
-    if (not instructions and not resolve_unknowns) or not shortlist:
-        return blank
-    req_text = "; ".join(
-        f"{_cell_text(row.get('label'))}: {_cell_text(row.get('value'))}"
+    # The ТЗ checklist the agent verdicts every card against — this IS the
+    # ranking input now, not a "?"-patch job. Rows in a fixed order so the
+    # agent can answer by number.
+    tz_rows = [
+        (_cell_text(row.get("label")), _cell_text(row.get("value")))
         for row in (requirement_rows or [])
         if isinstance(row, dict) and _cell_text(row.get("label")) and _cell_text(row.get("value"))
-    ) or "нет"
+    ]
+    if (not instructions and not tz_rows) or not shortlist:
+        return blank
+    tz_numbered = [f"{index}. {label}: {value}" for index, (label, value) in enumerate(tz_rows, 1)]
     numbered = []
     for index, value in enumerate(instructions, 1):
         text = _cell_text(value.get("text") if isinstance(value, dict) else value)
@@ -2883,21 +2929,21 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     # routinely truncates its JSON and the whole result is discarded. ~10
     # cards per call keeps every response short and reliable; the calls run
     # concurrently, so wall time is roughly one call, not N.
-    batches = [shortlist[i:i + 10] for i in range(0, len(shortlist), 10)] or [shortlist]
+    batch_size = 4 if tz_rows else 10
+    batches = [shortlist[i:i + batch_size] for i in range(0, len(shortlist), batch_size)] or [shortlist]
 
     def run_batch(numbered_batch):
         index, batch = numbered_batch
         cards_text = "\n".join(_shortlist_card_brief(card) for card in batch)
         with_images = bool(image_data_urls) and index == 0
         prompt = _shortlist_pass_prompt(
-            position_name, req_text, cards_text, numbered,
-            resolve_unknowns=resolve_unknowns,
+            position_name, tz_numbered, cards_text, numbered,
             image_order=image_order if with_images else None,
             batch_ids=", ".join(str(card.get("id")) for card in batch) if len(batches) > 1 else "",
         )
         try:
             return _ai_gateway_json(
-                prompt, max_tokens=2600 if resolve_unknowns else 1600, timeout=timeout,
+                prompt, max_tokens=800 + len(batch) * max(1, len(tz_rows)) * 40, timeout=timeout,
                 network_attempts=3, model=model,
                 image_data_urls=image_data_urls if with_images else None, image_detail="low",
             )
@@ -2910,14 +2956,11 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     if len(batches) == 1:
         batch_results = [run_batch((0, batches[0]))]
     else:
-        # 3 workers, not one-per-batch: enough overlap to keep wall time near
-        # a single call, but not a burst of 4-5 simultaneous requests that
-        # trips a per-second rate limit and fails the whole pass at once.
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=min(8, len(batches))) as executor:
             batch_results = list(executor.map(run_batch, list(enumerate(batches))))
 
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    merged, merged_verdicts, any_ok, some_failed, first_error = {}, [], False, False, ""
+    merged, merged_grid, any_ok, some_failed, first_error = {}, [], False, False, ""
     for raw, batch_usage in batch_results:
         if isinstance(batch_usage, dict):
             usage["prompt_tokens"] += batch_usage.get("prompt_tokens", 0) or 0
@@ -2938,13 +2981,14 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
                 if str(card_id) not in {str(value) for value in slot["cards"]}:
                     slot["cards"].append(card_id)
             (slot["_blocked"] if item.get("applied") is False else slot["_applied"]).append(True)
-        for entry in (raw.get("verdicts") if isinstance(raw.get("verdicts"), list) else []):
+        for entry in (raw.get("grid") if isinstance(raw.get("grid"), list) else []):
             if isinstance(entry, dict):
-                merged_verdicts.append(entry)
+                merged_grid.append(entry)
 
     if not any_ok:
         return {**blank, "error": first_error}
-    result = {"verdicts": merged_verdicts, "instructions": [
+    verdict_changes = _apply_shortlist_grid(shortlist, merged_grid, tz_rows)
+    result = {"instructions": [
         {
             "n": key, "cards": slot["cards"],
             "applied": not (slot["_blocked"] and not slot["_applied"]),
@@ -3025,16 +3069,6 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
             "summary": _cell_text(info.get("summary"))[:280] or criterion or _cell_text(value.get("text") if isinstance(value, dict) else value)[:120],
             "note": _cell_text(info.get("note"))[:200],
         })
-    verdict_changes = 0
-    if resolve_unknowns:
-        for entry in (result.get("verdicts") if isinstance(result.get("verdicts"), list) else []):
-            if not isinstance(entry, dict):
-                continue
-            card = by_id.get(str(entry.get("card")))
-            if card is not None and _resolve_card_unknown(
-                card, _cell_text(entry.get("point")), _cell_text(entry.get("verdict")).lower(),
-            ):
-                verdict_changes += 1
     raised_cards = [card for card in shortlist if card.get("priority") == 0]
     softened_cards = [card for card in shortlist if card.get("_ai_touched") and not card.get("_removed") and card.get("priority") != 0]
     outcome = {
@@ -3347,7 +3381,9 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     shortlist_seconds = 0.0
     pass_result = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
     shortlist_removed = []
-    resolvable_unknowns = bool(selected_rows) and any(card.get("unknown") for card in catalog_candidates[:25])
+    # The verdict pass runs whenever there is a ТЗ to grade against (it IS
+    # the verdict step now) or admin feedback to apply.
+    resolvable_unknowns = bool(selected_rows)
     if (pass_instructions or resolvable_unknowns) and catalog_candidates:
         if progress_callback:
             progress_callback("shortlist")
@@ -3379,6 +3415,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
             priority=card.get("priority", 1),
             relevance=card.get("relevance", 1),
             mismatch_count=card.get("mismatch_count", len(card.get("mismatches") or [])),
+            match_count=card.get("match_count", len(card.get("matches") or [])),
             unknown_count=card.get("unknown_count", len(card.get("unknown") or [])),
             price=_price_decimal(card.get("price")),
             name=_normalized_text(card.get("name")),

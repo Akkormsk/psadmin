@@ -2491,23 +2491,23 @@ def _refresh_live_oasis_prices(client, candidates, quantity=0):
 
 def _shortlist_rank_key(
     priority, mismatch_count, unknown_count, price, name, article, price_desc=False, relevance=1,
+    match_count=0,
 ):
     """The one fixed ordering for a search shortlist — no weights, no
     scores, read top to bottom like words in a dictionary:
 
       1. raised priority (0) before normal (1)
-      2. fewer mismatches — how well the card meets the ТЗ comes first
-      3. fewer unknowns
-      4. text relevance — how well the product NAME answers the query
-         (0 = the item / its distinctive word is in the name, 1 = only a
-         generic word). Only a tiebreak between cards the ТЗ ranks equal,
-         never a way for a worse-fitting card to climb over a better one.
-      5. a card with a price before one without; then cheaper — or,
+      2. fewer mismatches — a card that breaks a ТЗ point comes last
+      3. MORE ✓ — a card that explicitly meets more of the ТЗ comes first
+      4. fewer unknowns — fewer gaps
+      5. text relevance (0 = distinctive query word in the name, 1 = only a
+         generic word). A tiebreak between cards the ТЗ ranks equal.
+      6. a card with a price before one without; then cheaper — or,
          session-only, dearer (``price_desc``)
-      6. name, then article — a stable tiebreak, not a ranking signal
+      7. name, then article — a stable tiebreak, not a ranking signal
 
     Used both for the first deterministic sort and for the re-sort after
-    the AI shortlist pass raises / removes / softens a card — the pass
+    the AI shortlist pass grades every card against the ТЗ — the pass
     changes this function's inputs, never the function."""
     has_price = price is not None
     if price_desc:
@@ -2517,6 +2517,7 @@ def _shortlist_rank_key(
     return (
         0 if priority == 0 else 1,
         mismatch_count,
+        -match_count,
         unknown_count,
         relevance,
         0 if has_price else 1,
@@ -2765,6 +2766,7 @@ def catalog_candidates_for_line(
         priority=1,
         relevance=getattr(value[0], "_relevance", 1),
         mismatch_count=len(value[2]),
+        match_count=len(value[1]),
         unknown_count=len(value[3]),
         price=value[0].effective_price,
         name=_normalized(value[0].full_name or value[0].name),
