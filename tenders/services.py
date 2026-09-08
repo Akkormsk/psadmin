@@ -2764,9 +2764,17 @@ def _resolve_card_unknown(card, point, verdict):
     if not point_n or verdict not in {"match", "mismatch"}:
         return False
     unknowns = card.get("unknown") or []
+    # The ТЗ says "Вид продукции / Тип изделия / Наименование", the code's
+    # "?" says "Тип товара не подтверждён" — same question, different words.
+    # Let either phrasing from the model resolve the type-check unknown.
+    type_like = any(marker in point_n for marker in (
+        "вид продукци", "вид издели", "вид товара", "тип издели", "тип товара", "наименование",
+    ))
     hit = next(
         (value for value in unknowns
-         if point_n[:10] in _normalized_text(value) or _normalized_text(value).startswith(point_n[:6])),
+         if point_n[:10] in _normalized_text(value)
+         or _normalized_text(value).startswith(point_n[:6])
+         or (type_like and "тип товара" in _normalized_text(value))),
         None,
     )
     if hit is None:
@@ -2890,7 +2898,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         try:
             return _ai_gateway_json(
                 prompt, max_tokens=2600 if resolve_unknowns else 1600, timeout=timeout,
-                network_attempts=2, model=model,
+                network_attempts=3, model=model,
                 image_data_urls=image_data_urls if with_images else None, image_detail="low",
             )
         except TenderAIError as exc:
@@ -2902,7 +2910,10 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     if len(batches) == 1:
         batch_results = [run_batch((0, batches[0]))]
     else:
-        with ThreadPoolExecutor(max_workers=min(5, len(batches))) as executor:
+        # 3 workers, not one-per-batch: enough overlap to keep wall time near
+        # a single call, but not a burst of 4-5 simultaneous requests that
+        # trips a per-second rate limit and fails the whole pass at once.
+        with ThreadPoolExecutor(max_workers=3) as executor:
             batch_results = list(executor.map(run_batch, list(enumerate(batches))))
 
     usage = {"prompt_tokens": 0, "completion_tokens": 0}

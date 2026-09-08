@@ -98,13 +98,18 @@ class TenderTests(TestCase):
         expected_order = "${field('Комментарий','comment','text','Необязательно')}${linkControl()}${questionButton(line)}"
         self.assertIn(expected_order, content)
 
-    def test_assistant_deduplicates_questions_and_highlights_route(self):
+    def test_assistant_shows_no_recognition_questions_and_highlights_route(self):
         self.client.force_login(self.user)
 
         response = self.client.get(reverse("tender_home"))
         styles = (Path(__file__).resolve().parents[1] / "static" / "core" / "index.css").read_text(encoding="utf-8")
 
-        self.assertContains(response, "function uniqueAssistantQuestions")
+        # The recognition-time "questions to the manager" list is gone from
+        # the assistant window (it changed nothing — not search, not ranking,
+        # not the route or cost); the calc button no longer counts them.
+        self.assertNotContains(response, "function uniqueAssistantQuestions")
+        self.assertNotContains(response, "training-dialogue__questions")
+        self.assertNotContains(response, "вопр.`")
         # The route is one block-diagram: a vertical column of numbered
         # steps joined by connectors, and each step is itself the collapsible
         # <details> that expands its tool in place — no separate flow diagram
