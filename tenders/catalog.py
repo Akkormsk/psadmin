@@ -2206,7 +2206,7 @@ def _score_pool_relevance(pool, item_phrase, phrases):
     if not all_stems:
         for product in pool:
             product._relevance = 1
-        return pool, set()
+        return pool
     named = []
     document_frequency = {stem: 0 for stem in all_stems}
     for product in pool:
@@ -2235,33 +2235,7 @@ def _score_pool_relevance(pool, item_phrase, phrases):
         name_cover = 3 * len(hits & item_stem_set) + len((hits & distinctive) - item_stem_set)
         survivors.append((product._relevance, -name_cover, product))
     survivors.sort(key=lambda value: (value[0], value[1]))
-    # The specifying words of the item itself — the ones far rarer than
-    # its head noun ("пробко"/"дном"/"керами" for «керамическая кружка с
-    # пробковым дном», where «кружка» is in ~a third of the pool). Used
-    # later to tell a real type match from one on a loose synonym. Empty
-    # for a one-word item like «жилет» — then type rank does not split.
-    max_item_df = max((document_frequency.get(stem, 0) for stem in item_stem_set), default=0)
-    item_distinctive = {
-        stem for stem in item_stem_set
-        if 0 < document_frequency.get(stem, 0) <= 0.12 * max_item_df
-    }
-    return [product for _, _, product in survivors], item_distinctive
-
-
-def _type_match_rank(matches, distinctive_stems):
-    """0 when the deterministic type verdict confirms the item's own
-    distinctive concept — "Тип товара: кружка с пробковым дном" carries
-    «пробк» / «дном» — and 1 otherwise. A loose-synonym type match
-    ("Тип товара: кружка белая матовая") or an unconfirmed type is not
-    the same as being the thing the ТЗ asked for, so it sorts below —
-    but above a wrong-type card, which is hard-rejected earlier."""
-    if not distinctive_stems:
-        return 0
-    for entry in matches or []:
-        text = _normalized(entry)
-        if text.startswith("тип товара") and any(stem in text for stem in distinctive_stems):
-            return 0
-    return 1
+    return [product for _, _, product in survivors]
 
 
 def _refresh_live_oasis_prices(client, candidates, quantity=0):
@@ -2298,24 +2272,21 @@ def _refresh_live_oasis_prices(client, candidates, quantity=0):
 
 
 def _shortlist_rank_key(
-    priority, mismatch_count, unknown_count, price, name, article, price_desc=False, relevance=1, type_rank=0,
+    priority, mismatch_count, unknown_count, price, name, article, price_desc=False, relevance=1,
 ):
     """The one fixed ordering for a search shortlist — no weights, no
     scores, read top to bottom like words in a dictionary:
 
       1. raised priority (0) before normal (1)
-      2. text relevance — how well the product NAME answers the query
+      2. fewer mismatches — how well the card meets the ТЗ comes first
+      3. fewer unknowns
+      4. text relevance — how well the product NAME answers the query
          (0 = the item / its distinctive word is in the name, 1 = only a
-         generic word). What a supplier-site search sorts on first.
-      3. type confirmed — the deterministic verdict names this card as the
-         requested thing on its own distinctive terms («Тип товара: кружка
-         с пробковым дном»), not via a loose synonym. Right kind of thing
-         above a spec-clean vaguer match.
-      4. fewer mismatches
-      5. fewer unknowns
-      6. a card with a price before one without; then cheaper — or,
+         generic word). Only a tiebreak between cards the ТЗ ranks equal,
+         never a way for a worse-fitting card to climb over a better one.
+      5. a card with a price before one without; then cheaper — or,
          session-only, dearer (``price_desc``)
-      7. name, then article — a stable tiebreak, not a ranking signal
+      6. name, then article — a stable tiebreak, not a ranking signal
 
     Used both for the first deterministic sort and for the re-sort after
     the AI shortlist pass raises / removes / softens a card — the pass
@@ -2327,10 +2298,9 @@ def _shortlist_rank_key(
         price_key = price if has_price else Decimal("Infinity")
     return (
         0 if priority == 0 else 1,
-        relevance,
-        type_rank,
         mismatch_count,
         unknown_count,
+        relevance,
         0 if has_price else 1,
         price_key,
         name or "",
@@ -2512,12 +2482,10 @@ def catalog_candidates_for_line(
     # there is no hard cap — 2500 is a guard against a pathological query.
     # Live-crawl products (no mirror) skip this and stay neutral.
     relevance_scored = bool(oasis_used_mirror or gifts_supplier_exists)
-    item_distinctive_stems = set()
     if relevance_scored:
-        pool, item_distinctive_stems = _score_pool_relevance(
+        pool = _score_pool_relevance(
             pool, (intent or {}).get("item", "") if isinstance(intent, dict) else "", query_phrases,
-        )
-        pool = pool[:2500]
+        )[:2500]
     for product in pool:
         if not hasattr(product, "_relevance"):
             product._relevance = 1
@@ -2561,7 +2529,6 @@ def catalog_candidates_for_line(
                 partial_reasons[reason] = partial_reasons.get(reason, 0) + 1
         mismatches = eligibility["mismatches"]
         unknown = [value for value in eligibility["unknown"] if value not in mismatches]
-        product._type_rank = _type_match_rank(eligibility["matches"], item_distinctive_stems)
         ranked.append((
             product, eligibility["matches"], mismatches, unknown,
             eligibility["status"] == "partial_eligible", eligibility["status"], eligibility["reasons"],
@@ -2575,7 +2542,6 @@ def catalog_candidates_for_line(
     ranked.sort(key=lambda value: _shortlist_rank_key(
         priority=1,
         relevance=getattr(value[0], "_relevance", 1),
-        type_rank=getattr(value[0], "_type_rank", 0),
         mismatch_count=len(value[2]),
         unknown_count=len(value[3]),
         price=value[0].effective_price,
@@ -2622,10 +2588,10 @@ def catalog_candidates_for_line(
                 # 0 = raised, 1 = normal. Only the AI shortlist pass raises a
                 # card; fed straight into _shortlist_rank_key on the re-sort.
                 "priority": 1,
-                # Text-relevance tier (0 best .. 2) — how well the name answers
-                # the query. Carried so the pass re-sort keeps the same order.
+                # Text-relevance tier (0 = distinctive query word in the name,
+                # 1 = only a generic one). A tiebreak in _shortlist_rank_key,
+                # below mismatch/unknown. Carried so the pass re-sort matches.
                 "relevance": getattr(product, "_relevance", 1),
-                "type_rank": getattr(product, "_type_rank", 0),
                 "eligibility": eligibility_status,
                 "eligibility_reasons": eligibility_reasons,
                 "synced_at": timezone.now().isoformat(),

@@ -1715,10 +1715,12 @@ class TenderTests(TestCase):
         self.assertEqual(result[0]["relevance"], 0)
 
     def test_a_name_that_matches_the_requested_type_outranks_a_spec_clean_wrong_type(self):
-        # The "рюкзак мешок" regression: a plain kids' backpack with a clean
-        # spec sheet (0 mismatches) used to sit above the real drawstring
-        # sack that had one spec quibble, because type was not a ranking
-        # signal. Now the sack's name carries the distinctive word.
+        # The "рюкзак мешок" regression: a plain kids' backpack whose name is
+        # not the requested type used to sit above the real drawstring sack.
+        # The sack now leads because it meets the ТЗ colour while the kids'
+        # backpack does not (fewer mismatches — sort step 2), and because its
+        # name is the requested type (fewer type-unknowns — step 3). Relevance
+        # is only the tiebreak below those, never an override.
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
         CatalogProduct.objects.create(
             supplier=gifts, external_id="kiddo", article="K-1",
@@ -1748,26 +1750,25 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["external_id"], "sack")
 
-    def test_confirmed_item_type_outranks_a_spec_clean_looser_match(self):
-        # "Кружка с пробковым дном" ТЗ: the real cork-bottom mugs — even with
-        # a spec deviation — must beat a plain mug that has zero mismatches
-        # only because we cannot verify anything about it, and a "cork
-        # coaster" mug that is a looser type match.
+    def test_a_spec_clean_card_beats_a_name_match_that_violates_the_tz(self):
+        # The flash-drive regression: the position is titled «Флеш-карта», so
+        # a wooden 16 GB drive matched the name — but it broke two ТЗ rows
+        # (material, capacity) while a plain 32 GB drive broke none. Relevance
+        # must not let the name-match climb over the card that meets the ТЗ.
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogProduct.objects.bulk_create([
-            CatalogProduct(
-                supplier=gifts, external_id=f"plain-{i}", article=f"P-{i}",
-                name=f"Кружка керамическая Alpha {i}", full_name=f"Кружка керамическая Alpha {i}, белая",
-                colors=["белый"], materials=["керамика"], total_stock=500, discount_price=250,
-                search_text=f"кружка керамическая alpha {i} белая",
-            )
-            for i in range(15)
-        ])
         CatalogProduct.objects.create(
-            supplier=gifts, external_id="cork", article="C-1",
-            name="Кружка с пробковым дном Denpasar", full_name="Кружка с пробковым дном Denpasar, белая",
-            colors=["белый"], materials=["керамика"], total_stock=500, discount_price=370,
-            search_text="кружка с пробковым дном denpasar керамическая белая объём 300 мл",
+            supplier=gifts, external_id="wood", article="W-1",
+            name="Флеш-карта Woody деревянная", full_name="Флеш-карта Woody деревянная, 16 ГБ",
+            colors=["дерево"], materials=["дерево"], total_stock=500, discount_price=300,
+            attributes=[{"name": "Объём памяти", "value": "16 ГБ"}],
+            search_text="флеш-карта woody деревянная 16 гб usb",
+        )
+        CatalogProduct.objects.create(
+            supplier=gifts, external_id="plain", article="P-1",
+            name="Флеш-карта Slim", full_name="Флеш-карта Slim, 32 ГБ",
+            colors=["синий"], materials=["пластик", "металл"], total_stock=500, discount_price=350,
+            attributes=[{"name": "Объём памяти", "value": "32 ГБ"}],
+            search_text="флеш-карта slim usb синий 32 гб пластик металл",
         )
 
         class Client:
@@ -1777,18 +1778,18 @@ class TenderTests(TestCase):
                 return []
 
         result = catalog_candidates_for_line(
-            {"name": "Кружка", "quantity": "100", "requirements": {"requirements": [
-                {"label": "Тип изделия", "value": "кружка с пробковым дном"},
-                {"label": "Объём", "value": "400 мл"},
+            {"name": "Флеш-карта", "quantity": "100", "requirements": {"requirements": [
+                {"label": "Материал", "value": "пластик"},
+                {"label": "Объём памяти", "value": "32 ГБ"},
             ]}},
             limit=10,
-            intent={"item": "кружка с пробковым дном", "categories": ["кружка с пробковым дном"], "synonyms": ["керамическая кружка"]},
+            intent={"item": "флеш-карта", "categories": ["флеш-карта"], "synonyms": ["usb накопитель", "флешка"]},
             client=Client(),
         )
 
-        self.assertEqual(result[0]["external_id"], "cork")
-        self.assertEqual(result[0]["type_rank"], 0)
-        self.assertEqual(result[1]["type_rank"], 1)
+        by_id = {value["external_id"]: value for value in result}
+        self.assertGreater(by_id["wood"]["mismatch_count"], by_id["plain"]["mismatch_count"])
+        self.assertEqual(result[0]["external_id"], "plain")
 
     @staticmethod
     def _shortlist_card(**overrides):

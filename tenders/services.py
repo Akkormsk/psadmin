@@ -2764,11 +2764,6 @@ def _resolve_card_unknown(card, point, verdict):
     card["mismatch_count"] = len(card.get("mismatches") or [])
     card["fit"] = "exact" if not card["mismatch_count"] and not card["unknown_count"] else "partial"
     card["_verdict_resolved"] = True
-    # A "Тип изделия" / "Вид изделия" row the AI confirmed from the text is
-    # the strongest "this IS the requested thing" signal — let it flip the
-    # card's type rank so the sort key (§9 step 3) puts it above vaguer matches.
-    if verdict == "match" and point_n.startswith(("тип издел", "тип товар", "вид издел", "наименование")):
-        card["type_rank"] = 0
     return True
 
 
@@ -3300,7 +3295,6 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         catalog_candidates.sort(key=lambda card: _shortlist_rank_key(
             priority=card.get("priority", 1),
             relevance=card.get("relevance", 1),
-            type_rank=card.get("type_rank", 0),
             mismatch_count=card.get("mismatch_count", len(card.get("mismatches") or [])),
             unknown_count=card.get("unknown_count", len(card.get("unknown") or [])),
             price=_price_decimal(card.get("price")),
