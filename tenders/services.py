@@ -1439,46 +1439,8 @@ def _short_text_list(values, limit=12):
 
 
 
-def _normalize_catalog_intent(raw):
-    """A catalog_intent is just what to search for: item, a category hint,
-    search phrases, the recognised ТЗ requirements passed straight through,
-    and an optional session-only ranking_override. No DSL, no per-source
-    strategy, no structured constraints — _build_search_plan and the
-    backend keyword search handle everything themselves; free-text
-    instructions are handled by the AI shortlist pass afterwards."""
-    raw = raw if isinstance(raw, dict) else {}
-    item = _cell_text(raw.get("item"))[:200]
-    categories = _short_text_list(raw.get("categories"), limit=8) or ([item] if item else [])
-    required = []
-    for value in (raw.get("required") or [])[:20]:
-        if isinstance(value, dict):
-            label, item_value = _cell_text(value.get("label"))[:120], _cell_text(value.get("value"))[:500]
-            if label and item_value:
-                required.append({"label": label, "value": item_value})
-    ranking = raw.get("ranking_override") if isinstance(raw.get("ranking_override"), dict) else {}
-    return {
-        "item": item,
-        "categories": categories,
-        "synonyms": _short_text_list(raw.get("synonyms"), limit=12),
-        "required": required,
-        "ranking_override": {"price": ranking["price"]} if ranking.get("price") in {"asc", "desc"} else {},
-    }
 
 
-def _catalog_search_outcome(raw):
-    if isinstance(raw, dict):
-        return {
-            "candidates": raw.get("candidates", []) if isinstance(raw.get("candidates"), list) else [],
-            "sources": raw.get("sources", {}) if isinstance(raw.get("sources"), dict) else {},
-            "attempts": raw.get("attempts", []) if isinstance(raw.get("attempts"), list) else [],
-            "category_usage": raw.get("category_usage", {}) if isinstance(raw.get("category_usage"), dict) else {},
-            "category_errors": raw.get("category_errors", []) if isinstance(raw.get("category_errors"), list) else [],
-            "review": raw.get("review", {}) if isinstance(raw.get("review"), dict) else {},
-        }
-    return {
-        "candidates": raw if isinstance(raw, list) else [], "sources": {}, "attempts": [],
-        "category_usage": {}, "category_errors": [], "review": {},
-    }
 
 
 
@@ -2457,75 +2419,10 @@ def _strip_procurement_boilerplate(name):
     return stripped or name
 
 
-def _catalog_intent_from_requirements(line):
-    """The fallback half of the catalog_intent: the position name
-    (boilerplate clause stripped) as the item, and every recognised
-    requirement row passed through as-is under `required`. The search
-    plan's `item`/`queries` override the name; the `required` rows it
-    yields are what the eligibility pass and the AI pass check against."""
-    name = _strip_procurement_boilerplate(_cell_text(line.get("name"))) if isinstance(line, dict) else ""
-    requirements = line.get("requirements") if isinstance(line, dict) else None
-    if isinstance(requirements, dict):
-        requirements = requirements.get("requirements")
-    required = []
-    for value in requirements if isinstance(requirements, list) else []:
-        if not isinstance(value, dict) or value.get("selected") is False:
-            continue
-        if _cell_text(value.get("label")) and _cell_text(value.get("value")):
-            required.append({"label": _cell_text(value.get("label"))[:120], "value": _cell_text(value.get("value"))[:500]})
-    return _normalize_catalog_intent({"item": name[:200], "categories": [name[:200]] if name else [], "required": required})
 
 
-_SEARCH_PLAN_MODEL_DEFAULT = "anthropic/claude-sonnet-4-5"
 
 
-def _build_search_plan(line):
-    """The one LLM call before product search: turn a messy tender position
-    name into a clean item + a broad list of the OTHER names the same
-    product is sold under. Search now matches the product NAME only (step
-    3), so this list has to stand in for the synonym dictionary a supplier
-    site's search engine has built in — «флеш-накопитель», «флеш-карта»,
-    «флешка», «usb drive» are the same shelf, and if the plan misses one
-    the ТЗ's exact card can fall out of the pool. So this runs on the
-    strong model and asks for 12-20 names, not 2-4. Still no images, no
-    card dumps, no feedback — one focused call, cached per position."""
-    name = _cell_text(line.get("name"))[:300] if isinstance(line, dict) else ""
-    requirements = line.get("requirements") if isinstance(line, dict) else None
-    if isinstance(requirements, dict):
-        requirements = requirements.get("requirements")
-    req_lines = [
-        f"{_cell_text(value.get('label'))}: {_cell_text(value.get('value'))}"
-        for value in (requirements if isinstance(requirements, list) else [])
-        if isinstance(value, dict) and _cell_text(value.get("label")) and _cell_text(value.get("value"))
-    ][:40]
-    prompt = f"""Название позиции тендера почти всегда содержит канцелярские обороты. Убери их и дай короткое название товара и большой список поисковых фраз — все названия, под которыми ЭТОТ ЖЕ товар продаётся в каталогах сувенирной продукции (gifts.ru, oasiscatalog.com).
-
-Название позиции: {name}
-Характеристики из ТЗ: {'; '.join(req_lines) or 'нет'}
-
-Правила:
-- item — 1-3 слова, конкретный товар. Убирай «с логотипом», «с символикой Х», «услуги по изготовлению и поставке» и подобное. Не заменяй конкретный вид товара более общим словом.
-- queries — 12-20 коротких фраз: сам item и ВСЕ синонимы, разговорные названия, альтернативные написания, англ. варианты и близкие формы ОДНОГО И ТОГО ЖЕ товара. Каталоги называют один товар по-разному — если пропустишь форму, нужную карточку не найдём.
-  Примеры: «USB-флеш-накопитель» → флешка, флеш-карта, флеш-накопитель, usb флешка, usb накопитель, usb-флеш-диск, usb drive, usb flash, память usb, накопитель usb; «шопер» → сумка-шопер, эко-сумка, шоппер, сумка для покупок, shopper; «худи» → толстовка с капюшоном, кенгуру, hoodie.
-- НЕ добавляй в queries характеристики (цвет, объём, размер, материал) и не сужай до конкретной модели. Только названия вида товара.
-- НЕ уходи в другой товар: флешка не становится картой памяти microSD, шопер не становится рюкзаком.
-- skip_labels — названия строк ТЗ (ровно как в списке выше, до двоеточия), которые НЕ являются признаком готового товара: маркировка/сертификация («Честный Знак», «ЦРПТ»), требования к пошиву и швам, дизайн макета и расположение вышивки, бумажные документы. Физические свойства товара (материал, плотность, цвет, размер, конструкция) в skip_labels НЕ попадают.
-
-Верни только JSON: {{"item":"...","queries":["...","...", ...],"skip_labels":["..."]}}"""
-    model = os.getenv("TIMEWEB_AI_MODEL_SEARCH_PLAN", "").strip() or _SEARCH_PLAN_MODEL_DEFAULT
-    result, usage = _ai_gateway_json(prompt, max_tokens=900, timeout=40, network_attempts=2, model=model)
-    item = _cell_text(result.get("item"))[:100] if isinstance(result, dict) else ""
-    queries = list(dict.fromkeys(
-        _cell_text(value)[:150] for value in (result.get("queries") if isinstance(result, dict) and isinstance(result.get("queries"), list) else [])
-        if _cell_text(value)
-    ))[:20]
-    skip_labels = [
-        _cell_text(value)[:200] for value in (result.get("skip_labels") if isinstance(result, dict) and isinstance(result.get("skip_labels"), list) else [])
-        if _cell_text(value)
-    ][:40]
-    if not item:
-        item = _strip_procurement_boilerplate(name) or name
-    return {"item": item, "queries": queries, "skip_labels": skip_labels}, usage
 
 
 _COMPLIANCE_MARKING_RE = re.compile(r"честн\w*\s*знак|црпт|обязательн\w*\s+маркиров")
@@ -2542,32 +2439,6 @@ def _requirement_skip_labels():
     ]
 
 
-def _tag_requirement_selection(line, ai_skip_labels):
-    """Return the ТЗ rows with `selected` filled in on every row that does
-    not already carry it (a row the client already decided keeps its flag).
-    A row is off when the admin has a saved skip rule for its label, the
-    plan LLM tagged it as not-a-product-criterion, or it is a Честный Знак /
-    ЦРПТ marking requirement (a zero-cost default even before any learning)."""
-    if not isinstance(line, dict):
-        return []
-    rows = line.get("requirements")
-    rows = rows.get("requirements") if isinstance(rows, dict) else rows
-    if not isinstance(rows, list):
-        return []
-    rows = _collapse_requirements(rows)
-    learned = {rule["label_normalized"] for rule in _requirement_skip_labels()}
-    ai = {_normalized_text(label) for label in (ai_skip_labels or []) if _cell_text(label)}
-    tagged = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        row = dict(row)
-        if "selected" not in row and _cell_text(row.get("label")):
-            label_n = _normalized_text(row.get("label"))
-            blob = f"{label_n} {_normalized_text(row.get('value'))}"
-            row["selected"] = not (label_n in learned or label_n in ai or bool(_COMPLIANCE_MARKING_RE.search(blob)))
-        tagged.append(row)
-    return tagged
 
 
 _FROZEN_ROUTE_STEPS = ["Закупка готового изделия", "Нанесение"]
@@ -2591,49 +2462,10 @@ def _frozen_route(reason=None, purchase_details=None):
     }
 
 
-# --- AI shortlist pass -----------------------------------------------------
-# After the deterministic search leaves a short list (~40 cards), ONE small
-# model call turns each free-text instruction — this session's feedback and
-# the lessons pulled from earlier similar positions — into a NAMED criterion
-# and a per-card yes/no against it. The model never decides "remove" or
-# "priority" directly and never rewrites the deterministic verdicts: it only
-# says what the criterion is and which cards clearly match it. Plain code
-# then applies the action, and the same fixed key re-sorts. Skipped (0
-# tokens) when there is nothing to apply.
-#
-# Instruction types the model classifies each phrase into:
-#   priority  — "подними / опусти / сначала / приоритет / нужны X / лучше X"
-#               and anything ambiguous: a criterion + the cards that CLEARLY
-#               match it -> those get the raised-priority slot.
-#   keep_only — "оставь только X / только X / всё кроме X": a WHITE list. The
-#               model lists the cards that ARE X; code drops every other card,
-#               the uncertain ones included. "Оставь только мешки" must leave
-#               only sacks — `exclude` kept a card it was unsure about.
-#   exclude   — an explicit "убери / исключи / спрячь / без X" (no "только"):
-#               a criterion + the cards that CLEARLY contradict it (unclear =
-#               kept) -> those are filtered out of the list before ranking.
-#   soften    — "220 г это норм", "цвет считай совпавшим": a criterion + the
-#               cards whose deterministic mismatch on it is now acceptable.
-#   ranking   — "сначала дорогие / дешёвые": a session-only price-sort flip,
-#               never written to a lesson.
-
-_POINT_STOPWORDS = {
-    "не", "в", "на", "по", "и", "с", "до", "от", "требуется", "каталоге",
-    "указан", "указана", "указано", "совпадает", "подходит", "нет", "данных",
-    "товара", "товар", "заявлено", "нужное", "достаточен", "подтвержден", "подтверждён",
-}
-# The shortlist pass READS product cards and judges them against the ТЗ —
-# that is the one place we want the strong model, not the fast/cheap one
-# (the fast model's job is only synonyms and stripping procurement
-# boilerplate in the search-plan step). Split into small parallel batches
-# (see _run_shortlist_pass), so a strong per-batch model still returns in a
-# few seconds. Override with TIMEWEB_AI_MODEL_SHORTLIST.
-_SHORTLIST_MODEL_DEFAULT = "anthropic/claude-sonnet-4-5"
-
-# Step 4 — the name pass. Reads the product NAME only (never the card), so
-# the cheap fast model is right here; measured ~2-6s per 240-name batch,
-# ~$0.01 for a whole 2000-name pool run 10 batches wide. Override with
-# TIMEWEB_AI_MODEL_NAME_FILTER.
+# --- Шаг 4 каталога: дешёвый фильтр названий -----------------------------
+# Читает ТОЛЬКО название товара (не карточку), сотнями, пачками по 240 —
+# отсеивает коробку/чехол/кабель/набор. Спорное оставляет; всё остальное
+# по ТЗ разбирает сильный агент в tenders/cascade.py (шаг 6).
 _NAME_FILTER_MODEL_DEFAULT = "openai/gpt-4.1-mini"
 _NAME_FILTER_BATCH = 240
 
@@ -2706,184 +2538,18 @@ def _run_name_filter(item, id_names, *, usage=None):
     return keep if ran_any else None
 
 
-def _verdict_subject(text):
-    """The leading subject of a verdict / criterion line, used to find which
-    existing deterministic verdict a "soften" criterion refers to."""
-    head = re.split(r"\bне\b|:|<|>|≥|≤", _normalized_text(text))[0]
-    words = [value for value in head.split() if len(value) > 2 and value not in _POINT_STOPWORDS]
-    return words[0] if words else ""
 
 
-def _subjects_match(a, b):
-    a, b = _normalized_text(a), _normalized_text(b)
-    if not a or not b:
-        return False
-    length = min(len(a), len(b), 5)
-    return a[:length] == b[:length] if length >= 4 else a == b
 
 
-def _shortlist_card_brief(card):
-    header = f"[{card.get('id')}] {_cell_text(card.get('name'))[:90]}"
-    meta = []
-    if _cell_text(card.get("article")):
-        meta.append(f"арт {_cell_text(card.get('article'))[:24]}")
-    if card.get("price") not in (None, ""):
-        meta.append(f"{card.get('price')} ₽")
-    materials = ", ".join(_cell_text(value)[:40] for value in (card.get("materials") or [])[:4] if _cell_text(value))
-    if materials:
-        meta.append(materials)
-    colors = ", ".join(_cell_text(value)[:24] for value in (card.get("colors") or [])[:6] if _cell_text(value))
-    if colors:
-        meta.append(colors)
-    attributes = "; ".join(
-        f"{_cell_text(value.get('name'))[:40]}: {_cell_text(value.get('value'))[:70]}"
-        for value in (card.get("attributes") or [])[:16]
-        if isinstance(value, dict) and _cell_text(value.get("name")) and _cell_text(value.get("value"))
-    )
-    if attributes:
-        meta.append(attributes)
-    description = _cell_text(card.get("description"))[:700]
-    lines = [header]
-    if meta:
-        lines.append("   " + " | ".join(meta))
-    if description:
-        lines.append("   " + description)
-    return "\n".join(lines)
 
 
-def _soften_card_criterion(card, subject):
-    """"220 г это норм", "цвет считай совпавшим": drop the deterministic
-    mismatch / unknown about this subject from the card, as if the ТЗ point
-    were satisfied. Recomputes the counts the sort key reads."""
-    changed = False
-    for field_key in ("mismatches", "unknown"):
-        entries = card.get(field_key) or []
-        kept = [
-            entry for entry in entries
-            if not (_verdict_subject(entry) and _subjects_match(_verdict_subject(entry), subject))
-        ]
-        if len(kept) != len(entries):
-            changed = True
-        card[field_key] = kept
-    card["mismatch_count"] = len(card.get("mismatches") or [])
-    card["unknown_count"] = len(card.get("unknown") or [])
-    card["fit"] = "exact" if not card["mismatch_count"] and not card["unknown_count"] else "partial"
-    if changed:
-        card["_ai_touched"] = True
-    return changed
 
 
-def _apply_shortlist_grid(shortlist, grid, tz_rows, covered_ids):
-    """The agent's verdict table BECOMES the card's verdicts — the ranking
-    input, not a "?" patch. `grid` is a flat list of cells
-    {c: card id, r: row number, v: y|n|m, w: ≤6-word reason}. Every
-    (card, row) pair should be graded; a pair the model left out is "m"
-    (unknown), never a silent "y". A card with no cells at all keeps its
-    deterministic verdicts (its batch effectively failed on it)."""
-    if not tz_rows:
-        return 0
-    by_id = {str(card.get("id")): card for card in shortlist}
-    cells = {}
-    for entry in grid:
-        if not isinstance(entry, dict):
-            continue
-        card_id = str(entry.get("c") or entry.get("card") or "")
-        try:
-            row = int(entry.get("r"))
-        except (TypeError, ValueError):
-            continue
-        verdict = next((char for char in _cell_text(entry.get("v")).lower() if char in "ynm"), "")
-        if card_id in by_id and 1 <= row <= len(tz_rows) and verdict:
-            cells.setdefault(card_id, {})[row] = (verdict, _cell_text(entry.get("w") or entry.get("reason"))[:90])
-    graded = 0
-    for card_id in covered_ids:
-        card = by_id.get(card_id)
-        if card is None or card_id not in cells:
-            continue
-        card_cells = cells[card_id]
-        matches, mismatches, unknown = [], [], []
-        for index, (label, value) in enumerate(tz_rows, 1):
-            verdict, reason = card_cells.get(index, ("m", ""))
-            tail = f" — {reason}" if reason else ""
-            if verdict == "y":
-                matches.append(f"{label}: {value}{tail}")
-            elif verdict == "n":
-                mismatches.append(f"{label}: требуется {value}{tail}")
-            else:
-                unknown.append(f"{label}{tail or ' — нет данных в карточке'}")
-        card["matches"], card["mismatches"], card["unknown"] = matches, mismatches, unknown
-        card["mismatch_count"] = len(mismatches)
-        card["unknown_count"] = len(unknown)
-        card["match_count"] = len(matches)
-        card["fit"] = "exact" if not mismatches and not unknown else "partial"
-        card["_ai_graded"] = True
-        graded += 1
-    return graded
 
 
-def _shortlist_pass_prompt(position_name, tz_numbered, cards_text, instr_numbered, image_order=None, batch_ids=""):
-    tz_block = "\n".join(tz_numbered) if tz_numbered else "1. (пунктов ТЗ нет)"
-    batch_block = (
-        f"\nЭто одна пачка из общего списка. Отвечай ТОЛЬКО по карточкам этой пачки ({batch_ids}).\n"
-        if batch_ids else ""
-    )
-    instr_block = ""
-    if instr_numbered:
-        instr_block = f"""
-ОТДЕЛЬНО — замечания администратора (свободный текст):
-{chr(10).join(instr_numbered)}
-
-По каждому замечанию верни в "instructions" его тип и id карточек:
-- "priority" — «подними / нужны X / лучше X» и любая нечёткая фраза (по умолчанию сюда). "cards" = id карточек, у которых критерий ЯВНО выполняется.
-- "keep_only" — «оставь только X». "cards" = id ВСЕХ карточек, которые ЯВНО подходят под X (остальные уберут).
-- "exclude" — «убери / без X» (без слова «только»). "cards" = id карточек, которые ЯВНО противоречат.
-- "soften" — «220 г это норм», «цвет считай совпавшим». "cards" = id карточек, у которых это расхождение теперь допустимо.
-- "ranking" — «сначала дорогие / дешёвые» → "price":"asc"|"desc".
-Условное замечание («если в ТЗ …») — проверь условие по чек-листу ТЗ; не выполняется → "applied":false, "cards":[]. "applies_to": "item" (по умолчанию) или "any" (общее правило про ТЗ).
-"""
-    photos = ""
-    if image_order:
-        photos = ("\nК запросу приложены фото карточек в порядке: "
-                  + ", ".join(f"[{value}]" for value in image_order)
-                  + ". Смотри их для проверки формы и вида товара.\n")
-    row_count = len([line for line in tz_numbered if line]) or 1
-    return f"""Ты — эксперт по подбору товаров под тендер. По каждой карточке пройди ВЕСЬ её текст (название, описание, ВСЕ характеристики, материалы, цвет, список вариантов) и оцени КАЖДЫЙ пункт чек-листа — так, как это сделал бы человек.
-
-Позиция: {position_name}
-
-Чек-лист ТЗ (пронумерован 1..{row_count}):
-{tz_block}
-{batch_block}
-Карточки (номер | id | текст). У карточки может быть список вариантов (цвета, объёмы) — оценивай по тому варианту, который подходит под ТЗ:
-{cards_text}
-{photos}
-Для КАЖДОЙ карточки и КАЖДОГО пункта 1..{row_count} верни клетку {{"c":номер карточки,"r":номер пункта,"v":"y|n|m"}}:
-- "y" — карточка (или её подходящий вариант) соответствует пункту;
-- "n" — в карточке есть данные по этому пункту, и они НЕ совпадают с требованием;
-- "m" — в карточке про этот пункт ничего нет.
-Клеток должно быть ровно {row_count} на каждую карточку. Пропущенная клетка = "m". "m" — только когда данных реально нет, не из-за сомнений и не из лени.
-
-Как человек: небольшое отклонение размера/веса роли не играет → "y"; заметное, но возможно допустимое → "m" (в "w" напиши «X vs Y, проверить»); явно не то → "n". «Не менее N» — меньше N это "n". «Не более N» — больше N это "n". Ёмкость памяти бери из названия варианта («на 32 Гб»). «Флеш-карта USB 2.0» и «USB-флеш-накопитель» — одно и то же → "y".
-
-В "w" (≤6 слов) — пояснение ТОЛЬКО для "n" и "m".
-{instr_block}
-Верни только JSON:
-{{"grid":[{{"c":1,"r":1,"v":"y"}},{{"c":1,"r":5,"v":"n","w":"8 ГБ, нужно ≥32"}},{{"c":1,"r":6,"v":"m","w":"плотность не указана"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}"""
 
 
-def _exclude_criterion_drifted(instruction_value, criterion):
-    """True when the model classified an instruction as "exclude" but gave
-    a criterion that has nothing to do with the instruction's own words —
-    it drifted (e.g. turned a ТЗ point like "без крышки", noticed during
-    the verdict pass, into a removal). A conditional-ТЗ rule ("если в ТЗ
-    …") legitimately carries a criterion not in its text, so it is
-    exempt. Removal is the one destructive action, so this guards only it."""
-    text = _normalized_text(instruction_value.get("text") if isinstance(instruction_value, dict) else instruction_value)
-    if "если" in text:
-        return False
-    instruction_stems = {word[:4] for word in text.split() if len(word) >= 4}
-    criterion_stems = {word[:4] for word in _normalized_text(criterion).split() if len(word) >= 4}
-    return bool(instruction_stems) and bool(criterion_stems) and not (instruction_stems & criterion_stems)
 
 
 def _shortlist_card_images(shortlist, limit=8, side=300):
@@ -2921,230 +2587,6 @@ def _shortlist_card_images(shortlist, limit=8, side=300):
     return [resolved[card_id] for card_id in ids], ids
 
 
-def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions, *, resolve_unknowns=False, image_data_urls=None, image_order=None, timeout=45):
-    """The AI verdict pass: the strong model reads every shortlist card in
-    full and grades it against the ТЗ checklist (✓/✗/? per row) — that grid
-    becomes the card's verdicts, which the fixed sort key then ranks by.
-    Runs in parallel batches. Mutates the card dicts in place. Returns:
-      instructions - [{text, origin, type, criterion, applied, summary, note}]
-                     (only on the feedback path — free-text admin notes)
-      outcome      - {removed, raised, softened, verdict_changes}
-      ranking      - {} or {"price": "asc"|"desc"} (session-only)
-      usage, error - token usage; on total failure the deterministic order
-                     stands unchanged.
-
-    ``resolve_unknowns`` is kept for the caller's signature; the grid job
-    now runs whenever there is a ТЗ. ``image_data_urls`` (+ ``image_order``)
-    feed the model the card thumbnails — used on the feedback path."""
-    instructions = [
-        value for value in (instructions or [])
-        if _cell_text(value.get("text") if isinstance(value, dict) else value)
-    ]
-    blank = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
-    # The ТЗ checklist the agent verdicts every card against — this IS the
-    # ranking input now, not a "?"-patch job. Rows in a fixed order so the
-    # agent can answer by number.
-    tz_rows = [
-        (_cell_text(row.get("label")), _cell_text(row.get("value")))
-        for row in (requirement_rows or [])
-        if isinstance(row, dict) and _cell_text(row.get("label")) and _cell_text(row.get("value"))
-    ]
-    if (not instructions and not tz_rows) or not shortlist:
-        return blank
-    tz_numbered = [
-        f"{index}. {label}: {value}"
-        for index, (label, value) in enumerate(tz_rows, 1)
-    ]
-    numbered = []
-    for index, value in enumerate(instructions, 1):
-        text = _cell_text(value.get("text") if isinstance(value, dict) else value)
-        origin = (value.get("origin") if isinstance(value, dict) else "") or "session"
-        tag = "эта сессия" if origin == "session" else "раньше на похожих позициях"
-        numbered.append(f"{index}. ({tag}) {text}")
-    model = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or _SHORTLIST_MODEL_DEFAULT
-
-    # Parallel batches of 3 — small so the model gives each card real
-    # attention and grades every ТЗ row. The shared prompt prefix (the ТЗ
-    # checklist) is identical across batches so the gateway caches it.
-    batch_size = 3 if tz_rows else 10
-    batches = [shortlist[i:i + batch_size] for i in range(0, len(shortlist), batch_size)] or [shortlist]
-    covered_ids = set()
-
-    def run_batch(numbered_batch):
-        index, batch = numbered_batch
-        # Cards are numbered 1..N within the batch; the model answers by
-        # number and we map it back to the real id here, so a long
-        # external_id never has to survive a round-trip through the model.
-        local_ids = {position: str(card.get("id")) for position, card in enumerate(batch, 1)}
-        cards_text = "\n".join(
-            f"КАРТОЧКА {position} | id {card.get('id')}\n{_shortlist_card_brief(card)}"
-            for position, card in enumerate(batch, 1)
-        )
-        with_images = bool(image_data_urls) and index == 0
-        prompt = _shortlist_pass_prompt(
-            position_name, tz_numbered, cards_text, numbered,
-            image_order=image_order if with_images else None,
-            batch_ids=", ".join(f"{position}={card.get('id')}" for position, card in enumerate(batch, 1)) if len(batches) > 1 else "",
-        )
-        try:
-            raw, batch_usage = _ai_gateway_json(
-                prompt, max_tokens=900 + len(batch) * (len(tz_rows) + 2) * 22, timeout=timeout,
-                network_attempts=3, model=model,
-                image_data_urls=image_data_urls if with_images else None, image_detail="low",
-            )
-        except TenderAIError as exc:
-            return {"_error": str(exc)[:200]}, {}
-        except Exception:
-            logger.exception("Shortlist pass batch failed")
-            return {"_error": "Ошибка обработки пачки карточек."}, {}
-        if isinstance(raw, dict):
-            for entry in raw.get("grid") if isinstance(raw.get("grid"), list) else []:
-                if not isinstance(entry, dict):
-                    continue
-                try:
-                    position = int(str(entry.get("c")).strip())
-                except (TypeError, ValueError):
-                    position = None
-                if position in local_ids:
-                    entry["c"] = local_ids[position]
-            covered_ids.update(local_ids.values())
-        return raw, batch_usage
-
-    if len(batches) == 1:
-        batch_results = [run_batch((0, batches[0]))]
-    else:
-        with ThreadPoolExecutor(max_workers=min(10, len(batches))) as executor:
-            batch_results = list(executor.map(run_batch, list(enumerate(batches))))
-
-    usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    merged, merged_grid, any_ok, some_failed, first_error = {}, [], False, False, ""
-    for raw, batch_usage in batch_results:
-        if isinstance(batch_usage, dict):
-            usage["prompt_tokens"] += batch_usage.get("prompt_tokens", 0) or 0
-            usage["completion_tokens"] += batch_usage.get("completion_tokens", 0) or 0
-        if not isinstance(raw, dict) or raw.get("_error"):
-            some_failed = True
-            first_error = first_error or (raw.get("_error", "") if isinstance(raw, dict) else "")
-            continue
-        any_ok = True
-        for item in (raw.get("instructions") if isinstance(raw.get("instructions"), list) else []):
-            if not isinstance(item, dict):
-                continue
-            slot = merged.setdefault(str(item.get("n")), {"cards": [], "_applied": [], "_blocked": []})
-            for field in ("type", "criterion", "price", "applies_to", "summary", "note"):
-                if item.get(field) and not slot.get(field):
-                    slot[field] = item.get(field)
-            for card_id in item.get("cards") if isinstance(item.get("cards"), list) else []:
-                if str(card_id) not in {str(value) for value in slot["cards"]}:
-                    slot["cards"].append(card_id)
-            (slot["_blocked"] if item.get("applied") is False else slot["_applied"]).append(True)
-        for entry in (raw.get("grid") if isinstance(raw.get("grid"), list) else []):
-            if isinstance(entry, dict):
-                merged_grid.append(entry)
-
-    if not any_ok:
-        return {**blank, "error": first_error}
-    verdict_changes = _apply_shortlist_grid(shortlist, merged_grid, tz_rows, covered_ids)
-    result = {"instructions": [
-        {
-            "n": key, "cards": slot["cards"],
-            "applied": not (slot["_blocked"] and not slot["_applied"]),
-            **{field: slot[field] for field in ("type", "criterion", "price", "applies_to", "summary", "note") if slot.get(field)},
-        }
-        for key, slot in merged.items()
-    ]}
-    by_id = {str(card.get("id")): card for card in shortlist}
-    ai_by_n = {str(item.get("n")): item for item in result["instructions"] if isinstance(item, dict)}
-    ranking = {}
-    instruction_results = []
-    for index, value in enumerate(instructions, 1):
-        info = ai_by_n.get(str(index), {})
-        itype = _cell_text(info.get("type")).lower()
-        itype = itype if itype in {"priority", "keep_only", "exclude", "soften", "ranking"} else ""
-        criterion = _cell_text(info.get("criterion"))[:120]
-        card_ids = info.get("cards")
-        ids = {str(value) for value in card_ids} if isinstance(card_ids, list) else set()
-        applies_to = "any" if _cell_text(info.get("applies_to")).lower() == "any" else "item"
-        # A conditional instruction whose condition does not hold for THIS
-        # position: the model returns applied:false — do nothing here, but
-        # still keep it (and learn it) for positions where it will fire.
-        condition_blocked = info.get("applied") is False
-        applied = False
-        if condition_blocked:
-            pass
-        elif itype == "ranking":
-            price = _cell_text(info.get("price")).lower()
-            if price in {"asc", "desc"}:
-                ranking = {"price": price}
-                applied = True
-        elif itype == "priority" and criterion:
-            for card_id in ids:
-                card = by_id.get(card_id)
-                if card is not None:
-                    card["priority"] = 0
-                    card["_ai_priority_reason"] = criterion
-            applied = True
-        elif itype == "keep_only" and criterion and ids and not some_failed:
-            # White list: the model listed the cards that ARE X; drop every
-            # other card, the uncertain ones included. "Оставь только мешки"
-            # must leave only sacks — the blacklist "exclude" kept a card
-            # it was unsure about ("Рюкзак детский Kiddo" — a рюкзак, maybe
-            # a мешок?), which is the loop this fixes. No drift guard: the
-            # intent ("только X") is explicit and a wrong list only removes
-            # too much, which a plain recompute brings back. Skipped when a
-            # batch failed — a missing batch's keep-votes would wrongly drop
-            # its cards.
-            for card_id, card in by_id.items():
-                if card_id not in ids:
-                    card["_removed"] = True
-                    card["_removed_reason"] = f"не {criterion}"
-            applied = True
-        elif itype == "exclude" and criterion and not _exclude_criterion_drifted(value, criterion):
-            for card_id in ids:
-                card = by_id.get(card_id)
-                if card is not None:
-                    card["_removed"] = True
-                    card["_removed_reason"] = criterion
-            applied = True
-        elif itype == "soften" and criterion:
-            subject = _verdict_subject(criterion) or _normalized_text(criterion)
-            for card_id in ids:
-                card = by_id.get(card_id)
-                if card is not None:
-                    _soften_card_criterion(card, subject)
-            applied = True
-        instruction_results.append({
-            "text": _cell_text(value.get("text") if isinstance(value, dict) else value),
-            "origin": (value.get("origin") if isinstance(value, dict) else "") or "session",
-            "lesson_id": value.get("lesson_id") if isinstance(value, dict) else None,
-            "type": itype,
-            "criterion": criterion,
-            "applies_to": applies_to,
-            "applied": applied,
-            "condition_blocked": condition_blocked,
-            "ranking_only": itype == "ranking",
-            "summary": _cell_text(info.get("summary"))[:280] or criterion or _cell_text(value.get("text") if isinstance(value, dict) else value)[:120],
-            "note": _cell_text(info.get("note"))[:200],
-        })
-    raised_cards = [card for card in shortlist if card.get("priority") == 0]
-    softened_cards = [card for card in shortlist if card.get("_ai_touched") and not card.get("_removed") and card.get("priority") != 0]
-    outcome = {
-        # Names matter most for the removed ones ("и это сработало");
-        # raised/softened just carry a count + a couple of examples.
-        "removed": [
-            {"article": _cell_text(card.get("article"))[:60], "name": _cell_text(card.get("name"))[:80], "reason": _cell_text(card.get("_removed_reason"))[:120]}
-            for card in shortlist if card.get("_removed")
-        ][:15],
-        "raised_count": len(raised_cards),
-        "raised": [_cell_text(card.get("name"))[:70] for card in raised_cards[:4]],
-        "softened_count": len(softened_cards),
-        "softened": [_cell_text(card.get("name"))[:70] for card in softened_cards[:4]],
-        "verdict_changes": verdict_changes,
-    }
-    return {
-        "instructions": instruction_results, "outcome": outcome,
-        "ranking": ranking, "usage": usage or {}, "error": "",
-    }
 
 
 def _price_decimal(value):
@@ -3290,29 +2732,21 @@ def learn_lessons_from_session(hypothesis, session, user):
 
 
 def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None, clear_ranking=False):
-    """Product search + the AI shortlist pass (see docs/assistant_protocol.md):
+    """Собирает вход для восьмишагового каскада подбора (tenders/cascade.py) и
+    раскладывает его результат в гипотезу обучающего диалога.
 
-    `recompute` scopes a rebuild to one dialogue block:
-    - "all" (default): full rebuild — re-derives the search plan and the
-      route from scratch. What "Начать заново" and route feedback do.
-    - "catalog": keep the prior route and search plan verbatim (position
-      name did not change); still re-run the backend search and the pass.
+    `recompute`:
+    - "all" (по умолчанию) — полный пересчёт (маршрут строится заново).
+    - "catalog" — оставить прежний маршрут; каскад всё равно перегоняется,
+      но шаг 1 (разбор ТЗ + синонимы) сам берётся из кэша, если ТЗ не менялось.
 
-    1. ТЗ recognition already ran before this is called (document upload).
-    2. Route — hardcoded while search is the thing being perfected.
-    3. One tiny LLM call (_build_search_plan): messy position name -> clean
-       item + a few search phrases. Never sees feedback or lessons.
-    4. Backend search (catalog.catalog_candidates_for_line) — no LLM, a
-       fixed keyword + hard-filter + ranking pipeline.
-    5. The AI shortlist pass (_run_shortlist_pass) — only when there is
-       session feedback or a matching lesson: one call reads the ~40 ranked
-       cards in full and edits their verdicts / priority / remove flag, and
-       the same fixed math re-sorts. Skipped (zero tokens) otherwise.
-    6. "Принять и обучить" writes each session instruction to a Lesson with
-       the context it was learned in.
+    Здесь: сбор фидбека сессии + сохранённых правил «вне подбора» + подходящих
+    уроков → Cascade(...).run() → карточки, план, галочки, вердикты фидбека →
+    гипотеза. «Принять и обучить» дальше пишет каждую инструкцию в Lesson.
     """
     started_at = time.perf_counter()
-    from .catalog import CatalogSyncError, catalog_candidates_for_line, _shortlist_rank_key
+    from .catalog import CatalogSyncError
+    from .cascade import Cascade
 
     if progress_callback:
         progress_callback("cases")
@@ -3347,152 +2781,76 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     prior_ranking = current.get("ranking_override") if isinstance(current, dict) else None
     ranking_override = {} if clear_ranking else (prior_ranking if isinstance(prior_ranking, dict) and prior_ranking.get("price") in {"asc", "desc"} else {})
 
-    # Step 3: the one LLM call for search itself — messy position name ->
-    # clean item + a few queries. Never sees feedback or lessons.
+    # ── Шаги 1–8 подбора живут в tenders/cascade.py: один класс Cascade,
+    # восемь методов-шагов, у каждого типизированный вход/выход. Здесь —
+    # только сбор входов (фидбек сессии, сохранённые правила «вне подбора»,
+    # подходящие уроки) и раскладка результата в гипотезу диалога.
     if progress_callback:
         progress_callback("ai")
-    prior_plan = current.get("search_plan") if isinstance(current, dict) else None
-    if recompute == "catalog" and isinstance(prior_plan, dict) and _cell_text(prior_plan.get("item")):
-        plan, plan_usage, ai_seconds = prior_plan, {}, 0.0
-    else:
-        ai_started_at = time.perf_counter()
-        plan, plan_usage = _build_search_plan(line)
-        ai_seconds = round(time.perf_counter() - ai_started_at, 3)
-    usage = {
-        "prompt_tokens": plan_usage.get("prompt_tokens", 0) or 0,
-        "completion_tokens": plan_usage.get("completion_tokens", 0) or 0,
-    }
-    # Which ТЗ rows count as product criteria. A row the client already
-    # ticked/unticked keeps its flag; the rest default from the plan's
-    # skip_labels + the admin's saved skip rules. Everything downstream
-    # (search terms, matching, ranking, the shortlist pass) ignores an
-    # unticked row.
-    tagged_requirements = _tag_requirement_selection(line, plan.get("skip_labels"))
-    if tagged_requirements:
-        _base_requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
-        line = {**line, "requirements": {**_base_requirements, "requirements": tagged_requirements}}
-    base_intent = _catalog_intent_from_requirements(line)
-    catalog_intent = _normalize_catalog_intent({
-        "item": plan.get("item") or base_intent.get("item", ""),
-        "categories": [plan.get("item")] if plan.get("item") else base_intent.get("categories", []),
-        "synonyms": list(plan.get("queries", [])),
-        "required": base_intent.get("required", []),
-    })
-    catalog_intent["ranking_override"] = ranking_override
-
-    # Step 5 inputs: this session's catalog feedback + every lesson that
-    # matches this kind of position. Both are plain-text instructions for
-    # the one AI pass over the shortlist.
-    selected_rows = [
-        row for row in tagged_requirements
-        if isinstance(row, dict) and row.get("selected") is not False and _cell_text(row.get("label"))
+    catalog_instructions = [
+        value for value in session_instructions if value.get("scope") in {"catalog", "requirements"}
     ]
-    tz_labels = [_normalized_text(row.get("label")) for row in selected_rows]
-    catalog_instructions = [value for value in session_instructions if value.get("scope") in {"catalog", "requirements"}]
-    lessons = _retrieve_lessons("catalog", _cell_text(plan.get("item")), tz_labels)
-    pass_instructions = [
-        {"text": value["text"], "origin": "session"} for value in catalog_instructions
-    ] + [
-        {"text": lesson["instruction"], "origin": "lesson", "lesson_id": lesson["id"]} for lesson in lessons
-    ]
-    rules_seconds = 0.0
-
-    # Step 2: route, hardcoded for now. Catalog-scoped feedback keeps the
-    # prior route verbatim — it must not disturb another block.
+    skip_labels = {rule["label_normalized"] for rule in _requirement_skip_labels()}
     prior_route = current.get("route") if isinstance(current, dict) else None
     if recompute == "catalog" and isinstance(prior_route, dict) and prior_route.get("steps"):
         route = prior_route
     else:
         route = _frozen_route()
 
-    # Step 4: backend search. Name retrieval + the colour/stock gate carry
-    # no LLM; the AI touches are the cheap name pass (_run_name_filter) and
-    # then the strong per-ТЗ pass, both wired in only when there is a ТЗ or
-    # feedback to grade against. The whole gated set (colour + in stock,
-    # collapsed by group) goes to the strong pass — no 40-card cut; 200 is
-    # a safety ceiling against a pathological query, not a quality trim.
-    if progress_callback:
-        progress_callback("catalog")
-    run_full_analysis = bool(pass_instructions or selected_rows)
-    name_filter = None
-    if run_full_analysis:
-        def name_filter(id_names):
-            return _run_name_filter(
-                catalog_intent.get("item") or plan.get("item"), id_names, usage=usage,
-            )
-    catalog_started_at = time.perf_counter()
-    catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": []}
+    cascade_started_at = time.perf_counter()
     catalog_warning = ""
+    cascade_result = None
     try:
-        catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
-            line, limit=10, intent=catalog_intent, include_diagnostics=True,
-            shortlist_limit=200 if run_full_analysis else None,
-            name_filter=name_filter,
-        ))
+        cascade_result = Cascade(
+            line,
+            session_feedback=catalog_instructions,
+            lessons_provider=lambda item_word, tz_labels: _retrieve_lessons("catalog", item_word, tz_labels),
+            prior=current if isinstance(current, dict) else None,
+            skip_labels=skip_labels,
+            ranking_override=ranking_override,
+            progress=progress_callback,
+        ).run()
     except CatalogSyncError as exc:
         catalog_warning = str(exc)[:300]
     except Exception:
-        logger.exception("Unexpected catalog failure while building a training hypothesis")
-        catalog_warning = "Не удалось проверить каталог. Попробуйте ещё раз."
-    catalog_seconds = round(time.perf_counter() - catalog_started_at, 3)
-    catalog_candidates = catalog_outcome["candidates"]
-
-    # Step 5: the AI shortlist pass. ONE call — it runs when the admin has
-    # given feedback / a lesson matches, OR when the deterministic check
-    # left "?" on ТЗ rows a card's prose might answer ("пробковое дно" in
-    # the description). It resolves those "?" from the card text into ✓/✗,
-    # applies the feedback, and on the feedback path also looks at the card
-    # photos. The same fixed math then re-sorts and we trim to the ten
-    # shown. A failed call leaves the deterministic order untouched.
-    shortlist_seconds = 0.0
-    pass_result = {"instructions": [], "outcome": {}, "ranking": {}, "usage": {}, "error": ""}
-    shortlist_removed = []
-    # The verdict pass runs whenever there is a ТЗ to grade against (it IS
-    # the verdict step now) or admin feedback to apply.
-    resolvable_unknowns = bool(selected_rows)
-    if (pass_instructions or resolvable_unknowns) and catalog_candidates:
-        if progress_callback:
-            progress_callback("shortlist")
-        shortlist_started_at = time.perf_counter()
-        # Photos go in only when the admin has actually written feedback
-        # this session — not for a fresh position or a bare lesson match,
-        # where the extra fetch + vision tokens would not earn their keep.
-        card_images, image_order = _shortlist_card_images(catalog_candidates) if catalog_instructions else ([], [])
-        pass_result = _run_shortlist_pass(
-            _cell_text(line.get("name")), selected_rows, catalog_candidates, pass_instructions,
-            resolve_unknowns=resolvable_unknowns,
-            image_data_urls=card_images or None, image_order=image_order or None,
+        logger.exception("Cascade failed while building a training hypothesis")
+        catalog_warning = "Не удалось выполнить подбор товара. Попробуйте ещё раз."
+    if cascade_result is None:
+        from .cascade import CascadeResult
+        cascade_result = CascadeResult(
+            item=_cell_text(line.get("name")), queries=[], tz=[], candidates=[],
+            catalog_intent={}, requirement_selection=[],
         )
-        shortlist_seconds = round(time.perf_counter() - shortlist_started_at, 3)
-        usage["prompt_tokens"] += pass_result["usage"].get("prompt_tokens", 0) or 0
-        usage["completion_tokens"] += pass_result["usage"].get("completion_tokens", 0) or 0
-        if pass_result["ranking"].get("price") in {"asc", "desc"}:
-            ranking_override = pass_result["ranking"]
-        # A "сначала дорогие" instruction is a one-shot sort-mechanism change:
-        # its effect now lives in ranking_override (carried between turns),
-        # so drop it from the pass inputs — no point re-sending it every
-        # recompute. catalog_instructions entries are the same dict objects
-        # as in session_instructions, so retagging here propagates.
-        for index, result_row in enumerate(pass_result["instructions"]):
-            if result_row.get("ranking_only") and index < len(catalog_instructions):
-                catalog_instructions[index]["scope"] = "ranking"
-        price_desc = ranking_override.get("price") == "desc"
-        catalog_candidates.sort(key=lambda card: _shortlist_rank_key(
-            priority=card.get("priority", 1),
-            relevance=card.get("relevance", 1),
-            mismatch_count=card.get("mismatch_count", len(card.get("mismatches") or [])),
-            match_count=card.get("match_count", len(card.get("matches") or [])),
-            unknown_count=card.get("unknown_count", len(card.get("unknown") or [])),
-            price=_price_decimal(card.get("price")),
-            name=_normalized_text(card.get("name")),
-            article=_normalized_text(card.get("article")),
-            price_desc=price_desc,
-        ))
-        shortlist_removed = [card for card in catalog_candidates if card.get("_removed")]
-        catalog_candidates = [card for card in catalog_candidates if not card.get("_removed")][:10]
-        catalog_intent["ranking_override"] = ranking_override
-    else:
-        catalog_candidates = catalog_candidates[:10]
+
+    ai_seconds = round(time.perf_counter() - cascade_started_at, 3)
+    catalog_seconds = ai_seconds
+    rules_seconds = 0.0
+    shortlist_seconds = 0.0
+
+    plan = {"item": cascade_result.item, "queries": list(cascade_result.queries)}
+    ranking_override = cascade_result.ranking or ranking_override
+    catalog_intent = cascade_result.catalog_intent or {}
+    catalog_intent["ranking_override"] = ranking_override
+    tagged_requirements = cascade_result.requirement_selection
+    catalog_candidates = cascade_result.candidates
+    # A ranking-only instruction ("сначала дорогие") is carried in
+    # ranking_override between turns — drop it from the pass inputs.
+    for index, result_row in enumerate(cascade_result.instructions):
+        if result_row.get("ranking_only") and index < len(catalog_instructions):
+            catalog_instructions[index]["scope"] = "ranking"
+    pass_result = {
+        "instructions": cascade_result.instructions,
+        "outcome": cascade_result.outcome,
+        "ranking": cascade_result.ranking,
+        "usage": cascade_result.usage,
+        "error": cascade_result.error if (cascade_result.error and not catalog_candidates) else "",
+    }
+    shortlist_removed = [{**row, "_removed_reason": row.get("reason", "")} for row in cascade_result.removed]
+    catalog_outcome = {"sources": cascade_result.sources, "attempts": [{"cascade": cascade_result.diagnostics}]}
+    usage = {
+        "prompt_tokens": cascade_result.usage.get("prompt_tokens", 0) or 0,
+        "completion_tokens": cascade_result.usage.get("completion_tokens", 0) or 0,
+    }
 
     if progress_callback:
         progress_callback("finalizing")

@@ -312,6 +312,36 @@ class CatalogProduct(models.Model):
         return f"{self.article} · {self.full_name or self.name}" if self.article else (self.full_name or self.name)
 
 
+class CascadeCache(models.Model):
+    """Кэш каскада подбора товара (tenders/cascade.py).
+
+    - kind="tz": ключ = SHA1 названия позиции + отмеченных строк ТЗ.
+      payload = {item, queries, criteria}. Меняется ТЗ — меняется ключ,
+      промах происходит сам собой, оба вызова сильной модели (разбор ТЗ +
+      синонимы) пропускаются.
+    - kind="verdict": ключ = "<хэш ТЗ>|<id карточки>".
+      payload = {"grid": {"1": ["y", ""], "2": ["n", "8 ГБ"]}}. На повторном
+      прогоне того же ТЗ к агенту идут только карточки без записи.
+
+    Записи не инвалидируются вручную — ключ несёт в себе всё. Старьё чистится
+    командой prune_cascade_cache.
+    """
+
+    kind = models.CharField("Тип", max_length=16)
+    key = models.CharField("Ключ", max_length=200)
+    payload = models.JSONField("Содержимое", default=dict, blank=True)
+    created_at = models.DateTimeField("Обновлено", auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["kind", "key"], name="unique_cascade_cache_entry")]
+        indexes = [models.Index(fields=["kind", "key"])]
+        verbose_name = "Кэш каскада"
+        verbose_name_plural = "Кэш каскада"
+
+    def __str__(self):
+        return f"{self.kind}:{self.key[:40]}"
+
+
 class CatalogSyncRun(models.Model):
     STATUS_CHOICES = [("running", "Выполняется"), ("success", "Готово"), ("failed", "Ошибка")]
 

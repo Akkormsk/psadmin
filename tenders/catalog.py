@@ -4,10 +4,8 @@ import json
 import logging
 import os
 import re
-import threading
 import time
 import uuid
-from collections import Counter
 from functools import lru_cache
 from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree
@@ -767,207 +765,41 @@ def _normalized_cached(text):
     return re.sub(r"[^a-zа-я0-9%²³≥≤]+", " ", text.lower().replace("ё", "е")).strip()
 
 
-REQUIREMENT_FIELD_MARKERS = (
-    ("volume", ("объем", "вместимост")),
-    ("material", ("материал", "состав")),
-    ("color", ("цвет", "оттен")),
-    ("density", ("плотност",)),
-    ("size", ("размер",)),
-    ("mass", ("масса", "вес")),
-    ("length", ("длина",)),
-    ("width", ("ширина",)),
-    ("height", ("высота",)),
-    ("diameter", ("диаметр",)),
-    ("thickness", ("толщина",)),
-)
-
-MEASUREMENT_UNITS = {
-    "volume": "ml",
-    "mass": "g",
-    "length": "mm",
-    "width": "mm",
-    "height": "mm",
-    "diameter": "mm",
-    "thickness": "mm",
-    "density": "g/m²",
-}
 
 
-def _requirement_field(label):
-    return _requirement_field_cached(_normalized(label))
 
 
-@lru_cache(maxsize=4096)
-def _requirement_field_cached(normalized):
-    return next((field for field, markers in REQUIREMENT_FIELD_MARKERS if any(marker in normalized for marker in markers)), normalized)
 
 
-def _decimal_text(value):
-    normalized = format(value, "f")
-    if "." in normalized:
-        normalized = normalized.rstrip("0").rstrip(".")
-    return normalized or "0"
 
 
-def _normalized_measurement(field, label, value):
-    if field not in MEASUREMENT_UNITS:
-        return None
-    raw = f"{_text(label, 300)} {_text(value, 1000)}".lower().replace("ё", "е")
-    return _normalized_measurement_cached(field, raw)
 
 
-@lru_cache(maxsize=8192)
-def _normalized_measurement_cached(field, raw):
-    match = re.search(r"-?\d+(?:[.,]\d+)?", raw.replace(" ", ""))
-    if not match:
-        return None
-    try:
-        number = Decimal(match.group(0).replace(",", "."))
-    except InvalidOperation:
-        return None
-
-    factor = Decimal("1")
-    if field == "volume":
-        if re.search(r"(?:^|[^a-zа-я])(л|l|литр(?:а|ов)?)(?:$|[^a-zа-я])", raw) and not re.search(r"(?:мл|ml)", raw):
-            factor = Decimal("1000")
-    elif field == "mass":
-        if re.search(r"(?:кг|kg|килограмм)", raw):
-            factor = Decimal("1000")
-        elif re.search(r"(?:мг|mg|миллиграмм)", raw):
-            factor = Decimal("0.001")
-    elif field in {"length", "width", "height", "diameter", "thickness"}:
-        if re.search(r"(?:^|[^a-zа-я])(см|cm)(?:$|[^a-zа-я])", raw):
-            factor = Decimal("10")
-        elif re.search(r"(?:^|[^a-zа-я])(м|m|метр(?:а|ов)?)(?:$|[^a-zа-я])", raw) and not re.search(r"(?:мм|mm)", raw):
-            factor = Decimal("1000")
-    return {
-        "field": field,
-        "value": _decimal_text(number * factor),
-        "unit": MEASUREMENT_UNITS[field],
-    }
 
 
-def _normalized_requirement(requirement):
-    label = _text(requirement.get("label"), 300)
-    value = _text(requirement.get("value"), 1000)
-    field = _requirement_field(label)
-    measurement = _normalized_measurement(field, label, value)
-    scope = _requirement_scope(label)
-    if measurement:
-        result = {**measurement, "operator": "eq"}
-    else:
-        result = {"field": field, "operator": "eq", "value": _normalized(value), "unit": ""}
-    if scope:
-        result["scope"] = scope
-    return result
 
 
-def _requirement_scope(label):
-    return _requirement_scope_cached(_text(label, 300))
 
 
-@lru_cache(maxsize=4096)
-def _requirement_scope_cached(text):
-    prefix, separator, suffix = text.partition(":")
-    if not separator or not _normalized(prefix) or not _normalized(suffix):
-        return ""
-    suffix_field = _requirement_field(suffix)
-    prefix_field = _requirement_field(prefix)
-    return _normalized(prefix) if suffix_field and suffix_field != prefix_field else ""
 
 
-def _requirement_identity(requirement):
-    normalized = _normalized_requirement(requirement)
-    return normalized["field"], normalized["operator"], normalized["value"], normalized["unit"], normalized.get("scope", "")
 
 
-# catalog_candidates_for_line asks for the SAME line/effective_line's
-# requirement list on the order of ten times per pool product (thousands of
-# products per search) — these two are pure functions of `line`, so cache by
-# object identity for the life of one search. `line` is a dict (unhashable),
-# hence a manual id()-keyed cache rather than lru_cache; thread-local so two
-# concurrent searches (the assistant job pool runs >1 worker) never share or
-# clobber each other's cache, and it's reset at the top of
-# catalog_candidates_for_line so a reused id() from a GC'd dict never serves
-# stale data.
-_requirement_values_cache = threading.local()
 
 
-def _reset_requirement_values_cache():
-    _requirement_values_cache.by_id = {}
-    _requirement_values_cache.by_product_id = {}
 
 
-def _requirement_values(line):
-    by_id = getattr(_requirement_values_cache, "by_id", None)
-    key = id(line) if isinstance(line, dict) else None
-    if by_id is not None and key is not None and key in by_id:
-        return by_id[key]
-    requirements = line.get("requirements") if isinstance(line, dict) else {}
-    if isinstance(requirements, dict):
-        requirements = requirements.get("requirements", [])
-    if not isinstance(requirements, list):
-        result = []
-    else:
-        result, seen = [], set()
-        for value in requirements:
-            if not isinstance(value, dict):
-                continue
-            # A row the admin unchecked in the ТЗ ("не участвует в подборе")
-            # is treated as if it were never in the ТЗ — no match / mismatch
-            # / unknown, no effect on the search terms or the ranking. It
-            # still shows in the panel, just greyed.
-            if value.get("selected") is False:
-                continue
-            k = _requirement_identity(value)
-            if k in seen:
-                continue
-            seen.add(k)
-            result.append(value)
-    if by_id is not None and key is not None:
-        by_id[key] = result
-    return result
 
 
-def _product_requirement_values(line):
-    by_product_id = getattr(_requirement_values_cache, "by_product_id", None)
-    key = id(line) if isinstance(line, dict) else None
-    if by_product_id is not None and key is not None and key in by_product_id:
-        return by_product_id[key]
-    result = [value for value in _requirement_values(line) if not _requirement_scope(value.get("label"))]
-    if by_product_id is not None and key is not None:
-        by_product_id[key] = result
-    return result
 
 
-def _constraint_text(line, label_marker):
-    return " ".join(_text(value.get("value"), 1000) for value in _product_requirement_values(line) if label_marker in _normalized(value.get("label")))
 
 
-_TZ_STOPWORDS = frozenset({
-    "или", "равно", "более", "менее", "не", "для", "при", "как", "тип", "вид", "с", "и", "в",
-    "см", "мм", "гр", "шт", "мл", "кг", "продукции", "изделия", "товара", "сувенирной",
-})
 
 
-def _tz_token_set(line):
-    """The distinct meaningful words and numbers across all selected ТЗ
-    values — «синий», «32», «usb», «металл». Used as a pre-AI tiebreak so
-    the group-collapse keeps the variant the ТЗ actually asks for (a «32»
-    in the name beats a «16»), without the backend parsing any field."""
-    tokens = set()
-    for value in _product_requirement_values(line):
-        for token in _normalized(value.get("value")).split():
-            if len(token) >= 2 and token not in _TZ_STOPWORDS:
-                tokens.add(token)
-    return tokens
 
 
-def _tz_name_hits(product, tz_tokens):
-    if not tz_tokens:
-        return 0
-    words = set(_normalized(f"{product.name} {product.full_name} {product.size}").split())
-    return len(tz_tokens & words)
+
 
 
 def _meaningful_tokens(value):
@@ -1226,52 +1058,8 @@ def _capacity_mb(text):
 _COMPLIANCE_MARKING_RE = re.compile(r"честн\w*\s*знак|црпт|обязательн\w*\s+маркиров")
 
 
-def _colour_conflict(product, line):
-    """True only when the ТЗ names a colour and the product's own colour is
-    known and clearly a different family — белый asked, красный offered —
-    with no matching shade hiding in the name. Anything softer than that
-    (colour not stated, an adjacent shade) is left for the AI pass to
-    weigh; this is the one colour check that removes a card outright."""
-    required = _constraint_text(line, "цвет")
-    if not _meaningful_tokens(required):
-        return False
-    values = product.colors if isinstance(product.colors, list) and product.colors else _attribute_values(product, ("цвет",))
-    offered = " ".join(values)
-    if not _meaningful_tokens(offered) or _colors_compatible(required, offered)[0]:
-        return False
-    name_colors = []
-    if isinstance(product.raw_data, dict):
-        name_colors = [str(value) for value in product.raw_data.get("name_colors", []) if str(value).strip()]
-    if not name_colors:
-        name_colors = _gifts_name_colors(product.full_name or product.name)
-    if name_colors and _colors_compatible(required, " ".join(name_colors))[0]:
-        return False
-    required_family = _color_family(required)
-    offered_family = _color_family(offered)
-    return bool(
-        required_family and offered_family
-        and required_family != offered_family
-        and COLOR_PARENTS.get(required_family) != offered_family
-        and COLOR_PARENTS.get(offered_family) != required_family
-    )
 
 
-def _catalog_product_eligibility(product, line, quantity):
-    """Step 5 — the objective hard gates, the only per-product check the
-    backend still runs. Everything a person has to read and weigh
-    (dimensions, capacity, material, density, interface, print method, …)
-    is graded by the AI pass (services._run_shortlist_pass), not here.
-
-    A card is rejected only for a clear colour-family conflict or for
-    being genuinely unavailable. Type is handled upstream by the name
-    search and the AI name filter; a forbidden value by the AI pass and
-    admin feedback."""
-    if _colour_conflict(product, line):
-        return {"status": "rejected", "hard_codes": ["colour"], "reasons": ["Цвет не подходит по ТЗ"]}
-    transit = max(0, _integer(getattr(product, "stock_transit", 0)))
-    if quantity > 0 and product.total_stock <= 0 and transit <= 0 and not product.is_on_order:
-        return {"status": "rejected", "hard_codes": ["out_of_stock"], "reasons": ["Нет ни на складе, ни в пути, ни под заказ"]}
-    return {"status": "ok", "hard_codes": [], "reasons": []}
 
 
 
@@ -1352,7 +1140,7 @@ def _text_search_pool(supplier_code, phrases):
 def _score_pool_relevance(pool, item_phrase, phrases):
     """Merge the per-supplier name-matched lists into one order — the most
     query words in the name first — and tag every card with `_relevance`
-    for the ranking tiebreak (`_shortlist_rank_key`):
+    for the ranking tiebreak (Cascade.step_7_collapse_and_sort):
 
       0  the whole item phrase is in the name, or the name carries two or
          more distinct query words  («Сумка-шоппер …», «USB-флешка …»)
@@ -1412,313 +1200,5 @@ def _refresh_live_oasis_prices(client, candidates, quantity=0):
         )
 
 
-def _shortlist_rank_key(
-    priority, mismatch_count, unknown_count, price, name, article, price_desc=False, relevance=1,
-    match_count=0,
-):
-    """The one fixed ordering for a search shortlist — no weights, no
-    scores, read top to bottom like words in a dictionary:
-
-      1. raised priority (0) before normal (1)
-      2. fewer mismatches — a card that breaks a ТЗ point comes last
-      3. MORE ✓ — a card that explicitly meets more of the ТЗ comes first
-      4. fewer unknowns — fewer gaps
-      5. text relevance (0 = distinctive query word in the name, 1 = only a
-         generic word). A tiebreak between cards the ТЗ ranks equal.
-      6. a card with a price before one without; then cheaper — or,
-         session-only, dearer (``price_desc``)
-      7. name, then article — a stable tiebreak, not a ranking signal
-
-    Used both for the first deterministic sort and for the re-sort after
-    the AI shortlist pass grades every card against the ТЗ — the pass
-    changes this function's inputs, never the function."""
-    has_price = price is not None
-    if price_desc:
-        price_key = -price if has_price else Decimal(0)
-    else:
-        price_key = price if has_price else Decimal("Infinity")
-    return (
-        0 if priority == 0 else 1,
-        mismatch_count,
-        -match_count,
-        unknown_count,
-        relevance,
-        0 if has_price else 1,
-        price_key,
-        name or "",
-        article or "",
-    )
 
 
-def catalog_candidates_for_line(
-    line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
-    shortlist_limit=None, name_filter=None,
-):
-    """Return a name-relevance-then-price ranked shortlist from the Oasis +
-    Gifts mirrors. Steps 3–5 of the cascade: search by product name, the
-    optional AI name filter, the colour + availability hard gate, and one
-    card per supplier product group.
-
-    ``shortlist_limit`` — how many cards to serialise for the AI pass
-    (default ``limit``; the training flow passes 200 so the whole gated
-    set is graded, not a top-N slice).
-
-    ``name_filter`` — an optional callable the caller (services.py) sets to
-    the cheap AI name pass (step 4). It gets ``[(external_id, name), ...]``
-    for the whole name-matched pool and returns the set of ids to keep (a
-    case / box / holder / gift set is dropped), or ``None`` when it could
-    not run — the pool then passes through untouched. It never sees more
-    than the name; the whole-card review is the later shortlist pass."""
-    _reset_requirement_values_cache()
-    try:
-        quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
-    except (InvalidOperation, TypeError, ValueError):
-        quantity = 0
-    intent = intent if isinstance(intent, dict) else {}
-    synonyms = intent.get("synonyms") if isinstance(intent.get("synonyms"), list) else []
-    name_anchors = tuple(dict.fromkeys(
-        _text(value, 300) for value in [intent.get("item", ""), *synonyms] if _text(value, 300)
-    ))
-    if not name_anchors:
-        name_anchors = tuple(value for value in (
-            _text(intent.get("product_class", ""), 300), _text(line.get("name", ""), 300),
-        ) if value)
-    pool = []
-    source_status = {
-        "oasis": {"status": "not_searched", "message": "", "received": 0},
-        "gifts": {"status": "not_searched", "message": "", "received": 0},
-    }
-
-    query_phrases = list(name_anchors)
-
-    # Oasis is optional: a mirror that has not been synced must not suppress
-    # Gifts. Both suppliers are searched the same way — by product name over
-    # the local mirror (`python manage.py sync_oasis_catalog` /
-    # `sync_gifts_catalog`), no categories, no live crawl. Live price and
-    # stock for the handful of Oasis cards actually shown are refreshed in
-    # one batched call right before returning (see below).
-    oasis_used_mirror = CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists()
-    try:
-        client = client or OasisClient()
-        if oasis_used_mirror:
-            oasis_pool = _aggregate_color_variants(_text_search_pool("oasis", query_phrases), "oasis")
-            pool.extend(oasis_pool)
-            source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
-        else:
-            source_status["oasis"] = {
-                "status": "not_configured",
-                "message": "Каталог Oasis ещё не загружен (sync_oasis_catalog).",
-                "received": 0,
-            }
-    except CatalogSyncError as exc:
-        source_status["oasis"] = {"status": "failed", "message": str(exc)[:300], "received": 0}
-    except Exception:
-        logger.exception("Unexpected Oasis catalogue search failure")
-        source_status["oasis"] = {
-            "status": "failed",
-            "message": "Oasis вернул данные в неожиданном формате.",
-            "received": 0,
-        }
-
-    # Gifts: full-text over the stored name + description, like typing into
-    # gifts.ru's own search box. Collapse the per-size rows into one card
-    # per colour (Gifts has no color_group_id, so this groups by the name
-    # with the ", размер …" tail stripped).
-    gifts_supplier_exists = CatalogSupplier.objects.filter(code="gifts", is_active=True).exists()
-    cached_products = _aggregate_color_variants(_text_search_pool("gifts", query_phrases), "gifts")
-    pool.extend(cached_products)
-    source_status["gifts"] = {
-        "status": "success" if gifts_supplier_exists else "not_configured",
-        "message": "" if gifts_supplier_exists else "Каталог Gifts ещё не загружен.",
-        "received": len(cached_products),
-    }
-    ranked = []
-    # Order the whole name-matched pool by how many query words each name
-    # carries and tag `_relevance` for the ranking tiebreak. No hard cap —
-    # the pool is names only and the eligibility pass over it is cheap
-    # (~0.4s for 2000, per-requirement work cached).
-    relevance_scored = bool(oasis_used_mirror or gifts_supplier_exists)
-    if relevance_scored:
-        pool = _score_pool_relevance(
-            pool, (intent or {}).get("item", "") if isinstance(intent, dict) else "", query_phrases,
-        )
-    for product in pool:
-        if not hasattr(product, "_relevance"):
-            product._relevance = 1
-
-    # Step 4 — the cheap AI name pass. It reads every product NAME in the
-    # pool and drops the ones that are not the requested item (a case, box,
-    # holder, cable, gift set …); ambiguous names stay. Runs only when the
-    # caller wired it (the training flow does, once a ТЗ / feedback is
-    # present); a failed call returns None and the pool is kept whole.
-    name_filter_removed = 0
-    if name_filter is not None and pool:
-        keep_ids = name_filter([(product.external_id, product.full_name or product.name) for product in pool])
-        if keep_ids is not None:
-            keep_ids = {str(value) for value in keep_ids}
-            before = len(pool)
-            pool = [product for product in pool if str(product.external_id) in keep_ids]
-            name_filter_removed = before - len(pool)
-
-    # Step 5 — the objective hard gates (colour family, availability). Every
-    # readable ТЗ point — dimensions, capacity, material, density, interface,
-    # print method, free-text admin instructions — is graded later by the AI
-    # pass (services._run_shortlist_pass), which reads the whole card. The
-    # backend here only removes what a person would not even open the card
-    # for.
-    rejections = {
-        "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
-        "product_type": 0, "colour": 0, "forbidden": 0, "missing_required": 0,
-    }
-    eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
-    rejection_reasons, partial_reasons = {}, {}
-    tz_tokens = _tz_token_set(line)
-    for product in pool:
-        eligibility = _catalog_product_eligibility(product, line, quantity)
-        if eligibility["status"] == "rejected":
-            eligibility_counts["rejected"] += 1
-            for code in eligibility["hard_codes"]:
-                if code in rejections:
-                    rejections[code] += 1
-            for reason in eligibility["reasons"]:
-                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
-            continue
-        eligibility_counts["exact_eligible"] += 1
-        product._tz_hits = _tz_name_hits(product, tz_tokens)
-        ranked.append(product)
-
-    # Pre-AI order: name relevance, then how many ТЗ words the name carries
-    # (a «32» beats a «16» for «≥ 32 ГБ»), then price. The group-collapse
-    # below keeps the FIRST card of each group, so this order decides which
-    # variant is shown; the AI pass then grades every card and the fixed
-    # sort key re-orders on its numbers.
-    ranking_override = (intent or {}).get("ranking_override", {}) if isinstance(intent, dict) else {}
-    price_desc = _normalized(ranking_override.get("price")) == "desc"
-    ranked.sort(key=lambda product: (
-        getattr(product, "_relevance", 1),
-        -getattr(product, "_tz_hits", 0),
-        (-(product.effective_price or Decimal(0))) if price_desc
-        else (product.effective_price if product.effective_price is not None else Decimal("Infinity")),
-        _normalized(product.full_name or product.name),
-        _normalized(product.article),
-    ))
-    display_ranked = ranked
-    selected, group_cards = [], {}
-    for product in display_ranked:
-        # One card per supplier product group (`group_id` — the stable
-        # numeric id every colour / size / capacity SKU of one product
-        # shares). The list is sorted by _tz_hits first, so the SKU whose
-        # name carries the most ТЗ words — «…32 ГБ…» for «≥ 32 ГБ» — is the
-        # one kept; every other SKU rides along as a pickable variant. The
-        # AI pass then grades that card and can still say the ТЗ is not met.
-        group_key = product.group_id or product.external_id
-        if group_key in group_cards:
-            # Another SKU of a group already shown: keep it only as a
-            # pickable option on that card, never a second row.
-            kept = group_cards[group_key]
-            twin_size = _variant_size(product)
-            if twin_size and twin_size not in kept["sizes"]:
-                kept["sizes"].append(twin_size)
-            if product.external_id not in kept["variant_ids"]:
-                kept["variant_ids"].append(product.external_id)
-                kept["variants"].append({
-                    "size": twin_size,
-                    "product_id": product.external_id,
-                    "article": product.article,
-                    "stock": max(0, product.total_stock),
-                    "price": str(product.effective_price.quantize(Decimal("0.01"))) if product.effective_price is not None else None,
-                })
-            continue
-        try:
-            price = product.effective_price
-            product_url = product.product_url
-            supplier_site = urlparse(product_url or product.supplier.base_url).netloc.lower()
-            if supplier_site.startswith("www."):
-                supplier_site = supplier_site[4:]
-            selected.append({
-                "id": product.external_id,
-                "supplier_code": product.supplier.code,
-                "supplier_name": product.supplier.name,
-                "supplier_site": supplier_site,
-                "external_id": product.external_id,
-                "article": product.article,
-                "name": product.full_name or product.name,
-                "price": str(price) if price is not None else None,
-                "cost_total": str((price * quantity).quantize(Decimal("0.01"))) if price is not None and quantity > 0 else None,
-                "stock": product.total_stock,
-                "delivery_days": product.delivery_days,
-                "image_url": product.image_url,
-                "url": product_url,
-                # The verdict starts empty — the AI pass fills matches /
-                # mismatches / unknown for every ТЗ row and the fixed sort
-                # key re-orders on those counts.
-                "fit": "exact",
-                "matches": [],
-                "mismatches": [],
-                "unknown": [],
-                "mismatch_count": 0,
-                "unknown_count": 0,
-                # 0 = raised, 1 = normal. Only the AI shortlist pass raises a
-                # card; fed straight into _shortlist_rank_key on the re-sort.
-                "priority": 1,
-                # Text-relevance tier (0 = >=2 query words in the name / the
-                # whole item phrase, 1 = one). A tiebreak in _shortlist_rank_key.
-                "relevance": getattr(product, "_relevance", 1),
-                "eligibility": "exact_eligible",
-                "eligibility_reasons": [],
-                "synced_at": timezone.now().isoformat(),
-                "category": (
-                    product.category_names[0]
-                    if isinstance(product.category_names, list) and product.category_names
-                    else "Поиск по названию"
-                ),
-                "sizes": list(product.raw_data.get("sizes", []) or ([_variant_size(product)] if _variant_size(product) else [])) if isinstance(product.raw_data, dict) else [],
-                "variant_ids": list(product.raw_data.get("variant_ids", []) or [product.external_id]) if isinstance(product.raw_data, dict) else [product.external_id],
-                "color_group_id": product.color_group_id or product.external_id,
-                "variants": list(_product_variants(product)),
-                # Full card text for the semantic review step (LLM reads these, not the backend).
-                "description": _text(product.description, 800),
-                "attributes": [
-                    {"name": _text(value.get("name"), 100), "value": _text(value.get("value"), 250)}
-                    for value in (product.attributes if isinstance(product.attributes, list) else [])
-                    if isinstance(value, dict) and _text(value.get("name"), 100) and _text(value.get("value"), 250)
-                ][:20],
-                "materials": [_text(value, 200) for value in (product.materials if isinstance(product.materials, list) else []) if _text(value, 200)],
-                "colors": [_text(value, 120) for value in (product.colors if isinstance(product.colors, list) else []) if _text(value, 120)],
-            })
-        except Exception:
-            # One malformed card (odd supplier payload) must not blank the
-            # whole shortlist — skip it and keep ranking the rest.
-            logger.exception("Skipped a catalogue candidate that failed to serialise")
-            continue
-        group_cards[group_key] = selected[-1]
-        if len(selected) >= max(1, shortlist_limit or limit):
-            break
-    if oasis_used_mirror:
-        # The mirror can be hours old; the price and stock actually quoted to
-        # the tender must be current. One batched call for just the handful
-        # of Oasis cards making the shortlist — not the whole crawled pool.
-        _refresh_live_oasis_prices(client, selected, quantity=quantity)
-    if include_diagnostics:
-        return {
-            "candidates": selected,
-            "sources": source_status,
-            "attempts": [{
-                "mode": "text_search",
-                "query_phrases": list(query_phrases),
-                "relevance_tiers": sorted(Counter(getattr(product, "_relevance", 1) for product in pool).items()),
-                "name_hit_counts": sorted(Counter(getattr(product, "_name_hits", 0) for product in pool).items(), reverse=True),
-                "name_filter_removed": name_filter_removed,
-                "pool_count": len(pool),
-                "rejections": rejections,
-                "eligibility_counts": eligibility_counts,
-                "rejection_reasons": rejection_reasons,
-                "partial_reasons": partial_reasons,
-                "exact_count": eligibility_counts["exact_eligible"],
-                "partial_count": eligibility_counts["partial_eligible"],
-                "candidate_count": len(selected),
-            }],
-            "category_usage": {},
-            "category_errors": [],
-        }
-    return selected
