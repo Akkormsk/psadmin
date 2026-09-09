@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}Сверка остатков · Касса{% endblock %}
+{% block title %}Сверка остатков · Финансы{% endblock %}
 
 {% block content %}
 <div class="container">
-  <a href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}" class="back-link">← Касса</a>
+  <a href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}" class="back-link">← Финансы</a>
   <h1>Сверка остатков</h1>
   <section class="panel form-panel">
     <p class="settings-description">Сверка задаёт проверенный остаток на утро выбранной даты. Все последующие дни будут считаться от этой точки.</p>

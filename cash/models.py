@@ -80,6 +80,59 @@ class CashTransaction(models.Model):
         return f"{self.get_account_display()} · {self.get_direction_display()} · {self.amount}"
 
 
+class BankPayment(models.Model):
+    """Входящий платёж из Модульбанка — зеркало транзакции (operation-history / веб-хук).
+
+    Строки создаёт только синхронизация с банком, руками их не заводят и не удаляют.
+    Админ может скрыть платёж от менеджеров флагом ``hidden_from_managers``.
+    """
+
+    external_id = models.CharField("ID операции в банке", max_length=64, unique=True)
+    status = models.CharField("Статус в банке", max_length=32, blank=True)
+    direction = models.CharField("Направление", max_length=16, blank=True)
+    amount = models.DecimalField("Сумма", max_digits=14, decimal_places=2)
+    currency = models.CharField("Валюта", max_length=3, default="RUR")
+    counterparty_name = models.CharField("Плательщик", max_length=255, blank=True)
+    counterparty_inn = models.CharField("ИНН плательщика", max_length=20, blank=True)
+    counterparty_account = models.CharField("Счёт плательщика", max_length=34, blank=True)
+    counterparty_bank = models.CharField("Банк плательщика", max_length=255, blank=True)
+    payment_purpose = models.TextField("Назначение платежа", blank=True)
+    doc_number = models.CharField("№ документа", max_length=32, blank=True)
+    account_number = models.CharField("Счёт зачисления", max_length=34, blank=True)
+    executed_at = models.DateTimeField("Дата проведения", null=True, blank=True)
+    operation_date = models.DateField("Дата операции", db_index=True)
+    hidden_from_managers = models.BooleanField("Скрыт от менеджеров", default=False)
+    raw = models.JSONField("Ответ банка", default=dict, blank=True)
+    created_at = models.DateTimeField("Загружен", auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-operation_date", "-executed_at", "-pk")
+        verbose_name = "Платёж из банка"
+        verbose_name_plural = "Платежи из банка"
+
+    def __str__(self):
+        return f"{self.operation_date:%d.%m.%Y} · {self.amount} {self.currency} · {self.counterparty_name}"
+
+
+class BankSyncState(models.Model):
+    """Одна строка (pk=1): когда последний раз забирали платежи и чем закончилось."""
+
+    last_synced_at = models.DateTimeField("Последняя синхронизация", null=True, blank=True)
+    last_status = models.CharField("Результат", max_length=255, blank=True)
+
+    class Meta:
+        verbose_name = "Состояние синхронизации с банком"
+        verbose_name_plural = "Состояние синхронизации с банком"
+
+    def __str__(self):
+        return self.last_status or "нет данных"
+
+    @classmethod
+    def load(cls):
+        return cls.objects.get_or_create(pk=1)[0]
+
+
 class CashAuditLog(models.Model):
     ACTION_CREATED = "created"
     ACTION_UPDATED = "updated"

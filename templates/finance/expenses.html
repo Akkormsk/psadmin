@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="container">
-  <a href="{% url 'finance:calculation' %}?period={{ period.code }}" class="back-link">← Финансы</a>
+  <a href="{% url 'finance:calculation' %}?period={{ period.code }}" class="back-link">← Зарплата</a>
   <h1>Постоянные расходы</h1>
   <form method="post" class="content-stack">
     {% csrf_token %}

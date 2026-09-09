@@ -197,3 +197,11 @@ LOGGING = {
         },
     },
 }
+
+# --- Модульбанк: входящие платежи в разделе «Финансы» ---
+# Токен из ЛК Модульбанка (Настройки → Услуги → API Банка), права account-info + operation-history.
+MODULBANK_TOKEN = os.getenv("MODULBANK_TOKEN", "")
+# Системный id счёта (accountId). Можно несколько через запятую. Взять из `manage.py sync_modulbank --list-accounts`.
+MODULBANK_ACCOUNT_ID = os.getenv("MODULBANK_ACCOUNT_ID", "")
+# "1" — обращаться к песочнице Модульбанка (тестовые данные, без веб-хуков).
+MODULBANK_SANDBOX = os.getenv("MODULBANK_SANDBOX", "0") == "1"

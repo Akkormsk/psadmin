@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}История изменений · Касса{% endblock %}
+{% block title %}История изменений · Финансы{% endblock %}
 
 {% block content %}
 <div class="container">
-  <a href="{% url 'cash_home' %}" class="back-link">← Касса</a>
+  <a href="{% url 'cash_home' %}" class="back-link">← Финансы</a>
   <h1>История изменений кассы</h1>
   <section class="panel">
     {% if events %}
