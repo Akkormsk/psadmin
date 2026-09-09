@@ -7,14 +7,11 @@
   .bank-filters input[type="date"] { width: 148px; }
   .bank-filters input[type="search"] { width: 260px; }
   .bank-filters .field--actions { flex-direction: row; align-items: center; gap: 8px; }
-  .bank-summary { margin: 0 0 12px; color: #4b5563; font-size: 14px; }
+  .bank-summary { margin: 0 0 10px; color: #4b5563; font-size: 14px; }
   .bank-summary strong { color: #111827; }
-  .bank-toggle { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 16px; padding: 6px 13px; border-radius: 999px; border: 1px solid #d7dbe7; background: #fff; color: #4b5563; font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: background .12s ease, border-color .12s ease, color .12s ease; }
-  .bank-toggle:hover { background: #f9fafb; border-color: #c7ccd8; }
-  .bank-toggle.is-active { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; }
-  .bank-toggle__icon { font-size: 14px; line-height: 1; }
-  .bank-toggle__count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: #eef2ff; color: #4338ca; font-size: 11px; font-weight: 700; }
-  .bank-toggle.is-active .bank-toggle__count { background: #c7d2fe; }
+  .bank-internal-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 16px; color: #6b7280; font-size: 13px; cursor: pointer; user-select: none; }
+  .bank-internal-check input { width: 16px; height: 16px; margin: 0; accent-color: #4338ca; cursor: pointer; flex: none; }
+  .bank-internal-check__count { color: #9ca3af; }
   .bank-note { margin: 12px 0 0; color: #6b7280; font-size: 12px; }
   .bank-status-line { color: #6b7280; font-size: 13px; }
   .bank-hint { margin: 0 0 16px; padding: 12px 14px; border-radius: 11px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 13px; }
@@ -70,12 +67,11 @@
     {% if bank_count %}Платежей: <strong>{{ bank_count }}</strong> · на сумму <strong>{{ bank_total|floatformat:2|intcomma }} ₽</strong>{% else %}За выбранный период платежей нет{% endif %}
   </p>
   {% if bank_is_admin and bank_internal_count %}
-  <a class="bank-toggle{% if bank_show_internal %} is-active{% endif %}" href="{{ bank_toggle_url }}"
-     title="{% if bank_show_internal %}Скрыть переводы между своими счетами{% else %}Показать переводы между своими счетами{% endif %}">
-    <span class="bank-toggle__icon" aria-hidden="true">&#8646;</span>
-    Переводы между своими счетами
-    <span class="bank-toggle__count">{{ bank_internal_count }}</span>
-  </a>
+  <label class="bank-internal-check">
+    <input type="checkbox" {% if bank_show_internal %}checked{% endif %} onchange="location.href='{{ bank_toggle_url }}'">
+    Показывать переводы между своими счетами
+    <span class="bank-internal-check__count">({{ bank_internal_count }})</span>
+  </label>
   {% endif %}
 
   {% if bank_payments %}
