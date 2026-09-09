@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% load humanize %}
 
+{% block title %}Зарплата{% endblock %}
+
 {% block content %}
 <div class="container">
   <a href="/" class="back-link">← На главную</a>
@@ -18,7 +20,12 @@
             {% endfor %}
           </select>
         </form>
-        {% if is_admin_view %}<a class="button-secondary" href="{% url 'finance:manager_settings' %}">Настройки сотрудников</a>{% endif %}
+        {% if is_admin_view %}
+        <div class="panel-actions">
+          <a class="button-secondary" href="{% url 'payroll:index' %}?period={{ period.code }}">Финансовый учёт</a>
+          <a class="button-secondary" href="{% url 'finance:manager_settings' %}">Настройки сотрудников</a>
+        </div>
+        {% endif %}
       </div>
     </div>
 
@@ -67,18 +74,154 @@
     </form>
   </div>
 
-  {% if is_admin_view %}<div class="panel">
-    <div class="panel-header"><h2 class="panel-title">Прибыль компании</h2><a class="button-secondary" href="{% url 'finance:expenses' %}?period={{ period.code }}">Редактировать расходы</a></div>
-    <div class="table-wrapper">
-    <table class="table">
-      <tr><th>Показатель</th><th>Сумма</th></tr>
-      <tr><td>Прибыль по заказам и макетам</td><td>{{ order_total|floatformat:2|intcomma }} ₽</td></tr>
-      <tr><td>Зарплаты сотрудников</td><td>− {{ manager_payroll|floatformat:2|intcomma }} ₽</td></tr>
-      <tr><td>Постоянные расходы</td><td>− {{ expense_total|floatformat:2|intcomma }} ₽</td></tr>
-      <tr><th>Прибыль после расходов</th><th>{{ company_profit|floatformat:2|intcomma }} ₽</th></tr>
-    </table>
+  <div class="panel panel--separated">
+    <div class="panel-header panel-header--toolbar">
+      <h2 class="panel-title">{% if is_admin_view %}Заказы{% else %}Мои заказы{% endif %} за период</h2>
+      {% if is_admin_view %}
+      <form method="get" class="toolbar-control">
+        <input type="hidden" name="period" value="{{ period.code }}">
+        <label for="order_manager">Сотрудник</label>
+        <select id="order_manager" name="order_manager" onchange="this.form.submit()">
+          <option value="">Все сотрудники</option>
+          {% for manager in order_managers %}
+          <option value="{{ manager.pk }}" {% if selected_order_manager == manager.pk|stringformat:"s" %}selected{% endif %}>{{ manager.get_full_name|default:"Имя не указано" }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+      <div class="panel-actions">
+        <button type="button" class="button-success" id="open-orderrecord-modal">Создать запись</button>
+      </div>
     </div>
-  </div>{% endif %}
+    <p class="total-profit">Прибыль по заказам за период: <strong>{{ total_gross_profit|floatformat:2|intcomma }} руб.</strong></p>
+    {% if records %}
+    <div class="table-wrapper">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Номер заказа / макет</th>
+            <th>Валовая прибыль</th>
+            {% if is_admin_view %}<th>Ответственный</th>{% endif %}
+            <th>Обновлён</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for record in records %}
+          <tr class="table-row">
+            <td>{{ record.order_number }}{% if record.record_type == 'design' %}<span class="record-type-badge">Макет</span>{% endif %}</td>
+            <td>{{ record.gross_profit|floatformat:2|intcomma }} <span class="money-suffix">руб.</span></td>
+            {% if is_admin_view %}
+            <td><span class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=record.manager %}<span>{{ record.manager.get_full_name|default:"Имя не указано" }}</span></span></td>
+            {% endif %}
+            <td>{{ record.updated_at|date:"d.m.Y H:i" }}</td>
+            <td class="row-actions order-row-actions"><div class="hover-actions">
+              <button type="button" class="mobile-actions-toggle" aria-label="Действия">⋯</button>
+              <button type="button" class="hover-action js-order-edit-open" data-modal-id="order-edit-modal-{{ record.pk }}" title="Изменить" aria-label="Изменить запись">✎</button>
+              <form method="post" action="{% url 'finance:orders_delete' record.pk %}" onsubmit="return confirm('Удалить запись «{{ record.order_number|escapejs }}»?')">
+                {% csrf_token %}
+                <input type="hidden" name="period" value="{{ period.code }}">
+                <button type="submit" class="hover-action" title="Удалить" aria-label="Удалить запись">×</button>
+              </form>
+            </div></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p>Записей за период пока нет.</p>
+    {% endif %}
+  </div>
+
+  </div>
 </div>
+
+<div class="modal-overlay" id="orderrecord-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Создать запись</h2>
+      <button type="button" class="modal-close" id="close-orderrecord-modal">&times;</button>
+    </div>
+    {% include "finance/_orderrecord_form.html" %}
+  </div>
 </div>
+
+{% for record in records %}
+<div class="modal-overlay order-edit-modal" id="order-edit-modal-{{ record.pk }}" aria-hidden="true">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Изменить запись</h2>
+      <button type="button" class="modal-close js-order-edit-close" aria-label="Закрыть">&times;</button>
+    </div>
+    <form method="post" action="{% url 'finance:orders_update' record.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="period" value="{{ period.code }}">
+      {% for field in record.edit_form %}
+      <div class="form-group{% if field.name == 'record_type' %} form-group--record-type{% endif %}">
+        {% if field.name == 'record_type' %}<span class="form-label">{{ field.label }}</span>{% else %}<label for="{{ field.id_for_label }}"{% if field.name == 'order_number' %} class="order-reference-label"{% endif %}>{{ field.label }}</label>{% endif %}
+        {{ field }}
+        {{ field.errors }}
+      </div>
+      {% endfor %}
+      <div class="table-actions">
+        <button type="button" class="button-secondary js-order-edit-close">Отмена</button>
+        <button type="submit" class="button-success">Сохранить</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+<script>
+  (function () {
+    const modal = document.getElementById("orderrecord-modal");
+    const openBtn = document.getElementById("open-orderrecord-modal");
+    const closeBtn = document.getElementById("close-orderrecord-modal");
+    const shouldOpen = {{ open_order_modal|yesno:"true,false" }};
+
+    function openModal() { modal.classList.add("is-open"); }
+    function closeModal() { modal.classList.remove("is-open"); }
+
+    openBtn.addEventListener("click", openModal);
+    closeBtn.addEventListener("click", closeModal);
+    modal.addEventListener("click", function (event) { if (event.target === modal) closeModal(); });
+    if (shouldOpen) openModal();
+
+    function syncOrderReference(form) {
+      const selectedType = form.querySelector('input[name$="record_type"]:checked');
+      const reference = form.querySelector('input[name$="order_number"]');
+      if (!selectedType || !reference) return;
+      const isDesign = selectedType.value === "design";
+      const label = form.querySelector('label[for="' + reference.id + '"]');
+      if (label) label.textContent = isDesign ? "Название макета" : "Номер заказа";
+      reference.inputMode = isDesign ? "text" : "numeric";
+      reference.placeholder = isDesign ? "Например: макет вывески" : "Только цифры";
+    }
+    document.querySelectorAll('#orderrecord-modal form, .order-edit-modal form').forEach(function (form) {
+      syncOrderReference(form);
+      form.querySelectorAll('input[name$="record_type"]').forEach(function (radio) {
+        radio.addEventListener("change", function () { syncOrderReference(form); });
+      });
+    });
+
+    document.querySelectorAll(".js-order-edit-open").forEach(function (button) {
+      button.addEventListener("click", function () {
+        document.getElementById(button.dataset.modalId).classList.add("is-open");
+      });
+    });
+    document.querySelectorAll(".order-edit-modal").forEach(function (editModal) {
+      editModal.querySelectorAll(".js-order-edit-close").forEach(function (button) {
+        button.addEventListener("click", function () { editModal.classList.remove("is-open"); });
+      });
+      editModal.addEventListener("click", function (event) {
+        if (event.target === editModal) editModal.classList.remove("is-open");
+      });
+    });
+
+    {% if open_order_edit_id %}
+    document.getElementById("order-edit-modal-{{ open_order_edit_id }}").classList.add("is-open");
+    {% endif %}
+  })();
+</script>
 {% endblock %}

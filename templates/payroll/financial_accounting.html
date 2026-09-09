@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Финансовый учёт{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="/" class="back-link">← На главную</a>
+  <h1>Финансовый учёт</h1>
+
+  <div class="content-stack">
+    <div class="panel">
+      <div class="panel-header panel-header--toolbar">
+        <h2 class="panel-title">Период</h2>
+        <form method="get" class="compact-period-control">
+          <label for="period">Учётный период</label>
+          <select id="period" name="period" onchange="this.form.submit()">
+            {% for value, label in period_options %}
+            <option value="{{ value }}" {% if value == period.code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </form>
+        <div class="panel-actions">
+          <a class="button-secondary" href="{% url 'finance:expenses' %}?period={{ period.code }}">Редактировать расходы</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2 class="panel-title">Прибыль компании</h2></div>
+      <div class="table-wrapper">
+        <table class="table">
+          <tr><th>Показатель</th><th>Сумма</th></tr>
+          <tr><td>Прибыль по заказам и макетам</td><td>{{ order_total|floatformat:2|intcomma }} ₽</td></tr>
+          <tr><td>Зарплаты сотрудников</td><td>− {{ manager_payroll|floatformat:2|intcomma }} ₽</td></tr>
+          <tr><td>Постоянные расходы</td><td>− {{ expense_total|floatformat:2|intcomma }} ₽</td></tr>
+          <tr><th>Прибыль после расходов</th><th>{{ company_profit|floatformat:2|intcomma }} ₽</th></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
