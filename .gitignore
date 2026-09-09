@@ -16,3 +16,4 @@ gifts_instructions.md
 psadmin-local-export-catalog.json
 
 .claude/
+default_*.sqlite3
