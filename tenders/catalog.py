@@ -2369,91 +2369,73 @@ def _stem_in_words(stem, words):
 
 
 def _text_search_pool(supplier_code, phrases):
-    """Search a locally-mirrored supplier catalogue the way the supplier's
-    own site search works: one full-text query over search_text (name +
-    description + attributes) for every phrase of the plan and every
-    meaningful word in it, OR-ed together. No category step.
+    """Every mirrored card of one supplier whose PRODUCT NAME carries a
+    query word (as a stem). Description and attributes are deliberately not
+    searched here: a card that merely mentions «флешка» somewhere in its
+    spec table is not a flash drive, and a name-only pool is small enough
+    (a few thousand) to hand straight to the AI name filter without a cap.
+    What the rest of the card says is read later — by that filter and by
+    the per-ТЗ agent pass.
 
-    The keyword category picker it replaces (`_category_candidates`) kept
-    landing on a sibling node — for "Сумка шопер" it offered пляжные /
-    спортивные / поясные сумки and never even nominated "Для шопинга" —
-    and then only its top two categories were searched. Text-first has no
-    category to get wrong: every product whose name or description carries
-    a word of the query is a candidate, and relevance (see
-    `_score_pool_relevance`) decides the order."""
-    terms = []
-    for phrase in phrases:
-        value = _text(phrase, 120)
-        if value and value.lower() not in {existing.lower() for existing in terms}:
-            terms.append(value)
-        for token in _meaningful_tokens(phrase):
-            if token not in terms:
-                terms.append(token)
-    if not terms:
+    The pool comes back ordered by how many distinct query words the name
+    carries (more first), so the most-likely items lead; every card is
+    tagged `_name_hits` with that count for `_score_pool_relevance`."""
+    stems = _query_stems(phrases)
+    if not stems:
         return []
-    text_query = Q()
-    for term in terms:
-        text_query |= Q(search_text__icontains=term)
     base = CatalogProduct.objects.filter(supplier__code=supplier_code, is_active=True)
-    # 4000 is "no cap" for any real query; the guard only stops a
-    # single very common word (e.g. "сумка") from loading the whole table
-    # before relevance has had a chance to rank it down.
-    return list(base.filter(text_query).order_by("id")[:4000])
+    # Case-insensitive substring match on Cyrillic is not portable at the DB
+    # (SQLite LIKE folds only ASCII), so the name scan runs in Python over a
+    # cheap (id, name) projection — ~0.8s for a 33k mirror, `_normalized`
+    # being lru-cached over the many repeated variant names — then the
+    # matched ids are re-fetched in one `in_bulk`.
+    ranked_ids = []
+    for pid, name, full_name in base.values_list("id", "name", "full_name").iterator(chunk_size=4000):
+        name_words = _normalized(f"{name or ''} {full_name or ''}").split()
+        hits = sum(1 for stem in stems if _stem_in_words(stem, name_words))
+        if hits:
+            ranked_ids.append((hits, pid))
+    if not ranked_ids:
+        return []
+    ranked_ids.sort(key=lambda value: -value[0])
+    by_id = base.in_bulk([pid for _, pid in ranked_ids])
+    pool = []
+    for hits, pid in ranked_ids:
+        product = by_id.get(pid)
+        if product is not None:
+            product._name_hits = hits
+            pool.append(product)
+    return pool
 
 
 def _score_pool_relevance(pool, item_phrase, phrases):
-    """Rank the pool the way a site search does — by where the query words
-    land in the product NAME — and tag every product with `_relevance`:
+    """Merge the per-supplier name-matched lists into one order — the most
+    query words in the name first — and tag every card with `_relevance`
+    for the ranking tiebreak (`_shortlist_rank_key`):
 
-      0  the whole item phrase, or one of its *distinctive* words, is in
-         the name  ("...шопер..." for «Сумка шопер»)
-      1  only a *generic* word of the item is in the name  ("Спортивная
-         сумка" — has «сумка», nothing shopper-specific)
-      dropped: no query word in the name at all (it only matched a stray
-         mention in the description — not a real candidate)
+      0  the whole item phrase is in the name, or the name carries two or
+         more distinct query words  («Сумка-шоппер …», «USB-флешка …»)
+      1  the name carries only one query word  («Спортивная сумка …»)
 
-    "Distinctive" vs "generic" is decided per search from how common each
-    query word is among the name-matching results: «сумка» is in almost
-    every hit so it is generic, «шопер» in a few so it is distinctive.
-    No hardcoded word lists.
-
-    Only the (short) name is normalised here — never the multi-KB
-    search_text — so this stays cheap over a pool of thousands."""
+    `_text_search_pool` already dropped every card with no query word in
+    the name and set `_name_hits`; this only re-orders the combined pool
+    and fills `_relevance`. No document-frequency maths, no word lists."""
     all_stems = _query_stems(phrases)
-    item_stems = _query_stems([item_phrase]) if item_phrase else all_stems
-    if not all_stems:
-        for product in pool:
-            product._relevance = 1
-        return pool
-    named = []
-    document_frequency = {stem: 0 for stem in all_stems}
+    item_stems = set(_query_stems([item_phrase])) if item_phrase else set()
+    survivors = []
     for product in pool:
         name_words = _normalized(f"{product.name} {product.full_name}").split()
-        hits = {stem for stem in all_stems if _stem_in_words(stem, name_words)}
-        if not hits:
-            continue  # matched only the description — drop
-        named.append((product, name_words, hits))
-        for stem in hits:
-            document_frequency[stem] += 1
-    ceiling = max(document_frequency.values()) or 1
-    distinctive = {stem for stem, count in document_frequency.items() if 0 < count <= 0.6 * ceiling} or {
-        stem for stem, count in document_frequency.items() if count > 0
-    }
-    generic = {stem for stem in all_stems if document_frequency[stem] > 0} - distinctive
-    item_stem_set = set(item_stems)
-    survivors = []
-    for product, name_words, hits in named:
-        full_phrase = bool(item_stem_set) and item_stem_set <= hits
-        product._relevance = 0 if (full_phrase or hits & distinctive) else 1
-        # Tiebreak for the cap below: how much of the ITEM the name covers
-        # comes first (a product literally named «Жилет» must not lose its
-        # place to «Спортивный жилет» just because the plan listed
-        # «спортивный» as a synonym), then a small nudge for a distinctive
-        # word that is not part of the item itself.
-        name_cover = 3 * len(hits & item_stem_set) + len((hits & distinctive) - item_stem_set)
-        survivors.append((product._relevance, -name_cover, product))
-    survivors.sort(key=lambda value: (value[0], value[1]))
-    return [product for _, _, product in survivors]
+        hits = getattr(product, "_name_hits", None)
+        if hits is None:
+            hits = sum(1 for stem in all_stems if _stem_in_words(stem, name_words))
+            if not hits:
+                continue
+            product._name_hits = hits
+        full_item = bool(item_stems) and all(_stem_in_words(stem, name_words) for stem in item_stems)
+        product._relevance = 0 if (full_item or hits >= 2) else 1
+        survivors.append(product)
+    survivors.sort(key=lambda product: -getattr(product, "_name_hits", 0))
+    return survivors
 
 
 def _refresh_live_oasis_prices(client, candidates, quantity=0):
