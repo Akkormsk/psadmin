@@ -1419,28 +1419,6 @@ def _aggregate_color_variants(products, supplier_code="oasis"):
     return result
 
 
-_VARIANT_AXIS_MARKERS = (
-    "объем", "гб", "тб", "мб", "памят", "мкост", "накопит",
-    "размер", "длин", "ширин", "высот", "диаметр", "толщин", "габарит",
-)
-
-
-def _variant_axis_signature(mismatches, unknown):
-    """The subset of a card's verdicts that concern a size / capacity /
-    dimension — the axes a товарная-группа's SKUs differ on. Two SKUs of one
-    group with the SAME signature are the same offer (collapse to one card,
-    keep the rest as picker options); a DIFFERENT signature means one variant
-    genuinely fits the ТЗ and another does not (16 ГБ vs 32 ГБ), so they must
-    stay as separate candidates. When the ТЗ says nothing about size the
-    signature is empty for every SKU → clothing collapses to one card."""
-    keys = []
-    for text in list(mismatches or []) + list(unknown or []):
-        normalized = _normalized(text)
-        if any(marker in normalized for marker in _VARIANT_AXIS_MARKERS):
-            keys.append(normalized)
-    return tuple(sorted(keys))
-
-
 CONSTRAINT_FIELD_LABELS = {
     "gender": "Пол", "material": "Материал", "color": "Цвет", "density": "Плотность",
     "branding": "Нанесение", "stock": "Остаток", "price": "Цена", "name": "Название",
@@ -2560,18 +2538,17 @@ def catalog_candidates_for_line(
     display_ranked = ranked
     selected, group_cards = [], {}
     for product, matches, mismatches, unknown, _, eligibility_status, eligibility_reasons in display_ranked:
-        # One card per товарная-группа PER size/capacity verdict: SKUs that
-        # the ТЗ judges the same (all clothing sizes, when size is not asked)
-        # collapse; SKUs it judges differently (16 ГБ fails «≥ 32», 32 ГБ
-        # passes) stay as separate candidates so the fitting one is not
-        # silently dropped as a "duplicate" of a worse sibling.
-        group_key = (
-            product.group_id or product.external_id,
-            _variant_axis_signature(mismatches, unknown),
-        )
+        # One card per supplier product group (`group_id` — the stable
+        # numeric id every colour / size / capacity SKU of one product
+        # shares). The list is already sorted best-fit first, so the SKU
+        # that best meets the ТЗ becomes the shown card and every other SKU
+        # of the group rides along as a pickable variant. Which variant the
+        # ТЗ actually wants (32 ГБ, not 16) is the AI pass's call — it reads
+        # the variant names; the backend does not parse capacities.
+        group_key = product.group_id or product.external_id
         if group_key in group_cards:
-            # A true twin (same group, same verdict): keep it only as a
-            # pickable option on the card already shown, never a second row.
+            # Another SKU of a group already shown: keep it only as a
+            # pickable option on that card, never a second row.
             kept = group_cards[group_key]
             twin_size = _variant_size(product)
             if twin_size and twin_size not in kept["sizes"]:

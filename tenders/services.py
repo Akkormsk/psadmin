@@ -2476,14 +2476,19 @@ def _catalog_intent_from_requirements(line):
     return _normalize_catalog_intent({"item": name[:200], "categories": [name[:200]] if name else [], "required": required})
 
 
+_SEARCH_PLAN_MODEL_DEFAULT = "anthropic/claude-sonnet-4-5"
+
+
 def _build_search_plan(line):
-    """The one LLM call left in product search: turn a messy tender position
-    name into a clean item + a few search phrases, the way a person would
-    type into a supplier's own search box — not a route, not a catalog DSL,
-    nothing else. Kept deliberately tiny (no images, no card dumps, no
-    feedback to weigh) so it stays fast: measured 0.5-2s per call against
-    this gateway. The admin's free-text feedback is handled separately, by
-    the AI shortlist pass — this call never sees it."""
+    """The one LLM call before product search: turn a messy tender position
+    name into a clean item + a broad list of the OTHER names the same
+    product is sold under. Search now matches the product NAME only (step
+    3), so this list has to stand in for the synonym dictionary a supplier
+    site's search engine has built in — «флеш-накопитель», «флеш-карта»,
+    «флешка», «usb drive» are the same shelf, and if the plan misses one
+    the ТЗ's exact card can fall out of the pool. So this runs on the
+    strong model and asks for 12-20 names, not 2-4. Still no images, no
+    card dumps, no feedback — one focused call, cached per position."""
     name = _cell_text(line.get("name"))[:300] if isinstance(line, dict) else ""
     requirements = line.get("requirements") if isinstance(line, dict) else None
     if isinstance(requirements, dict):
@@ -2493,24 +2498,27 @@ def _build_search_plan(line):
         for value in (requirements if isinstance(requirements, list) else [])
         if isinstance(value, dict) and _cell_text(value.get("label")) and _cell_text(value.get("value"))
     ][:40]
-    prompt = f"""Название позиции тендера почти всегда содержит канцелярские обороты. Убери их и дай короткое название товара и несколько поисковых фраз — как их вбил бы человек в поиск на сайте поставщика (gifts.ru, oasiscatalog.com).
+    prompt = f"""Название позиции тендера почти всегда содержит канцелярские обороты. Убери их и дай короткое название товара и большой список поисковых фраз — все названия, под которыми ЭТОТ ЖЕ товар продаётся в каталогах сувенирной продукции (gifts.ru, oasiscatalog.com).
 
 Название позиции: {name}
 Характеристики из ТЗ: {'; '.join(req_lines) or 'нет'}
 
 Правила:
 - item — 1-3 слова, конкретный товар. Убирай «с логотипом», «с символикой Х», «услуги по изготовлению и поставке» и подобное. Не заменяй конкретный вид товара более общим словом.
-- queries — 2-4 коротких поисковых фразы: сам item и синонимы/альтернативные названия того же товара (например «майка» → «футболка»), без характеристик и без канцелярских оборотов.
-- Не выдумывай характеристики и не добавляй их в queries.
-- skip_labels — названия тех строк ТЗ (ровно как в списке выше, до двоеточия), которые НЕ являются признаком готового товара и не помогают выбрать его в каталоге: маркировка/сертификация («Честный Знак», «ЦРПТ»), требования к пошиву и швам (ширина шва, тип стежки, тип молнии по номеру), дизайн макета и расположение вышивки, бумажные документы (ярлык с составом, макет в трёх вариантах). Физические свойства товара (материал, плотность, цвет, размер, конструкция) в skip_labels НЕ попадают.
+- queries — 12-20 коротких фраз: сам item и ВСЕ синонимы, разговорные названия, альтернативные написания, англ. варианты и близкие формы ОДНОГО И ТОГО ЖЕ товара. Каталоги называют один товар по-разному — если пропустишь форму, нужную карточку не найдём.
+  Примеры: «USB-флеш-накопитель» → флешка, флеш-карта, флеш-накопитель, usb флешка, usb накопитель, usb-флеш-диск, usb drive, usb flash, память usb, накопитель usb; «шопер» → сумка-шопер, эко-сумка, шоппер, сумка для покупок, shopper; «худи» → толстовка с капюшоном, кенгуру, hoodie.
+- НЕ добавляй в queries характеристики (цвет, объём, размер, материал) и не сужай до конкретной модели. Только названия вида товара.
+- НЕ уходи в другой товар: флешка не становится картой памяти microSD, шопер не становится рюкзаком.
+- skip_labels — названия строк ТЗ (ровно как в списке выше, до двоеточия), которые НЕ являются признаком готового товара: маркировка/сертификация («Честный Знак», «ЦРПТ»), требования к пошиву и швам, дизайн макета и расположение вышивки, бумажные документы. Физические свойства товара (материал, плотность, цвет, размер, конструкция) в skip_labels НЕ попадают.
 
-Верни только JSON: {{"item":"...","queries":["..."],"skip_labels":["..."]}}"""
-    result, usage = _ai_gateway_json(prompt, max_tokens=400, timeout=20, network_attempts=2)
+Верни только JSON: {{"item":"...","queries":["...","...", ...],"skip_labels":["..."]}}"""
+    model = os.getenv("TIMEWEB_AI_MODEL_SEARCH_PLAN", "").strip() or _SEARCH_PLAN_MODEL_DEFAULT
+    result, usage = _ai_gateway_json(prompt, max_tokens=900, timeout=40, network_attempts=2, model=model)
     item = _cell_text(result.get("item"))[:100] if isinstance(result, dict) else ""
-    queries = [
+    queries = list(dict.fromkeys(
         _cell_text(value)[:150] for value in (result.get("queries") if isinstance(result, dict) and isinstance(result.get("queries"), list) else [])
         if _cell_text(value)
-    ][:5]
+    ))[:20]
     skip_labels = [
         _cell_text(value)[:200] for value in (result.get("skip_labels") if isinstance(result, dict) and isinstance(result.get("skip_labels"), list) else [])
         if _cell_text(value)
