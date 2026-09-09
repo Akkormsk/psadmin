@@ -635,20 +635,24 @@ class Cascade:
                 card.update(fit="exact", matches=[], mismatches=[], unknown=[], mismatch_count=0, unknown_count=0, match_count=0)
             return cards
 
-        if self.feedback_instructions:
-            todo = cards  # фидбек может изменить любой вердикт — гоним всё заново
-        else:
-            todo = []
-            for card in cards:
-                cached = _cache_get("verdict", f"{self._tz_hash}|{card['id']}")
-                if cached and isinstance(cached.get("grid"), dict):
-                    self._apply_cells(card, {int(k): tuple(v) for k, v in cached["grid"].items()}, rows)
-                    self.diagnostics["verdict_cache_hits"] += 1
-                else:
-                    todo.append(card)
+        # Матрица ТЗ — только по ТЗ, независимо от фидбека. Клетки берём из
+        # кэша (карточка, хэш ТЗ); к модели идут только карточки без записи.
+        todo = []
+        for card in cards:
+            cached = _cache_get("verdict", f"{self._tz_hash}|{card['id']}") if rows else None
+            if cached and isinstance(cached.get("grid"), dict):
+                self._apply_cells(card, {int(k): tuple(v) for k, v in cached["grid"].items()}, rows)
+                self.diagnostics["verdict_cache_hits"] += 1
+            else:
+                todo.append(card)
+        if todo and rows:
+            self._grade_grid(todo, rows)
 
-        if todo:
-            self._grade(todo, rows)
+        # Замечания администратора / уроки — отдельный проход: классифицирует
+        # фразы и раздаёт priority / exclude / keep_only / soften / ranking.
+        # Матрицу не трогает, кэш не пишет.
+        if self.feedback_instructions:
+            self._classify_feedback(cards, rows)
         return cards
 
     def _init_unknown(self, card, rows) -> None:
@@ -660,47 +664,30 @@ class Cascade:
         card["unknown_count"] = len(rows)
         card["fit"] = "partial" if rows else "exact"
 
-    def _grade(self, cards, rows) -> None:
-        images, image_ids = ([], [])
-        if any(v.get("origin") == "session" for v in self.feedback_instructions):
-            from .services import _shortlist_card_images
-
-            images, image_ids = _shortlist_card_images(cards)
-
-        instr_numbered = [
-            f"{i}. ({'эта сессия' if v.get('origin') == 'session' else 'раньше на похожих позициях'}) {_cell(v.get('text'))}"
-            for i, v in enumerate(self.feedback_instructions, 1)
-        ]
-        batch_size = 3 if rows else 8
-        batches = [cards[i:i + batch_size] for i in range(0, len(cards), batch_size)] or [cards]
+    def _grade_grid(self, cards, rows) -> None:
+        """Клетки y/n/m по каждой (карточка, пункт ТЗ). Пачки по 3, параллельно.
+        Каждую оценённую карточку кладём в кэш вердикта."""
+        batches = [cards[i:i + 3] for i in range(0, len(cards), 3)] or [cards]
         tz_numbered = [f"{i}. {label}: {value}" for i, (label, value) in enumerate(rows, 1)]
-
         cells_by_card: dict[str, dict[int, tuple]] = {}
-        raw_instructions: list[dict] = []
         errors = []
 
         def run_batch(indexed):
-            index, batch = indexed
+            _index, batch = indexed
             local = {pos: str(card["id"]) for pos, card in enumerate(batch, 1)}
             cards_text = "\n\n".join(
                 f"КАРТОЧКА {pos} | id {card['id']}\n{self._card_brief(card)}"
                 for pos, card in enumerate(batch, 1)
             )
-            with_images = bool(images) and index == 0
             prompt = self._step6_prompt(
-                tz_numbered, cards_text, instr_numbered,
-                image_ids=image_ids if with_images else None,
+                tz_numbered, cards_text, [],
                 batch_ids=", ".join(f"{p}={c['id']}" for p, c in enumerate(batch, 1)) if len(batches) > 1 else "",
             )
             try:
-                raw, usage = _ai_json(
-                    prompt,
-                    max_tokens=700 + len(batch) * (len(rows) + 2) * 24,
-                    timeout=60, model=_AGENT_MODEL,
-                    images=images if with_images else None,
-                )
+                raw, usage = _ai_json(prompt, max_tokens=700 + len(batch) * (len(rows) + 2) * 24,
+                                      timeout=60, model=_AGENT_MODEL)
             except Exception as exc:
-                logger.exception("Cascade step 6 batch failed")
+                logger.exception("Cascade step 6 grid batch failed")
                 return {"_error": _cell(exc)[:200]}, {}
             return raw if isinstance(raw, dict) else {}, usage, local
 
@@ -709,9 +696,8 @@ class Cascade:
             if len(batches) == 1
             else list(ThreadPoolExecutor(max_workers=min(10, len(batches))).map(run_batch, list(enumerate(batches))))
         )
-
         for result in results:
-            if len(result) == 2:  # error tuple
+            if len(result) == 2:
                 errors.append(result[0].get("_error", ""))
                 continue
             raw, usage, local = result
@@ -727,24 +713,73 @@ class Cascade:
                 card_id = local.get(pos)
                 if card_id and verdict and 1 <= row <= len(rows):
                     cells_by_card.setdefault(card_id, {})[row] = (verdict, _cell(cell.get("w"))[:90])
-            for item in raw.get("instructions") if isinstance(raw.get("instructions"), list) else []:
-                if isinstance(item, dict):
-                    item["cards"] = [local.get(c, c) if isinstance(c, int) else c for c in (item.get("cards") or [])]
-                    raw_instructions.append(item)
 
         if errors and not cells_by_card:
             self.error = self.error or errors[0]
-
         by_id = {str(card["id"]): card for card in cards}
         for card_id, cells in cells_by_card.items():
             card = by_id.get(card_id)
             if card is not None:
                 self._apply_cells(card, cells, rows)
-                if not self.feedback_instructions:
-                    _cache_put("verdict", f"{self._tz_hash}|{card_id}", {"grid": {str(k): list(v) for k, v in cells.items()}})
+                _cache_put("verdict", f"{self._tz_hash}|{card_id}", {"grid": {str(k): list(v) for k, v in cells.items()}})
 
-        if self.feedback_instructions:
-            self._apply_instructions(raw_instructions, by_id, bool(errors))
+    def _classify_feedback(self, cards, rows) -> None:
+        """Один проход: классифицирует замечания администратора и уроки в
+        priority / exclude / keep_only / soften / ranking и раздаёт по
+        карточкам. Матрицу ТЗ не трогает."""
+        from .services import _shortlist_card_images
+
+        images, image_ids = ([], [])
+        if any(v.get("origin") == "session" for v in self.feedback_instructions):
+            images, image_ids = _shortlist_card_images(cards)
+        instr_numbered = [
+            f"{i}. ({'эта сессия' if v.get('origin') == 'session' else 'раньше на похожих позициях'}) {_cell(v.get('text'))}"
+            for i, v in enumerate(self.feedback_instructions, 1)
+        ]
+        tz_numbered = [f"{i}. {label}: {value}" for i, (label, value) in enumerate(rows, 1)]
+        batches = [cards[i:i + 12] for i in range(0, len(cards), 12)] or [cards]
+        raw_instructions: list[dict] = []
+        errors = []
+
+        def run_batch(indexed):
+            index, batch = indexed
+            local = {pos: str(card["id"]) for pos, card in enumerate(batch, 1)}
+            cards_text = "\n\n".join(
+                f"КАРТОЧКА {pos} | id {card['id']}\n{self._card_brief(card)}"
+                for pos, card in enumerate(batch, 1)
+            )
+            with_images = bool(images) and index == 0
+            prompt = self._step6_prompt(
+                tz_numbered, cards_text, instr_numbered, want_grid=False,
+                image_ids=image_ids if with_images else None,
+                batch_ids=", ".join(f"{p}={c['id']}" for p, c in enumerate(batch, 1)) if len(batches) > 1 else "",
+            )
+            try:
+                raw, usage = _ai_json(prompt, max_tokens=400 + len(self.feedback_instructions) * 120,
+                                      timeout=60, model=_AGENT_MODEL,
+                                      images=images if with_images else None)
+            except Exception as exc:
+                logger.exception("Cascade feedback classification batch failed")
+                return {"_error": _cell(exc)[:200]}, {}
+            return raw if isinstance(raw, dict) else {}, usage, local
+
+        results = (
+            [run_batch((0, batches[0]))]
+            if len(batches) == 1
+            else list(ThreadPoolExecutor(max_workers=min(10, len(batches))).map(run_batch, list(enumerate(batches))))
+        )
+        for result in results:
+            if len(result) == 2:
+                errors.append(result[0].get("_error", ""))
+                continue
+            raw, usage, local = result
+            self._add_usage(usage)
+            for item in raw.get("instructions") if isinstance(raw.get("instructions"), list) else []:
+                if isinstance(item, dict):
+                    item["cards"] = [local.get(c, c) if isinstance(c, int) else c for c in (item.get("cards") or [])]
+                    raw_instructions.append(item)
+
+        self._apply_instructions(raw_instructions, {str(c["id"]): c for c in cards}, bool(errors))
 
     def _apply_cells(self, card, cells, rows) -> None:
         matches, mismatches, unknown = [], [], []
@@ -799,7 +834,7 @@ class Cascade:
             lines.append("   " + description)
         return "\n".join(lines)
 
-    def _step6_prompt(self, tz_numbered, cards_text, instr_numbered, *, image_ids=None, batch_ids="") -> str:
+    def _step6_prompt(self, tz_numbered, cards_text, instr_numbered, *, want_grid=True, image_ids=None, batch_ids="") -> str:
         row_count = len(tz_numbered) or 1
         tz_block = "\n".join(tz_numbered) if tz_numbered else "1. (пунктов ТЗ нет)"
         batch_block = (
@@ -825,6 +860,19 @@ class Cascade:
 - "ranking" — «сначала дорогие / дешёвые» → "price":"asc|desc".
 Условное («если в ТЗ …») — проверь по чек-листу; не выполняется → "applied":false, "cards":[]. "applies_to": "item" (по умолчанию) или "any".
 """
+        if not want_grid:
+            return f"""Ты эксперт по подбору товара под тендер. Ниже позиция, чек-лист ТЗ, карточки и замечания администратора. Классифицируй КАЖДОЕ замечание и укажи id карточек.
+
+Позиция: {_cell(self.line.get('name'))[:200]}
+
+Чек-лист ТЗ (1..{row_count}):
+{tz_block}
+{batch_block}
+Карточки (номер | id | текст):
+{cards_text}
+{photos}{instr_block}
+Верни только JSON: {{"instructions":[{{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","applied":true}}]}}"""
+
         return f"""Ты эксперт по подбору товара под тендер. Прочитай КАЖДУЮ карточку целиком (название, характеристики, материалы, цвет, список вариантов, описание) и оцени КАЖДЫЙ пункт чек-листа так, как это сделал бы человек.
 
 Позиция: {_cell(self.line.get('name'))[:200]}

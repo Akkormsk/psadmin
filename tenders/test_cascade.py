@@ -323,6 +323,24 @@ class CascadeFeedbackTests(TestCase):
         self.assertEqual(ids, {"P1"})
         self.assertEqual(result.removed[0]["id"], "P2")
 
+    def test_verdict_cache_is_written_even_when_a_lesson_fires(self):
+        # регресс: раньше проход с уроком не писал кэш вердикта, и позиции с
+        # уроком (почти все реальные) никогда не ускорялись
+        _product("Флешка Твист 64 ГБ", external_id="P1")
+        rows = [{"label": "Ёмкость", "value": "не менее 32 ГБ"}]
+        crit = [{"n": 1, "concept": "ёмкость", "operator": ">=", "value": "32 ГБ", "keep": True}]
+        gw1 = _Gateway(queries=["флешка"], criteria=crit,
+                       grid=[{"id": "P1", "cells": {"1": "y"}}], instructions=[])
+        _run(gw1, _line(rows=rows), lessons_provider=lambda i, l: [{"id": 3, "instruction": "не детские"}])
+        self.assertTrue(CascadeCache.objects.filter(kind="verdict").exists())
+
+        gw2 = _Gateway(queries=["флешка"], criteria=crit,
+                       grid=[{"id": "P1", "cells": {"1": "y"}}], instructions=[])
+        result = _run(gw2, _line(rows=rows), lessons_provider=lambda i, l: [{"id": 3, "instruction": "не детские"}])
+        # матрица из кэша — grid-проход не гонялся; сработал только разбор фидбека
+        self.assertGreaterEqual(result.diagnostics["verdict_cache_hits"], 1)
+        self.assertEqual(result.candidates[0]["fit"], "exact")
+
     def test_a_lesson_is_folded_in_as_an_instruction(self):
         _product("Флешка детская", external_id="P1")
         gw = _Gateway(queries=["флешка"], criteria=[], grid=[], instructions=[])
