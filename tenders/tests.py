@@ -213,6 +213,74 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.document_analysis["technical"]["matched"], 1)
         self.assertEqual(estimate.lines.get().requirements["requirements"][0]["value"], "пластик")
 
+    def test_autosave_creates_then_updates_one_estimate(self):
+        self.client.force_login(self.user)
+        lines = json.dumps(self.payload)
+
+        created = self.client.post(reverse("tender_estimate_create"), {
+            "tender_number": "555", "name": "Автосейв", "reduction_percent": "30",
+            "russia_delivery": "0", "lines_json": lines, "document_analysis_json": "{}",
+        })
+        self.assertEqual(created.status_code, 200)
+        pk = created.json()["pk"]
+        self.assertEqual(TenderEstimate.objects.count(), 1)
+        self.assertFalse(created.json()["incomplete"])
+
+        updated = self.client.post(reverse("tender_estimate_save", args=[pk]), {
+            "tender_number": "555", "name": "Автосейв 2", "reduction_percent": "30",
+            "russia_delivery": "0", "lines_json": lines, "document_analysis_json": "{}",
+        })
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(TenderEstimate.objects.count(), 1)
+        self.assertEqual(TenderEstimate.objects.get().name, "Автосейв 2")
+
+    def test_autosave_rejects_a_tender_without_a_number_or_name(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("tender_estimate_create"), {
+            "tender_number": "", "name": "", "reduction_percent": "30",
+            "russia_delivery": "0", "lines_json": json.dumps(self.payload), "document_analysis_json": "{}",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+        self.assertFalse(TenderEstimate.objects.exists())
+
+    def test_duplicate_copies_lines_and_requirements(self):
+        self.client.force_login(self.user)
+        payload = [{**self.payload[0], "requirements": {"requirements": [{"label": "Цвет", "value": "синий"}]}}]
+        self.client.post(reverse("tender_home"), {
+            "tender_number": "900", "name": "Оригинал", "reduction_percent": "25",
+            "russia_delivery": "50", "lines_json": json.dumps(payload), "document_analysis_json": "{}",
+        })
+        original = TenderEstimate.objects.get()
+
+        response = self.client.post(reverse("tender_estimate_duplicate", args=[original.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        copy = TenderEstimate.objects.exclude(pk=original.pk).get()
+        self.assertEqual(copy.name, "Оригинал (копия)")
+        self.assertEqual(copy.status, TenderEstimate.DRAFT)
+        self.assertEqual(copy.reduction_percent, original.reduction_percent)
+        self.assertEqual(copy.lines.get().requirements["requirements"][0]["value"], "синий")
+        self.assertRedirects(response, reverse("tender_estimate", args=[copy.pk]))
+
+    def test_duplicate_of_another_users_tender_is_blocked(self):
+        estimate = TenderEstimate.objects.create(owner=self.other, tender_number="1", name="Чужой")
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("tender_estimate_duplicate", args=[estimate.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(TenderEstimate.objects.count(), 1)
+
+    def test_tender_page_autosaves_without_a_save_button(self):
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Список")
+        self.client.force_login(self.user)
+        content = self.client.get(reverse("tender_home")).content.decode()
+        self.assertIn('id="tender-autosave-status"', content)
+        self.assertNotIn('<button class="button-success">Сохранить</button>', content)
+        self.assertIn(reverse("tender_estimate_duplicate", args=[estimate.pk]), content)
+        self.assertIn("/tenders/save/", content)  # createUrl for a brand-new просчёт
+
     def test_saved_estimate_list_shows_status_selector_without_draft_exclamation(self):
         TenderEstimate.objects.create(
             owner=self.user,

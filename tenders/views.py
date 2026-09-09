@@ -20,6 +20,7 @@ from django.core import serializers
 from django.db import close_old_connections
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
@@ -817,6 +818,74 @@ def calculator_knowledge_proposal(request):
     return JsonResponse({"error": "Добавьте постоянный расходник через калькулятор или админку."}, status=410)
 
 
+def _persist_tender_estimate(request, estimate, settings):
+    """Parse the posted tender state and write it to ``estimate`` (creating
+    one when it is ``None``). Returns ``(estimate, error, meta)`` — ``error``
+    is a message string when nothing was saved, ``meta`` carries
+    ``incomplete`` and the parsed ``posted_lines`` / ``posted_analysis``
+    (kept even on a validation error so the form can re-render them).
+    Shared by the plain form POST and the autosave endpoint."""
+    meta = {"incomplete": False, "posted_lines": None, "posted_analysis": None}
+    try:
+        raw_lines = json.loads(request.POST.get("lines_json", "[]"))
+        raw_analysis = json.loads(request.POST.get("document_analysis_json", "{}"))
+    except json.JSONDecodeError:
+        return estimate, "Проверьте товарные позиции.", meta
+    meta["posted_lines"] = raw_lines if isinstance(raw_lines, list) else []
+    meta["posted_analysis"] = raw_analysis if isinstance(raw_analysis, dict) else {}
+    try:
+        tender_number = request.POST.get("tender_number", "").strip()
+        name = request.POST.get("name", "").strip()
+        reduction_percent = _number(request.POST.get("reduction_percent"), "30")
+        russia_delivery = _number(request.POST.get("russia_delivery"))
+        if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
+            raise ValueError
+        lines = []
+        calculation_complete = True
+        for row in meta["posted_lines"]:
+            line = {
+                "name": str(row.get("name", "")).strip(),
+                "quantity": _number(row.get("quantity")),
+                "nmck_unit": _number(row.get("nmck_unit")),
+                "material_unit": _number(row.get("material_unit")),
+                "application_unit": _number(row.get("application_unit")),
+                "logistics_unit": _number(row.get("logistics_unit")),
+                "product_url": str(row.get("product_url", "")).strip(),
+                "comment": str(row.get("comment", "")).strip(),
+                "requirements": row.get("requirements") if isinstance(row.get("requirements"), dict) else {},
+            }
+            has_expense = any(line[key] > 0 for key in ("material_unit", "application_unit", "logistics_unit"))
+            if min(line["quantity"], line["nmck_unit"], line["material_unit"], line["application_unit"], line["logistics_unit"]) < 0:
+                raise ValueError
+            if not line["name"] or line["quantity"] <= 0 or line["nmck_unit"] <= 0 or not has_expense:
+                calculation_complete = False
+            lines.append(line)
+        if not lines:
+            lines.append({"name": "", "quantity": Decimal("0"), "nmck_unit": Decimal("0"), "material_unit": Decimal("0"), "application_unit": Decimal("0"), "logistics_unit": Decimal("0"), "product_url": "", "comment": "", "requirements": {}})
+            calculation_complete = False
+    except (ValueError, TypeError, InvalidOperation):
+        return estimate, "Проверьте реквизиты тендера и товарные позиции.", meta
+
+    calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
+    estimate = estimate or TenderEstimate(owner=request.user)
+    if request.user.is_superuser and request.POST.get("owner_id"):
+        estimate.owner = get_object_or_404(get_user_model(), pk=request.POST["owner_id"])
+    estimate.tender_number = tender_number[:100]
+    estimate.name = name[:300]
+    estimate.reduction_percent = reduction_percent
+    estimate.russia_delivery = russia_delivery
+    estimate.result_notes = request.POST.get("result_notes", "").strip()[:5000]
+    estimate.vat_rate_snapshot = settings.vat_rate
+    estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
+    estimate.summary_snapshot["is_incomplete"] = not calculation_complete
+    estimate.document_analysis = meta["posted_analysis"] or {}
+    estimate.save()
+    estimate.lines.all().delete()
+    TenderLine.objects.bulk_create([TenderLine(estimate=estimate, sort_order=index, **line) for index, line in enumerate(lines)])
+    meta["incomplete"] = not calculation_complete
+    return estimate, None, meta
+
+
 @login_required
 def home(request, pk=None):
     estimate = _estimate_for_user(request, pk) if pk else None
@@ -840,60 +909,13 @@ def home(request, pk=None):
             "result_notes": request.POST.get("result_notes", ""),
             "owner_id": request.POST.get("owner_id") or request.user.id,
         }
-        try:
-            tender_number = request.POST.get("tender_number", "").strip()
-            name = request.POST.get("name", "").strip()
-            reduction_percent = _number(request.POST.get("reduction_percent"), "30")
-            russia_delivery = _number(request.POST.get("russia_delivery"))
-            raw_lines = json.loads(request.POST.get("lines_json", "[]"))
-            raw_analysis = json.loads(request.POST.get("document_analysis_json", "{}"))
-            posted_lines = raw_lines if isinstance(raw_lines, list) else []
-            posted_analysis = raw_analysis if isinstance(raw_analysis, dict) else {}
-            if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
-                raise ValueError
-            lines = []
-            calculation_complete = True
-            for row in raw_lines:
-                line = {
-                    "name": str(row.get("name", "")).strip(),
-                    "quantity": _number(row.get("quantity")),
-                    "nmck_unit": _number(row.get("nmck_unit")),
-                    "material_unit": _number(row.get("material_unit")),
-                    "application_unit": _number(row.get("application_unit")),
-                    "logistics_unit": _number(row.get("logistics_unit")),
-                    "product_url": str(row.get("product_url", "")).strip(),
-                    "comment": str(row.get("comment", "")).strip(),
-                    "requirements": row.get("requirements") if isinstance(row.get("requirements"), dict) else {},
-                }
-                has_expense = any(line[key] > 0 for key in ("material_unit", "application_unit", "logistics_unit"))
-                if min(line["quantity"], line["nmck_unit"], line["material_unit"], line["application_unit"], line["logistics_unit"]) < 0:
-                    raise ValueError
-                if not line["name"] or line["quantity"] <= 0 or line["nmck_unit"] <= 0 or not has_expense:
-                    calculation_complete = False
-                lines.append(line)
-            if not lines:
-                lines.append({"name": "", "quantity": Decimal("0"), "nmck_unit": Decimal("0"), "material_unit": Decimal("0"), "application_unit": Decimal("0"), "logistics_unit": Decimal("0"), "product_url": "", "comment": "", "requirements": {}})
-                calculation_complete = False
-        except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
-            messages.error(request, "Проверьте реквизиты тендера и товарные позиции.")
+        estimate, error, meta = _persist_tender_estimate(request, estimate, settings)
+        posted_lines = meta["posted_lines"]
+        posted_analysis = meta["posted_analysis"]
+        if error:
+            messages.error(request, error)
         else:
-            calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
-            estimate = estimate or TenderEstimate(owner=request.user)
-            if request.user.is_superuser and request.POST.get("owner_id"):
-                estimate.owner = get_object_or_404(get_user_model(), pk=request.POST["owner_id"])
-            estimate.tender_number = tender_number[:100]
-            estimate.name = name[:300]
-            estimate.reduction_percent = reduction_percent
-            estimate.russia_delivery = russia_delivery
-            estimate.result_notes = request.POST.get("result_notes", "").strip()[:5000]
-            estimate.vat_rate_snapshot = settings.vat_rate
-            estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
-            estimate.summary_snapshot["is_incomplete"] = not calculation_complete
-            estimate.document_analysis = posted_analysis or {}
-            estimate.save()
-            estimate.lines.all().delete()
-            TenderLine.objects.bulk_create([TenderLine(estimate=estimate, sort_order=index, **line) for index, line in enumerate(lines)])
-            messages.success(request, "Черновик просчёта сохранён." if not calculation_complete else "Просчёт тендера сохранён.")
+            messages.success(request, "Черновик просчёта сохранён." if meta["incomplete"] else "Просчёт тендера сохранён.")
             return redirect("tender_estimate", pk=estimate.pk)
 
     initial_lines = []
@@ -908,6 +930,55 @@ def home(request, pk=None):
     if request.user.is_superuser:
         knowledge_sources = list(TenderKnowledgeSource.objects.filter(is_active=True).values("id", "title", "supplier_name", "source_type", "url")[:100])
     return render(request, "tenders/home.html", {"estimate": estimate, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "users": users})
+
+
+@login_required
+@require_POST
+def save_estimate(request, pk=None):
+    """Autosave: the same write as the form POST, but returns JSON and
+    never redirects — the tender page keeps its state (and its open ТЗ
+    drawer / running AI passes)."""
+    settings = TenderSettings.objects.get_or_create(pk=1)[0]
+    estimate = _estimate_for_user(request, pk) if pk else None
+    estimate, error, meta = _persist_tender_estimate(request, estimate, settings)
+    if error:
+        return JsonResponse({"error": error}, status=400)
+    return JsonResponse({
+        "pk": estimate.pk,
+        "url": reverse("tender_estimate", args=[estimate.pk]),
+        "saved_at": timezone.localtime(estimate.updated_at).strftime("%H:%M"),
+        "incomplete": meta["incomplete"],
+    })
+
+
+@login_required
+@require_POST
+def duplicate_estimate(request, pk):
+    original = _estimate_for_user(request, pk)
+    lines = list(original.lines.all())
+    copy = TenderEstimate.objects.create(
+        owner=request.user,
+        tender_number=original.tender_number,
+        name=f"{original.name} (копия)"[:300],
+        status=TenderEstimate.DRAFT,
+        reduction_percent=original.reduction_percent,
+        russia_delivery=original.russia_delivery,
+        result_notes="",
+        vat_rate_snapshot=original.vat_rate_snapshot,
+        summary_snapshot=original.summary_snapshot,
+        document_analysis=original.document_analysis,
+    )
+    TenderLine.objects.bulk_create([
+        TenderLine(
+            estimate=copy, sort_order=line.sort_order, name=line.name, quantity=line.quantity,
+            nmck_unit=line.nmck_unit, material_unit=line.material_unit,
+            application_unit=line.application_unit, logistics_unit=line.logistics_unit,
+            product_url=line.product_url, comment=line.comment, requirements=line.requirements,
+        )
+        for line in lines
+    ])
+    messages.success(request, f"Создана копия просчёта № {original.tender_number}.")
+    return redirect("tender_estimate", pk=copy.pk)
 
 
 @login_required

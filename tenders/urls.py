@@ -22,7 +22,10 @@ urlpatterns = [
     path("production/requirement-skip/drop/", views.drop_requirement_skip_rule, name="tender_drop_requirement_skip_rule"),
     path("production/lesson/drop/", views.drop_lesson, name="tender_drop_lesson"),
     path("production/knowledge/", views.calculator_knowledge_proposal, name="tender_calculator_knowledge_proposal"),
+    path("save/", views.save_estimate, name="tender_estimate_create"),
     path("<int:pk>/", views.home, name="tender_estimate"),
+    path("<int:pk>/save/", views.save_estimate, name="tender_estimate_save"),
+    path("<int:pk>/duplicate/", views.duplicate_estimate, name="tender_estimate_duplicate"),
     path("<int:pk>/status/", views.update_estimate_status, name="tender_estimate_status"),
     path("<int:pk>/delete/", views.delete_estimate, name="tender_estimate_delete"),
 ]
