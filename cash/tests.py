@@ -2,6 +2,7 @@ import hashlib
 import json
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -10,7 +11,7 @@ from django.utils import timezone
 
 from . import modulbank
 from .forms import CashReconciliationForm
-from .models import BankPayment, CashAuditLog, CashReconciliation, CashTransaction
+from .models import BankPayment, BankSyncState, CashAuditLog, CashReconciliation, CashTransaction
 from .services import balance_for_date
 
 
@@ -217,3 +218,27 @@ class BankPaymentTests(TestCase):
         self.assertNotContains(default_view, "ИП Я Сам")
         with_internal = self.client.get(reverse("cash_home"), {"bank_internal": "1"})
         self.assertContains(with_internal, "ИП Я Сам")
+
+    @override_settings(MODULBANK_ACCOUNT_ID="acc-typo")
+    def test_sync_drops_payments_from_no_longer_configured_accounts(self):
+        BankPayment.objects.create(
+            external_id="old-other-account", status="Received", direction="Debet", amount=Decimal("5"),
+            account_number="40802810999999999999", operation_date=self.today - timedelta(days=1),
+        )
+        companies = [{"Inn": "7712345678", "bankAccounts": [
+            {"id": "acc-typo", "number": "40802810170010029231", "bankInn": "2204000595"},
+            {"id": "acc-other", "number": "40802810999999999999"},
+        ]}]
+        operation = {
+            "id": "fresh-client", "category": "Debet", "status": "Received", "amount": 12000.0,
+            "contragentName": "ООО Клиент", "contragentInn": "5024090909",
+            "bankAccountNumber": "40802810170010029231", "executed": "2026-09-08T10:00:00",
+        }
+        with mock.patch.object(modulbank, "list_accounts", return_value=companies), \
+             mock.patch.object(modulbank, "fetch_incoming", return_value=[operation]):
+            touched = modulbank.sync()
+
+        self.assertEqual(touched, 1)
+        self.assertTrue(BankPayment.objects.filter(external_id="fresh-client").exists())
+        self.assertFalse(BankPayment.objects.filter(external_id="old-other-account").exists())
+        self.assertIn("2204000595", BankSyncState.load().own_identifiers)

@@ -59,23 +59,26 @@ def list_accounts():
     return _request("account-info", {})
 
 
-def own_identifiers():
-    """ИНН своих компаний, ИНН банка и номера своих счетов.
+def _digest_accounts(companies):
+    """Из ответа account-info: (свои реквизиты, {id счёта: номер счёта}).
 
-    Нужно, чтобы отличить переводы между собственными счетами и внутрибанковские
-    зачисления от реальных платежей клиентов.
+    Свои реквизиты (ИНН/ОГРН компаний, ИНН банка, номера всех счетов) нужны, чтобы
+    отличать переводы между собственными счетами от реальных платежей клиентов.
     """
-    keys = set()
-    for company in list_accounts():
+    own_keys = set()
+    id_to_number = {}
+    for company in companies:
         for field in ("Inn", "Kpp", "Ogrn"):
             if company.get(field):
-                keys.add(str(company[field]))
+                own_keys.add(str(company[field]))
         for account in company.get("bankAccounts", []):
             if account.get("number"):
-                keys.add(str(account["number"]))
+                own_keys.add(str(account["number"]))
             if account.get("bankInn"):
-                keys.add(str(account["bankInn"]))
-    return sorted(keys)
+                own_keys.add(str(account["bankInn"]))
+            if account.get("id") and account.get("number"):
+                id_to_number[str(account["id"])] = str(account["number"])
+    return own_keys, id_to_number
 
 
 def _to_decimal(value):
@@ -172,14 +175,20 @@ def _account_ids():
 
 
 def sync(days=WINDOW_DAYS):
-    """Забрать входящие платежи за последние ``days`` дней и разложить по строкам."""
-    from .models import BankSyncState
+    """Забрать входящие платежи по настроенным счетам за последние ``days`` дней.
+
+    В окне синхронизации база приводится к тому, что банк отдаёт сейчас: платежи по
+    больше не настроенным счетам удаляются.
+    """
+    from .models import BankPayment, BankSyncState
 
     account_ids = _account_ids()
     if not account_ids:
         raise ModulbankError("Не задан MODULBANK_ACCOUNT_ID")
 
-    own_keys = set(own_identifiers())
+    own_keys, id_to_number = _digest_accounts(list_accounts())
+    wanted_numbers = {id_to_number[i] for i in account_ids if i in id_to_number}
+
     till = timezone.localdate()
     since = till - timedelta(days=days)
     touched = 0
@@ -188,9 +197,19 @@ def sync(days=WINDOW_DAYS):
             if upsert_operation(operation, own_keys):
                 touched += 1
 
+    # Убрать платежи по счетам, которые убрали из настроек (в пределах окна).
+    removed = 0
+    if wanted_numbers:
+        removed = (
+            BankPayment.objects.filter(operation_date__gte=since)
+            .exclude(account_number__in=wanted_numbers)
+            .exclude(account_number="")
+            .delete()[0]
+        )
+
     state = BankSyncState.load()
     state.last_synced_at = timezone.now()
-    state.last_status = f"Готово, платежей обработано: {touched}"
+    state.last_status = f"Готово, платежей обработано: {touched}" + (f", удалено лишних: {removed}" if removed else "")
     state.own_identifiers = sorted(own_keys)
     state.save(update_fields=["last_synced_at", "last_status", "own_identifiers"])
     return touched
