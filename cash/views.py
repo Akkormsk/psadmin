@@ -9,7 +9,7 @@ from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
@@ -54,6 +54,17 @@ def _bank_context(request):
     payments = list(payments)
     internal_count = base.filter(is_internal=True).count()
 
+    toggle_params = {"date": request.GET.get("date") or ""}
+    if date_from != window_start:
+        toggle_params["bank_from"] = date_from.isoformat()
+    if date_to != today:
+        toggle_params["bank_to"] = date_to.isoformat()
+    if query:
+        toggle_params["bank_q"] = query
+    if not show_internal:
+        toggle_params["bank_internal"] = "1"
+    bank_toggle_url = "?" + urlencode({k: v for k, v in toggle_params.items() if v})
+
     return {
         "bank_payments": payments,
         "bank_total": sum((item.amount for item in payments), Decimal("0")),
@@ -64,6 +75,7 @@ def _bank_context(request):
         "bank_is_admin": is_admin,
         "bank_show_internal": show_internal,
         "bank_internal_count": internal_count,
+        "bank_toggle_url": bank_toggle_url,
         "bank_has_filter": bool(query or date_from != window_start or date_to != today),
         "bank_sync_state": BankSyncState.load(),
         "bank_configured": bool(settings.MODULBANK_TOKEN and settings.MODULBANK_ACCOUNT_ID),
