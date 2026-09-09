@@ -2624,6 +2624,81 @@ _POINT_STOPWORDS = {
 # few seconds. Override with TIMEWEB_AI_MODEL_SHORTLIST.
 _SHORTLIST_MODEL_DEFAULT = "anthropic/claude-sonnet-4-5"
 
+# Step 4 — the name pass. Reads the product NAME only (never the card), so
+# the cheap fast model is right here; measured ~2-6s per 240-name batch,
+# ~$0.01 for a whole 2000-name pool run 10 batches wide. Override with
+# TIMEWEB_AI_MODEL_NAME_FILTER.
+_NAME_FILTER_MODEL_DEFAULT = "openai/gpt-4.1-mini"
+_NAME_FILTER_BATCH = 240
+
+
+def _run_name_filter(item, id_names, *, usage=None):
+    """Step 4: the cheap AI name pass. `gpt-4.1-mini` reads each product
+    NAME (nothing else) and drops the ones that are not the requested
+    `item` — a case / box / holder / cable / a gift set of several things,
+    not the thing itself. Ambiguous names are kept. Whatever the rest of
+    the card says is read later, by the strong shortlist pass.
+
+    Names are split into 240-name batches run up to 10 wide. Returns the
+    set of ids to keep; a batch that fails just keeps its own names; if no
+    batch ran at all it returns None so the caller keeps the pool whole.
+    `usage`, when a dict, accumulates the token spend."""
+    item = _cell_text(item)[:80]
+    pairs = [(str(identifier), _cell_text(name)[:120]) for identifier, name in id_names if _cell_text(name)]
+    if not item or not pairs:
+        return None
+    batches = [pairs[index:index + _NAME_FILTER_BATCH] for index in range(0, len(pairs), _NAME_FILTER_BATCH)]
+    model = os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or _NAME_FILTER_MODEL_DEFAULT
+
+    def run_batch(batch):
+        numbered = "\n".join(f"{number}. {name}" for number, (_, name) in enumerate(batch, 1))
+        prompt = (
+            "Ниже пронумерованный список названий товаров из каталога сувенирной продукции.\n"
+            f"Нужен именно товар: «{item}».\n\n"
+            "Верни JSON {\"not_item\":[номера строк, которые НЕ являются этим товаром]}.\n"
+            "НЕ товар — это другой предмет, аксессуар к нему, чехол / коробка / упаковка / "
+            "органайзер / держатель / подставка, запасная часть, ИЛИ подарочный набор из "
+            "нескольких предметов. Сам товар в любом исполнении, форме, объёме, цвете и "
+            "материале — оставляй. Если по названию непонятно — оставляй.\n\n"
+            f"{numbered}"
+        )
+        try:
+            raw, batch_usage = _ai_gateway_json(
+                prompt, max_tokens=1600, timeout=60, network_attempts=2, model=model,
+            )
+        except TenderAIError:
+            return None, {}
+        except Exception:
+            logger.exception("Name-filter batch failed")
+            return None, {}
+        rejected = set()
+        for value in raw.get("not_item", []) if isinstance(raw, dict) else []:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= index <= len(batch):
+                rejected.add(batch[index - 1][0])
+        return rejected, batch_usage
+
+    if len(batches) == 1:
+        results = [run_batch(batches[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=min(10, len(batches))) as executor:
+            results = list(executor.map(run_batch, batches))
+
+    keep = {identifier for identifier, _ in pairs}
+    ran_any = False
+    for rejected, batch_usage in results:
+        if isinstance(batch_usage, dict) and isinstance(usage, dict):
+            usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + (batch_usage.get("prompt_tokens", 0) or 0)
+            usage["completion_tokens"] = usage.get("completion_tokens", 0) + (batch_usage.get("completion_tokens", 0) or 0)
+        if rejected is None:
+            continue
+        ran_any = True
+        keep -= rejected
+    return keep if ran_any else None
+
 
 def _verdict_subject(text):
     """The leading subject of a verdict / criterion line, used to find which
@@ -3379,20 +3454,28 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     else:
         route = _frozen_route()
 
-    # Step 4: backend search, no LLM. Ask for the wide shortlist (~40) when
-    # the pass is going to run — it needs cards it can resurrect, not just
-    # the visible ten.
+    # Step 4: backend search. Name retrieval + the deterministic filters
+    # carry no LLM; the one AI touch is the cheap name pass (_run_name_filter),
+    # wired in only when the strong shortlist pass is going to run anyway —
+    # there is no point paying to clean a pool nothing then reads. Ask for
+    # the wide shortlist (~40) in the same case.
     if progress_callback:
         progress_callback("catalog")
+    run_full_analysis = bool(pass_instructions or selected_rows)
+    name_filter = None
+    if run_full_analysis:
+        def name_filter(id_names):
+            return _run_name_filter(
+                catalog_intent.get("item") or plan.get("item"), id_names, usage=usage,
+            )
     catalog_started_at = time.perf_counter()
     catalog_outcome = {"candidates": [], "sources": {}, "attempts": [], "category_usage": {}, "category_errors": []}
     catalog_warning = ""
     try:
         catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
             line, limit=10, intent=catalog_intent, include_diagnostics=True,
-            # The wider set feeds the AI pass — which runs on feedback and,
-            # now, whenever there is a ТЗ (its "?" rows may need prose review).
-            shortlist_limit=40 if (pass_instructions or selected_rows) else None,
+            shortlist_limit=40 if run_full_analysis else None,
+            name_filter=name_filter,
         ))
     except CatalogSyncError as exc:
         catalog_warning = str(exc)[:300]

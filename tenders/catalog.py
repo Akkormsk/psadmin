@@ -2378,14 +2378,21 @@ def _shortlist_rank_key(
 
 def catalog_candidates_for_line(
     line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
-    shortlist_limit=None,
+    shortlist_limit=None, name_filter=None,
 ):
     """Return a relevance-ranked shortlist from the Oasis + Gifts mirrors.
 
     ``shortlist_limit`` widens how many ranked cards are serialised and
     returned (default: just ``limit``). The AI shortlist pass in
     services.py asks for the wider set — ~40 cards it can read in full and
-    re-order — then trims back to what the admin actually sees."""
+    re-order — then trims back to what the admin actually sees.
+
+    ``name_filter`` — an optional callable the caller (services.py) sets to
+    the cheap AI name pass (step 4). It gets ``[(external_id, name), ...]``
+    for the whole name-matched pool and returns the set of ids to keep (a
+    case / box / holder / gift set is dropped), or ``None`` when it could
+    not run — the pool then passes through untouched. It never sees more
+    than the name; the whole-card review is the later shortlist pass."""
     _reset_requirement_values_cache()
     try:
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
@@ -2458,20 +2465,33 @@ def catalog_candidates_for_line(
         "received": len(cached_products),
     }
     ranked = []
-    # Tag every product with a relevance tier (0 = distinctive query word
-    # in the name, 1 = only a generic one) and drop products whose name
-    # matched nothing. The eligibility pass over what's left is cheap
-    # (~0.4s for 2000 products, the per-requirement work is cached), so
-    # there is no hard cap — 2500 is a guard against a pathological query.
-    # Live-crawl products (no mirror) skip this and stay neutral.
+    # Order the whole name-matched pool by how many query words each name
+    # carries and tag `_relevance` for the ranking tiebreak. No hard cap —
+    # the pool is names only and the eligibility pass over it is cheap
+    # (~0.4s for 2000, per-requirement work cached).
     relevance_scored = bool(oasis_used_mirror or gifts_supplier_exists)
     if relevance_scored:
         pool = _score_pool_relevance(
             pool, (intent or {}).get("item", "") if isinstance(intent, dict) else "", query_phrases,
-        )[:2500]
+        )
     for product in pool:
         if not hasattr(product, "_relevance"):
             product._relevance = 1
+
+    # Step 4 — the cheap AI name pass. It reads every product NAME in the
+    # pool and drops the ones that are not the requested item (a case, box,
+    # holder, cable, gift set …); ambiguous names stay. Runs only when the
+    # caller wired it (the training flow does, once a ТЗ / feedback is
+    # present); a failed call returns None and the pool is kept whole.
+    name_filter_removed = 0
+    if name_filter is not None and pool:
+        keep_ids = name_filter([(product.external_id, product.full_name or product.name) for product in pool])
+        if keep_ids is not None:
+            keep_ids = {str(value) for value in keep_ids}
+            before = len(pool)
+            pool = [product for product in pool if str(product.external_id) in keep_ids]
+            name_filter_removed = before - len(pool)
+
     # "Исключить детские", "только хлопок", "подними мужские" and every
     # other free-text instruction are no longer backend keyword filters —
     # they are handled by the AI shortlist pass (services._run_shortlist_pass),
@@ -2648,6 +2668,7 @@ def catalog_candidates_for_line(
                 "query_phrases": list(query_phrases),
                 "relevance_tiers": sorted(Counter(getattr(product, "_relevance", 1) for product in pool).items()),
                 "name_hit_counts": sorted(Counter(getattr(product, "_name_hits", 0) for product in pool).items(), reverse=True),
+                "name_filter_removed": name_filter_removed,
                 "pool_count": len(pool),
                 "rejections": rejections,
                 "eligibility_counts": eligibility_counts,

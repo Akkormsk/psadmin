@@ -16,7 +16,7 @@ from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, catalog_candidates_for_line, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _retrieve_lessons, _run_shortlist_pass, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
+from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_catalog_intent, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _retrieve_lessons, _run_name_filter, _run_shortlist_pass, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
 
 
 class _StubOasisClient:
@@ -1602,6 +1602,42 @@ class TenderTests(TestCase):
         self.assertEqual([value["external_id"] for value in result], ["travel-mug"])
         self.assertEqual(result[0]["relevance"], 0)
 
+    def test_name_filter_callback_drops_cards_before_the_deterministic_pass(self):
+        _mirror_oasis([
+            {"id": "flash", "article": "F", "group_id": "flash", "name": "USB-флешка на 32 Гб", "full_name": "USB-флешка на 32 Гб, синяя", "colors": ["синий"], "total_stock": 100, "price": 500},
+            {"id": "box", "article": "B", "group_id": "box", "name": "Коробка для флешки", "full_name": "Коробка для флешки, синяя", "colors": ["синий"], "total_stock": 100, "price": 50},
+        ])
+        seen = {}
+
+        def name_filter(id_names):
+            seen["ids"] = {identifier for identifier, _ in id_names}
+            return {"flash"}
+
+        result = catalog_candidates_for_line(
+            {"name": "Флешка", "quantity": 10, "requirements": {"requirements": [{"label": "Цвет", "value": "синий"}]}},
+            intent={"item": "флешка", "queries": ["usb флешка"]},
+            client=_StubOasisClient(), include_diagnostics=True, name_filter=name_filter,
+        )
+
+        self.assertEqual(seen["ids"], {"flash", "box"})
+        self.assertEqual([value["external_id"] for value in result["candidates"]], ["flash"])
+        self.assertEqual(result["attempts"][0]["name_filter_removed"], 1)
+
+    def test_name_filter_that_returns_none_leaves_the_pool_whole(self):
+        _mirror_oasis([
+            {"id": "flash", "article": "F", "group_id": "flash", "name": "USB-флешка на 32 Гб", "full_name": "USB-флешка на 32 Гб", "total_stock": 100, "price": 500},
+            {"id": "box", "article": "B", "group_id": "box", "name": "Коробка для флешки", "full_name": "Коробка для флешки", "total_stock": 100, "price": 50},
+        ])
+
+        result = catalog_candidates_for_line(
+            {"name": "Флешка", "quantity": 10},
+            intent={"item": "флешка"},
+            client=_StubOasisClient(), include_diagnostics=True, name_filter=lambda id_names: None,
+        )
+
+        self.assertEqual({value["external_id"] for value in result["candidates"]}, {"flash", "box"})
+        self.assertEqual(result["attempts"][0]["name_filter_removed"], 0)
+
     def test_text_search_surfaces_the_item_even_without_a_matching_category(self):
         # The "Сумка шопер" regression: the keyword category picker used to
         # land on спортивные / поясные сумки and the real shoppers — which
@@ -1739,6 +1775,52 @@ class TenderTests(TestCase):
         gateway.assert_not_called()
         self.assertEqual(result["instructions"], [])
         self.assertEqual(result["ranking"], {})
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_name_filter_drops_the_names_the_model_rejects(self, gateway):
+        gateway.return_value = ({"not_item": [2, 4]}, {"prompt_tokens": 300, "completion_tokens": 8})
+        id_names = [
+            ("a", "USB-флешка на 32 Гб «Орландо»"),
+            ("box", "Коробка для флешки с магнитной крышкой"),
+            ("b", "USB 2.0- флешка на 16 Гб"),
+            ("set", "Подарочный набор: ручка и флешка"),
+        ]
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+        keep = _run_name_filter("USB-флеш-накопитель", id_names, usage=usage)
+
+        self.assertEqual(keep, {"a", "b"})
+        self.assertEqual(usage, {"prompt_tokens": 300, "completion_tokens": 8})
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_name_filter_keeps_the_whole_pool_when_the_call_fails(self, gateway):
+        gateway.side_effect = TenderAIError("Insufficient funds")
+
+        keep = _run_name_filter("флешка", [("a", "USB-флешка"), ("b", "Коробка для флешки")])
+
+        self.assertIsNone(keep)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_name_filter_a_failed_batch_keeps_only_its_own_names(self, gateway):
+        # 3 batches of 1, run in parallel: the batch that errors keeps its
+        # own name, the other two are filtered normally. Keyed on the prompt
+        # text so thread order does not matter.
+        def fake_gateway(prompt, **kwargs):
+            if "Пакетик" in prompt:
+                raise TenderAIError("429")
+            if "Коробка" in prompt:
+                return ({"not_item": [1]}, {})
+            return ({"not_item": []}, {})
+
+        gateway.side_effect = fake_gateway
+        with patch("tenders.services._NAME_FILTER_BATCH", 1):
+            keep = _run_name_filter("флешка", [
+                ("box", "Коробка для флешки"),
+                ("mid", "Пакетик для флешки"),
+                ("real", "USB-флешка на 32 Гб"),
+            ])
+
+        self.assertEqual(keep, {"mid", "real"})
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_raises_the_cards_a_priority_criterion_matches(self, gateway):
@@ -2423,6 +2505,24 @@ class TenderTests(TestCase):
 
         self.assertEqual(second["understood_changes"], ["исключи детские", "подними мужских"])
         self.assertEqual([v["text"] for v in second["session_instructions"]], ["исключи детские", "подними мужских"])
+
+    @patch("tenders.catalog.catalog_candidates_for_line")
+    @patch("tenders.services._ai_gateway_json")
+    def test_training_hypothesis_wires_the_name_filter_when_a_tz_is_present(self, gateway, catalog_search):
+        catalog_search.return_value = {"candidates": [], "sources": {}, "attempts": []}
+        gateway.side_effect = [({"item": "флешка", "queries": ["usb флешка"], "skip_labels": []}, {})]
+
+        with_tz = {"name": "USB-флеш-накопитель", "quantity": 10, "requirements": {"requirements": [
+            {"label": "Объём памяти", "value": "не менее 32 ГБ", "selected": True},
+        ]}}
+        build_training_hypothesis(with_tz)
+        self.assertTrue(callable(catalog_search.call_args.kwargs.get("name_filter")))
+
+        catalog_search.reset_mock()
+        gateway.side_effect = [({"item": "флешка", "queries": ["usb флешка"], "skip_labels": []}, {})]
+        no_tz = {"name": "USB-флеш-накопитель", "quantity": 10, "requirements": {"requirements": []}}
+        build_training_hypothesis(no_tz)
+        self.assertIsNone(catalog_search.call_args.kwargs.get("name_filter"))
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
