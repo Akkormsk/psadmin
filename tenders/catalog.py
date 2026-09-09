@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import io
 import json
 import logging
@@ -16,8 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from django.db import connection, transaction
-from django.db.models import Q
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -756,20 +754,6 @@ def sync_oasis_catalog(client=None):
         raise
 
 
-BRANDING_ALIASES = {
-    "вышивка": ("вышив",),
-    "dtf": ("dtf", "дтф"),
-    "термотрансфер": ("термотрансфер", "термоперенос"),
-    "шелкография": ("шелкограф", "трафаретная печать"),
-    "тампопечать": ("тампопечат",),
-    "уф-печать": ("уф-печат", "ультрафиолетовая печать", "uv-печат"),
-    "гравировка": ("гравиров",),
-    "тиснение": ("тиснен",),
-    "сублимация": ("сублимац",),
-    "деколь": ("декол",),
-}
-
-
 def _normalized(value):
     # A catalog search compares the same ТЗ requirement text against every
     # pool product (hundreds to thousands), so this is called millions of
@@ -960,106 +944,35 @@ def _constraint_text(line, label_marker):
     return " ".join(_text(value.get("value"), 1000) for value in _product_requirement_values(line) if label_marker in _normalized(value.get("label")))
 
 
+_TZ_STOPWORDS = frozenset({
+    "или", "равно", "более", "менее", "не", "для", "при", "как", "тип", "вид", "с", "и", "в",
+    "см", "мм", "гр", "шт", "мл", "кг", "продукции", "изделия", "товара", "сувенирной",
+})
+
+
+def _tz_token_set(line):
+    """The distinct meaningful words and numbers across all selected ТЗ
+    values — «синий», «32», «usb», «металл». Used as a pre-AI tiebreak so
+    the group-collapse keeps the variant the ТЗ actually asks for (a «32»
+    in the name beats a «16»), without the backend parsing any field."""
+    tokens = set()
+    for value in _product_requirement_values(line):
+        for token in _normalized(value.get("value")).split():
+            if len(token) >= 2 and token not in _TZ_STOPWORDS:
+                tokens.add(token)
+    return tokens
+
+
+def _tz_name_hits(product, tz_tokens):
+    if not tz_tokens:
+        return 0
+    words = set(_normalized(f"{product.name} {product.full_name} {product.size}").split())
+    return len(tz_tokens & words)
+
+
 def _meaningful_tokens(value):
     ignored = {"цвет", "материал", "состав", "изделие", "товар", "требуется", "должен", "должна", "менее", "более", "процентов"}
     return {token for token in _normalized(value).split() if len(token) >= 3 and token not in ignored and not token.isdigit()}
-
-
-_MATERIAL_SYNONYMS = (
-    {"спанбонд", "спанбонда", "спанбонде", "нетканый", "нетканого", "нетканое", "нетканая", "полипропилен", "полипропиленовый"},
-    {"хлопок", "хлопка", "хлопковый", "хлопковая", "хлопчатобумажный", "cotton"},
-    {"полиэстер", "полиэстера", "полиэфир", "polyester"},
-)
-
-
-def _expand_material_tokens(tokens):
-    expanded = set(tokens)
-    for group in _MATERIAL_SYNONYMS:
-        if tokens & group:
-            expanded |= group
-    return expanded
-
-
-_GENDER_LABEL_RE = re.compile(r"\b(пол|гендер)\b")
-
-
-def _is_gender_label(label):
-    # A plain `"пол" in label` substring check also matches "поло" (as in
-    # "рубашка-ПОЛО") — every "Модели рубашки-поло"/"Цвет рубашки-поло"-style
-    # requirement was being swept into the gender check by accident. "пол"
-    # (sex/gender) is a real standalone word here, so it needs a word
-    # boundary, not a bare substring test.
-    return bool(_GENDER_LABEL_RE.search(_normalized(label)))
-
-
-def _required_gender(line):
-    gender_values = " ".join(
-        _text(value.get("value"), 1000) for value in _product_requirement_values(line)
-        if _is_gender_label(value.get("label"))
-    )
-    text = _normalized(f"{gender_values} {_text(line.get('name', ''), 300)}")
-    has_unisex = "унисекс" in text
-    has_female = "женск" in text
-    has_male = "мужск" in text
-    # "мужская и женская" (a model range covering both) is not a request
-    # for women's only — it's the ТЗ saying either sex is acceptable, the
-    # same as "унисекс". Checking "женск" and returning immediately, before
-    # ever looking for "мужск" in the same text, was reading that as a
-    # strict women's-only requirement and hard-rejecting every men's item.
-    if has_unisex or (has_female and has_male):
-        return "унисекс"
-    if has_female:
-        return "женский"
-    if has_male:
-        return "мужской"
-    return ""
-
-
-def _product_gender(product):
-    text = _normalized(" ".join([
-        product.name or "", product.full_name or "",
-        *_attribute_values(product, ("пол", "гендер", "половой")),
-    ]))
-    if "унисекс" in text:
-        return "унисекс"
-    if "женск" in text:
-        return "женский"
-    if "мужск" in text:
-        return "мужской"
-    return ""
-
-
-def _shares_product_token(phrases, text):
-    """True when a meaningful word from any phrase also appears (as a stem) in text."""
-    text_tokens = _meaningful_tokens(text)
-    for phrase in phrases:
-        for token in _meaningful_tokens(phrase):
-            if len(token) < 4:
-                continue
-            for other in text_tokens:
-                if token == other:
-                    return True
-                short, long = sorted((token, other), key=len)
-                if len(short) >= 4 and long.startswith(short):
-                    return True
-    return False
-
-
-def _entity_phrase_matches(required, offered):
-    required_tokens = _normalized(required).split()
-    offered_tokens = _normalized(offered).split()
-    if not required_tokens or not offered_tokens:
-        return False
-
-    def compatible(left, right):
-        if left == right:
-            return True
-        if min(len(left), len(right)) < 5:
-            return False
-        prefix_length = max(4, min(6, len(left) - 1, len(right) - 1))
-        return left[:prefix_length] == right[:prefix_length]
-
-    return all(any(compatible(required_token, offered_token) for offered_token in offered_tokens) for required_token in required_tokens)
 
 
 COLOR_FAMILIES = {
@@ -1118,137 +1031,6 @@ def _colors_compatible(required, offered):
     return False, ""
 
 
-def _density_constraint(line):
-    text = _normalized(_constraint_text(line, "плотност"))
-    match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:г|гр)?\s*(?:м2|м²)", text)
-    if not match:
-        return None
-    value = Decimal(match.group(1).replace(",", "."))
-    if "не менее" in text or "от " in f"{text} " or "≥" in text:
-        return {"kind": "min", "value": value}
-    if "не более" in text or "до " in f"{text} " or "≤" in text:
-        return {"kind": "max", "value": value}
-    return {"kind": "exact", "value": value}
-
-
-def _product_density(product):
-    values = []
-    for attribute in product.attributes if isinstance(product.attributes, list) else []:
-        if not isinstance(attribute, dict) or "плотност" not in _normalized(attribute.get("name")):
-            continue
-        match = re.search(r"(\d+(?:[.,]\d+)?)", _text(attribute.get("value"), 300))
-        if match:
-            try:
-                values.append(Decimal(match.group(1).replace(",", ".")))
-            except InvalidOperation:
-                pass
-    return max(values) if values else None
-
-
-def _requested_branding(line):
-    text = " ".join(
-        _text(value.get("value"), 1000)
-        for value in _requirement_values(line)
-        if any(marker in _normalized(value.get("label")) for marker in ("нанес", "печат", "логотип", "вышив"))
-    )
-    normalized = _normalized(text)
-    return [name for name, aliases in BRANDING_ALIASES.items() if any(alias in normalized for alias in aliases)]
-
-
-def _planner_categories(intent):
-    if not isinstance(intent, dict):
-        return []
-    values = []
-    has_planned_categories = isinstance(intent.get("categories"), list) and intent.get("categories")
-    keys = ("categories",) if has_planned_categories else ("item", "product_class")
-    for key in keys:
-        raw = intent.get(key)
-        raw = raw if isinstance(raw, list) else [raw]
-        for value in raw:
-            value = _text(value, 200)
-            if value and _normalized(value) not in {_normalized(item) for item in values}:
-                values.append(value)
-    return values[:12]
-
-
-def _planner_requirements(intent):
-    if not isinstance(intent, dict):
-        return []
-    result = []
-    for key in ("required", "preferred"):
-        values = intent.get(key)
-        if not isinstance(values, list):
-            continue
-        for value in values[:20]:
-            if not isinstance(value, dict):
-                continue
-            label, item_value = _text(value.get("label"), 300), _text(value.get("value"), 1000)
-            if label and item_value:
-                result.append({"label": label, "value": item_value, "group": key})
-    return result
-
-
-def _line_with_planner_requirements(line, intent):
-    existing = _requirement_values(line)
-    requirements = list(existing)
-    seen = {_requirement_identity(value) for value in existing}
-    existing_fields = {_requirement_field(value.get("label")) for value in _product_requirement_values(line)}
-    line_name = _normalized(line.get("name") if isinstance(line, dict) else "")
-    for value in _planner_requirements(intent):
-        field = _requirement_field(value["label"])
-        field_markers = next((markers for key, markers in REQUIREMENT_FIELD_MARKERS if key == field), ())
-        if existing and field not in existing_fields and not any(marker in line_name for marker in field_markers):
-            continue
-        key = _requirement_identity(value)
-        if key in seen:
-            continue
-        requirements.append({"label": value["label"], "value": value["value"]})
-        seen.add(key)
-    if len(requirements) == len(existing):
-        return line
-    result = dict(line)
-    result["requirements"] = {"requirements": requirements}
-    return result
-
-
-def _criterion_key(value):
-    normalized = _normalized(value)
-    groups = (
-        ("price", ("цена", "стоимост", "бюджет")),
-        ("name", ("назван", "наименован", "модель")),
-        ("product_type", ("тип товара", "категор", "вид изделия")),
-        ("material", ("материал", "состав", "сырье")),
-        ("color", ("цвет", "оттен")),
-        ("volume", ("volume", "объем", "вместимост")),
-        ("mass", ("mass", "масса", "вес")),
-        ("length", ("length", "длина")),
-        ("width", ("width", "ширина")),
-        ("height", ("height", "высота")),
-        ("diameter", ("diameter", "диаметр")),
-        ("thickness", ("thickness", "толщина")),
-        ("size", ("size", "размер")),
-        ("density", ("плотност",)),
-        ("branding", ("нанес", "вышив", "гравиров", "печать", "логотип")),
-        ("stock", ("остаток", "налич", "тираж", "количеств", "склад")),
-        ("gender", ("gender", "пол", "гендер", "мужск", "женск", "унисекс")),
-        ("source", ("source", "источник", "поставщик")),
-    )
-    return next((key for key, markers in groups if any(marker in normalized for marker in markers)), normalized)
-
-
-def _required_mismatches(mismatches, intent):
-    required_labels = {
-        _criterion_key(value["label"])
-        for value in _planner_requirements(intent)
-        if value.get("group") == "required" and _normalized(value.get("label"))
-    }
-    return [
-        mismatch for mismatch in mismatches
-        if _criterion_key(mismatch) in required_labels
-        or any(label in _normalized(mismatch) for label in required_labels)
-    ]
-
-
 def _attribute_values(product, markers):
     values = []
     for attribute in product.attributes if isinstance(product.attributes, list) else []:
@@ -1260,24 +1042,6 @@ def _attribute_values(product, markers):
             if value:
                 values.append(value)
     return values
-
-
-def _values_compatible(required, offered):
-    """Compare a requirement with a catalogue value without relying on exact inflection."""
-    required_text = _text(required, 1000)
-    offered_text = _text(offered, 1000)
-    if _color_family(required_text) and _color_family(offered_text):
-        return _colors_compatible(required_text, offered_text)[0]
-    required_tokens = _meaningful_tokens(required_text)
-    offered_tokens = _meaningful_tokens(offered_text)
-    if required_tokens & offered_tokens:
-        return True
-    return any(
-        len(required_token) >= 4 and len(offered_token) >= 4
-        and (required_token.startswith(offered_token[:4]) or offered_token.startswith(required_token[:4]))
-        for required_token in required_tokens
-        for offered_token in offered_tokens
-    )
 
 
 def _product_sizes(product):
@@ -1419,229 +1183,6 @@ def _aggregate_color_variants(products, supplier_code="oasis"):
     return result
 
 
-CONSTRAINT_FIELD_LABELS = {
-    "gender": "Пол", "material": "Материал", "color": "Цвет", "density": "Плотность",
-    "branding": "Нанесение", "stock": "Остаток", "price": "Цена", "name": "Название",
-    "product_type": "Тип товара", "source": "Поставщик", "volume": "Объём", "mass": "Масса",
-    "length": "Длина", "width": "Ширина", "height": "Высота", "diameter": "Диаметр",
-    "thickness": "Толщина", "size": "Размер",
-}
-
-
-def _canonical_gender(value):
-    normalized = _normalized(value)
-    if any(marker in normalized for marker in ("унисекс", "unisex")):
-        return "unisex"
-    if any(marker in normalized for marker in ("женск", "female", "women", "woman")):
-        return "female"
-    if any(marker in normalized for marker in ("мужск", "male", "men", "man")):
-        return "male"
-    return ""
-
-
-def _constraint_product_values(product, field):
-    field = _criterion_key(field)
-    attributes = product.attributes if isinstance(product.attributes, list) else []
-    related = [
-        _text(value.get("value"), 1000)
-        for value in attributes if isinstance(value, dict) and _criterion_key(value.get("name")) == field
-        and _text(value.get("value"), 1000)
-    ]
-    if field == "gender":
-        explicit = [value for value in (_canonical_gender(item) for item in related) if value]
-        if explicit:
-            return list(dict.fromkeys(explicit))
-        inferred = _canonical_gender(" ".join([product.name, product.full_name]))
-        return [inferred] if inferred else []
-    if field == "material":
-        return product.materials if isinstance(product.materials, list) and product.materials else related
-    if field == "color":
-        return product.colors if isinstance(product.colors, list) and product.colors else related
-    if field == "branding":
-        return product.branding if isinstance(product.branding, list) and product.branding else related
-    if field == "density":
-        value = _product_density(product)
-        return [f"{_decimal_text(value)} {MEASUREMENT_UNITS[field]}"] if value is not None else []
-    if field in MEASUREMENT_UNITS:
-        values = _measurement_values_for_product(product, field)
-        return [f"{value['value']} {value['unit']}" for value in values]
-    if field == "stock":
-        return [product.total_stock]
-    if field == "price":
-        return [product.effective_price] if product.effective_price is not None else []
-    if field == "name":
-        return [product.full_name or product.name] if product.full_name or product.name else []
-    if field == "product_type":
-        return [*product.category_names, product.full_name or product.name]
-    if field == "source":
-        return [product.supplier.code, product.supplier.name]
-    return related
-
-
-def _constraint_expected_values(field, values):
-    if field == "gender":
-        return [value for value in (_canonical_gender(item) for item in values) if value]
-    if field in MEASUREMENT_UNITS:
-        result = []
-        for value in values:
-            normalized = _normalized_measurement(field, field, value)
-            if normalized:
-                canonical = f"{normalized['value']} {normalized['unit']}"
-                if canonical not in result:
-                    result.append(canonical)
-        return result
-    return values
-
-
-def _constraint_number(value):
-    if isinstance(value, (int, float, Decimal)):
-        return Decimal(str(value))
-    match = re.search(r"-?\d+(?:[.,]\d+)?", _text(value, 300).replace(" ", ""))
-    if not match:
-        return None
-    try:
-        return Decimal(match.group(0).replace(",", "."))
-    except InvalidOperation:
-        return None
-
-
-def _constraint_values_match(field, expected, offered):
-    if field == "gender":
-        return _canonical_gender(expected) == _canonical_gender(offered)
-    if field in MEASUREMENT_UNITS:
-        left = _normalized_measurement(field, field, expected)
-        right = _normalized_measurement(field, field, offered)
-        return bool(left and right and left["unit"] == right["unit"] and left["value"] == right["value"])
-    return _values_compatible(expected, offered)
-
-
-def _deduplicated_structured_constraints(intent):
-    values = intent.get("constraints", []) if isinstance(intent, dict) and isinstance(intent.get("constraints"), list) else []
-    result, seen = [], set()
-    for constraint in values:
-        if not isinstance(constraint, dict):
-            continue
-        field = _criterion_key(constraint.get("field"))
-        operator = _normalized(constraint.get("operator")).replace(" ", "_")
-        expected = _constraint_expected_values(
-            field,
-            constraint.get("values", []) if isinstance(constraint.get("values"), list) else [],
-        )
-        key = field, operator, tuple(expected), _normalized(constraint.get("level")), _normalized(constraint.get("missing_policy"))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(constraint)
-    return result
-
-
-def _structured_constraint_requirement_keys(constraint):
-    field = _criterion_key(constraint.get("field"))
-    operator = _normalized(constraint.get("operator")).replace(" ", "_")
-    if operator not in {"eq", "in", "contains"}:
-        return set()
-    values = constraint.get("values", []) if isinstance(constraint.get("values"), list) else []
-    keys = set()
-    for value in values:
-        measurement = _normalized_measurement(field, field, value)
-        if measurement:
-            keys.add((field, "eq", measurement["value"], measurement["unit"], ""))
-        else:
-            keys.add((field, "eq", _normalized(value), "", ""))
-    return keys
-
-
-def _evaluate_structured_constraints(product, intent, requirement_keys=None):
-    matches, mismatches, unknown, hard_mismatches = [], [], [], []
-    constraints = _deduplicated_structured_constraints(intent)
-    for constraint in constraints:
-        if not isinstance(constraint, dict):
-            continue
-        if _structured_constraint_requirement_keys(constraint) & set(requirement_keys or ()):
-            continue
-        field = _criterion_key(constraint.get("field"))
-        operator = _normalized(constraint.get("operator")).replace(" ", "_")
-        expected = _constraint_expected_values(field, constraint.get("values", []) if isinstance(constraint.get("values"), list) else [])
-        offered = _constraint_product_values(product, field)
-        label = CONSTRAINT_FIELD_LABELS.get(field, _text(constraint.get("field"), 80).rstrip(":") or "Характеристика")
-        level = _normalized(constraint.get("level"))
-        missing_policy = _normalized(constraint.get("missing_policy")).replace(" ", "_")
-        if not offered:
-            message = f"{label} не указан в каталоге"
-            if missing_policy == "reject":
-                mismatches.append(message)
-                if level == "required":
-                    hard_mismatches.append(message)
-            elif missing_policy == "allow_with_penalty":
-                unknown.append(message)
-            continue
-
-        valid = False
-        if operator == "exists":
-            valid = True
-        elif operator in {"eq", "in", "contains"}:
-            valid = any(_constraint_values_match(field, wanted, actual) for wanted in expected for actual in offered)
-        elif operator in {"not_in", "not_contains"}:
-            valid = not any(_constraint_values_match(field, wanted, actual) for wanted in expected for actual in offered)
-        elif operator in {"lte", "gte", "between"}:
-            actual_numbers = [value for value in (_constraint_number(item) for item in offered) if value is not None]
-            expected_numbers = [value for value in (_constraint_number(item) for item in expected) if value is not None]
-            if actual_numbers and expected_numbers:
-                if operator == "lte":
-                    valid = any(actual <= expected_numbers[0] for actual in actual_numbers)
-                elif operator == "gte":
-                    valid = any(actual >= expected_numbers[0] for actual in actual_numbers)
-                elif len(expected_numbers) >= 2:
-                    low, high = sorted(expected_numbers[:2])
-                    valid = any(low <= actual <= high for actual in actual_numbers)
-
-        offered_text = ", ".join(str(value) for value in offered)
-        if valid:
-            matches.append(f"{label}: {offered_text}")
-        else:
-            verb = "запрещённое значение" if operator in {"not_in", "not_contains"} else "не соответствует правилу"
-            message = f"{label}: {verb} ({offered_text})"
-            mismatches.append(message)
-            if level == "required":
-                hard_mismatches.append(message)
-    return (
-        list(dict.fromkeys(matches)),
-        list(dict.fromkeys(mismatches)),
-        list(dict.fromkeys(unknown)),
-        list(dict.fromkeys(hard_mismatches)),
-    )
-
-
-REQUIREMENT_DISPLAY_LABELS = {
-    "volume": "Объём",
-    "mass": "Масса",
-    "length": "Длина",
-    "width": "Ширина",
-    "height": "Высота",
-    "diameter": "Диаметр",
-    "thickness": "Толщина",
-    "size": "Размер",
-}
-
-
-def _normalized_size(value):
-    return re.sub(r"\s+", "", _text(value, 100).upper().replace("Х", "X"))
-
-
-def _requested_size_quantities(line):
-    result = {}
-    for requirement in _product_requirement_values(line):
-        if _requirement_field(requirement.get("label")) != "size":
-            continue
-        value = _text(requirement.get("value"), 2000)
-        for match in re.finditer(r"(?<!\w)([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9./-]{0,11})\s*[—–:=]\s*(\d+)\s*(?:шт\.?\b)?", value):
-            size = _normalized_size(match.group(1))
-            quantity = int(match.group(2))
-            if size and quantity > 0:
-                result[size] = result.get(size, 0) + quantity
-    return result
-
-
 def _product_variants(product):
     if isinstance(product.raw_data, dict) and isinstance(product.raw_data.get("variants"), list):
         return [value for value in product.raw_data["variants"] if isinstance(value, dict)]
@@ -1655,99 +1196,6 @@ def _product_variants(product):
     }]
 
 
-def _measurement_values_for_product(product, field):
-    if field == "density":
-        density = _product_density(product)
-        return [{"field": field, "value": _decimal_text(density), "unit": MEASUREMENT_UNITS[field]}] if density is not None else []
-    result = []
-    for attribute in product.attributes if isinstance(product.attributes, list) else []:
-        if not isinstance(attribute, dict) or _requirement_field(attribute.get("name")) != field:
-            continue
-        normalized = _normalized_measurement(field, attribute.get("name"), attribute.get("value"))
-        if normalized and normalized not in result:
-            result.append(normalized)
-    return result
-
-
-def _normalized_comparison_values(product, line, quantity, intent=None):
-    requirements, product_values = [], []
-    size_quantities = _requested_size_quantities(line)
-    requirement_keys = {_requirement_identity(value) for value in _product_requirement_values(line)}
-    for requirement in _product_requirement_values(line):
-        normalized = _normalized_requirement(requirement)
-        field = normalized["field"]
-        if field == "size" and size_quantities:
-            continue
-        if normalized not in requirements:
-            requirements.append(normalized)
-        if field in MEASUREMENT_UNITS:
-            offered = _measurement_values_for_product(product, field)
-        elif field == "material":
-            offered = [{"field": field, "value": _normalized(value), "unit": ""} for value in product.materials]
-        elif field == "color":
-            offered = [{"field": field, "value": _normalized(value), "unit": ""} for value in product.colors]
-        else:
-            offered = []
-            for attribute in product.attributes if isinstance(product.attributes, list) else []:
-                if isinstance(attribute, dict) and _requirement_field(attribute.get("name")) == field:
-                    offered.append({"field": field, "value": _normalized(attribute.get("value")), "unit": ""})
-        for value in offered:
-            if value not in product_values:
-                product_values.append(value)
-    for constraint in _deduplicated_structured_constraints(intent):
-        if _structured_constraint_requirement_keys(constraint) & requirement_keys:
-            continue
-        field = _criterion_key(constraint.get("field"))
-        operator = _normalized(constraint.get("operator")).replace(" ", "_")
-        expected = _constraint_expected_values(
-            field,
-            constraint.get("values", []) if isinstance(constraint.get("values"), list) else [],
-        )
-        normalized_expected = []
-        for value in expected:
-            measurement = _normalized_measurement(field, field, value)
-            normalized_expected.append({
-                "value": measurement["value"] if measurement else _normalized(value),
-                "unit": measurement["unit"] if measurement else "",
-            })
-        record = {"field": field, "operator": operator, "values": normalized_expected}
-        if record not in requirements:
-            requirements.append(record)
-        offered_values = _constraint_product_values(product, field)
-        for value in offered_values:
-            measurement = _normalized_measurement(field, field, value)
-            product_record = {
-                "field": field,
-                "value": measurement["value"] if measurement else _normalized(value),
-                "unit": measurement["unit"] if measurement else "",
-            }
-            if product_record not in product_values:
-                product_values.append(product_record)
-    if size_quantities:
-        requirements.append({
-            "field": "size_stock", "operator": "gte",
-            "values": [{"size": size, "quantity": needed} for size, needed in size_quantities.items()],
-            "unit": "pcs",
-        })
-        product_values.append({"field": "size_stock", "variants": _product_variants(product), "unit": "pcs"})
-    elif quantity > 0:
-        requirements.append({"field": "stock", "operator": "gte", "value": str(quantity), "unit": "pcs"})
-        product_values.append({"field": "stock", "value": str(product.total_stock), "unit": "pcs"})
-    return requirements, product_values
-
-
-def _requirement_matches_attribute(field, requirement, attribute):
-    required_measurement = _normalized_measurement(field, requirement.get("label"), requirement.get("value"))
-    offered_measurement = _normalized_measurement(field, attribute.get("name"), attribute.get("value"))
-    if required_measurement and offered_measurement:
-        comparator = _requirement_comparator(requirement.get("label"), requirement.get("value"))
-        return _measure_satisfies(
-            Decimal(required_measurement["value"]), Decimal(offered_measurement["value"]),
-            comparator, field,
-        ) is True
-    return _values_compatible(requirement.get("value"), attribute.get("value"))
-
-
 _CAPACITY_RE = re.compile(
     r"(\d+(?:[.,]\d+)?)\s*(гигабайт|гбайт|гб|gb|терабайт|тбайт|тб|tb|мегабайт|мбайт|мб|mb)(?![а-яa-z])",
     re.I,
@@ -1757,10 +1205,6 @@ _CAPACITY_TO_MB = {
     "гб": 1024, "гбайт": 1024, "гигабайт": 1024, "gb": 1024,
     "тб": 1048576, "тбайт": 1048576, "терабайт": 1048576, "tb": 1048576,
 }
-_DIM_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?")
-_SIZE_ATTR_RE = re.compile(r"размер|габарит|dimension")
-
-
 def _capacity_mb(text):
     """Memory capacity of a string ("32 ГБ", "…, 16 Gb, …") in megabytes, or None."""
     match = _CAPACITY_RE.search(_normalized(text))
@@ -1770,72 +1214,6 @@ def _capacity_mb(text):
         return Decimal(match.group(1).replace(",", ".")) * _CAPACITY_TO_MB[match.group(2).lower()]
     except (InvalidOperation, KeyError):
         return None
-
-
-def _capacity_label(megabytes):
-    if megabytes is None:
-        return ""
-    if megabytes >= 1048576 and megabytes % 1048576 == 0:
-        return f"{_decimal_text(megabytes / 1048576)} ТБ"
-    if megabytes >= 1024:
-        return f"{_decimal_text(megabytes / 1024)} ГБ"
-    return f"{_decimal_text(megabytes)} МБ"
-
-
-def _requirement_comparator(label, value):
-    """'gte' / 'lte' / 'eq' read from the requirement text — "не менее 250",
-    "от 32 ГБ", "≥ 200" → gte; "не более", "до", "≤" → lte; otherwise eq.
-    A ТЗ number is almost always a bound, not an exact spec."""
-    raw = f"{_text(label, 300)} {_text(value, 1000)}"
-    text = _normalized(raw)
-    if "≥" in raw or ">=" in raw or any(
-        marker in text for marker in ("не менее", "не меньше", "не ниже", "больше или равно", "как минимум", "минимум")
-    ):
-        return "gte"
-    if "≤" in raw or "<=" in raw or any(
-        marker in text for marker in ("не более", "не больше", "не выше", "меньше или равно", "как максимум", "максимум")
-    ):
-        return "lte"
-    return "eq"
-
-
-def _measure_satisfies(required, offered, comparator, field=""):
-    """Does `offered` meet `required`? None when either is missing.
-    'eq' allows a tolerance band — a ТЗ dimension of "6 см" is met by a
-    catalogue "5,8 см" (manufacturing / rounding); a linear size gets a
-    wider band than a capacity or a mass."""
-    if required is None or offered is None:
-        return None
-    if comparator == "gte":
-        return offered >= required
-    if comparator == "lte":
-        return offered <= required
-    ratio = Decimal("0.12") if field in {"length", "width", "height", "diameter", "thickness"} else Decimal("0.05")
-    band = max(required * ratio, Decimal("1"))
-    return abs(offered - required) <= band
-
-
-def _linear_dimensions_mm(product_attributes, product):
-    """Every linear measurement we can read off the card, in millimetres —
-    from a "Размер товара (см): 5,8 х 1,8 х 0,8" style attribute (units from
-    the attribute name) or a `size` field. Used when the ТЗ asks for a
-    length / width the catalogue never spells out as its own field."""
-    numbers = []
-    for attribute in product_attributes:
-        name = _normalized(attribute.get("name"))
-        if not _SIZE_ATTR_RE.search(name):
-            continue
-        factor = Decimal("10") if "см" in name or "cm" in name else (
-            Decimal("1") if "мм" in name or "mm" in name else None
-        )
-        if factor is None:
-            continue
-        for token in _DIM_NUMBER_RE.findall(_text(attribute.get("value"), 200)):
-            try:
-                numbers.append(Decimal(token.replace(",", ".")) * factor)
-            except InvalidOperation:
-                continue
-    return [value for value in numbers if value > 0]
 
 
 # "Честный Знак" / ЦРПТ marking is a labelling-compliance obligation the
@@ -1848,335 +1226,53 @@ def _linear_dimensions_mm(product_attributes, product):
 _COMPLIANCE_MARKING_RE = re.compile(r"честн\w*\s*знак|црпт|обязательн\w*\s+маркиров")
 
 
-def _fit_product(product, line, anchors, quantity, intent=None, name_matched_query=False, name_anchors=()):
-    name_anchors = name_anchors or anchors
-    matches, mismatches, unknown = [], [], []
-    type_text = _normalized(" ".join([
-        *(product.category_names if isinstance(product.category_names, list) else []),
-        product.name,
-        product.full_name,
-    ]))
-    anchor_hit = next((value for value in anchors if _entity_phrase_matches(value, type_text)), "")
-    if anchor_hit:
-        matches.append(f"Тип товара: {anchor_hit}")
-    elif name_matched_query and _shares_product_token(name_anchors, type_text):
-        # Text search put this card here because a query word is in its name
-        # ("снуд" for a «шарф» query, "холщовая сумка" for «сумка шопер») —
-        # trust it as plausibly the right kind of thing over an exact-phrase
-        # miss; relevance has already ranked the phrase matches above it. A
-        # card whose name shares nothing (напульсник for бафф) is still wrong.
-        unknown.append("Тип товара не подтверждён по названию")
-    else:
-        mismatches.append("Не совпадает тип товара")
-
-    material_text = _constraint_text(line, "материал") or _constraint_text(line, "состав")
-    material_tokens = _meaningful_tokens(material_text)
-    material_values = product.materials if isinstance(product.materials, list) and product.materials else _attribute_values(product, ("материал", "состав"))
-    product_materials = _meaningful_tokens(" ".join(material_values))
-    if material_tokens:
-        material_overlap = _expand_material_tokens(material_tokens) & _expand_material_tokens(product_materials)
-        if material_overlap:
-            matches.append(f"Материал: {', '.join(sorted(material_tokens & product_materials) or material_overlap)}")
-        elif product_materials:
-            mismatches.append(f"Материал не совпадает: требуется {material_text}; в каталоге {', '.join(material_values)}")
-        else:
-            unknown.append("Материал не указан в каталоге")
-
-    color_text = _constraint_text(line, "цвет")
-    color_values = product.colors if isinstance(product.colors, list) and product.colors else _attribute_values(product, ("цвет",))
-    product_color_text = " ".join(color_values)
-    name_color_values = []
+def _colour_conflict(product, line):
+    """True only when the ТЗ names a colour and the product's own colour is
+    known and clearly a different family — белый asked, красный offered —
+    with no matching shade hiding in the name. Anything softer than that
+    (colour not stated, an adjacent shade) is left for the AI pass to
+    weigh; this is the one colour check that removes a card outright."""
+    required = _constraint_text(line, "цвет")
+    if not _meaningful_tokens(required):
+        return False
+    values = product.colors if isinstance(product.colors, list) and product.colors else _attribute_values(product, ("цвет",))
+    offered = " ".join(values)
+    if not _meaningful_tokens(offered) or _colors_compatible(required, offered)[0]:
+        return False
+    name_colors = []
     if isinstance(product.raw_data, dict):
-        name_color_values = [str(value) for value in product.raw_data.get("name_colors", []) if str(value).strip()]
-    if not name_color_values:
-        name_color_values = _gifts_name_colors(product.full_name or product.name)
-    name_color_match = False
-    if _meaningful_tokens(color_text):
-        color_matches, color_family = _colors_compatible(color_text, product_color_text)
-        if color_matches:
-            family_note = f" (семейство: {color_family})" if color_family else ""
-            matches.append(f"Цвет: {', '.join(color_values)}{family_note}")
-        else:
-            name_color_match, _ = _colors_compatible(color_text, " ".join(name_color_values))
-            required_family = _color_family(color_text)
-            offered_family = _color_family(product_color_text)
-            if name_color_match and required_family and offered_family and COLOR_PARENTS.get(required_family) == offered_family:
-                matches.append(f"Цвет: {', '.join(color_values)} (оттенок в названии: {', '.join(name_color_values)})")
-            elif required_family and offered_family and not name_color_match:
-                # Both colours are known and belong to different families
-                # (white asked, red offered). Confident enough to drop the card.
-                mismatches.append(f"Цвет не подходит: требуется {color_text}; в каталоге {', '.join(color_values)}")
-            elif _meaningful_tokens(product_color_text):
-                mismatches.append(f"Цвет не совпадает: требуется {color_text}; в каталоге {', '.join(color_values)}")
-            else:
-                unknown.append("Цвет не указан в каталоге")
-
-    density = _density_constraint(line)
-    product_density = _product_density(product)
-    if density:
-        if product_density is None:
-            unknown.append("Плотность не указана в каталоге")
-        else:
-            valid = (
-                density["kind"] == "min" and product_density >= density["value"]
-                or density["kind"] == "max" and product_density <= density["value"]
-                or density["kind"] == "exact" and product_density == density["value"]
-            )
-            if valid:
-                matches.append(f"Плотность: {_text(product_density)} г/м²")
-            else:
-                sign = {"min": "не менее", "max": "не более", "exact": "ровно"}[density["kind"]]
-                mismatches.append(f"Плотность {_text(product_density)} г/м²; требуется {sign} {_text(density['value'])} г/м²")
-
-    requested_branding = _requested_branding(line)
-    branding_values = product.branding if isinstance(product.branding, list) and product.branding else _attribute_values(product, ("нанес", "брендирован"))
-    product_branding = _normalized(" ".join(branding_values))
-    for method in requested_branding:
-        if any(alias in product_branding for alias in BRANDING_ALIASES[method]):
-            matches.append(f"Поддерживается нанесение: {method}")
-        elif product_branding:
-            mismatches.append(f"Не заявлено нужное нанесение: {method}")
-        else:
-            unknown.append(f"Не указана совместимость с нанесением: {method}")
-
-    required_gender = _required_gender(line)
-    product_gender = _product_gender(product) if required_gender else ""
-    if required_gender and product_gender and not (
-        product_gender == required_gender
-        or product_gender == "унисекс"
-        or required_gender == "унисекс"
-    ):
-        mismatches.append(f"Пол не совпадает: требуется {required_gender}; товар {product_gender}")
-
-    handled_markers = ("материал", "состав", "цвет", "плотност", "нанес", "печат", "логотип", "вышив", "остаток", "наличие", "тираж", "размер", "гендер")
-    # A "Вид продукции / Тип изделия / Наименование товара" row asks the same
-    # question the type check at the top of this function already answered —
-    # do not count it a second time as its own "не указан" unknown.
-    type_like_markers = ("вид продукци", "вид издели", "вид товара", "тип издели", "тип товара", "наименование товара", "категория товара")
-    product_attributes = [
-        attribute for attribute in product.attributes
-        if isinstance(attribute, dict) and _text(attribute.get("name"), 300) and _text(attribute.get("value"), 1000)
-    ] if isinstance(product.attributes, list) else []
-    card_prose = " ".join(filter(None, [product.name, product.full_name, product.description]))
-    for requirement in _product_requirement_values(line):
-        label = _text(requirement.get("label"), 300)
-        value = _text(requirement.get("value"), 1000)
-        label_normalized = _normalized(label)
-        if not label_normalized or not value or _is_gender_label(label) or any(marker in label_normalized for marker in handled_markers):
-            continue
-        if any(marker in label_normalized for marker in type_like_markers):
-            continue
-        if any(marker in label_normalized for marker in ("коммент", "примеч")):
-            continue
-        if _COMPLIANCE_MARKING_RE.search(f"{label_normalized} {_normalized(value)}"):
-            continue
-        label_tokens = _meaningful_tokens(label_normalized)
-        field = _requirement_field(label)
-        comparator = _requirement_comparator(label, value)
-        related = [
-            attribute for attribute in product_attributes
-            if (
-                field and field == _requirement_field(attribute.get("name"))
-                or label_tokens and any(token in _normalized(attribute.get("name")) for token in label_tokens)
-            )
-        ]
-        display_label = REQUIREMENT_DISPLAY_LABELS.get(field, label.rstrip(":"))
-
-        # Memory capacity: "Объём памяти: не менее 32 ГБ" reads as field
-        # "volume" (millilitres) but is a capacity in GB. Compare it as a
-        # capacity against the size field / attributes / the card text.
-        required_capacity = _capacity_mb(value)
-        if required_capacity is not None:
-            offered_capacity = next((
-                capacity for capacity in (
-                    _capacity_mb(product.size),
-                    *(_capacity_mb(_text(attribute.get("value"), 200)) for attribute in product_attributes),
-                    _capacity_mb(card_prose),
-                ) if capacity is not None
-            ), None)
-            if offered_capacity is None:
-                unknown.append(f"{display_label} не указан в каталоге")
-            elif _measure_satisfies(required_capacity, offered_capacity, comparator, "volume"):
-                matches.append(f"{display_label}: {_capacity_label(offered_capacity)}")
-            else:
-                mismatches.append(
-                    f"{display_label} не совпадает: требуется {value}; в каталоге {_capacity_label(offered_capacity)}"
-                )
-            continue
-
-        if related:
-            offered_values = [_text(attribute.get("value"), 1000) for attribute in related]
-            if any(_requirement_matches_attribute(field, requirement, attribute) for attribute in related):
-                matches.append(f"{display_label}: {', '.join(offered_values)}")
-            else:
-                mismatches.append(f"{display_label} не совпадает: требуется {value}; в каталоге {', '.join(offered_values)}")
-            continue
-
-        # No attribute lines up by name. For a linear dimension the catalogue
-        # often packs it into one "Размер товара (см): 5,8 х 1,8 х 0,8"
-        # string — read the numbers off that instead of giving up.
-        if field in {"length", "width", "height", "diameter", "thickness"}:
-            required_mm = _normalized_measurement(field, label, value)
-            dimensions = _linear_dimensions_mm(product_attributes, product)
-            if required_mm and dimensions:
-                required_mm = Decimal(required_mm["value"])
-                closest = min(dimensions, key=lambda value_mm: abs(value_mm - required_mm))
-                blob = ", ".join(sorted({
-                    _text(attribute.get("value"), 80) for attribute in product_attributes
-                    if _SIZE_ATTR_RE.search(_normalized(attribute.get("name")))
-                }))
-                if _measure_satisfies(required_mm, closest, comparator, field):
-                    matches.append(f"{display_label}: подтверждено габаритами ({blob})")
-                elif required_mm > 0 and abs(closest - required_mm) <= required_mm * Decimal("0.3"):
-                    # A ТЗ dimension is nominal; a catalogue value within ~30 %
-                    # is a "проверьте, допустимо ли" note (weighted like an
-                    # unknown), not a hard deviation that sinks the card.
-                    unknown.append(
-                        f"{display_label}: в каталоге ≈{_decimal_text(closest / 10)} см при требуемых {value} — проверьте допуск"
-                    )
-                else:
-                    mismatches.append(f"{display_label} не совпадает: требуется {value}; габариты в каталоге — {blob}")
-                continue
-
-        unknown.append(f"{display_label} не указан в каталоге")
-
-    if quantity > 0:
-        # These tenders are "изготовление / нанесение под заказ": the supplier
-        # makes and brands the item to order, so a warehouse balance below the
-        # tirage is a "check the delivery date" note (weighted like one
-        # unknown), NEVER a spec mismatch that sinks the card, and stock in
-        # transit counts toward availability. Only a listing with nothing on
-        # hand, nothing in transit and no on-order flag is a real problem (and
-        # it is hard-rejected upstream before this runs).
-        transit = max(0, _integer(getattr(product, "stock_transit", 0)))
-        if product.total_stock >= quantity:
-            matches.append(f"Остаток достаточен: {product.total_stock} шт.")
-        elif product.total_stock + transit >= quantity:
-            matches.append(
-                f"Хватает с учётом поставки в пути: {product.total_stock} шт. на складе + {transit} шт. в пути"
-            )
-        elif product.total_stock > 0 or transit > 0:
-            tail = f", ещё {transit} шт. в пути" if transit else ""
-            unknown.append(
-                f"На складе {product.total_stock} из {quantity} шт.{tail} — остальное под заказ, уточните срок"
-            )
-        elif product.is_on_order:
-            unknown.append(f"На складе нет, товар под заказ — уточните срок поставки {quantity} шт.")
-        else:
-            mismatches.append(f"Нет на складе; поставку под заказ нужно подтвердить у поставщика (требуется {quantity} шт.)")
-
-    size_quantities = _requested_size_quantities(line)
-    if size_quantities:
-        stock_by_size = {}
-        for variant in _product_variants(product):
-            size = _normalized_size(variant.get("size"))
-            if size:
-                stock_by_size[size] = stock_by_size.get(size, 0) + max(0, _integer(variant.get("stock")))
-        for size, needed in size_quantities.items():
-            available = stock_by_size.get(size, 0)
-            if available >= needed:
-                matches.append(f"Размер {size}: доступно {available} шт., требуется {needed} шт.")
-            else:
-                mismatches.append(f"Размер {size}: доступно {available} из {needed} шт.")
-
-    return matches, mismatches, unknown
-
-
-def _catalog_product_eligibility(product, line, effective_line, anchors, quantity, intent, name_matched_query=False, name_anchors=()):
-    matches, mismatches, unknown = _fit_product(
-        product, effective_line, anchors, quantity, intent=intent,
-        name_matched_query=name_matched_query, name_anchors=name_anchors,
+        name_colors = [str(value) for value in product.raw_data.get("name_colors", []) if str(value).strip()]
+    if not name_colors:
+        name_colors = _gifts_name_colors(product.full_name or product.name)
+    if name_colors and _colors_compatible(required, " ".join(name_colors))[0]:
+        return False
+    required_family = _color_family(required)
+    offered_family = _color_family(offered)
+    return bool(
+        required_family and offered_family
+        and required_family != offered_family
+        and COLOR_PARENTS.get(required_family) != offered_family
+        and COLOR_PARENTS.get(offered_family) != required_family
     )
-    hard_reasons, hard_codes, partial_reasons = [], [], []
-    if "Не совпадает тип товара" in mismatches:
-        hard_reasons.append("Не совпадает тип товара")
-        hard_codes.append("product_type")
-    colour_reason = next((value for value in mismatches if value.startswith("Цвет не подходит")), "")
-    if colour_reason:
-        hard_reasons.append(colour_reason)
-        hard_codes.append("colour")
-    # Stock shortage is no longer a hard reject: the assistant works on
-    # "изготовление / нанесение под заказ" tenders where the supplier makes
-    # and brands the item to order, so a warehouse balance below the tirage
-    # (and a mirror that may be hours stale) must not delete the best-fitting
-    # product — it stays as a ranked alternative with the shortage shown by
-    # _fit_product ("на складе N из Q, недостающее под заказ"). Only a SKU with
-    # nothing on hand, nothing in transit and no on-order flag is dropped, as
-    # a likely-dead listing (handled by the out_of_stock check upstream).
-    transit_stock = max(0, _integer(getattr(product, "stock_transit", 0)))
-    if (
-        quantity > 0
-        and product.total_stock <= 0
-        and transit_stock <= 0
-        and not product.is_on_order
-    ):
-        hard_reasons.append("Нет ни на складе, ни в пути, ни под заказ")
-        hard_codes.append("out_of_stock")
 
-    allowed_sources = {
-        _normalized(value) for value in intent.get("allowed_sources", [])
-        if _normalized(value)
-    } if isinstance(intent, dict) and intent.get("_source_only_confirmed") else set()
-    if allowed_sources and not ({_normalized(product.supplier.code), _normalized(product.supplier.name)} & allowed_sources):
-        hard_reasons.append("Источник запрещён подтверждённым правилом source_only")
-        hard_codes.append("source")
 
-    requirement_keys = {_requirement_identity(value) for value in _product_requirement_values(effective_line)}
-    constraint_matches, constraint_mismatches, constraint_unknown, _ = _evaluate_structured_constraints(
-        product, intent, requirement_keys=requirement_keys,
-    )
-    matches.extend(constraint_matches)
-    mismatches.extend(constraint_mismatches)
-    unknown.extend(constraint_unknown)
+def _catalog_product_eligibility(product, line, quantity):
+    """Step 5 — the objective hard gates, the only per-product check the
+    backend still runs. Everything a person has to read and weigh
+    (dimensions, capacity, material, density, interface, print method, …)
+    is graded by the AI pass (services._run_shortlist_pass), not here.
 
-    for constraint in _deduplicated_structured_constraints(intent):
-        single_matches, single_mismatches, _, _ = _evaluate_structured_constraints(
-            product, {"constraints": [constraint]},
-        )
-        if single_matches or not single_mismatches:
-            continue
-        operator = _normalized(constraint.get("operator")).replace(" ", "_")
-        level = _normalized(constraint.get("level"))
-        if operator in {"not_in", "not_contains"}:
-            hard_reasons.extend(single_mismatches)
-            hard_codes.append("forbidden")
-        elif level == "required":
-            # A required technical characteristic the catalogue does not answer
-            # (or answers differently) keeps the product as a ranked alternative;
-            # only wrong type, wrong colour, stock and explicit bans remove it.
-            partial_reasons.extend(single_mismatches)
+    A card is rejected only for a clear colour-family conflict or for
+    being genuinely unavailable. Type is handled upstream by the name
+    search and the AI name filter; a forbidden value by the AI pass and
+    admin feedback."""
+    if _colour_conflict(product, line):
+        return {"status": "rejected", "hard_codes": ["colour"], "reasons": ["Цвет не подходит по ТЗ"]}
+    transit = max(0, _integer(getattr(product, "stock_transit", 0)))
+    if quantity > 0 and product.total_stock <= 0 and transit <= 0 and not product.is_on_order:
+        return {"status": "rejected", "hard_codes": ["out_of_stock"], "reasons": ["Нет ни на складе, ни в пути, ни под заказ"]}
+    return {"status": "ok", "hard_codes": [], "reasons": []}
 
-    required_fields = {
-        _requirement_field(value.get("label")) for value in _product_requirement_values(line)
-    } | {
-        _criterion_key(value.get("label"))
-        for value in _planner_requirements(intent) if value.get("group") == "required"
-    }
-    for mismatch in mismatches:
-        if mismatch in hard_reasons or mismatch.startswith(("Недостаточный остаток", "На складе")):
-            continue
-        if mismatch.startswith("Размер ") or _criterion_key(mismatch) in required_fields:
-            partial_reasons.append(mismatch)
-
-    hard_reasons = list(dict.fromkeys(hard_reasons))
-    partial_reasons = list(dict.fromkeys(partial_reasons))
-    if hard_reasons:
-        status = "rejected"
-        reasons = hard_reasons
-    elif partial_reasons:
-        status = "partial_eligible"
-        reasons = partial_reasons
-    else:
-        status = "exact_eligible"
-        reasons = []
-    return {
-        "status": status,
-        "reasons": reasons,
-        "hard_codes": list(dict.fromkeys(hard_codes)),
-        "matches": list(dict.fromkeys(matches)),
-        "mismatches": list(dict.fromkeys(mismatches)),
-        "unknown": list(dict.fromkeys(unknown)),
-    }
 
 
 def _query_stems(phrases):
@@ -2358,12 +1454,14 @@ def catalog_candidates_for_line(
     line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
     shortlist_limit=None, name_filter=None,
 ):
-    """Return a relevance-ranked shortlist from the Oasis + Gifts mirrors.
+    """Return a name-relevance-then-price ranked shortlist from the Oasis +
+    Gifts mirrors. Steps 3–5 of the cascade: search by product name, the
+    optional AI name filter, the colour + availability hard gate, and one
+    card per supplier product group.
 
-    ``shortlist_limit`` widens how many ranked cards are serialised and
-    returned (default: just ``limit``). The AI shortlist pass in
-    services.py asks for the wider set — ~40 cards it can read in full and
-    re-order — then trims back to what the admin actually sees.
+    ``shortlist_limit`` — how many cards to serialise for the AI pass
+    (default ``limit``; the training flow passes 200 so the whole gated
+    set is graded, not a top-N slice).
 
     ``name_filter`` — an optional callable the caller (services.py) sets to
     the cheap AI name pass (step 4). It gets ``[(external_id, name), ...]``
@@ -2376,23 +1474,15 @@ def catalog_candidates_for_line(
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
         quantity = 0
-    planner_categories = _planner_categories(intent)
-    specific_entities = [
-        (intent or {}).get("item", "") if isinstance(intent, dict) else "",
-        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
-        *planner_categories,
-    ]
-    anchors = tuple(dict.fromkeys(_text(value, 300) for value in specific_entities if _text(value, 300)))
-    if not anchors:
-        anchors = tuple(value for value in (
-            (intent or {}).get("product_class", "") if isinstance(intent, dict) else "",
-            _text(line.get("name", ""), 300),
-        ) if _text(value, 300))
-    name_anchors = tuple(dict.fromkeys(_text(value, 300) for value in [
-        (intent or {}).get("item", "") if isinstance(intent, dict) else "",
-        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
-    ] if _text(value, 300))) or anchors
-    effective_line = _line_with_planner_requirements(line, intent)
+    intent = intent if isinstance(intent, dict) else {}
+    synonyms = intent.get("synonyms") if isinstance(intent.get("synonyms"), list) else []
+    name_anchors = tuple(dict.fromkeys(
+        _text(value, 300) for value in [intent.get("item", ""), *synonyms] if _text(value, 300)
+    ))
+    if not name_anchors:
+        name_anchors = tuple(value for value in (
+            _text(intent.get("product_class", ""), 300), _text(line.get("name", ""), 300),
+        ) if value)
     pool = []
     source_status = {
         "oasis": {"status": "not_searched", "message": "", "received": 0},
@@ -2422,7 +1512,7 @@ def catalog_candidates_for_line(
             }
     except CatalogSyncError as exc:
         source_status["oasis"] = {"status": "failed", "message": str(exc)[:300], "received": 0}
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected Oasis catalogue search failure")
         source_status["oasis"] = {
             "status": "failed",
@@ -2470,81 +1560,57 @@ def catalog_candidates_for_line(
             pool = [product for product in pool if str(product.external_id) in keep_ids]
             name_filter_removed = before - len(pool)
 
-    # "Исключить детские", "только хлопок", "подними мужские" and every
-    # other free-text instruction are no longer backend keyword filters —
-    # they are handled by the AI shortlist pass (services._run_shortlist_pass),
-    # which reads the whole card and edits its verdicts / priority / remove
-    # flag. The backend here does only the objective, deterministic work.
+    # Step 5 — the objective hard gates (colour family, availability). Every
+    # readable ТЗ point — dimensions, capacity, material, density, interface,
+    # print method, free-text admin instructions — is graded later by the AI
+    # pass (services._run_shortlist_pass), which reads the whole card. The
+    # backend here only removes what a person would not even open the card
+    # for.
     rejections = {
         "out_of_stock": 0, "insufficient_total_stock": 0, "source": 0,
         "product_type": 0, "colour": 0, "forbidden": 0, "missing_required": 0,
     }
     eligibility_counts = {"exact_eligible": 0, "partial_eligible": 0, "rejected": 0}
     rejection_reasons, partial_reasons = {}, {}
+    tz_tokens = _tz_token_set(line)
     for product in pool:
-        if (
-            product.total_stock <= 0
-            and max(0, _integer(getattr(product, "stock_transit", 0))) <= 0
-            and not product.is_on_order
-        ):
-            rejections["out_of_stock"] += 1
-            eligibility_counts["rejected"] += 1
-            rejection_reasons["Нулевой остаток"] = rejection_reasons.get("Нулевой остаток", 0) + 1
-            continue
-        eligibility = _catalog_product_eligibility(
-            product, line, effective_line, anchors, quantity, intent,
-            name_matched_query=relevance_scored and getattr(product, "_relevance", 1) <= 1,
-            name_anchors=name_anchors,
-        )
+        eligibility = _catalog_product_eligibility(product, line, quantity)
         if eligibility["status"] == "rejected":
             eligibility_counts["rejected"] += 1
             for code in eligibility["hard_codes"]:
                 if code in rejections:
                     rejections[code] += 1
             for reason in eligibility["reasons"]:
-                label = (
-                    "Недостаточный общий остаток" if reason.startswith("Недостаточный общий остаток")
-                    else reason
-                )
-                rejection_reasons[label] = rejection_reasons.get(label, 0) + 1
+                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
             continue
-        eligibility_counts[eligibility["status"]] += 1
-        if eligibility["status"] == "partial_eligible":
-            for reason in eligibility["reasons"]:
-                partial_reasons[reason] = partial_reasons.get(reason, 0) + 1
-        mismatches = eligibility["mismatches"]
-        unknown = [value for value in eligibility["unknown"] if value not in mismatches]
-        ranked.append((
-            product, eligibility["matches"], mismatches, unknown,
-            eligibility["status"] == "partial_eligible", eligibility["status"], eligibility["reasons"],
-        ))
+        eligibility_counts["exact_eligible"] += 1
+        product._tz_hits = _tz_name_hits(product, tz_tokens)
+        ranked.append(product)
 
-    # The "priority" slot (0 = raised) is only ever set by the AI shortlist
-    # pass, on the serialised card dict, after this function returns — the
-    # first deterministic sort treats every card as normal priority.
+    # Pre-AI order: name relevance, then how many ТЗ words the name carries
+    # (a «32» beats a «16» for «≥ 32 ГБ»), then price. The group-collapse
+    # below keeps the FIRST card of each group, so this order decides which
+    # variant is shown; the AI pass then grades every card and the fixed
+    # sort key re-orders on its numbers.
     ranking_override = (intent or {}).get("ranking_override", {}) if isinstance(intent, dict) else {}
     price_desc = _normalized(ranking_override.get("price")) == "desc"
-    ranked.sort(key=lambda value: _shortlist_rank_key(
-        priority=1,
-        relevance=getattr(value[0], "_relevance", 1),
-        mismatch_count=len(value[2]),
-        match_count=len(value[1]),
-        unknown_count=len(value[3]),
-        price=value[0].effective_price,
-        name=_normalized(value[0].full_name or value[0].name),
-        article=_normalized(value[0].article),
-        price_desc=price_desc,
+    ranked.sort(key=lambda product: (
+        getattr(product, "_relevance", 1),
+        -getattr(product, "_tz_hits", 0),
+        (-(product.effective_price or Decimal(0))) if price_desc
+        else (product.effective_price if product.effective_price is not None else Decimal("Infinity")),
+        _normalized(product.full_name or product.name),
+        _normalized(product.article),
     ))
     display_ranked = ranked
     selected, group_cards = [], {}
-    for product, matches, mismatches, unknown, _, eligibility_status, eligibility_reasons in display_ranked:
+    for product in display_ranked:
         # One card per supplier product group (`group_id` — the stable
         # numeric id every colour / size / capacity SKU of one product
-        # shares). The list is already sorted best-fit first, so the SKU
-        # that best meets the ТЗ becomes the shown card and every other SKU
-        # of the group rides along as a pickable variant. Which variant the
-        # ТЗ actually wants (32 ГБ, not 16) is the AI pass's call — it reads
-        # the variant names; the backend does not parse capacities.
+        # shares). The list is sorted by _tz_hits first, so the SKU whose
+        # name carries the most ТЗ words — «…32 ГБ…» for «≥ 32 ГБ» — is the
+        # one kept; every other SKU rides along as a pickable variant. The
+        # AI pass then grades that card and can still say the ТЗ is not met.
         group_key = product.group_id or product.external_id
         if group_key in group_cards:
             # Another SKU of a group already shown: keep it only as a
@@ -2569,9 +1635,6 @@ def catalog_candidates_for_line(
             supplier_site = urlparse(product_url or product.supplier.base_url).netloc.lower()
             if supplier_site.startswith("www."):
                 supplier_site = supplier_site[4:]
-            normalized_requirements, normalized_product_values = _normalized_comparison_values(
-                product, effective_line, quantity, intent=intent,
-            )
             selected.append({
                 "id": product.external_id,
                 "supplier_code": product.supplier.code,
@@ -2586,21 +1649,23 @@ def catalog_candidates_for_line(
                 "delivery_days": product.delivery_days,
                 "image_url": product.image_url,
                 "url": product_url,
-                "fit": "exact" if not mismatches and not unknown else "partial",
-                "matches": matches,
-                "mismatches": mismatches,
-                "unknown": unknown,
-                "mismatch_count": len(mismatches),
-                "unknown_count": len(unknown),
+                # The verdict starts empty — the AI pass fills matches /
+                # mismatches / unknown for every ТЗ row and the fixed sort
+                # key re-orders on those counts.
+                "fit": "exact",
+                "matches": [],
+                "mismatches": [],
+                "unknown": [],
+                "mismatch_count": 0,
+                "unknown_count": 0,
                 # 0 = raised, 1 = normal. Only the AI shortlist pass raises a
                 # card; fed straight into _shortlist_rank_key on the re-sort.
                 "priority": 1,
-                # Text-relevance tier (0 = distinctive query word in the name,
-                # 1 = only a generic one). A tiebreak in _shortlist_rank_key,
-                # below mismatch/unknown. Carried so the pass re-sort matches.
+                # Text-relevance tier (0 = >=2 query words in the name / the
+                # whole item phrase, 1 = one). A tiebreak in _shortlist_rank_key.
                 "relevance": getattr(product, "_relevance", 1),
-                "eligibility": eligibility_status,
-                "eligibility_reasons": eligibility_reasons,
+                "eligibility": "exact_eligible",
+                "eligibility_reasons": [],
                 "synced_at": timezone.now().isoformat(),
                 "category": (
                     product.category_names[0]
@@ -2611,8 +1676,6 @@ def catalog_candidates_for_line(
                 "variant_ids": list(product.raw_data.get("variant_ids", []) or [product.external_id]) if isinstance(product.raw_data, dict) else [product.external_id],
                 "color_group_id": product.color_group_id or product.external_id,
                 "variants": list(_product_variants(product)),
-                "normalized_requirements": normalized_requirements,
-                "normalized_product_values": normalized_product_values,
                 # Full card text for the semantic review step (LLM reads these, not the backend).
                 "description": _text(product.description, 800),
                 "attributes": [
@@ -2629,7 +1692,7 @@ def catalog_candidates_for_line(
             logger.exception("Skipped a catalogue candidate that failed to serialise")
             continue
         group_cards[group_key] = selected[-1]
-        if len(selected) >= max(1, min(60, max(limit, shortlist_limit or 0))):
+        if len(selected) >= max(1, shortlist_limit or limit):
             break
     if oasis_used_mirror:
         # The mirror can be hours old; the price and stock actually quoted to

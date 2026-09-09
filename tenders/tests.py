@@ -1585,18 +1585,19 @@ class TenderTests(TestCase):
         self.assertEqual(supplier.sync_status, "failed")
         self.assertEqual(CatalogSyncRun.objects.get().status, "failed")
 
-    def test_catalog_search_enforces_material_density_branding_and_stock(self):
+    def test_catalog_search_leaves_every_readable_tz_row_to_the_ai_pass(self):
+        # Density / material / print method are no longer checked in the
+        # backend — both polos come back with an empty verdict for the AI
+        # pass to grade; only price + text are set here.
         _mirror_oasis([
-            {"id": "exact", "article": "POLO-190", "group_id": "polo-exact", "name": "Футболка поло", "full_name": "Футболка поло тёмно-синяя", "materials": ["хлопок"], "colors": ["темно-синий"], "branding": ["Вышивка", "DTF"], "attributes": [{"name": "Плотность материала", "value": "190 г/м²"}], "price": 700, "discount_price": 650, "total_stock": 500},
-            {"id": "thin", "article": "POLO-160", "group_id": "polo-thin", "name": "Футболка поло", "full_name": "Футболка поло тёмно-синяя эконом", "materials": ["хлопок"], "colors": ["темно-синий"], "branding": ["Вышивка"], "attributes": [{"name": "Плотность материала", "value": "160 г/м²"}], "price": 400, "total_stock": 1000},
+            {"id": "exact", "article": "POLO-190", "group_id": "polo-exact", "name": "Футболка поло", "full_name": "Футболка поло тёмно-синяя", "materials": ["хлопок"], "colors": ["темно-синий"], "attributes": [{"name": "Плотность материала", "value": "190 г/м²"}], "price": 700, "discount_price": 650, "total_stock": 500},
+            {"id": "thin", "article": "POLO-160", "group_id": "polo-thin", "name": "Футболка поло", "full_name": "Футболка поло тёмно-синяя эконом", "materials": ["хлопок"], "colors": ["темно-синий"], "attributes": [{"name": "Плотность материала", "value": "160 г/м²"}], "price": 400, "total_stock": 1000},
         ])
         line = {
             "name": "Футболка поло", "quantity": "300",
             "requirements": {"requirements": [
-                {"label": "Материал", "value": "хлопок 100%"},
                 {"label": "Цвет", "value": "темно-синий"},
                 {"label": "Плотность", "value": "не менее 190 г/м²"},
-                {"label": "Нанесение", "value": "вышивка"},
             ]},
         }
 
@@ -1604,44 +1605,13 @@ class TenderTests(TestCase):
             line, limit=3, intent={"item": "футболка поло", "product_class": "поло"}, client=_StubOasisClient(),
         )
 
-        self.assertEqual(candidates[0]["external_id"], "exact")
-        self.assertEqual(candidates[0]["fit"], "exact")
-        self.assertEqual(candidates[0]["price"], "650.00")
-        self.assertEqual(candidates[0]["cost_total"], "195000.00")
-        thin = next(value for value in candidates if value["external_id"] == "thin")
-        self.assertEqual(thin["fit"], "partial")
-        self.assertTrue(any("требуется не менее 190" in value for value in thin["mismatches"]))
-
-    def test_catalog_search_returns_nearest_candidate_when_required_density_differs(self):
-        _mirror_oasis([{
-            "id": "near", "article": "LS-1", "group_id": "long-1",
-            "name": "Футболка с длинным рукавом", "full_name": "Футболка с длинным рукавом белая",
-            "colors": ["белый"],
-            "materials": ["хлопок 100%, плотность 190 г/м2"],
-            "attributes": [{"name": "Плотность", "value": "190 г/м²"}],
-            "total_stock": 100, "price": 700,
-        }])
-
-        result = catalog_candidates_for_line(
-            {"name": "Лонгслив", "quantity": 50, "requirements": {"requirements": [
-                {"label": "Цвет", "value": "белый"},
-                {"label": "Плотность", "value": "141 г/м2"},
-            ]}},
-            intent={
-                "item": "лонгслив", "synonyms": ["футболка с длинным рукавом"],
-                "required": [{"label": "Плотность", "value": "141 г/м2", "weight": 1}],
-                "constraints": [{
-                    "field": "density", "operator": "gte", "values": ["141"],
-                    "level": "required", "weight": 1, "missing_policy": "reject",
-                }],
-            },
-            client=_StubOasisClient(),
-        )
-
-        self.assertEqual(result[0]["external_id"], "near")
-        self.assertEqual(result[0]["fit"], "partial")
-        self.assertEqual(result[0]["eligibility"], "partial_eligible")
-        self.assertTrue(any("Плотность" in value for value in result[0]["mismatches"]))
+        ids = {value["external_id"] for value in candidates}
+        self.assertEqual(ids, {"exact", "thin"})
+        for value in candidates:
+            self.assertEqual(value["mismatches"], [])
+            self.assertEqual(value["unknown"], [])
+            self.assertEqual(value["fit"], "exact")
+        self.assertEqual(next(v for v in candidates if v["external_id"] == "exact")["price"], "650.00")
 
     def test_gifts_product_is_found_by_its_name_text_without_a_category(self):
         # Search is text-first now: no category node is picked, the product
@@ -1783,47 +1753,6 @@ class TenderTests(TestCase):
         )
 
         self.assertEqual(result[0]["external_id"], "sack")
-
-    def test_a_spec_clean_card_beats_a_name_match_that_violates_the_tz(self):
-        # The flash-drive regression: the position is titled «Флеш-карта», so
-        # a wooden 16 GB drive matched the name — but it broke two ТЗ rows
-        # (material, capacity) while a plain 32 GB drive broke none. Relevance
-        # must not let the name-match climb over the card that meets the ТЗ.
-        gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://gifts.ru")
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="wood", article="W-1",
-            name="Флеш-карта Woody деревянная", full_name="Флеш-карта Woody деревянная, 16 ГБ",
-            colors=["дерево"], materials=["дерево"], total_stock=500, discount_price=300,
-            attributes=[{"name": "Объём памяти", "value": "16 ГБ"}],
-            search_text="флеш-карта woody деревянная 16 гб usb",
-        )
-        CatalogProduct.objects.create(
-            supplier=gifts, external_id="plain", article="P-1",
-            name="Флеш-карта Slim", full_name="Флеш-карта Slim, 32 ГБ",
-            colors=["синий"], materials=["пластик", "металл"], total_stock=500, discount_price=350,
-            attributes=[{"name": "Объём памяти", "value": "32 ГБ"}],
-            search_text="флеш-карта slim usb синий 32 гб пластик металл",
-        )
-
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                return []
-
-        result = catalog_candidates_for_line(
-            {"name": "Флеш-карта", "quantity": "100", "requirements": {"requirements": [
-                {"label": "Материал", "value": "пластик"},
-                {"label": "Объём памяти", "value": "32 ГБ"},
-            ]}},
-            limit=10,
-            intent={"item": "флеш-карта", "categories": ["флеш-карта"], "synonyms": ["usb накопитель", "флешка"]},
-            client=Client(),
-        )
-
-        by_id = {value["external_id"]: value for value in result}
-        self.assertGreater(by_id["wood"]["mismatch_count"], by_id["plain"]["mismatch_count"])
-        self.assertEqual(result[0]["external_id"], "plain")
 
     @staticmethod
     def _shortlist_card(**overrides):
@@ -2168,7 +2097,7 @@ class TenderTests(TestCase):
         )
 
         self.assertEqual(gateway.call_count, 2)
-        self.assertEqual(catalog_search.call_args.kwargs.get("shortlist_limit"), 40)
+        self.assertEqual(catalog_search.call_args.kwargs.get("shortlist_limit"), 200)
         self.assertEqual([card["id"] for card in result["catalog_candidates"]], ["m", "w"])
         self.assertTrue(result["shortlist_instructions"][0]["applied"])
 
@@ -2560,24 +2489,24 @@ class TenderTests(TestCase):
         flags = {row["label"]: row["selected"] for row in result["requirement_selection"]}
         self.assertEqual(flags, {"Цвет": True, "Швы": True})
 
-    def test_an_unchecked_row_is_invisible_to_the_matcher(self):
+    def test_an_unchecked_colour_row_is_invisible_to_the_hard_gate(self):
+        # The colour gate is the one ТЗ row the backend still reads; an
+        # unchecked colour row must not remove a card.
         _mirror_oasis([{
             "id": "v", "article": "V", "group_id": "v", "name": "Жилет",
-            "full_name": "Жилет тёмно-синий", "colors": ["темно-синий"],
+            "full_name": "Жилет красный", "colors": ["красный"],
             "total_stock": 200, "price": 900,
-            "attributes": [{"name": "Плотность", "value": "150 г/м²"}],
         }])
 
         base = {"name": "Жилет", "quantity": 10, "requirements": {"requirements": [
-            {"label": "Цвет", "value": "темно-синий"},
-            {"label": "Плотность", "value": "не менее 300 г/м²"},
+            {"label": "Цвет", "value": "синий"},
         ]}}
-        checked = catalog_candidates_for_line(base, limit=3, intent={"item": "жилет"}, client=_StubOasisClient())[0]
-        self.assertTrue(any("Плотность" in m for m in checked["mismatches"]))
+        rejected = catalog_candidates_for_line(base, limit=3, intent={"item": "жилет"}, client=_StubOasisClient())
+        self.assertEqual(rejected, [])
 
-        base["requirements"]["requirements"][1]["selected"] = False
-        unchecked = catalog_candidates_for_line(base, limit=3, intent={"item": "жилет"}, client=_StubOasisClient())[0]
-        self.assertFalse(any("Плотность" in v for v in unchecked["mismatches"] + unchecked["unknown"]))
+        base["requirements"]["requirements"][0]["selected"] = False
+        kept = catalog_candidates_for_line(base, limit=3, intent={"item": "жилет"}, client=_StubOasisClient())
+        self.assertEqual([value["external_id"] for value in kept], ["v"])
 
     @patch("tenders.catalog.catalog_candidates_for_line")
     @patch("tenders.services._ai_gateway_json")
@@ -2699,103 +2628,30 @@ class TenderTests(TestCase):
         self.assertNotIn("размер", kivach[0]["name"])
         self.assertGreaterEqual(len(kivach[0]["variants"]), 4)
 
-    def test_catalog_search_matches_lime_to_the_green_apple_colour_family(self):
+    def test_colour_gate_does_not_reject_an_adjacent_shade(self):
+        # «лаймово-зелёный» asked, «зеленое яблоко» offered — same green
+        # family, so the colour gate keeps the card for the AI pass.
         _mirror_oasis([{
             "id": "00000008300", "article": "3100868S", "group_id": "apple-shirt", "color_group_id": "00000008300",
-            "name": "Футболка Super Heavy Super Club мужская",
-            "full_name": "Футболка Super Heavy Super Club мужская, зеленое яблоко",
+            "name": "Футболка Super Heavy мужская",
+            "full_name": "Футболка Super Heavy мужская, зеленое яблоко",
             "colors": [{"name": "зеленое яблоко"}], "materials": ["хлопок"],
-            "attributes": [{"name": "Плотность", "value": "180 г/м2"}],
-            "branding": ["DTF (Полноцвет)"], "discount_price": "510.60",
-            "total_stock": 200,
+            "discount_price": "510.60", "total_stock": 200,
         }])
 
-        line = {"name": "Майка брендированная", "quantity": 160, "requirements": {"requirements": [
-            {"label": "Материал", "value": "хлопок"},
+        line = {"name": "Майка", "quantity": 160, "requirements": {"requirements": [
             {"label": "Цвет", "value": "лаймово-зелёный"},
-            {"label": "Плотность", "value": "не менее 180 г/м²"},
-            {"label": "Нанесение", "value": "DTF"},
         ]}}
 
         candidates = catalog_candidates_for_line(
             line, limit=3, intent={"item": "футболка", "product_class": "футболка"}, client=_StubOasisClient(),
         )
 
-        self.assertEqual(candidates[0]["external_id"], "00000008300")
-        self.assertEqual(candidates[0]["fit"], "exact")
+        self.assertEqual([value["external_id"] for value in candidates], ["00000008300"])
+        self.assertEqual(candidates[0]["mismatches"], [])
         self.assertEqual(candidates[0]["price"], "510.60")
-        self.assertEqual(candidates[0]["supplier_name"], "Oasis")
-        self.assertEqual(candidates[0]["supplier_site"], "oasiscatalog.com")
-        self.assertTrue(any("семейство: lime" in value for value in candidates[0]["matches"]))
 
-    def test_catalog_comparison_normalizes_and_deduplicates_volume_requirements(self):
-        _mirror_oasis([{
-            "id": "mug", "article": "MUG-400", "group_id": "mug", "name": "Кружка Depansar",
-            "full_name": "Кружка Depansar с пробковым дном, черная", "materials": ["керамика", "пробка"],
-            "colors": ["черный"], "attributes": [{"name": "Объем, мл", "value": "400"}],
-            "price": "500", "total_stock": 100,
-        }])
-
-        line = {"name": "Кружка", "quantity": 10, "requirements": {"requirements": [
-            {"label": "Объём", "value": "400 мл"},
-            {"label": "Объем", "value": "400 см³"},
-            {"label": "Материал", "value": "керамика"},
-            {"label": "Цвет", "value": "черный"},
-            {"label": "Индивидуальная упаковка: плотность", "value": "не менее 300 г/м²"},
-        ]}}
-        result = catalog_candidates_for_line(
-            line, limit=1,
-            intent={
-                "item": "кружка",
-                "required": [{"label": "Плотность", "value": "190 г/м²", "weight": 1}],
-                "constraints": [
-                    {"field": "volume", "operator": "eq", "values": ["400 ml"], "level": "required"},
-                    {"field": "volume", "operator": "eq", "values": ["400 куб. см"], "level": "required"},
-                ],
-            },
-            client=_StubOasisClient(),
-        )[0]
-
-        volume_requirements = [value for value in result["normalized_requirements"] if value["field"] == "volume"]
-        volume_product_values = [value for value in result["normalized_product_values"] if value["field"] == "volume"]
-        self.assertEqual(volume_requirements, [{"field": "volume", "operator": "eq", "value": "400", "unit": "ml"}])
-        self.assertEqual(volume_product_values, [{"field": "volume", "value": "400", "unit": "ml"}])
-        self.assertEqual(sum(value.startswith("Объём:") for value in result["matches"]), 1)
-        self.assertFalse(any("Объём" in value for value in result["mismatches"] + result["unknown"]))
-        self.assertFalse(any("Плотность" in value for value in result["matches"] + result["mismatches"] + result["unknown"]))
-        self.assertFalse(any(value["field"] == "density" for value in result["normalized_requirements"]))
-        self.assertTrue(any(value.startswith("Материал:") for value in result["matches"]))
-        self.assertTrue(any(value.startswith("Цвет:") for value in result["matches"]))
-        self.assertEqual(result["eligibility"], "exact_eligible")
-
-    def test_real_white_polo_group_is_partial_when_one_requested_size_is_short(self):
-        _mirror_oasis([
-            {
-                "id": f"1-000042293-{size}", "article": f"873106{size}",
-                "group_id": "1-000042293-model", "color_group_id": "1-000042293",
-                "name": "Рубашка поло, белая", "full_name": "Рубашка поло, белая",
-                "size": size, "colors": ["белый"], "price": "1411.24",
-                "total_stock": stock,
-            }
-            for size, stock in (
-                ("XS", 423), ("S", 493), ("M", 1907), ("L", 1561), ("XL", 1334),
-                ("2XL", 916), ("3XL", 369), ("4XL", 268), ("5XL", 202),
-            )
-        ])
-
-        candidate = catalog_candidates_for_line(
-            {"name": "Белое поло", "quantity": 600, "requirements": {"requirements": [
-                {"label": "Цвет", "value": "белый"},
-                {"label": "Размерная раскладка", "value": "S — 500; M — 100"},
-            ]}},
-            limit=1, intent={"item": "поло"}, client=_StubOasisClient(),
-        )[0]
-
-        self.assertEqual(candidate["eligibility"], "partial_eligible")
-        self.assertIn("Размер S: доступно 493 из 500 шт.", candidate["eligibility_reasons"])
-        self.assertTrue(any(value == "Остаток достаточен: 7473 шт." for value in candidate["matches"]))
-
-    def test_color_group_preserves_variants_and_checks_explicit_size_quantities(self):
+    def test_color_group_collapses_to_one_card_that_keeps_every_size_as_a_variant(self):
         _mirror_oasis([
             {
                 "id": product_id, "article": article, "group_id": "helios", "color_group_id": "helios-white",
@@ -2809,150 +2665,36 @@ class TenderTests(TestCase):
             )
         ])
 
-        with_sizes = catalog_candidates_for_line(
-            {"name": "Белое поло", "quantity": 10, "requirements": {"requirements": [
-                {"label": "Цвет", "value": "белый"},
-                {"label": "Размерный ряд", "value": "S — 5 шт.; M — 5 шт."},
-            ]}},
-            limit=1, intent={"item": "поло"}, client=_StubOasisClient(),
-        )[0]
+        candidates = catalog_candidates_for_line(
+            {"name": "Белое поло", "quantity": 10, "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]}},
+            limit=3, intent={"item": "поло"}, client=_StubOasisClient(),
+        )
 
-        self.assertEqual(with_sizes["color_group_id"], "helios-white")
-        self.assertEqual(with_sizes["stock"], 29)
-        self.assertEqual(with_sizes["variants"], [
-            {"size": "S", "product_id": "helios-s", "article": "H-S", "stock": 5, "price": "500.00"},
-            {"size": "M", "product_id": "helios-m", "article": "H-M", "stock": 4, "price": "510.00"},
-            {"size": "L", "product_id": "helios-l", "article": "H-L", "stock": 20, "price": "520.00"},
-        ])
-        self.assertTrue(any("Размер S" in value and "5 шт." in value for value in with_sizes["matches"]))
-        self.assertTrue(any("Размер M" in value and "4 из 5" in value for value in with_sizes["mismatches"]))
-        self.assertEqual(with_sizes["eligibility"], "partial_eligible")
-        self.assertTrue(any(value.startswith("Остаток достаточен") for value in with_sizes["matches"]))
+        self.assertEqual(len(candidates), 1)
+        card = candidates[0]
+        self.assertEqual(card["color_group_id"], "helios-white")
+        self.assertEqual(card["mismatches"], [])
+        self.assertEqual({variant["size"] for variant in card["variants"]}, {"S", "M", "L"})
 
-        without_sizes = catalog_candidates_for_line(
-            {"name": "Белое поло", "quantity": 29, "requirements": {"requirements": [
-                {"label": "Цвет", "value": "белый"},
-            ]}},
-            limit=1, intent={"item": "поло"}, client=_StubOasisClient(),
-        )[0]
-        self.assertTrue(any(value == "Остаток достаточен: 29 шт." for value in without_sizes["matches"]))
-        self.assertEqual(without_sizes["eligibility"], "exact_eligible")
-        self.assertFalse(any("Размер " in value for value in without_sizes["matches"] + without_sizes["mismatches"] + without_sizes["unknown"]))
-
-    def test_catalog_stock_shortage_is_kept_as_a_make_to_order_alternative(self):
-        # These tenders are "изготовление под заказ" — a warehouse balance
-        # below the tirage is a delivery-timing note, not a reason to delete
-        # the best-fitting product. The card stays, as a ranked alternative
-        # with the shortage shown; it is not counted as a spec mismatch.
+    def test_catalog_stock_shortage_is_kept_not_rejected(self):
+        # These tenders are "изготовление под заказ": a warehouse balance
+        # below the tirage is not a reason to drop the card. Only a listing
+        # with nothing on hand, in transit or on order is rejected.
         _mirror_oasis([
-            {
-                "id": f"white-{size}", "article": f"W-{size}", "group_id": "polo",
-                "color_group_id": "polo-white", "name": "Поло", "full_name": "Поло белое",
-                "size": size, "colors": ["белый"], "price": 500, "total_stock": stock,
-            }
-            for size, stock in (("S", 5), ("M", 15))
+            {"id": "short", "article": "S", "group_id": "short", "name": "Поло", "full_name": "Поло белое", "colors": ["белый"], "price": 500, "total_stock": 5},
+            {"id": "dead", "article": "D", "group_id": "dead", "name": "Поло", "full_name": "Поло белое", "colors": ["белый"], "price": 400, "total_stock": 0},
         ])
 
         result = catalog_candidates_for_line(
-            {"name": "Белое поло", "quantity": 50, "requirements": {"requirements": [
-                {"label": "Цвет", "value": "белый"},
-            ]}},
-            limit=3, intent={"item": "поло"}, client=_StubOasisClient(), include_diagnostics=True,
+            {"name": "Белое поло", "quantity": 50, "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]}},
+            limit=5, intent={"item": "поло"}, client=_StubOasisClient(), include_diagnostics=True,
         )
 
-        self.assertEqual([value["external_id"] for value in result["candidates"]], ["polo-white"])
-        card = result["candidates"][0]
-        self.assertEqual(card["mismatch_count"], 0)
-        self.assertTrue(any("под заказ" in str(value) for value in card["unknown"]))
+        self.assertEqual([value["external_id"] for value in result["candidates"]], ["short"])
+        self.assertEqual(result["candidates"][0]["mismatches"], [])
+        self.assertEqual(result["attempts"][0]["rejections"]["out_of_stock"], 1)
 
-    def test_catalog_eligibility_keeps_positive_required_mismatch_but_rejects_prohibition(self):
-        _mirror_oasis([
-            {
-                "id": "male-poly", "article": "MP", "group_id": "male-poly", "name": "Поло мужское",
-                "full_name": "Поло мужское, белое", "materials": ["полиэстер"], "colors": ["белый"],
-                "price": 400, "total_stock": 100,
-            },
-            {
-                "id": "female-cotton", "article": "FC", "group_id": "female-cotton", "name": "Поло женское",
-                "full_name": "Поло женское, белое", "materials": ["хлопок"], "colors": ["белый"],
-                "price": 400, "total_stock": 100,
-            },
-        ])
-
-        result = catalog_candidates_for_line(
-            {"name": "Белое поло", "quantity": 20, "requirements": {"requirements": [
-                {"label": "Материал", "value": "хлопок"},
-                {"label": "Цвет", "value": "белый"},
-            ]}},
-            limit=3,
-            intent={
-                "item": "поло",
-                "required": [{"label": "Материал", "value": "хлопок", "weight": 1}],
-                "constraints": [{
-                    "field": "gender", "operator": "not_in", "values": ["female"],
-                    "level": "required", "missing_policy": "allow",
-                }],
-            },
-            client=_StubOasisClient(), include_diagnostics=True,
-        )
-
-        self.assertEqual([value["external_id"] for value in result["candidates"]], ["male-poly"])
-        self.assertEqual(result["candidates"][0]["eligibility"], "partial_eligible")
-        self.assertTrue(any("Материал не совпадает" in value for value in result["candidates"][0]["eligibility_reasons"]))
-        self.assertEqual(result["attempts"][0]["eligibility_counts"]["rejected"], 1)
-
-    def test_catalog_eligibility_applies_missing_policy_without_penalty(self):
-        _mirror_oasis([{
-            "id": "mug", "article": "M", "group_id": "mug", "name": "Кружка",
-            "full_name": "Кружка белая", "colors": ["белый"], "price": 300,
-            "total_stock": 100,
-        }])
-
-        def outcome(policy):
-            return catalog_candidates_for_line(
-                {"name": "Кружка", "quantity": 10, "requirements": {"requirements": [
-                    {"label": "Плотность", "value": "не менее 180 г/м²"},
-                ]}},
-                limit=1,
-                intent={"item": "кружка", "constraints": [{
-                    "field": "density", "operator": "gte", "values": ["180"],
-                    "level": "required", "missing_policy": policy,
-                }]},
-                client=_StubOasisClient(), include_diagnostics=True,
-            )
-
-        rejected = outcome("reject")
-        allowed = outcome("allow")
-        allowed_with_penalty = outcome("allow_with_penalty")
-
-        # A missing required characteristic no longer removes the product:
-        # "reject" now only surfaces the gap and ranks it as a partial match.
-        self.assertEqual(rejected["candidates"][0]["eligibility"], "partial_eligible")
-        self.assertEqual(allowed["candidates"][0]["eligibility"], "exact_eligible")
-        self.assertEqual(allowed_with_penalty["candidates"][0]["eligibility"], "exact_eligible")
-        self.assertTrue(allowed_with_penalty["candidates"][0]["unknown"])
-
-    def test_catalog_eligibility_enforces_source_only_only_after_confirmed_operation(self):
-        _mirror_oasis([{
-            "id": "mug", "article": "M", "group_id": "mug", "name": "Кружка",
-            "full_name": "Кружка", "price": 300, "total_stock": 100,
-        }])
-
-        line = {"name": "Кружка", "quantity": 10}
-        llm_only = catalog_candidates_for_line(
-            line, limit=1, intent={"item": "кружка", "allowed_sources": ["gifts"]}, client=_StubOasisClient(),
-        )
-        confirmed = catalog_candidates_for_line(
-            line, limit=1,
-            intent={"item": "кружка", "allowed_sources": ["gifts"], "_source_only_confirmed": True},
-            client=_StubOasisClient(), include_diagnostics=True,
-        )
-
-        self.assertEqual(llm_only[0]["eligibility"], "exact_eligible")
-        self.assertEqual(confirmed["candidates"], [])
-        self.assertEqual(confirmed["attempts"][0]["rejections"]["source"], 1)
-
-    def test_catalog_search_uses_name_shade_as_soft_hint_with_explicit_parent_color(self):
+    def test_colour_gate_keeps_a_card_whose_shade_lives_only_in_the_name(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")
         CatalogProduct.objects.create(
             supplier=gifts, external_id="lime-shirt", article="1376.89", name="Футболка унисекс Regent 150, лайм",
@@ -2961,20 +2703,11 @@ class TenderTests(TestCase):
             search_text="футболка лайм зеленый хлопок", product_url="https://gifts.ru/id/16224",
         )
 
-        class Client:
-            base_url = "https://api.oasiscatalog.com"
-
-            def get(self, path, params=None):
-                if path == "/v4/categories":
-                    return [{"id": 10, "name": "Футболки", "path": "categories/tekstil/futbolki"}]
-                return []
-
         line = {"name": "Футболка", "quantity": "10", "requirements": {"requirements": [{"label": "Цвет", "value": "лайм"}]}}
-        candidates = catalog_candidates_for_line(line, limit=1, intent={"product_class": "футболка"}, client=Client())
+        candidates = catalog_candidates_for_line(line, limit=1, intent={"item": "футболка", "product_class": "футболка"}, client=_StubOasisClient())
 
-        self.assertEqual(candidates[0]["external_id"], "lime-shirt")
-        self.assertEqual(candidates[0]["fit"], "exact")
-        self.assertTrue(any("Цвет: зеленый" in value for value in candidates[0]["matches"]))
+        self.assertEqual([value["external_id"] for value in candidates], ["lime-shirt"])
+        self.assertEqual(candidates[0]["mismatches"], [])
 
     def test_catalog_search_uses_price_after_equal_relevance(self):
         _mirror_oasis([
@@ -2986,44 +2719,6 @@ class TenderTests(TestCase):
         candidates = catalog_candidates_for_line(line, limit=2, intent={"item": "футболка", "product_class": "футболка"}, client=_StubOasisClient())
 
         self.assertEqual([value["external_id"] for value in candidates], ["cheap", "expensive"])
-
-    def test_catalog_search_prioritizes_requirements_over_product_name_similarity(self):
-        _mirror_oasis([
-            {
-                "id": "popular", "article": "P", "group_id": "popular",
-                "name": "Ручка шариковая Popular", "full_name": "Ручка шариковая Popular, зеленая",
-                "materials": ["металл"], "colors": ["зеленый"], "attributes": [],
-                "total_stock": 100, "price": "84",
-            },
-            {
-                "id": "gold", "article": "G", "group_id": "gold",
-                "name": "Ручка шариковая Euro Gold", "full_name": "Ручка шариковая Euro Gold, зеленая",
-                "materials": ["металл"], "colors": ["зеленый"],
-                "attributes": [{"name": "Чернила", "value": "синие"}, {"name": "Механизм", "value": "поворотный"}],
-                "total_stock": 100, "price": "12.80",
-            },
-            {
-                "id": "chrome", "article": "C", "group_id": "chrome",
-                "name": "Ручка шариковая Euro Chrome", "full_name": "Ручка шариковая Euro Chrome, зеленая",
-                "materials": ["металл"], "colors": ["зеленый"],
-                "attributes": [{"name": "Чернила", "value": "синие"}, {"name": "Механизм", "value": "поворотный"}],
-                "total_stock": 100, "price": "10.60",
-            },
-        ])
-
-        line = {"name": "Ручка, зелёная, материал – металл, чернила синие, механизм поворотный", "quantity": "10", "requirements": {"requirements": [
-            {"label": "Материал", "value": "металл"},
-            {"label": "Цвет", "value": "зелёная"},
-            {"label": "Чернила", "value": "синие"},
-            {"label": "Механизм", "value": "поворотный"},
-            {"label": "Нанесение", "value": "гравировка 1+0"},
-        ]}}
-
-        candidates = catalog_candidates_for_line(line, limit=3, intent={"item": "ручка", "product_class": "ручка"}, client=_StubOasisClient())
-
-        self.assertEqual([value["external_id"] for value in candidates], ["chrome", "gold", "popular"])
-        self.assertTrue(any("Чернила" in value for value in candidates[0]["matches"]))
-        self.assertTrue(any("Механизм" in value for value in candidates[0]["matches"]))
 
     def test_catalog_search_keeps_only_the_named_item_not_the_generic_class(self):
         # "Футболка" alone has no query word for item «поло» in its name, so
@@ -3039,66 +2734,6 @@ class TenderTests(TestCase):
         candidates = catalog_candidates_for_line(line, limit=3, intent=intent, client=_StubOasisClient())
 
         self.assertEqual([value["external_id"] for value in candidates], ["polo"])
-
-    def test_catalog_search_marks_product_that_breaks_positive_required_constraint_partial(self):
-        _mirror_oasis([
-            {
-                "id": "cotton", "article": "C", "group_id": "cotton", "name": "Футболка",
-                "full_name": "Футболка хлопковая белая", "materials": ["хлопок"], "colors": ["белый"],
-                "total_stock": 100, "price": "900",
-            },
-            {
-                "id": "cheap-polyester", "article": "P", "group_id": "polyester", "name": "Футболка",
-                "full_name": "Футболка из полиэстера белая", "materials": ["полиэстер"], "colors": ["белый"],
-                "total_stock": 100, "price": "100",
-            },
-        ])
-
-        line = {"name": "Футболка", "quantity": 10, "requirements": {"requirements": []}}
-        intent = {
-            "item": "футболка",
-            "categories": ["футболка"],
-            "required": [{"label": "Состав", "value": "хлопок", "weight": 1}],
-            "ranking": [{"criterion": "цена", "weight": 1}],
-        }
-
-        candidates = catalog_candidates_for_line(line, limit=3, intent=intent, client=_StubOasisClient())
-
-        self.assertEqual([value["external_id"] for value in candidates], ["cotton", "cheap-polyester"])
-        self.assertEqual([value["eligibility"] for value in candidates], ["exact_eligible", "partial_eligible"])
-
-    def test_catalog_constraints_exclude_forbidden_value_and_read_fact_from_name_or_attribute(self):
-        _mirror_oasis([
-            {"id": "female-attribute", "article": "F1", "group_id": "f1", "name": "Поло Boston", "full_name": "Поло Boston белое", "attributes": [{"name": "Пол", "value": "женский"}], "colors": ["белый"], "total_stock": 100, "price": 100},
-            {"id": "female-name", "article": "F2", "group_id": "f2", "name": "Поло Boston женское", "full_name": "Поло Boston женское, белое", "colors": ["белый"], "total_stock": 100, "price": 90},
-            {"id": "male", "article": "M", "group_id": "m", "name": "Поло Laguna мужское", "full_name": "Поло Laguna мужское, белое", "attributes": [{"name": "Пол", "value": "мужской"}], "colors": ["белый"], "total_stock": 100, "price": 200},
-            {"id": "unspecified", "article": "U", "group_id": "u", "name": "Поло Base", "full_name": "Поло Base, белое", "colors": ["белый"], "total_stock": 100, "price": 80},
-        ])
-
-        intent = {
-            "item": "поло",
-            "categories": ["поло"],
-            "constraints": [
-                {
-                    "field": "gender", "operator": "in", "values": ["male", "unisex"],
-                    "level": "required", "weight": 1, "missing_policy": "allow_with_penalty",
-                },
-                {
-                    "field": "gender", "operator": "not_in", "values": ["female"],
-                    "level": "required", "weight": 1, "missing_policy": "allow_with_penalty",
-                },
-            ],
-        }
-
-        candidates = catalog_candidates_for_line(
-            {"name": "Поло унисекс", "quantity": 10, "requirements": {"requirements": []}},
-            limit=10, intent=intent, client=_StubOasisClient(),
-        )
-
-        self.assertEqual([value["external_id"] for value in candidates], ["male", "unspecified"])
-        self.assertTrue(any("Пол" in value for value in candidates[0]["matches"]))
-        self.assertEqual(sum("Пол" in value for value in candidates[0]["matches"]), 1)
-        self.assertTrue(any("Пол не указан" in value for value in candidates[1]["unknown"]))
 
     def test_chestny_znak_requirement_never_becomes_a_product_mismatch(self):
         # Live bug: every tender requires "Маркировка Честного Знака / ЦРПТ".
@@ -3132,48 +2767,6 @@ class TenderTests(TestCase):
         for c in candidates:
             self.assertFalse(any("Маркировк" in m for m in c["mismatches"]), c["mismatches"])
             self.assertFalse(any("Маркировк" in u for u in c["unknown"]), c["unknown"])
-
-    def test_catalog_positive_numeric_constraints_keep_nearest_alternatives_partial(self):
-        _mirror_oasis([
-            {"id": "valid", "article": "V", "group_id": "v", "name": "Поло", "full_name": "Поло белое", "attributes": [{"name": "Плотность", "value": "190 г/м²"}], "total_stock": 150, "price": 450},
-            {"id": "expensive", "article": "E", "group_id": "e", "name": "Поло", "full_name": "Поло белое", "attributes": [{"name": "Плотность", "value": "190 г/м²"}], "total_stock": 150, "price": 700},
-            {"id": "thin", "article": "T", "group_id": "t", "name": "Поло", "full_name": "Поло белое", "attributes": [{"name": "Плотность", "value": "150 г/м²"}], "total_stock": 150, "price": 300},
-        ])
-
-        intent = {"item": "поло", "categories": ["поло"], "constraints": [
-            {"field": "price", "operator": "lte", "values": ["500"], "level": "required", "weight": 1, "missing_policy": "reject"},
-            {"field": "density", "operator": "between", "values": ["180", "220"], "level": "required", "weight": 1, "missing_policy": "reject"},
-            {"field": "stock", "operator": "gte", "values": ["100"], "level": "required", "weight": 1, "missing_policy": "reject"},
-        ]}
-
-        candidates = catalog_candidates_for_line({"name": "Поло", "quantity": 100}, limit=10, intent=intent, client=_StubOasisClient())
-
-        self.assertEqual([value["external_id"] for value in candidates], ["valid", "thin", "expensive"])
-        self.assertEqual(candidates[0]["eligibility"], "exact_eligible")
-        self.assertTrue(all(value["eligibility"] == "partial_eligible" for value in candidates[1:]))
-
-    def test_cheaper_product_does_not_outrank_a_closer_match(self):
-        _mirror_oasis([
-            {
-                "id": "cotton", "article": "C", "group_id": "cotton", "name": "Футболка",
-                "full_name": "Футболка хлопковая белая", "materials": ["хлопок"], "colors": ["белый"],
-                "total_stock": 100, "price": "900",
-            },
-            {
-                "id": "cheap-polyester", "article": "P", "group_id": "polyester", "name": "Футболка",
-                "full_name": "Футболка из полиэстера белая", "materials": ["полиэстер"], "colors": ["белый"],
-                "total_stock": 100, "price": "100",
-            },
-        ])
-
-        line = {"name": "Футболка", "quantity": 10, "requirements": {"requirements": [{"label": "Материал", "value": "хлопок"}]}}
-        intent = {"item": "футболка", "categories": ["футболка"], "required": [{"label": "Материал", "value": "хлопок"}]}
-
-        candidates = catalog_candidates_for_line(line, limit=2, intent=intent, client=_StubOasisClient())
-
-        # The cotton shirt matches the material; the cheaper polyester one does
-        # not, so price never lets it climb above.
-        self.assertEqual([value["external_id"] for value in candidates], ["cotton", "cheap-polyester"])
 
     def test_a_missing_oasis_mirror_does_not_hide_gifts(self):
         gifts = CatalogSupplier.objects.create(code="gifts", name="gifts.ru", base_url="https://api2.gifts.ru/export/v2")

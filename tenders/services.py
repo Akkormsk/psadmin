@@ -2617,8 +2617,6 @@ def _frozen_route(reason=None, purchase_details=None):
 #   ranking   — "сначала дорогие / дешёвые": a session-only price-sort flip,
 #               never written to a lesson.
 
-_VERDICT_FIELDS = {"match": "matches", "mismatch": "mismatches", "unknown": "unknown"}
-_VERDICT_ICON = {"match": "✓", "mismatch": "✗", "unknown": "?"}
 _POINT_STOPWORDS = {
     "не", "в", "на", "по", "и", "с", "до", "от", "требуется", "каталоге",
     "указан", "указана", "указано", "совпадает", "подходит", "нет", "данных",
@@ -2745,19 +2743,11 @@ def _shortlist_card_brief(card):
     if attributes:
         meta.append(attributes)
     description = _cell_text(card.get("description"))[:700]
-    verdicts = [
-        f"{_VERDICT_ICON[key]} {_cell_text(value)[:80]}"
-        for key, field in _VERDICT_FIELDS.items()
-        for value in (card.get(field) or [])[:10]
-        if _cell_text(value)
-    ]
     lines = [header]
     if meta:
         lines.append("   " + " | ".join(meta))
     if description:
         lines.append("   " + description)
-    if verdicts:
-        lines.append("   оценки кода: " + "; ".join(verdicts))
     return "\n".join(lines)
 
 
@@ -2881,44 +2871,6 @@ def _shortlist_pass_prompt(position_name, tz_numbered, cards_text, instr_numbere
 {{"grid":[{{"c":1,"r":1,"v":"y"}},{{"c":1,"r":5,"v":"n","w":"8 ГБ, нужно ≥32"}},{{"c":1,"r":6,"v":"m","w":"плотность не указана"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}"""
 
 
-def _resolve_card_unknown(card, point, verdict):
-    """Move a "?" verdict the AI could read from the card's prose into ✓ or
-    ✗, and recompute the counts the sort key uses. The deterministic check
-    only reads structured catalogue fields; this fills the gap for
-    requirements written out in the description ("пробковое дно",
-    "плотность 340 г/м²")."""
-    point_n = _normalized_text(point)
-    if not point_n or verdict not in {"match", "mismatch"}:
-        return False
-    unknowns = card.get("unknown") or []
-    # The ТЗ says "Вид продукции / Тип изделия / Наименование", the code's
-    # "?" says "Тип товара не подтверждён" — same question, different words.
-    # Let either phrasing from the model resolve the type-check unknown.
-    type_like = any(marker in point_n for marker in (
-        "вид продукци", "вид издели", "вид товара", "тип издели", "тип товара", "наименование",
-    ))
-    hit = next(
-        (value for value in unknowns
-         if point_n[:10] in _normalized_text(value)
-         or _normalized_text(value).startswith(point_n[:6])
-         or (type_like and "тип товара" in _normalized_text(value))),
-        None,
-    )
-    if hit is None:
-        return False
-    card["unknown"] = [value for value in unknowns if value is not hit]
-    label = point.rstrip(":").strip() or hit
-    target = "matches" if verdict == "match" else "mismatches"
-    card.setdefault(target, []).append(
-        f"{label}: {'подтверждено по описанию' if verdict == 'match' else 'не соответствует по описанию'}"
-    )
-    card["unknown_count"] = len(card["unknown"])
-    card["mismatch_count"] = len(card.get("mismatches") or [])
-    card["fit"] = "exact" if not card["mismatch_count"] and not card["unknown_count"] else "partial"
-    card["_verdict_resolved"] = True
-    return True
-
-
 def _exclude_criterion_drifted(instruction_value, criterion):
     """True when the model classified an instruction as "exclude" but gave
     a criterion that has nothing to do with the instruction's own words —
@@ -3011,10 +2963,9 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         numbered.append(f"{index}. ({tag}) {text}")
     model = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or _SHORTLIST_MODEL_DEFAULT
 
-    # Parallel batches. The model returns one compact y/n/m string per card
-    # (see _apply_shortlist_grid) — ~12 chars a card — so a batch of 6 never
-    # truncates. The shared prompt prefix (the ТЗ checklist) is identical
-    # across batches so the gateway caches it.
+    # Parallel batches of 3 — small so the model gives each card real
+    # attention and grades every ТЗ row. The shared prompt prefix (the ТЗ
+    # checklist) is identical across batches so the gateway caches it.
     batch_size = 3 if tz_rows else 10
     batches = [shortlist[i:i + batch_size] for i in range(0, len(shortlist), batch_size)] or [shortlist]
     covered_ids = set()
@@ -3454,11 +3405,12 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     else:
         route = _frozen_route()
 
-    # Step 4: backend search. Name retrieval + the deterministic filters
-    # carry no LLM; the one AI touch is the cheap name pass (_run_name_filter),
-    # wired in only when the strong shortlist pass is going to run anyway —
-    # there is no point paying to clean a pool nothing then reads. Ask for
-    # the wide shortlist (~40) in the same case.
+    # Step 4: backend search. Name retrieval + the colour/stock gate carry
+    # no LLM; the AI touches are the cheap name pass (_run_name_filter) and
+    # then the strong per-ТЗ pass, both wired in only when there is a ТЗ or
+    # feedback to grade against. The whole gated set (colour + in stock,
+    # collapsed by group) goes to the strong pass — no 40-card cut; 200 is
+    # a safety ceiling against a pathological query, not a quality trim.
     if progress_callback:
         progress_callback("catalog")
     run_full_analysis = bool(pass_instructions or selected_rows)
@@ -3474,7 +3426,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     try:
         catalog_outcome = _catalog_search_outcome(catalog_candidates_for_line(
             line, limit=10, intent=catalog_intent, include_diagnostics=True,
-            shortlist_limit=40 if run_full_analysis else None,
+            shortlist_limit=200 if run_full_analysis else None,
             name_filter=name_filter,
         ))
     except CatalogSyncError as exc:
