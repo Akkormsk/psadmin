@@ -2450,21 +2450,19 @@ _PROCUREMENT_TAIL_RE = re.compile(
 def _strip_procurement_boilerplate(name):
     """A tender position name almost always carries a trailing procurement
     clause ("... с символикой Думы...", "... с логотипом") that is real
-    text but not part of the item's identity — left in, it out-weighs the
-    one word that actually names the item in keyword search (see
-    catalog._category_candidates' own generic_tokens for the category-name
-    side of the same problem). Strip it for search only; the original
-    stays on display everywhere else."""
+    text but not part of the item's identity — left in, its words dilute
+    the one word that actually names the item. Strip it for search only;
+    the original stays on display everywhere else."""
     stripped = _PROCUREMENT_TAIL_RE.sub("", name).strip()
     return stripped or name
 
 
 def _catalog_intent_from_requirements(line):
-    """Build a catalog_intent straight from the recognised ТЗ — no LLM. The
-    position name (boilerplate clause stripped) is the item, every
-    recognised requirement row is passed through as-is. Used only by the
-    no-LLM diagnostic path below, to test the backend search+filter in
-    isolation from any model call."""
+    """The fallback half of the catalog_intent: the position name
+    (boilerplate clause stripped) as the item, and every recognised
+    requirement row passed through as-is under `required`. The search
+    plan's `item`/`queries` override the name; the `required` rows it
+    yields are what the eligibility pass and the AI pass check against."""
     name = _strip_procurement_boilerplate(_cell_text(line.get("name"))) if isinstance(line, dict) else ""
     requirements = line.get("requirements") if isinstance(line, dict) else None
     if isinstance(requirements, dict):

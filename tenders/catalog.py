@@ -1249,133 +1249,6 @@ def _required_mismatches(mismatches, intent):
     ]
 
 
-def _planner_source_terms(intent, source_code):
-    if not isinstance(intent, dict) or not isinstance(intent.get("source_strategy"), list):
-        return []
-    result = []
-    for strategy in intent["source_strategy"]:
-        if not isinstance(strategy, dict) or _normalized(strategy.get("source")) != _normalized(source_code):
-            continue
-        for key in ("category_terms", "query_terms"):
-            for value in strategy.get(key, []) if isinstance(strategy.get(key), list) else []:
-                value = _text(value, 300)
-                if value and _normalized(value) not in {_normalized(item) for item in result}:
-                    result.append(value)
-    return result[:16]
-
-
-def _oasis_category_snapshot(client):
-    supplier = CatalogSupplier.objects.filter(code="oasis", is_active=True).first()
-    categories = list(CatalogCategory.objects.filter(
-        supplier=supplier, is_active=True,
-    ).values("external_id", "parent_external_id", "name", "path", "embedding", "embedding_model")) if supplier else []
-    if not categories:
-        sync_oasis_categories(client)
-        supplier = CatalogSupplier.objects.get(code="oasis")
-        categories = list(CatalogCategory.objects.filter(
-            supplier=supplier, is_active=True,
-        ).values("external_id", "parent_external_id", "name", "path", "embedding", "embedding_model"))
-    return [{
-        "id": value["external_id"],
-        "parent_id": value["parent_external_id"],
-        "name": value["name"],
-        "path": value["path"] or value["name"],
-        "embedding": value["embedding"],
-        "embedding_model": value["embedding_model"],
-    } for value in categories]
-
-
-def _category_candidates(categories_by_source, line, intent, limit_per_source=12):
-    intent = intent if isinstance(intent, dict) else {}
-    weighted_phrases = []
-    for weight, values in (
-        (6, [intent.get("item")]),
-        (5, [line.get("name") if isinstance(line, dict) else ""]),
-        (5, intent.get("synonyms", []) if isinstance(intent.get("synonyms"), list) else []),
-        (3, [intent.get("product_class")]),
-        (1, intent.get("categories", []) if isinstance(intent.get("categories"), list) else []),
-    ):
-        for value in values:
-            normalized = _normalized(value)
-            if normalized:
-                weighted_phrases.append((weight, normalized))
-
-    # Procurement-document boilerplate: these words show up in the name of
-    # almost every promotional-merch category ("Блокноты с логотипом",
-    # "Ветровки с логотипом", ...) and in almost every tender position name
-    # ("... с нанесением логотипа", "с символикой ..."). Scored like any
-    # other token they out-weigh the one word that actually identifies the
-    # item, pulling in categories that share only the boilerplate.
-    generic_tokens = {
-        "товар", "товары", "каталог", "одежда", "текстиль", "сувенир", "сувениры", "продукция",
-        "логотип", "логотипом", "логотипа", "логотипе", "логотипу",
-        "символика", "символикой", "символики", "символике",
-        "нанесение", "нанесением", "нанесения", "нанесении",
-        "вручение", "вручения", "вручению",
-        "изготовление", "изготовления", "изготовлению",
-        "поставка", "поставки", "поставке", "поставку",
-        "услуга", "услуги", "услугу", "услуге",
-    }
-    class_tokens = set(_normalized(intent.get("product_class")).split())
-    token_weights = {}
-    for weight, phrase in weighted_phrases:
-        for token in phrase.split():
-            if len(token) < 3 or token.isdigit():
-                continue
-            token_weights[token] = token_weights.get(token, 0) + weight
-    for token in set(_normalized(intent.get("item")).split()) - class_tokens - generic_tokens:
-        if len(token) >= 3 and not token.isdigit():
-            token_weights[token] = token_weights.get(token, 0) + 8
-
-    def compatible(left, right):
-        if left == right:
-            return True
-        if min(len(left), len(right)) < 5:
-            return False
-        prefix_length = max(4, min(6, len(left) - 1, len(right) - 1))
-        return left[:prefix_length] == right[:prefix_length]
-
-    result = []
-    for source, categories in categories_by_source.items():
-        source_rows = []
-        for category in categories if isinstance(categories, list) else []:
-            category_id = str(category.get("id") or category.get("external_id") or "")
-            source_code = _text(source, 50).lower()
-            if not category_id:
-                continue
-            name = _text(category.get("name"), 300)
-            path = _text(category.get("path") or name, 1000)
-            name_tokens = _normalized(name).split()
-            path_tokens = _normalized(path).split()
-            matched_weights = [
-                weight for token, weight in token_weights.items()
-                if any(compatible(token, offered) for offered in [*name_tokens, *path_tokens])
-            ]
-            if not matched_weights:
-                continue
-            depth = path.count("/") + path.count(">")
-            distinctive_matches = sum(
-                weight for token, weight in token_weights.items()
-                if token not in generic_tokens and any(compatible(token, offered) for offered in name_tokens)
-            )
-            exact_bonus = max((
-                weight * 3 for weight, phrase in weighted_phrases
-                if phrase == _normalized(name)
-            ), default=0)
-            generic_penalty = 20 if name_tokens and all(token in generic_tokens for token in name_tokens) else 0
-            score = sum(matched_weights) + distinctive_matches + exact_bonus + min(8, depth * 2) - generic_penalty
-            source_rows.append({
-                "source": source_code,
-                "category_id": category_id,
-                "name": name,
-                "path": path,
-                "specificity": round(score, 3),
-            })
-        source_rows.sort(key=lambda value: (-value["specificity"], -value["path"].count("/"), _normalized(value["path"])))
-        result.extend(source_rows[:max(1, min(30, limit_per_source))])
-    return sorted(result, key=lambda value: (-value["specificity"], value["source"], _normalized(value["path"])))
-
-
 def _attribute_values(product, markers):
     values = []
     for attribute in product.attributes if isinstance(product.attributes, list) else []:
@@ -2328,14 +2201,6 @@ def _catalog_product_eligibility(product, line, effective_line, anchors, quantit
     }
 
 
-# A well-scoped category never holds this many SKUs; the ceiling only stops a
-# too-broad category (or a bare full-text query) from crawling Oasis for minutes
-# at the client's 1s-per-page rate limit. Only used when no local mirror exists
-# yet (see _local_catalog_pool) — once `sync_oasis_catalog` has run, search
-# reads the mirror like Gifts and this crawl is never touched.
-_OASIS_PAGE_CEILING = 6
-
-
 def _query_stems(phrases):
     """The meaningful words of the query, stemmed to 6 chars, deduped —
     the unit both retrieval and relevance work in."""
@@ -2390,13 +2255,15 @@ def _text_search_pool(supplier_code, phrases):
     # being lru-cached over the many repeated variant names — then the
     # matched ids are re-fetched in one `in_bulk`.
     ranked_ids = []
-    for pid, name, full_name in base.values_list("id", "name", "full_name").iterator(chunk_size=4000):
+    for pid, name, full_name in base.values_list("id", "name", "full_name").order_by("id").iterator(chunk_size=4000):
         name_words = _normalized(f"{name or ''} {full_name or ''}").split()
         hits = sum(1 for stem in stems if _stem_in_words(stem, name_words))
         if hits:
             ranked_ids.append((hits, pid))
     if not ranked_ids:
         return []
+    # More query words in the name first; stable within a tier, so cards
+    # keep the id order the funnel and variant grouping expect.
     ranked_ids.sort(key=lambda value: -value[0])
     by_id = base.in_bulk([pid for _, pid in ranked_ids])
     pool = []
@@ -2511,9 +2378,9 @@ def _shortlist_rank_key(
 
 def catalog_candidates_for_line(
     line, limit=3, supplier_code="oasis", intent=None, client=None, include_diagnostics=False,
-    force_full_text=False, shortlist_limit=None,
+    shortlist_limit=None,
 ):
-    """Return a relevance-ranked shortlist from live Oasis and cached suppliers.
+    """Return a relevance-ranked shortlist from the Oasis + Gifts mirrors.
 
     ``shortlist_limit`` widens how many ranked cards are serialised and
     returned (default: just ``limit``). The AI shortlist pass in
@@ -2524,24 +2391,7 @@ def catalog_candidates_for_line(
         quantity = int(Decimal(str(line.get("quantity") or 0).replace(",", ".")))
     except (InvalidOperation, TypeError, ValueError):
         quantity = 0
-    categories, category, category_map = [], None, {}
-    category_tasks, category_usage, category_errors = [], {}, []
-    fields = (
-        "id,article,name,full_name,description,article_base,group_id,color_group_id,size,images,colors,"
-        "categories,categories_array,brand,attributes,materials,branding,package,price,discount_price,"
-        "total_stock,is_on_order,delivery_days,supply_terms,lead,defect,updated_at"
-    )
-    rows, seen_ids = [], set()
     planner_categories = _planner_categories(intent)
-    semantic_entities = [
-        (intent or {}).get("item", "") if isinstance(intent, dict) else "",
-        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
-        (intent or {}).get("product_class", "") if isinstance(intent, dict) else "",
-        *planner_categories,
-        _text(line.get("name", ""), 300),
-    ]
-    search_aliases = tuple(dict.fromkeys(_text(value, 300) for value in semantic_entities if _text(value, 300)))
-    aliases = tuple(planner_categories) or search_aliases or (_text(line.get("name", ""), 300),)
     specific_entities = [
         (intent or {}).get("item", "") if isinstance(intent, dict) else "",
         *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
@@ -2558,22 +2408,6 @@ def catalog_candidates_for_line(
         *((intent or {}).get("synonyms", []) if isinstance(intent, dict) and isinstance((intent or {}).get("synonyms"), list) else []),
     ] if _text(value, 300))) or anchors
     effective_line = _line_with_planner_requirements(line, intent)
-    text_terms = list(aliases)
-    for value in [
-        line.get("name", ""),
-        *((intent or {}).get("synonyms", []) if isinstance(intent, dict) else []),
-        *((intent or {}).get("hard_constraints", []) if isinstance(intent, dict) else []),
-        *((intent or {}).get("preferences", []) if isinstance(intent, dict) else []),
-        *[item.get("value", "") for item in _requirement_values(effective_line)],
-        *[item.get("value", "") for item in _planner_requirements(intent)],
-        *[
-            term
-            for query in (intent or {}).get("fallback_queries", []) if isinstance(query, dict)
-            for term in query.get("terms", []) if isinstance(query.get("terms"), list)
-        ],
-    ]:
-        text_terms.extend(sorted(_meaningful_tokens(value)))
-    text_terms = list(dict.fromkeys(value for value in text_terms if _text(value, 100)))
     pool = []
     source_status = {
         "oasis": {"status": "not_searched", "message": "", "received": 0},
@@ -2582,77 +2416,25 @@ def catalog_candidates_for_line(
 
     query_phrases = list(name_anchors)
 
-    # Oasis is optional: an API/category failure must not suppress Gifts.
-    oasis_used_mirror = False
-    oasis_mirror_exists = CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists()
+    # Oasis is optional: a mirror that has not been synced must not suppress
+    # Gifts. Both suppliers are searched the same way — by product name over
+    # the local mirror (`python manage.py sync_oasis_catalog` /
+    # `sync_gifts_catalog`), no categories, no live crawl. Live price and
+    # stock for the handful of Oasis cards actually shown are refreshed in
+    # one batched call right before returning (see below).
+    oasis_used_mirror = CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists()
     try:
         client = client or OasisClient()
-        if oasis_mirror_exists:
-            # A local mirror exists (`python manage.py sync_oasis_catalog`) —
-            # search its text like Gifts, no categories, no live crawl. Live
-            # price and stock for the handful of cards actually shown are
-            # refreshed in one batched call right before returning (see below).
-            oasis_used_mirror = True
+        if oasis_used_mirror:
             oasis_pool = _aggregate_color_variants(_text_search_pool("oasis", query_phrases), "oasis")
             pool.extend(oasis_pool)
             source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
         else:
-            # No mirror synced in this environment — legacy live crawl. It
-            # still leans on the keyword category picker because the Oasis API
-            # has no usable relevance search; kept only as a cold-start
-            # fallback (prod and dev both run the mirror, so text search wins).
-            categories = _oasis_category_snapshot(client)
-            category_map = {value["id"]: value["path"] or value["name"] for value in categories}
-            gifts_categories = list(CatalogCategory.objects.filter(
-                supplier__code="gifts", supplier__is_active=True, is_active=True,
-            ).values("external_id", "parent_external_id", "name", "path"))
-            if not force_full_text:
-                per_source = {}
-                for option in _category_candidates({"oasis": categories, "gifts": gifts_categories}, line, intent or {}):
-                    per_source.setdefault(option["source"], []).append(option)
-                category_tasks = [
-                    {**option, "priority": index + 1}
-                    for options in per_source.values()
-                    for index, option in enumerate(options[:2])
-                ]
-            selected_oasis_categories = [
-                next((value for value in categories if value["id"] == task["category_id"]), None)
-                for task in sorted(category_tasks, key=lambda value: value.get("priority", 1))
-                if task.get("source") == "oasis"
-            ]
-            selected_oasis_categories = [value for value in selected_oasis_categories if value]
-            category = selected_oasis_categories[0] if selected_oasis_categories else None
-            search_terms = list(dict.fromkeys(_planner_source_terms(intent, "oasis") + list(name_anchors)))[:6]
-            oasis_search_categories = selected_oasis_categories or [None]
-            for selected_category in oasis_search_categories:
-                offset = 0
-                for _ in range(_OASIS_PAGE_CEILING):
-                    params = {
-                        "format": "json", "limit": 500, "offset": offset,
-                        "available": 1, "includeGroupId": 1, "fields": fields,
-                    }
-                    if selected_category:
-                        params["category"] = selected_category["id"]
-                    elif search_terms:
-                        params["search"] = " ".join(search_terms)
-                    payload = client.get("/v4/products", params)
-                    page = payload.get("items", []) if isinstance(payload, dict) else payload
-                    if not isinstance(page, list):
-                        raise CatalogSyncError("Oasis вернул неожиданный формат товаров.")
-                    fresh = [value for value in page if isinstance(value, dict) and str(value.get("id", "")) not in seen_ids]
-                    rows.extend(fresh)
-                    seen_ids.update(str(value.get("id", "")) for value in fresh)
-                    if len(page) < 500 or not fresh:
-                        break
-                    offset += len(page)
-            supplier = CatalogSupplier(code=supplier_code, name="Oasis", base_url=client.base_url)
-            marker = str(uuid.uuid4())
-            oasis_pool = _aggregate_color_variants([value for value in (
-                _product_from_payload(supplier, raw, category_map, marker)
-                for raw in rows if isinstance(raw, dict)
-            ) if value and value.is_active], "oasis")
-            pool.extend(oasis_pool)
-            source_status["oasis"] = {"status": "success", "message": "", "received": len(oasis_pool)}
+            source_status["oasis"] = {
+                "status": "not_configured",
+                "message": "Каталог Oasis ещё не загружен (sync_oasis_catalog).",
+                "received": 0,
+            }
     except CatalogSyncError as exc:
         source_status["oasis"] = {"status": "failed", "message": str(exc)[:300], "received": 0}
     except Exception as exc:
@@ -2825,8 +2607,8 @@ def catalog_candidates_for_line(
                 "synced_at": timezone.now().isoformat(),
                 "category": (
                     product.category_names[0]
-                    if isinstance(product.category_names, list) and product.category_names else
-                    (category["path"] or category["name"]) if category else "Поиск по названию и описанию"
+                    if isinstance(product.category_names, list) and product.category_names
+                    else "Поиск по названию"
                 ),
                 "sizes": list(product.raw_data.get("sizes", []) or ([_variant_size(product)] if _variant_size(product) else [])) if isinstance(product.raw_data, dict) else [],
                 "variant_ids": list(product.raw_data.get("variant_ids", []) or [product.external_id]) if isinstance(product.raw_data, dict) else [product.external_id],
@@ -2862,12 +2644,10 @@ def catalog_candidates_for_line(
             "candidates": selected,
             "sources": source_status,
             "attempts": [{
-                "mode": "selected_categories" if category_tasks else "text_search",
-                "category_tasks": category_tasks,
-                "categories": planner_categories,
-                "terms": text_terms,
+                "mode": "text_search",
                 "query_phrases": list(query_phrases),
                 "relevance_tiers": sorted(Counter(getattr(product, "_relevance", 1) for product in pool).items()),
+                "name_hit_counts": sorted(Counter(getattr(product, "_name_hits", 0) for product in pool).items(), reverse=True),
                 "pool_count": len(pool),
                 "rejections": rejections,
                 "eligibility_counts": eligibility_counts,
@@ -2877,7 +2657,7 @@ def catalog_candidates_for_line(
                 "partial_count": eligibility_counts["partial_eligible"],
                 "candidate_count": len(selected),
             }],
-            "category_usage": category_usage,
-            "category_errors": category_errors,
+            "category_usage": {},
+            "category_errors": [],
         }
     return selected
