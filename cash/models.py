@@ -101,6 +101,7 @@ class BankPayment(models.Model):
     account_number = models.CharField("Счёт зачисления", max_length=34, blank=True)
     executed_at = models.DateTimeField("Дата проведения", null=True, blank=True)
     operation_date = models.DateField("Дата операции", db_index=True)
+    is_internal = models.BooleanField("Перевод между своими счетами", default=False, db_index=True)
     hidden_from_managers = models.BooleanField("Скрыт от менеджеров", default=False)
     raw = models.JSONField("Ответ банка", default=dict, blank=True)
     created_at = models.DateTimeField("Загружен", auto_now_add=True)
@@ -120,6 +121,8 @@ class BankSyncState(models.Model):
 
     last_synced_at = models.DateTimeField("Последняя синхронизация", null=True, blank=True)
     last_status = models.CharField("Результат", max_length=255, blank=True)
+    # ИНН своих компаний, ИНН банка и номера своих счетов — чтобы отличать переводы между своими счетами.
+    own_identifiers = models.JSONField("Свои реквизиты", default=list, blank=True)
 
     class Meta:
         verbose_name = "Состояние синхронизации с банком"

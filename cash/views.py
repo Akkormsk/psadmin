@@ -37,11 +37,13 @@ def _bank_context(request):
     date_from = max(_parse_date(request.GET.get("bank_from")) or window_start, window_start)
     date_to = min(_parse_date(request.GET.get("bank_to")) or today, today)
     query = (request.GET.get("bank_q") or "").strip()
+    show_internal = is_admin and request.GET.get("bank_internal") == "1"
 
-    payments = BankPayment.objects.filter(operation_date__gte=window_start)
+    base = BankPayment.objects.filter(operation_date__gte=date_from, operation_date__lte=date_to)
     if not is_admin:
-        payments = payments.filter(hidden_from_managers=False)
-    payments = payments.filter(operation_date__gte=date_from, operation_date__lte=date_to)
+        base = base.filter(hidden_from_managers=False)
+
+    payments = base if show_internal else base.filter(is_internal=False)
     if query:
         payments = payments.filter(
             Q(counterparty_name__icontains=query)
@@ -50,6 +52,7 @@ def _bank_context(request):
             | Q(doc_number__icontains=query)
         )
     payments = list(payments)
+    internal_count = base.filter(is_internal=True).count()
 
     return {
         "bank_payments": payments,
@@ -59,6 +62,8 @@ def _bank_context(request):
         "bank_window_start": window_start,
         "bank_today": today,
         "bank_is_admin": is_admin,
+        "bank_show_internal": show_internal,
+        "bank_internal_count": internal_count,
         "bank_has_filter": bool(query or date_from != window_start or date_to != today),
         "bank_sync_state": BankSyncState.load(),
         "bank_configured": bool(settings.MODULBANK_TOKEN and settings.MODULBANK_ACCOUNT_ID),

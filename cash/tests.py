@@ -203,3 +203,17 @@ class BankPaymentTests(TestCase):
         modulbank.upsert_operation({"id": "op-hidden", "category": "Debet", "amount": 5, "status": "Received"})
         self.assertFalse(BankPayment.objects.get(external_id="op-visible").hidden_from_managers)
         self.assertTrue(BankPayment.objects.get(external_id="op-hidden").hidden_from_managers)
+
+    def test_internal_transfers_are_flagged_and_hidden_from_the_list(self):
+        own = {"7712345678", "40802810170010029231"}
+        modulbank.upsert_operation({"id": "op-c", "category": "Debet", "amount": 1000, "status": "Received", "contragentName": "ООО Клиент", "contragentInn": "5024090909"}, own)
+        modulbank.upsert_operation({"id": "op-s", "category": "Debet", "amount": 50000, "status": "Received", "contragentName": "ИП Я Сам", "contragentInn": "7712345678"}, own)
+        self.assertFalse(BankPayment.objects.get(external_id="op-c").is_internal)
+        self.assertTrue(BankPayment.objects.get(external_id="op-s").is_internal)
+
+        self.client.force_login(self.admin)
+        default_view = self.client.get(reverse("cash_home"))
+        self.assertContains(default_view, "ООО Клиент")
+        self.assertNotContains(default_view, "ИП Я Сам")
+        with_internal = self.client.get(reverse("cash_home"), {"bank_internal": "1"})
+        self.assertContains(with_internal, "ИП Я Сам")

@@ -59,6 +59,25 @@ def list_accounts():
     return _request("account-info", {})
 
 
+def own_identifiers():
+    """ИНН своих компаний, ИНН банка и номера своих счетов.
+
+    Нужно, чтобы отличить переводы между собственными счетами и внутрибанковские
+    зачисления от реальных платежей клиентов.
+    """
+    keys = set()
+    for company in list_accounts():
+        for field in ("Inn", "Kpp", "Ogrn"):
+            if company.get(field):
+                keys.add(str(company[field]))
+        for account in company.get("bankAccounts", []):
+            if account.get("number"):
+                keys.add(str(account["number"]))
+            if account.get("bankInn"):
+                keys.add(str(account["bankInn"]))
+    return sorted(keys)
+
+
 def _to_decimal(value):
     try:
         return Decimal(str(value or "0"))
@@ -102,14 +121,24 @@ def fetch_incoming(account_id, date_from, date_till):
     return collected
 
 
-def upsert_operation(operation):
+def _is_internal(operation, own_keys):
+    contragent_account = operation.get("contragentBankAccountNumber") or ""
+    return bool(own_keys) and (
+        (operation.get("contragentInn") or "") in own_keys or contragent_account in own_keys
+    )
+
+
+def upsert_operation(operation, own_keys=None):
     """Сохранить одну транзакцию из банка. Возвращает (BankPayment, created) или None."""
-    from .models import BankPayment
+    from .models import BankPayment, BankSyncState
 
     if not isinstance(operation, dict) or not operation.get("id"):
         return None
     if operation.get("category") != INCOMING:
         return None
+
+    if own_keys is None:
+        own_keys = set(BankSyncState.load().own_identifiers)
 
     executed_at = _parse_moscow(operation.get("executed") or operation.get("created"))
     operation_date = executed_at.astimezone(MOSCOW).date() if executed_at else timezone.localdate()
@@ -130,6 +159,7 @@ def upsert_operation(operation):
             "account_number": operation.get("bankAccountNumber") or "",
             "executed_at": executed_at,
             "operation_date": operation_date,
+            "is_internal": _is_internal(operation, own_keys),
             "raw": operation,
         },
     )
@@ -149,18 +179,20 @@ def sync(days=WINDOW_DAYS):
     if not account_ids:
         raise ModulbankError("Не задан MODULBANK_ACCOUNT_ID")
 
+    own_keys = set(own_identifiers())
     till = timezone.localdate()
     since = till - timedelta(days=days)
     touched = 0
     for account_id in account_ids:
         for operation in fetch_incoming(account_id, since, till):
-            if upsert_operation(operation):
+            if upsert_operation(operation, own_keys):
                 touched += 1
 
     state = BankSyncState.load()
     state.last_synced_at = timezone.now()
     state.last_status = f"Готово, платежей обработано: {touched}"
-    state.save(update_fields=["last_synced_at", "last_status"])
+    state.own_identifiers = sorted(own_keys)
+    state.save(update_fields=["last_synced_at", "last_status", "own_identifiers"])
     return touched
 
 

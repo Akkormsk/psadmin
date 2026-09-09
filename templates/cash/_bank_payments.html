@@ -10,7 +10,7 @@
   .bank-table td.bank-amount { white-space: nowrap; font-weight: 600; }
   .bank-table .bank-purpose { color: #4b5563; font-size: 13px; max-width: 420px; }
   .bank-table .bank-payer small { display: block; color: #6b7280; font-weight: 400; }
-  .bank-table tr.is-hidden-row td { color: #9ca3af; }
+  .bank-table tr.is-hidden-row td, .bank-table tr.is-internal-row td { color: #9ca3af; }
   .bank-flag { display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 999px; background: #f3f4f6; color: #6b7280; font-size: 11px; font-weight: 700; vertical-align: middle; }
 </style>
 
@@ -53,6 +53,9 @@
 
   <p class="bank-summary">
     {% if bank_count %}Платежей: <strong>{{ bank_count }}</strong> · на сумму <strong>{{ bank_total|floatformat:2|intcomma }} ₽</strong>{% else %}За выбранный период платежей нет{% endif %}
+    {% if bank_is_admin and bank_internal_count %}
+      · <a href="?date={{ selected_date|date:'Y-m-d' }}{% if bank_filter.q %}&bank_q={{ bank_filter.q|urlencode }}{% endif %}&bank_from={{ bank_filter.from|date:'Y-m-d' }}&bank_to={{ bank_filter.to|date:'Y-m-d' }}{% if not bank_show_internal %}&bank_internal=1{% endif %}">{% if bank_show_internal %}скрыть переводы между своими счетами{% else %}+ {{ bank_internal_count }} перевод(ов) между своими счетами{% endif %}</a>
+    {% endif %}
   </p>
 
   {% if bank_payments %}
@@ -69,12 +72,13 @@
       </thead>
       <tbody>
         {% for payment in bank_payments %}
-        <tr class="table-row{% if payment.hidden_from_managers %} is-hidden-row{% endif %}">
+        <tr class="table-row{% if payment.hidden_from_managers %} is-hidden-row{% endif %}{% if payment.is_internal %} is-internal-row{% endif %}">
           <td>{{ payment.operation_date|date:"d.m.Y" }}</td>
           <td class="bank-payer">
             {{ payment.counterparty_name|default:"—" }}
             {% if payment.counterparty_inn %}<small>ИНН {{ payment.counterparty_inn }}</small>{% endif %}
             {% if bank_is_admin and payment.hidden_from_managers %}<span class="bank-flag">скрыт</span>{% endif %}
+            {% if payment.is_internal %}<span class="bank-flag">свой счёт</span>{% endif %}
           </td>
           <td class="bank-purpose">{{ payment.payment_purpose|default:"—" }}</td>
           <td class="bank-amount">{{ payment.amount|floatformat:2|intcomma }} <span class="money-suffix">₽</span></td>
@@ -96,5 +100,5 @@
   </div>
   {% endif %}
 
-  <p class="bank-note">Показаны только входящие платежи за последний месяц. Данные приходят из Модульбанка.</p>
+  <p class="bank-note">Входящие платежи за последний месяц из Модульбанка. Переводы между собственными счетами {% if bank_is_admin %}по умолчанию скрыты{% else %}не показываются{% endif %}.</p>
 </section>
