@@ -1,6 +1,34 @@
 from django.contrib import admin
 
-from .models import CashAuditLog, CashReconciliation, CashTransaction
+from .models import BankPayment, BankSyncState, CashAuditLog, CashReconciliation, CashTransaction
+
+
+@admin.register(BankPayment)
+class BankPaymentAdmin(admin.ModelAdmin):
+    list_display = ("operation_date", "amount", "currency", "counterparty_name", "status", "hidden_from_managers")
+    list_filter = ("hidden_from_managers", "status", "operation_date")
+    search_fields = ("counterparty_name", "counterparty_inn", "payment_purpose", "doc_number", "external_id")
+    actions = ("hide_from_managers", "show_to_managers")
+    readonly_fields = ("external_id", "raw", "created_at", "updated_at")
+
+    @admin.action(description="Скрыть от менеджеров")
+    def hide_from_managers(self, request, queryset):
+        queryset.update(hidden_from_managers=True)
+
+    @admin.action(description="Показать менеджерам")
+    def show_to_managers(self, request, queryset):
+        queryset.update(hidden_from_managers=False)
+
+
+@admin.register(BankSyncState)
+class BankSyncStateAdmin(admin.ModelAdmin):
+    list_display = ("last_synced_at", "last_status")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(CashTransaction)

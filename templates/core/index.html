@@ -14,19 +14,21 @@
             </a>
 
             <a class="card" href="/cash/">
-                <div class="card-title">Касса</div>
-                <div class="card-desc">Учёт наличных в офисе</div>
+                <div class="card-title">Финансы</div>
+                <div class="card-desc">Касса офиса и входящие платежи из банка</div>
             </a>
 
             <a class="card" href="/finance/">
-                <div class="card-title">Финансы</div>
-                <div class="card-desc">{% if request.user.is_superuser %}Зарплаты, расходы и прибыль компании{% else %}Моя зарплата за текущий период{% endif %}</div>
+                <div class="card-title">Зарплата</div>
+                <div class="card-desc">{% if request.user.is_superuser %}Зарплаты сотрудников и учёт заказов{% else %}Моя зарплата и мои заказы{% endif %}</div>
             </a>
 
+            {% if request.user.is_superuser %}
             <a class="card" href="/payroll/">
-                <div class="card-title">Заказы</div>
-                <div class="card-desc">Учёт закрытых заказов и валовой прибыли</div>
+                <div class="card-title">Финансовый учет</div>
+                <div class="card-desc">Прибыль компании, расходы</div>
             </a>
+            {% endif %}
 
             <a class="card" href="/tenders/">
                 <div class="card-title">Расчет тендеров</div>

@@ -1,9 +1,12 @@
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from calendar import monthrange
 
+from .forms import OrderRecordCreateForm
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -137,8 +140,65 @@ def _sync_open_period_expenses(period, refresh_values=False):
             expense.save(update_fields=("name", "amount"))
 
 
+def _period_options(code):
+    current_period = timezone.localdate().strftime("%Y-%m")
+    period_codes = sorted(
+        set(OrderRecord.objects.values_list("accounting_period", flat=True))
+        | set(FinancialPeriod.objects.values_list("code", flat=True))
+        | {code, current_period},
+        reverse=True,
+    )
+    month_names = ("Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь")
+    return [(value, f"{month_names[int(value[5:]) - 1]} {value[:4]}") for value in period_codes]
+
+
+def period_financials(code):
+    """Свод «Прибыль компании» за период — для раздела «Финансовый учёт»."""
+    period, _ = FinancialPeriod.objects.get_or_create(code=code)
+    _, managers = _manager_data()
+    _sync_open_manager_lines(period, managers)
+    if not period.is_closed:
+        _sync_open_printer_line(period)
+        _sync_open_period_expenses(period)
+        _refresh_period(period)
+    manager_payroll = Decimal("0")
+    for line in period.payroll_lines.filter(kind=PayrollLine.MANAGER):
+        base = _base_salary(line, period)
+        design_pay = line.design_amount * line.design_percent / Decimal("100")
+        manager_payroll += base + line.kpi_bonus + design_pay - line.deductions
+    order_total = OrderRecord.objects.filter(accounting_period=code).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
+    expense_total = period.expenses.aggregate(total=Sum("amount"))["total"] or Decimal("0")
+    return {
+        "period": period,
+        "order_total": order_total,
+        "manager_payroll": manager_payroll,
+        "expense_total": expense_total,
+        "company_profit": order_total - manager_payroll - expense_total,
+    }
+
+
+def _order_records(request, code):
+    """Заказы за период с фильтром: админ видит все и может фильтровать по сотруднику."""
+    is_admin = request.user.is_superuser
+    records = OrderRecord.objects.filter(accounting_period=code).select_related(
+        "manager", "manager__profile", "created_by", "created_by__profile"
+    ).defer("manager__profile__avatar_data", "created_by__profile__avatar_data")
+    order_managers = []
+    selected_manager = ""
+    if is_admin:
+        order_managers = get_user_model().objects.filter(is_active=True, is_superuser=False).order_by("first_name", "last_name", "pk")
+        selected_manager = request.GET.get("order_manager", "")
+        if selected_manager.isdigit():
+            records = records.filter(manager_id=int(selected_manager))
+        else:
+            selected_manager = ""
+    else:
+        records = records.filter(manager=request.user)
+    return list(records.order_by("-created_at")), order_managers, selected_manager
+
+
 @login_required
-def calculation(request):
+def calculation(request, order_form=None, open_order_modal=False, order_edit_form=None, open_order_edit_id=None):
     is_admin_view = request.user.is_superuser
     code = request.GET.get("period") or request.POST.get("period") or timezone.localdate().strftime("%Y-%m")
     period, _ = FinancialPeriod.objects.get_or_create(code=code)
@@ -151,7 +211,7 @@ def calculation(request):
         period.is_closed = False
         period.save(update_fields=("is_closed",))
         return redirect(f"{request.path}?period={code}")
-    if request.method == "POST" and not period.is_closed:
+    if request.method == "POST" and request.POST.get("action") and not period.is_closed:
         editable_lines = period.payroll_lines.all() if is_admin_view else period.payroll_lines.filter(manager=request.user)
         editable_fields = (
             ("work_shifts", "leave_shifts", "fixed_salary", "deductions", "advance")
@@ -181,29 +241,90 @@ def calculation(request):
     )
     if not is_admin_view:
         lines = lines.filter(manager=request.user)
-    manager_payroll = Decimal("0")
     for line in lines:
         base = _base_salary(line, period)
         fixed_salary = Decimal("0") if line.kind == PayrollLine.PRINTER else line.fixed_salary
         line.design_pay = line.design_amount * line.design_percent / Decimal("100")
         line.total = base + fixed_salary + line.kpi_bonus + line.design_pay - line.deductions
         line.balance = line.total - line.advance
-        if line.kind == PayrollLine.MANAGER:
-            manager_payroll += base + line.kpi_bonus + line.design_pay - line.deductions
-    order_total = OrderRecord.objects.filter(accounting_period=code).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
-    expense_total = period.expenses.aggregate(total=Sum("amount"))["total"] or Decimal("0")
-    current_period = timezone.localdate().strftime("%Y-%m")
-    period_codes = sorted(
-        set(OrderRecord.objects.values_list("accounting_period", flat=True))
-        | set(FinancialPeriod.objects.values_list("code", flat=True))
-        | {code, current_period},
-        reverse=True,
-    )
-    month_names = ("Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь")
-    period_options = [(value, f"{month_names[int(value[5:]) - 1]} {value[:4]}") for value in period_codes]
-    for line in lines:
-        line.base_salary = _base_salary(line, period)
-    return render(request, "finance/calculation.html", {"period": period, "lines": lines, "period_options": period_options, "order_total": order_total, "manager_payroll": manager_payroll, "expense_total": expense_total, "company_profit": order_total - manager_payroll - expense_total, "is_admin_view": is_admin_view})
+        line.base_salary = base
+
+    records, order_managers, selected_order_manager = _order_records(request, code)
+    total_gross_profit = sum((record.gross_profit for record in records), Decimal("0"))
+    if order_form is None:
+        order_form = OrderRecordCreateForm(user=request.user)
+    for record in records:
+        record.edit_form = (
+            order_edit_form
+            if order_edit_form is not None and record.pk == open_order_edit_id
+            else OrderRecordCreateForm(instance=record, user=request.user, prefix=f"edit-{record.pk}")
+        )
+
+    return render(request, "finance/calculation.html", {
+        "period": period,
+        "lines": lines,
+        "period_options": _period_options(code),
+        "is_admin_view": is_admin_view,
+        "records": records,
+        "order_managers": order_managers,
+        "selected_order_manager": selected_order_manager,
+        "total_gross_profit": total_gross_profit,
+        "order_form": order_form,
+        "open_order_modal": open_order_modal,
+        "open_order_edit_id": open_order_edit_id,
+    })
+
+
+def _order_period(request):
+    return request.POST.get("period") or request.GET.get("period") or timezone.localdate().strftime("%Y-%m")
+
+
+@login_required
+def orders_create(request):
+    if request.method != "POST":
+        return redirect("finance:calculation")
+    form = OrderRecordCreateForm(request.POST, user=request.user)
+    if form.is_valid():
+        record = form.save(commit=False)
+        record.manager = form.cleaned_data.get("manager") if request.user.is_superuser else request.user
+        record.created_by = request.user
+        record.source = OrderRecord.SOURCE_MANUAL
+        record.save()
+        messages.success(request, "Запись добавлена.")
+        return redirect(f"{reverse('finance:calculation')}?period={record.accounting_period}")
+    return calculation(request, order_form=form, open_order_modal=True)
+
+
+@login_required
+def orders_update(request, pk):
+    records = OrderRecord.objects.all()
+    if not request.user.is_superuser:
+        records = records.filter(manager=request.user)
+    record = records.filter(pk=pk).first()
+    if record is None or request.method != "POST":
+        return redirect("finance:calculation")
+    form = OrderRecordCreateForm(request.POST, instance=record, user=request.user, prefix=f"edit-{record.pk}")
+    if form.is_valid():
+        record = form.save(commit=False)
+        if request.user.is_superuser:
+            record.manager = form.cleaned_data["manager"]
+        record.save()
+        messages.success(request, "Запись сохранена.")
+        return redirect(f"{reverse('finance:calculation')}?period={record.accounting_period}")
+    return calculation(request, order_edit_form=form, open_order_edit_id=record.pk)
+
+
+@login_required
+def orders_delete(request, pk):
+    if request.method == "POST":
+        records = OrderRecord.objects.filter(pk=pk)
+        if not request.user.is_superuser:
+            records = records.filter(manager=request.user)
+        record = records.first()
+        if record:
+            record.delete()
+            messages.success(request, "Запись удалена.")
+    return redirect(f"{reverse('finance:calculation')}?period={_order_period(request)}")
 
 
 @login_required

@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib.auth import get_user_model
 
-from .models import OrderRecord
+from payroll.models import OrderRecord
 
 
 class EmployeeChoiceField(forms.ModelChoiceField):
@@ -18,11 +18,7 @@ class OrderRecordCreateForm(forms.ModelForm):
         labels = {"order_number": "Номер заказа", "gross_profit": "Сумма"}
         widgets = {
             "record_type": forms.RadioSelect,
-            "order_number": forms.TextInput(
-                attrs={
-                    "inputmode": "numeric",
-                }
-            ),
+            "order_number": forms.TextInput(attrs={"inputmode": "numeric"}),
         }
 
     def __init__(self, *args, user=None, **kwargs):
@@ -75,20 +71,9 @@ class OrderRecordCreateForm(forms.ModelForm):
 
     @staticmethod
     def _month_choices_for_year(year: int):
-        # Russian month names in nominative form, matching UI request.
         month_names = [
-            "Январь",
-            "Февраль",
-            "Март",
-            "Апрель",
-            "Май",
-            "Июнь",
-            "Июль",
-            "Август",
-            "Сентябрь",
-            "Октябрь",
-            "Ноябрь",
-            "Декабрь",
+            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
         ]
         return [
             (f"{year:04d}-{month:02d}", f"{month_names[month - 1]} {year}")

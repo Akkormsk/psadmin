@@ -1,0 +1,120 @@
+{% load humanize %}
+<style>
+  .bank-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin-bottom: 16px; }
+  .bank-filters .field { display: flex; flex-direction: column; gap: 5px; }
+  .bank-filters label { font-size: 12px; font-weight: 600; color: #6b7280; }
+  .bank-filters input { padding: 9px 11px; border: 1px solid #ddd; border-radius: 10px; background: #fff; font: inherit; box-sizing: border-box; min-height: 40px; }
+  .bank-filters input[type="date"] { width: 148px; }
+  .bank-filters input[type="search"] { width: 260px; }
+  .bank-filters .field--actions { flex-direction: row; align-items: center; gap: 8px; }
+  .bank-summary { margin: 0 0 10px; color: #4b5563; font-size: 14px; }
+  .bank-summary strong { color: #111827; }
+  .bank-internal-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 16px; color: #6b7280; font-size: 13px; cursor: pointer; user-select: none; }
+  .bank-internal-check input { width: 16px; height: 16px; margin: 0; accent-color: #4338ca; cursor: pointer; flex: none; }
+  .bank-internal-check__count { color: #9ca3af; }
+  .bank-note { margin: 12px 0 0; color: #6b7280; font-size: 12px; }
+  .bank-status-line { color: #6b7280; font-size: 13px; }
+  .bank-hint { margin: 0 0 16px; padding: 12px 14px; border-radius: 11px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 13px; }
+  .bank-table td.bank-amount { white-space: nowrap; font-weight: 600; }
+  .bank-table .bank-purpose { color: #4b5563; font-size: 13px; max-width: 420px; }
+  .bank-table .bank-payer small { display: block; color: #6b7280; font-weight: 400; }
+  .bank-table tr.is-hidden-row td, .bank-table tr.is-internal-row td { color: #9ca3af; }
+  .bank-flag { display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 999px; background: #f3f4f6; color: #6b7280; font-size: 11px; font-weight: 700; vertical-align: middle; }
+  @media (max-width: 560px) {
+    .bank-filters .field { flex: 1 1 100%; }
+    .bank-filters input[type="date"], .bank-filters input[type="search"] { width: 100%; }
+  }
+</style>
+
+<section class="panel panel--separated bank-panel">
+  <div class="panel-header panel-header--toolbar">
+    <h2 class="panel-title">Банк — входящие платежи</h2>
+    <div class="panel-actions">
+      {% if bank_sync_state.last_synced_at %}
+      <span class="bank-status-line">Обновлено {{ bank_sync_state.last_synced_at|naturaltime }} · {{ bank_sync_state.last_status }}</span>
+      {% endif %}
+      {% if bank_is_admin %}
+      <form method="post" action="{% url 'bank_sync_now' %}">{% csrf_token %}<button type="submit" class="button-secondary">Синхронизировать сейчас</button></form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if bank_is_admin and not bank_configured %}
+  <p class="bank-hint">Автосинхронизация не настроена: задайте <code>MODULBANK_TOKEN</code> и <code>MODULBANK_ACCOUNT_ID</code> в <code>.env</code>, чтобы платежи подгружались из Модульбанка.</p>
+  {% endif %}
+
+  <form method="get" class="bank-filters">
+    <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
+    <div class="field">
+      <label for="bank-from">С даты</label>
+      <input type="date" id="bank-from" name="bank_from" value="{{ bank_filter.from|date:'Y-m-d' }}" min="{{ bank_window_start|date:'Y-m-d' }}" max="{{ bank_today|date:'Y-m-d' }}">
+    </div>
+    <div class="field">
+      <label for="bank-to">По дату</label>
+      <input type="date" id="bank-to" name="bank_to" value="{{ bank_filter.to|date:'Y-m-d' }}" min="{{ bank_window_start|date:'Y-m-d' }}" max="{{ bank_today|date:'Y-m-d' }}">
+    </div>
+    <div class="field">
+      <label for="bank-q">Плательщик, ИНН, назначение</label>
+      <input type="search" id="bank-q" name="bank_q" value="{{ bank_filter.q }}" placeholder="Например: ООО Ромашка">
+    </div>
+    <div class="field field--actions">
+      <button type="submit" class="button-success">Показать</button>
+      {% if bank_has_filter %}<a href="{% url 'cash_home' %}?date={{ selected_date|date:'Y-m-d' }}" class="button-secondary">Сбросить</a>{% endif %}
+    </div>
+  </form>
+
+  <p class="bank-summary">
+    {% if bank_count %}Платежей: <strong>{{ bank_count }}</strong> · на сумму <strong>{{ bank_total|floatformat:2|intcomma }} ₽</strong>{% else %}За выбранный период платежей нет{% endif %}
+  </p>
+  {% if bank_is_admin and bank_internal_count %}
+  <label class="bank-internal-check">
+    <input type="checkbox" {% if bank_show_internal %}checked{% endif %} onchange="location.href='{{ bank_toggle_url }}'">
+    Показывать переводы между своими счетами
+    <span class="bank-internal-check__count">({{ bank_internal_count }})</span>
+  </label>
+  {% endif %}
+
+  {% if bank_payments %}
+  <div class="table-wrapper">
+    <table class="table bank-table">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Плательщик</th>
+          <th>Назначение</th>
+          <th>Сумма</th>
+          {% if bank_is_admin %}<th></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for payment in bank_payments %}
+        <tr class="table-row{% if payment.hidden_from_managers %} is-hidden-row{% endif %}{% if payment.is_internal %} is-internal-row{% endif %}">
+          <td>{{ payment.operation_date|date:"d.m.Y" }}</td>
+          <td class="bank-payer">
+            {{ payment.counterparty_name|default:"—" }}
+            {% if payment.counterparty_inn %}<small>ИНН {{ payment.counterparty_inn }}</small>{% endif %}
+            {% if bank_is_admin and payment.hidden_from_managers %}<span class="bank-flag">скрыт</span>{% endif %}
+            {% if payment.is_internal %}<span class="bank-flag">свой счёт</span>{% endif %}
+          </td>
+          <td class="bank-purpose">{{ payment.payment_purpose|default:"—" }}</td>
+          <td class="bank-amount">{{ payment.amount|floatformat:2|intcomma }} <span class="money-suffix">₽</span></td>
+          {% if bank_is_admin %}
+          <td class="row-actions">
+            <div class="hover-actions">
+              <button type="button" class="mobile-actions-toggle" aria-label="Действия">⋯</button>
+              <form method="post" action="{% url 'bank_payment_toggle' payment.pk %}">{% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button type="submit" class="hover-action" title="{% if payment.hidden_from_managers %}Показать менеджерам{% else %}Скрыть от менеджеров{% endif %}" aria-label="Переключить видимость">{% if payment.hidden_from_managers %}🙈{% else %}👁{% endif %}</button>
+              </form>
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <p class="bank-note">Входящие платежи за последний месяц из Модульбанка. Переводы между собственными счетами {% if bank_is_admin %}по умолчанию скрыты{% else %}не показываются{% endif %}.</p>
+</section>
