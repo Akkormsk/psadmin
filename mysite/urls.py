@@ -12,5 +12,6 @@ urlpatterns = [
     path("payroll/", include("payroll.urls")),
     path("finance/", include("finance.urls")),
     path("tenders/", include("tenders.urls")),
+    path("tender-selection/", include("tender_selection.urls")),
     path("", include("django.contrib.auth.urls")),  # login/logout
 ]
