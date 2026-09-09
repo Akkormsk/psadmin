@@ -32,6 +32,13 @@
                 <div class="card-title">Расчет тендеров</div>
                 <div class="card-desc">Ручные просчёты тендеров и сохранение результатов</div>
             </a>
+
+            {% if request.user.is_superuser %}
+            <a class="card" href="/tender-selection/">
+                <div class="card-title">Подбор тендеров</div>
+                <div class="card-desc">Автоматическая выгрузка закупок из ЕИС и отбор подходящих</div>
+            </a>
+            {% endif %}
         </div>
 
         {% if request.user.is_superuser %}

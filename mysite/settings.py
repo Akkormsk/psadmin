@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     "payroll",
     "finance",
     "tenders",
+    "tender_selection",
 ]
 
 MIDDLEWARE = [
