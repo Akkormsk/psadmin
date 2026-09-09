@@ -1907,14 +1907,20 @@ class TenderTests(TestCase):
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_grades_every_card_against_the_tz(self, gateway):
-        # The verdict pass reads each card in full and grades every ТЗ row.
-        # The model returns ONLY the problem cells (n / m); every other row
-        # of a card its batch covered is "y". That grid replaces the card's
-        # verdicts and drives the ranking.
-        gateway.return_value = ({"grid": [
-            {"c": "plain", "r": 1, "v": "n", "w": "дно керамическое"},
-            {"c": "cork", "r": 2, "v": "m", "w": "материал клипа не указан"},
-        ]}, {})
+        # The verdict pass reads each card in full and grades every ТЗ row —
+        # one y/n/m letter per row, in order. That grid replaces the card's
+        # verdicts and drives the ranking. A row the model leaves out of the
+        # string is "m" (unknown), never a free "y".
+        gateway.return_value = ({
+            "grid": [
+                {"c": "plain", "v": "ny"},
+                {"c": "cork", "v": "ym"},
+            ],
+            "why": [
+                {"c": "plain", "r": 1, "w": "дно керамическое"},
+                {"c": "cork", "r": 2, "w": "материал клипа не указан"},
+            ],
+        }, {})
         cards = [
             self._shortlist_card(
                 id="plain", name="Кружка Alpha", description="Керамическая кружка, белая матовая",
@@ -1937,14 +1943,33 @@ class TenderTests(TestCase):
 
         cork = next(card for card in cards if card["id"] == "cork")
         plain = next(card for card in cards if card["id"] == "plain")
-        # cork: row 1 not flagged -> y; row 2 flagged m
+        # cork "ym": row 1 y (match), row 2 m (unknown)
         self.assertEqual(cork["match_count"], 1)
         self.assertEqual(cork["mismatch_count"], 0)
         self.assertEqual(cork["unknown_count"], 1)
-        # plain: row 1 flagged n; row 2 not flagged -> y
+        # plain "ny": row 1 n (mismatch), row 2 y (match)
         self.assertEqual(plain["mismatch_count"], 1)
         self.assertEqual(plain["match_count"], 1)
         self.assertEqual(result["outcome"]["verdict_changes"], 2)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_shortlist_pass_treats_a_missing_row_letter_as_unknown_not_a_pass(self, gateway):
+        # The model returns a 1-letter string for a 2-row checklist — the
+        # second row was not graded, so it is "m", not a silent "y".
+        gateway.return_value = ({"grid": [{"c": "a", "v": "y"}]}, {})
+        cards = [self._shortlist_card(id="a", name="Флешка на 8 Гб")]
+
+        _run_shortlist_pass(
+            "Флешка", [
+                {"label": "Интерфейс", "value": "USB 2.0"},
+                {"label": "Объём памяти", "value": "не менее 32 ГБ"},
+            ],
+            cards, [], resolve_unknowns=True,
+        )
+
+        self.assertEqual(cards[0]["match_count"], 1)
+        self.assertEqual(cards[0]["unknown_count"], 1)
+        self.assertEqual(cards[0]["fit"], "partial")
 
     @patch("tenders.services._ai_gateway_json")
     def test_shortlist_pass_runs_for_unknowns_alone_without_any_feedback(self, gateway):
