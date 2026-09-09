@@ -850,6 +850,9 @@ h1 {
 .calculator-save { display:flex; align-items:end; justify-content:space-between; gap:16px; margin-top:22px; padding-top:18px; border-top:1px solid #e5e7eb; }
 .calculator-save label { flex:1; }
 .calculator-save label:nth-child(2) { flex:1.35; }
+.autosave-status { flex:0 0 auto; align-self:center; min-width:132px; text-align:right; font-size:13px; font-weight:600; color:#9ca3af; transition:color .15s ease; }
+.autosave-status--ok { color:#16a34a; }
+.autosave-status--error { color:#dc2626; }
 .saved-estimate { display:flex; align-items:center; gap:12px; border-top:1px solid #eee; }
 .saved-estimate__main { display:flex; flex:1; justify-content:space-between; align-items:center; gap:16px; color:#374151; text-decoration:none; padding:10px 0; min-width:0; }
 .saved-estimate__main span { color:#6b7280; font-size:14px; }

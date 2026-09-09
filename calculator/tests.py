@@ -88,7 +88,61 @@ class SheetCalculatorTests(TestCase):
         response = self.client.get(reverse("calculator_estimate", args=[estimate.pk]))
 
         self.assertContains(response, "window.location.href='/calculator/?calculator='+this.value")
-        self.assertContains(response, "Начать новый расчёт? Несохранённые изменения будут потеряны.")
+        self.assertContains(response, "Открыть новый пустой расчёт?")
+
+    def test_autosave_creates_then_updates_a_single_estimate(self):
+        self.client.force_login(self.user)
+        lines = json.dumps([{"category": "paper", "item_id": self.item.pk, "quantity": 25, "custom": False}])
+
+        created = self.client.post(reverse("calculator_estimate_create"), {
+            "name": "Автосохранение", "product_quantity": 100, "work_hours": "1.0", "lines_json": lines,
+        })
+        self.assertEqual(created.status_code, 200)
+        pk = created.json()["pk"]
+        self.assertEqual(Estimate.objects.filter(owner=self.user).count(), 1)
+
+        updated = self.client.post(reverse("calculator_estimate_save", args=[pk]), {
+            "name": "Автосохранение 2", "product_quantity": 200, "work_hours": "1.0", "lines_json": lines,
+        })
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(Estimate.objects.filter(owner=self.user).count(), 1)
+        self.assertEqual(Estimate.objects.get().name, "Автосохранение 2")
+
+    def test_autosave_reports_invalid_input_without_saving(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("calculator_estimate_create"), {
+            "name": "Плохие часы", "product_quantity": 1, "work_hours": "0.3", "lines_json": "[]",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+        self.assertFalse(Estimate.objects.exists())
+
+    def test_duplicate_copies_lines_into_a_new_estimate(self):
+        self.client.force_login(self.user)
+        self.client.post(reverse("calculator_home"), {
+            "name": "Оригинал", "product_quantity": 50, "work_hours": "2.0",
+            "lines_json": json.dumps([{"category": "paper", "item_id": self.item.pk, "quantity": 25, "custom": False}]),
+        })
+        original = Estimate.objects.get()
+
+        response = self.client.post(reverse("calculator_estimate_duplicate", args=[original.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        copy = Estimate.objects.exclude(pk=original.pk).get()
+        self.assertEqual(copy.name, "Оригинал (копия)")
+        self.assertEqual(copy.product_quantity, 50)
+        self.assertEqual(copy.lines.count(), original.lines.count())
+        self.assertRedirects(response, reverse("calculator_estimate", args=[copy.pk]))
+
+    def test_duplicate_of_another_users_estimate_is_blocked(self):
+        other = get_user_model().objects.create_user(username="someone-else", password="password")
+        estimate = Estimate.objects.create(owner=other, name="Чужой")
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("calculator_estimate_duplicate", args=[estimate.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Estimate.objects.count(), 1)
 
     def test_new_calculation_does_not_replace_existing_estimate(self):
         first = Estimate.objects.create(owner=self.user, name="Первый", calculator_type=Estimate.TYPE_SHEET)
