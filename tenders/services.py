@@ -2783,26 +2783,18 @@ def _soften_card_criterion(card, subject):
     return changed
 
 
-def _apply_shortlist_grid(shortlist, grid, whys, tz_rows, covered_ids):
+def _apply_shortlist_grid(shortlist, grid, tz_rows, covered_ids):
     """The agent's verdict table BECOMES the card's verdicts — the ranking
-    input, not a "?" patch. Per card the model returns a string `v` with
-    one letter per ТЗ row in order: y (meets it), n (contradicts it), m
-    (card is silent). A row the model left out of the string is "m", not
-    "y" — a gap is an unknown, never a free pass. A card the model did not
-    return a `v` for at all keeps its deterministic verdicts."""
+    input, not a "?" patch. `grid` is a flat list of cells
+    {c: card id, r: row number, v: y|n|m, w: ≤6-word reason}. Every
+    (card, row) pair should be graded; a pair the model left out is "m"
+    (unknown), never a silent "y". A card with no cells at all keeps its
+    deterministic verdicts (its batch effectively failed on it)."""
     if not tz_rows:
         return 0
     by_id = {str(card.get("id")): card for card in shortlist}
-    verdicts = {}
+    cells = {}
     for entry in grid:
-        if not isinstance(entry, dict):
-            continue
-        card_id = str(entry.get("c") or entry.get("card") or "")
-        letters = [char for char in _cell_text(entry.get("v")).lower() if char in "ynm"]
-        if card_id in by_id and letters:
-            verdicts[card_id] = letters
-    reasons = {}
-    for entry in whys or []:
         if not isinstance(entry, dict):
             continue
         card_id = str(entry.get("c") or entry.get("card") or "")
@@ -2810,19 +2802,18 @@ def _apply_shortlist_grid(shortlist, grid, whys, tz_rows, covered_ids):
             row = int(entry.get("r"))
         except (TypeError, ValueError):
             continue
-        reason = _cell_text(entry.get("w") or entry.get("reason"))[:90]
-        if card_id and reason:
-            reasons[(card_id, row)] = reason
+        verdict = next((char for char in _cell_text(entry.get("v")).lower() if char in "ynm"), "")
+        if card_id in by_id and 1 <= row <= len(tz_rows) and verdict:
+            cells.setdefault(card_id, {})[row] = (verdict, _cell_text(entry.get("w") or entry.get("reason"))[:90])
     graded = 0
     for card_id in covered_ids:
         card = by_id.get(card_id)
-        if card is None or card_id not in verdicts:
+        if card is None or card_id not in cells:
             continue
-        letters = verdicts[card_id]
+        card_cells = cells[card_id]
         matches, mismatches, unknown = [], [], []
         for index, (label, value) in enumerate(tz_rows, 1):
-            verdict = letters[index - 1] if index - 1 < len(letters) else "m"
-            reason = reasons.get((card_id, index), "")
+            verdict, reason = card_cells.get(index, ("m", ""))
             tail = f" — {reason}" if reason else ""
             if verdict == "y":
                 matches.append(f"{label}: {value}{tail}")
@@ -2866,31 +2857,28 @@ def _shortlist_pass_prompt(position_name, tz_numbered, cards_text, instr_numbere
                   + ", ".join(f"[{value}]" for value in image_order)
                   + ". Смотри их для проверки формы и вида товара.\n")
     row_count = len([line for line in tz_numbered if line]) or 1
-    return f"""Ты — эксперт по подбору товаров под тендер. Проверяешь каждую карточку по чек-листу требований (ТЗ) — так, как это сделал бы человек, читая карточку целиком.
+    return f"""Ты — эксперт по подбору товаров под тендер. По каждой карточке пройди ВЕСЬ её текст (название, описание, ВСЕ характеристики, материалы, цвет, список вариантов) и оцени КАЖДЫЙ пункт чек-листа — так, как это сделал бы человек.
 
 Позиция: {position_name}
 
-Чек-лист ТЗ (пронумерован):
+Чек-лист ТЗ (пронумерован 1..{row_count}):
 {tz_block}
 {batch_block}
-Карточки (у карточки может быть список вариантов — цвета, объёмы; выбирай тот вариант, который подходит под ТЗ):
+Карточки (номер | id | текст). У карточки может быть список вариантов (цвета, объёмы) — оценивай по тому варианту, который подходит под ТЗ:
 {cards_text}
 {photos}
-Для КАЖДОЙ карточки верни строку "v" — по одному символу на КАЖДЫЙ из {row_count} пунктов чек-листа, строго по порядку:
-- "y" — карточка (или её подходящий вариант) СООТВЕТСТВУЕТ пункту;
-- "n" — карточка ПРЯМО ПРОТИВОРЕЧИТ пункту (в карточке есть данные, и они не совпадают);
-- "m" — в карточке про это НИЧЕГО нет.
+Для КАЖДОЙ карточки и КАЖДОГО пункта 1..{row_count} верни клетку {{"c":номер карточки,"r":номер пункта,"v":"y|n|m"}}:
+- "y" — карточка (или её подходящий вариант) соответствует пункту;
+- "n" — в карточке есть данные по этому пункту, и они НЕ совпадают с требованием;
+- "m" — в карточке про этот пункт ничего нет.
+Клеток должно быть ровно {row_count} на каждую карточку. Пропущенная клетка = "m". "m" — только когда данных реально нет, не из-за сомнений и не из лени.
 
-Длина "v" = {row_count}. Оцени каждый пункт, ничего не пропускай. "m" ставь ТОЛЬКО когда данных реально нет — не из-за сомнений (сомнение решай как "y" или "n"), не из лени.
+Как человек: небольшое отклонение размера/веса роли не играет → "y"; заметное, но возможно допустимое → "m" (в "w" напиши «X vs Y, проверить»); явно не то → "n". «Не менее N» — меньше N это "n". «Не более N» — больше N это "n". Ёмкость памяти бери из названия варианта («на 32 Гб»). «Флеш-карта USB 2.0» и «USB-флеш-накопитель» — одно и то же → "y".
 
-Числовой допуск (габариты, вес — если в ТЗ нет «не менее»/«не более»): отклонение до 10% → "y"; 10–25% → "m"; больше 25% → "n". «Не менее N» → значение меньше N это "n". «Не более N» → больше N это "n". Объём/ёмкость памяти читай из названия варианта («на 32 Гб»).
-
-Синонимы и факты в свободном тексте — твоё суждение как человека: «Флеш-карта USB 2.0» = «USB-флеш-накопитель» → y; «плотность 200 г» в составе при требовании «не менее 250» → n. Строка «оценки кода» в карточке — ЧЕРНОВАЯ подсказка, можешь не согласиться.
-
-Отдельным списком "why" — короткое пояснение (≤6 слов) ТОЛЬКО для клеток "n" и "m".
+В "w" (≤6 слов) — пояснение ТОЛЬКО для "n" и "m".
 {instr_block}
 Верни только JSON:
-{{"grid":[{{"c":"id","v":"{'y' * row_count}"}}],"why":[{{"c":"id","r":3,"w":"8 ГБ, нужно ≥32"}},{{"c":"id","r":6,"w":"плотность не указана"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}"""
+{{"grid":[{{"c":1,"r":1,"v":"y"}},{{"c":1,"r":5,"v":"n","w":"8 ГБ, нужно ≥32"}},{{"c":1,"r":6,"v":"m","w":"плотность не указана"}}]{',"instructions":[{"n":1,"type":"priority|keep_only|exclude|soften|ranking","criterion":"...","cards":["id"],"price":"asc|desc","applies_to":"item|any","summary":"...","applied":true,"note":"..."}]' if instr_numbered else ''}}}"""
 
 
 def _resolve_card_unknown(card, point, verdict):
@@ -3027,33 +3015,49 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
     # (see _apply_shortlist_grid) — ~12 chars a card — so a batch of 6 never
     # truncates. The shared prompt prefix (the ТЗ checklist) is identical
     # across batches so the gateway caches it.
-    batch_size = 6 if tz_rows else 10
+    batch_size = 3 if tz_rows else 10
     batches = [shortlist[i:i + batch_size] for i in range(0, len(shortlist), batch_size)] or [shortlist]
     covered_ids = set()
 
     def run_batch(numbered_batch):
         index, batch = numbered_batch
-        cards_text = "\n".join(_shortlist_card_brief(card) for card in batch)
+        # Cards are numbered 1..N within the batch; the model answers by
+        # number and we map it back to the real id here, so a long
+        # external_id never has to survive a round-trip through the model.
+        local_ids = {position: str(card.get("id")) for position, card in enumerate(batch, 1)}
+        cards_text = "\n".join(
+            f"КАРТОЧКА {position} | id {card.get('id')}\n{_shortlist_card_brief(card)}"
+            for position, card in enumerate(batch, 1)
+        )
         with_images = bool(image_data_urls) and index == 0
         prompt = _shortlist_pass_prompt(
             position_name, tz_numbered, cards_text, numbered,
             image_order=image_order if with_images else None,
-            batch_ids=", ".join(str(card.get("id")) for card in batch) if len(batches) > 1 else "",
+            batch_ids=", ".join(f"{position}={card.get('id')}" for position, card in enumerate(batch, 1)) if len(batches) > 1 else "",
         )
         try:
             raw, batch_usage = _ai_gateway_json(
-                prompt, max_tokens=800 + len(batch) * (len(tz_rows) + 4) * 16, timeout=timeout,
+                prompt, max_tokens=900 + len(batch) * (len(tz_rows) + 2) * 22, timeout=timeout,
                 network_attempts=3, model=model,
                 image_data_urls=image_data_urls if with_images else None, image_detail="low",
             )
-            if isinstance(raw, dict):
-                covered_ids.update(str(card.get("id")) for card in batch)
-            return raw, batch_usage
         except TenderAIError as exc:
             return {"_error": str(exc)[:200]}, {}
         except Exception:
             logger.exception("Shortlist pass batch failed")
             return {"_error": "Ошибка обработки пачки карточек."}, {}
+        if isinstance(raw, dict):
+            for entry in raw.get("grid") if isinstance(raw.get("grid"), list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    position = int(str(entry.get("c")).strip())
+                except (TypeError, ValueError):
+                    position = None
+                if position in local_ids:
+                    entry["c"] = local_ids[position]
+            covered_ids.update(local_ids.values())
+        return raw, batch_usage
 
     if len(batches) == 1:
         batch_results = [run_batch((0, batches[0]))]
@@ -3062,7 +3066,7 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
             batch_results = list(executor.map(run_batch, list(enumerate(batches))))
 
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    merged, merged_grid, merged_why, any_ok, some_failed, first_error = {}, [], [], False, False, ""
+    merged, merged_grid, any_ok, some_failed, first_error = {}, [], False, False, ""
     for raw, batch_usage in batch_results:
         if isinstance(batch_usage, dict):
             usage["prompt_tokens"] += batch_usage.get("prompt_tokens", 0) or 0
@@ -3086,13 +3090,10 @@ def _run_shortlist_pass(position_name, requirement_rows, shortlist, instructions
         for entry in (raw.get("grid") if isinstance(raw.get("grid"), list) else []):
             if isinstance(entry, dict):
                 merged_grid.append(entry)
-        for entry in (raw.get("why") if isinstance(raw.get("why"), list) else []):
-            if isinstance(entry, dict):
-                merged_why.append(entry)
 
     if not any_ok:
         return {**blank, "error": first_error}
-    verdict_changes = _apply_shortlist_grid(shortlist, merged_grid, merged_why, tz_rows, covered_ids)
+    verdict_changes = _apply_shortlist_grid(shortlist, merged_grid, tz_rows, covered_ids)
     result = {"instructions": [
         {
             "n": key, "cards": slot["cards"],

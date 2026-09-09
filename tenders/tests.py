@@ -1911,16 +1911,12 @@ class TenderTests(TestCase):
         # one y/n/m letter per row, in order. That grid replaces the card's
         # verdicts and drives the ranking. A row the model leaves out of the
         # string is "m" (unknown), never a free "y".
-        gateway.return_value = ({
-            "grid": [
-                {"c": "plain", "v": "ny"},
-                {"c": "cork", "v": "ym"},
-            ],
-            "why": [
-                {"c": "plain", "r": 1, "w": "дно керамическое"},
-                {"c": "cork", "r": 2, "w": "материал клипа не указан"},
-            ],
-        }, {})
+        gateway.return_value = ({"grid": [
+            {"c": 1, "r": 1, "v": "n", "w": "дно керамическое"},
+            {"c": 1, "r": 2, "v": "y"},
+            {"c": 2, "r": 1, "v": "y"},
+            {"c": 2, "r": 2, "v": "m", "w": "материал клипа не указан"},
+        ]}, {})
         cards = [
             self._shortlist_card(
                 id="plain", name="Кружка Alpha", description="Керамическая кружка, белая матовая",
@@ -1943,20 +1939,20 @@ class TenderTests(TestCase):
 
         cork = next(card for card in cards if card["id"] == "cork")
         plain = next(card for card in cards if card["id"] == "plain")
-        # cork "ym": row 1 y (match), row 2 m (unknown)
+        # card 2 (cork): r1 y (match), r2 m (unknown)
         self.assertEqual(cork["match_count"], 1)
         self.assertEqual(cork["mismatch_count"], 0)
         self.assertEqual(cork["unknown_count"], 1)
-        # plain "ny": row 1 n (mismatch), row 2 y (match)
+        # card 1 (plain): r1 n (mismatch), r2 y (match)
         self.assertEqual(plain["mismatch_count"], 1)
         self.assertEqual(plain["match_count"], 1)
         self.assertEqual(result["outcome"]["verdict_changes"], 2)
 
     @patch("tenders.services._ai_gateway_json")
-    def test_shortlist_pass_treats_a_missing_row_letter_as_unknown_not_a_pass(self, gateway):
-        # The model returns a 1-letter string for a 2-row checklist — the
-        # second row was not graded, so it is "m", not a silent "y".
-        gateway.return_value = ({"grid": [{"c": "a", "v": "y"}]}, {})
+    def test_shortlist_pass_treats_a_missing_cell_as_unknown_not_a_pass(self, gateway):
+        # The model grades row 1 and forgets row 2 — the gap is "m"
+        # (unknown), never a silent "y".
+        gateway.return_value = ({"grid": [{"c": 1, "r": 1, "v": "y"}]}, {})
         cards = [self._shortlist_card(id="a", name="Флешка на 8 Гб")]
 
         _run_shortlist_pass(
