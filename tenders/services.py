@@ -2801,6 +2801,8 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     catalog_warning = ""
     cascade_result = None
     try:
+        from .gateway_budget import preflight, report_line
+        preflight()
         cascade_result = Cascade(
             line,
             session_feedback=catalog_instructions,
@@ -2810,7 +2812,14 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
             ranking_override=ranking_override,
             progress=progress_callback,
         ).run()
+        logger.info(
+            "cascade %s: %s (%.1f c)", _cell_text(line.get("name"))[:60],
+            report_line(cascade_result.usage, cascade_result.usage_by_model),
+            time.perf_counter() - cascade_started_at,
+        )
     except CatalogSyncError as exc:
+        catalog_warning = str(exc)[:300]
+    except TenderAIError as exc:
         catalog_warning = str(exc)[:300]
     except Exception:
         logger.exception("Cascade failed while building a training hypothesis")
