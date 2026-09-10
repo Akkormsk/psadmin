@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Мой аккаунт{% endblock %}
-{% block body_class %}themed-page{% endblock %}
 {% block content %}
 <div class="container account-page">
   <a href="/" class="back-link">← На главную</a>
@@ -8,7 +7,7 @@
   <div class="account-grid">
     <section class="panel account-theme-card">
       <div class="panel-header"><h2 class="panel-title">Тема оформления</h2></div>
-      <p class="settings-description">Применяется на главной и на этой странице. Остальные разделы пока всегда светлые.</p>
+      <p class="settings-description">Применяется во всём приложении. «Как в системе» следует за настройкой вашего устройства.</p>
       <form method="post" class="account-theme-form" id="theme-form">
         {% csrf_token %}
         <input type="hidden" name="action" value="theme">
