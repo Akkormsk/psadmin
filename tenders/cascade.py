@@ -696,7 +696,10 @@ class Cascade:
         Итоговую сетку кладём в кэш. `CASCADE_TWO_TIER=0` → только сильная."""
         axis_cells = self._axis_prefill(todo, rows)  # {card_id: {row: (v, w)}}
         strong_top = int(os.getenv("CASCADE_STRONG_TOP", "18"))
-        two_tier = os.getenv("CASCADE_TWO_TIER", "1") == "1" and len(todo) > strong_top
+        # По умолчанию ВЫКЛ: живой тест 10.09 показал, что дешёвые модели на
+        # сетке ленятся (возвращают "m" почти везде) — ранжировка для отбора в
+        # сильный слой получается недостоверной. Код оставлен под флагом.
+        two_tier = os.getenv("CASCADE_TWO_TIER", "0") == "1" and len(todo) > strong_top
 
         if two_tier:
             cheap = self._grade_grid(todo, rows, model=_CHEAP_GRID_MODEL, batch_size=10)

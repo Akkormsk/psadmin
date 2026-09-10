@@ -13,7 +13,7 @@ class Command(BaseCommand):
                 "Не удалось получить баланс. Проверьте TIMEWEB_API_TOKEN в .env."
             ))
             return
-        self.stdout.write(self.style.SUCCESS(f"Баланс: {balance:.2f} ₽"))
+        self.stdout.write(self.style.SUCCESS(f"Баланс: {balance:.2f} руб."))
         for key in ("hourly_cost", "monthly_cost", "hours_left", "autopay_card_info"):
             if key in meta:
                 self.stdout.write(f"  {key}: {meta[key]}")

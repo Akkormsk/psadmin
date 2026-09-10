@@ -29,11 +29,15 @@ _UNDER_TEST = "test" in sys.argv[1:2] or "pytest" in sys.argv[0]
 _FINANCES_URL = "https://api.timeweb.cloud/api/v1/account/finances"
 _cache: dict = {"at": 0.0, "value": None, "meta": {}}
 
-# ₽ за 1M токенов: (входящие, исходящие). Заполнить из дашборда AI Gateway.
+# ₽ за 1M токенов: (входящие, исходящие). Из дашборда AI Gateway, 2026-09-10.
 RATES_RUB_PER_M: dict[str, tuple[float, float]] = {
-    # "anthropic/claude-sonnet-4-5": (0.0, 0.0),
-    # "anthropic/claude-haiku-4-5": (0.0, 0.0),
-    # "openai/gpt-4.1-mini": (0.0, 0.0),
+    "anthropic/claude-sonnet-4-5": (405, 2025),
+    "anthropic/claude-sonnet-4-6": (405, 2025),
+    "anthropic/claude-haiku-4-5": (135, 1080),
+    "openai/gpt-4.1-mini": (54, 216),
+    "openai/gpt-4.1-nano": (27, 169),
+    "gemini/gemini-2.5-flash-lite": (34, 203),
+    "gemini/gemini-3.1-flash-lite": (34, 203),
 }
 
 

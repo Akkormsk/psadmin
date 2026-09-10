@@ -357,6 +357,7 @@ class CascadeFeedbackTests(TestCase):
         self.assertEqual(result.instructions[0]["lesson_id"], 7)
 
 
+@patch.dict("os.environ", {"CASCADE_TWO_TIER": "1"})
 class CascadeTwoTierTests(TestCase):
     def _many(self, n):
         for i in range(n):
