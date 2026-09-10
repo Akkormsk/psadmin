@@ -18,6 +18,9 @@
   --surface:       light-dark(#ffffff, #1c1c1e);
   --surface-2:     light-dark(#f4f4f6, #2c2c2e);
   --surface-glass: light-dark(rgba(255, 255, 255, 0.78), rgba(28, 28, 30, 0.66));
+  /* top-level panels: translucent so the backdrop tints the edges, but opaque
+     enough that dense tables/inputs stay legible without a blur pass */
+  --panel-bg:      light-dark(rgba(255, 255, 255, 0.86), rgba(28, 28, 30, 0.80));
   --glass-blur: saturate(180%) blur(22px);
   --glass-edge: light-dark(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.10));
   --hairline:   light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.10));
@@ -306,7 +309,7 @@ h1 {
 /* ---------- panel ---------- */
 
 .panel {
-  background: var(--surface);
+  background: var(--panel-bg);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
   padding: 24px;
