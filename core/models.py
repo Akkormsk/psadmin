@@ -11,6 +11,16 @@ class Profile(models.Model):
         (ROLE_OWNER, "Owner"),
     ]
 
+    THEME_AUTO = ""
+    THEME_LIGHT = "light"
+    THEME_DARK = "dark"
+
+    THEME_CHOICES = [
+        (THEME_AUTO, "Как в системе"),
+        (THEME_LIGHT, "Светлая"),
+        (THEME_DARK, "Тёмная"),
+    ]
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -20,6 +30,13 @@ class Profile(models.Model):
         max_length=20,
         choices=ROLE_CHOICES,
         default=ROLE_MANAGER,
+    )
+    theme = models.CharField(
+        "Тема оформления",
+        max_length=10,
+        choices=THEME_CHOICES,
+        default=THEME_AUTO,
+        blank=True,
     )
     avatar_data = models.BinaryField("Аватар", null=True, blank=True, editable=False)
     avatar_content_type = models.CharField(max_length=40, blank=True, editable=False)

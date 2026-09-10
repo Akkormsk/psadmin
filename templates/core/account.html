@@ -5,6 +5,24 @@
   <a href="/" class="back-link">← На главную</a>
   <h1>Мой аккаунт</h1>
   <div class="account-grid">
+    <section class="panel account-theme-card">
+      <div class="panel-header"><h2 class="panel-title">Тема оформления</h2></div>
+      <p class="settings-description">Применяется во всём приложении. «Как в системе» следует за настройкой вашего устройства.</p>
+      <form method="post" class="account-theme-form" id="theme-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="theme">
+        <div class="theme-toggle" role="radiogroup" aria-label="Тема оформления">
+          <input type="radio" name="theme" value="" id="theme-auto"{% if not profile.theme %} checked{% endif %}>
+          <label for="theme-auto">Как в системе</label>
+          <input type="radio" name="theme" value="light" id="theme-light"{% if profile.theme == 'light' %} checked{% endif %}>
+          <label for="theme-light">Светлая</label>
+          <input type="radio" name="theme" value="dark" id="theme-dark"{% if profile.theme == 'dark' %} checked{% endif %}>
+          <label for="theme-dark">Тёмная</label>
+        </div>
+        <button type="submit" class="button-secondary" data-theme-save>Сохранить</button>
+      </form>
+    </section>
+
     <section class="panel account-profile-card">
       <div class="account-avatar account-avatar--large">
         {% if profile.has_avatar %}<img src="{% url 'account_avatar' %}" alt="">{% else %}<span>{{ initials }}</span>{% endif %}
@@ -35,7 +53,7 @@
 
     <section class="panel account-background-card">
       <div class="panel-header"><h2 class="panel-title">Фон</h2></div>
-      <div class="account-background-preview"{% if profile.has_background %} style="background-image:linear-gradient(rgba(248,249,250,.70),rgba(248,249,250,.70)),url('{% url 'account_background' %}?v={{ profile.background_updated_at|date:'U' }}')"{% endif %}></div>
+      <div class="account-background-preview"{% if profile.has_background %} style="background-image:linear-gradient(var(--app-background-overlay),var(--app-background-overlay)),url('{% url 'account_background' %}?v={{ profile.background_updated_at|date:'U' }}')"{% endif %}></div>
       <p class="settings-description">Изображение автоматически уменьшается и подгоняется под любой экран.</p>
       <form method="post" enctype="multipart/form-data" class="account-form account-background-form">
         {% csrf_token %}
@@ -47,4 +65,15 @@
     </section>
   </div>
 </div>
+<script>
+  (function () {
+    var form = document.getElementById("theme-form");
+    if (!form) return;
+    var save = form.querySelector("[data-theme-save]");
+    if (save) save.remove();
+    form.querySelectorAll('input[name="theme"]').forEach(function (input) {
+      input.addEventListener("change", function () { form.submit(); });
+    });
+  })();
+</script>
 {% endblock %}

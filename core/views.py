@@ -48,6 +48,14 @@ def account(request):
             update_session_auth_hash(request, user)
             messages.success(request, "Пароль изменён.")
             return redirect("account")
+    elif request.method == "POST" and request.POST.get("action") == "theme":
+        choice = request.POST.get("theme", "")
+        valid = {value for value, _ in Profile.THEME_CHOICES}
+        if choice in valid:
+            profile.theme = choice
+            profile.save(update_fields=("theme",))
+            messages.success(request, "Тема оформления сохранена.")
+        return redirect("account")
     elif request.method == "POST" and request.POST.get("action") == "background":
         background_form = BackgroundUploadForm(request.POST, request.FILES)
         if background_form.is_valid():
