@@ -34,14 +34,19 @@ def _run_once(tick: int) -> None:
 
     close_old_connections()
     try:
-        run_pull(max_requests=16)
+        run = run_pull(max_requests=16)
+        logger.warning("autopull: pull — %d new, %d seen, %.0fs, ok=%s%s",
+                       run.created_count, run.records_received, run.duration_seconds,
+                       run.ok, f", err={run.error}" if run.error else "")
     except Exception:
         logger.exception("autopull: run_pull failed")
 
     if tick % _STATS_EVERY_TICKS == 0:
         close_old_connections()
         try:
-            collect_price_stats()
+            srun = collect_price_stats()
+            logger.warning("autopull: stats — %d contracts, %d new, %d nmck, ok=%s",
+                           srun.contracts_seen, srun.created_count, srun.filled_count, srun.ok)
         except Exception:
             logger.exception("autopull: collect_price_stats failed")
     close_old_connections()
@@ -64,5 +69,5 @@ def start() -> None:
         return
     _started = True
     threading.Thread(target=_loop, name="tender-autopull", daemon=True).start()
-    logger.info("tender autopull started — pull every %d min, stats every %d h",
-                _PULL_EVERY_SECONDS // 60, _PULL_EVERY_SECONDS * _STATS_EVERY_TICKS // 3600)
+    logger.warning("tender autopull started — pull every %d min, stats every %d h",
+                   _PULL_EVERY_SECONDS // 60, _PULL_EVERY_SECONDS * _STATS_EVERY_TICKS // 3600)
