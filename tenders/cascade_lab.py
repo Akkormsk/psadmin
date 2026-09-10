@@ -36,7 +36,7 @@ def _json_default(value):
 
 def _json_value(value):
     if isinstance(value, Criterion):
-        return asdict(value)
+        value = asdict(value)
     return json.loads(json.dumps(value, ensure_ascii=False, default=_json_default))
 
 

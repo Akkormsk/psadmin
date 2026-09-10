@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -185,6 +186,17 @@ class CascadeLabRunnerTests(TestCase):
         self.assertIn("output", self.run.snapshots[0])
         self.assertIn("seconds", self.run.snapshots[0]["metrics"])
         self.assertIn("cost_rub", self.run.snapshots[0]["metrics"])
+
+    def test_criterion_numeric_bounds_are_json_serializable(self):
+        from .cascade_lab import _json_value
+        from .cascade import Criterion
+
+        value = _json_value(Criterion(
+            label="Ёмкость", raw_value="не менее 32 ГБ", concept="ёмкость",
+            operator=">=", value="32 ГБ", num_min=Decimal("32768"),
+        ))
+
+        self.assertEqual(json.loads(json.dumps(value))["num_min"], "32768")
 
     def test_expectations_are_evaluated_on_final_cards(self):
         from .cascade_lab import evaluate_expectations
