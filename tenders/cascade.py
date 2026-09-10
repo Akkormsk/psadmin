@@ -19,7 +19,7 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
@@ -45,7 +45,6 @@ from .catalog import (
     _variant_size,
 )
 from .models import CascadeCache, CatalogProduct, CatalogSupplier
-from .criterion_checks import TOLERANCE, deterministic_cells
 
 logger = logging.getLogger(__name__)
 
@@ -653,9 +652,11 @@ class Cascade:
                 card.update(fit="exact", matches=[], mismatches=[], unknown=[], mismatch_count=0, unknown_count=0, match_count=0)
             return cards
 
+        # Матрица ТЗ — только по ТЗ, независимо от фидбека. Клетки из кэша
+        # (карточка, хэш ТЗ); к модели идут только карточки без записи.
         todo, cached_cards = [], []
         for card in cards:
-            cached = _cache_get("verdict", self._verdict_key(card)) if rows else None
+            cached = _cache_get("verdict", f"{self._tz_hash}|{card['id']}") if rows else None
             grid = cached.get("grid", {}) if isinstance(cached, dict) else {}
             cells = {
                 index: tuple(grid[str(index)])
@@ -675,18 +676,6 @@ class Cascade:
         if self.feedback_instructions:
             self._classify_feedback(cards, rows)
         return cards
-
-    def _verdict_key(self, card):
-        payload = {
-            "version": "matrix-v3", "model": _AGENT_MODEL, "tolerance": TOLERANCE,
-            "position": self.line.get("name"), "criteria": [asdict(c) for c in self.tz if c.checked],
-            "supplier": card.get("supplier_code"), "id": card["id"],
-            "source": {key: card.get(key) for key in (
-                "name", "article", "price", "stock", "description", "attributes",
-                "materials", "colors", "variants", "sizes",
-            )},
-        }
-        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
     def _init_unknown(self, card, rows) -> None:
         card["matches"] = []
@@ -732,28 +721,13 @@ class Cascade:
         Полный ответ «m» отличается от пропущенной клетки и может кэшироваться.
         """
         axis_cells = self._axis_prefill(todo, rows)
-        known_cells = {str(card["id"]): {**axis_cells.get(str(card["id"]), {}), **deterministic_cells(card, self.tz)} for card in todo}
-        deterministic = []
-        unresolved = []
-        for card in todo:
-            cells = known_cells[str(card["id"])]
-            self._apply_cells(card, cells, rows)
-            card.pop("_ai_graded", None)
-            if self._complete_grid(cells, rows):
-                card["matrix_status"] = "complete"
-                deterministic.append(card)
-            else:
-                card["matrix_status"] = "pending"
-                unresolved.append(card)
-        ranked = sorted(unresolved, key=lambda card: self._preagent_key(card, known_cells))
+        ranked = sorted(todo, key=lambda card: self._preagent_key(card, axis_cells))
         first = max(1, int(os.getenv("CASCADE_STEP6_FIRST", "25")))
         ceiling = max(0, int(os.getenv("CASCADE_STEP6_CEILING", "75")))
-        suitable = sum(self._suitable_for_stop(card) for card in [*cached_cards, *deterministic])
+        suitable = sum(self._suitable_for_stop(card) for card in cached_cards)
         diagnostics = {
             "pool": len(todo), "graded": 0, "batches": 0, "cached": len(cached_cards),
-            "complete": len(cached_cards) + len(deterministic), "suitable": suitable,
-            "deterministic": len(deterministic),
-            "deterministic_cells": sum(len(cells) for cells in known_cells.values()),
+            "complete": len(cached_cards), "suitable": suitable,
         }
         self.diagnostics["step6"] = diagnostics
         stop_reason = "exhausted"
@@ -761,20 +735,20 @@ class Cascade:
             if suitable >= 10:
                 break
             batch = ranked[offset:min(offset + first, ceiling)]
-            grids = self._grade_grid(batch, rows, model=_AGENT_MODEL, batch_size=8, known_cells=known_cells)
+            grids = self._grade_grid(batch, rows, model=_AGENT_MODEL, batch_size=3)
             diagnostics["graded"] += len(batch)
             diagnostics["batches"] += 1
             for card in batch:
                 cid = str(card["id"])
                 model_cells = grids.get(cid, {})
-                cells = {**model_cells, **known_cells.get(cid, {})}
-                complete = self._complete_grid(cells, rows)
+                complete = self._complete_grid(model_cells, rows)
+                cells = {**model_cells, **axis_cells.get(cid, {})}
                 self._apply_cells(card, cells, rows)
                 card["matrix_status"] = "complete" if complete else "incomplete"
                 if complete:
                     diagnostics["complete"] += 1
                     suitable += self._suitable_for_stop(card)
-                    _cache_put("verdict", self._verdict_key(card), {
+                    _cache_put("verdict", f"{self._tz_hash}|{cid}", {
                         "grid": {str(k): list(v) for k, v in cells.items()},
                     })
                 else:
@@ -783,7 +757,7 @@ class Cascade:
                 stop_reason = "empty_response"
                 break
         diagnostics["suitable"] = suitable
-        diagnostics["pending"] = len(unresolved) - diagnostics["graded"]
+        diagnostics["pending"] = len(todo) - diagnostics["graded"]
         if suitable >= 10:
             stop_reason = "enough_suitable"
         elif stop_reason != "empty_response" and diagnostics["pending"]:
@@ -791,36 +765,54 @@ class Cascade:
         diagnostics["stop_reason"] = stop_reason
 
     def _axis_prefill(self, cards, rows) -> dict:
-        """Существующие числовые оси: только однозначное значение выбранного SKU."""
-        out = {}
+        """Клетки, которые код считает точнее модели: числовая ось из шага 1
+        (ёмкость/объём). Ставим ТОЛЬКО когда число однозначно — иначе строку
+        отдаём агенту. Никогда не вносит вердикт, которого агент бы не дал."""
+        axis_by_row = {}
+        checked = [c for c in self.tz if c.checked]
+        for idx, crit in enumerate(checked, 1):
+            if crit.axis in {"capacity", "volume"} and (crit.num_min is not None or crit.num_max is not None):
+                axis_by_row[idx] = crit
+        if not axis_by_row:
+            return {}
+        out: dict[str, dict] = {}
         for card in cards:
-            name = _cell(card.get("name"))
-            for index, crit in enumerate((c for c in self.tz if c.checked), 1):
-                if crit.axis not in {"capacity", "volume"}:
-                    continue
-                # При наличии структурированного поля его проверяет общий компаратор.
-                labels = {_norm_label(crit.label), _norm_label(crit.concept)} - {""}
-                if any(any(label in _norm_label(a.get("name")) for label in labels)
-                       for a in card.get("attributes", []) if isinstance(a, dict)):
-                    continue
-                pattern, parser = (_CAP_LABEL_RE, _capacity_mb) if crit.axis == "capacity" else (_VOL_LABEL_RE, _volume_ml)
-                values = {parser(match.group()) for match in pattern.finditer(name)} - {None}
-                if len(values) != 1 or (crit.num_min is None and crit.num_max is None):
-                    continue
-                value = values.pop()
-                fits = ((crit.num_min is None or value >= crit.num_min - abs(crit.num_min) * TOLERANCE)
-                        and (crit.num_max is None or value <= crit.num_max + abs(crit.num_max) * TOLERANCE))
-                out.setdefault(str(card["id"]), {})[index] = (
-                    "y" if fits else "n", f"{_axis_short(value, crit.axis)}, нужно {crit.value}",
-                )
+            caps = self._card_axis_values(card)
+            for row_idx, crit in axis_by_row.items():
+                values = caps.get(crit.axis, [])
+                if not values:
+                    continue  # карточка молчит про ось — пусть судит агент
+                fits = [
+                    v for v in values
+                    if (crit.num_min is None or v >= crit.num_min) and (crit.num_max is None or v <= crit.num_max)
+                ]
+                if fits:
+                    out.setdefault(str(card["id"]), {})[row_idx] = ("y", "по варианту")
+                else:
+                    best = max(values) if crit.num_min is not None else min(values)
+                    out.setdefault(str(card["id"]), {})[row_idx] = ("n", f"{_axis_short(best, crit.axis)}, нужно {crit.value}")
         return out
 
-    def _grade_grid(self, cards, rows, *, model, batch_size, known_cells=None) -> dict:
+    def _card_axis_values(self, card) -> dict:
+        """{'capacity': [МБ...], 'volume': [мл...]} по названию + всем вариантам."""
+        texts = [f"{card.get('name', '')}"] + [
+            _cell(v.get("size")) for v in (card.get("variants") or []) if isinstance(v, dict) and _cell(v.get("size"))
+        ] + [_cell(s) for s in (card.get("sizes") or [])]
+        caps, vols = [], []
+        for text in texts:
+            mb = _capacity_mb(text)
+            if mb is not None:
+                caps.append(mb)
+            ml = _volume_ml(text)
+            if ml is not None:
+                vols.append(ml)
+        return {"capacity": caps, "volume": vols}
+
+    def _grade_grid(self, cards, rows, *, model, batch_size) -> dict:
         """Возвращает {id карточки: {номер строки: (v, w)}}. Не применяет и не
         кэширует — это делает вызывающий."""
         if not cards:
             return {}
-        known_cells = known_cells or {}
         batches = [cards[i:i + batch_size] for i in range(0, len(cards), batch_size)] or [cards]
         cells_by_card: dict[str, dict[int, tuple]] = {}
         errors = []
@@ -829,9 +821,7 @@ class Cascade:
             _index, batch = indexed
             local = {pos: str(card["id"]) for pos, card in enumerate(batch, 1)}
             cards_text = "\n\n".join(
-                f"КАРТОЧКА {pos} | id {card['id']}\n"
-                + "Проверить пункты: " + ", ".join(str(r) for r in range(1, len(rows) + 1) if r not in known_cells.get(str(card['id']), {}))
-                + f"\n{self._card_brief(card)}"
+                f"КАРТОЧКА {pos} | id {card['id']}\n{self._card_brief(card)}"
                 for pos, card in enumerate(batch, 1)
             )
             prompt = self._step6_prompt(
@@ -839,8 +829,7 @@ class Cascade:
                 batch_ids=", ".join(f"{p}={c['id']}" for p, c in enumerate(batch, 1)) if len(batches) > 1 else "",
             )
             try:
-                missing_count = sum(len(rows) - len(known_cells.get(str(card["id"]), {})) for card in batch)
-                raw, usage = _ai_json(prompt, max_tokens=700 + (missing_count + len(batch) * 2) * 24,
+                raw, usage = _ai_json(prompt, max_tokens=700 + len(batch) * (len(rows) + 2) * 24,
                                       timeout=60, model=model)
             except Exception as exc:
                 logger.exception("Cascade step 6 grid batch failed (%s)", model)
@@ -865,9 +854,9 @@ class Cascade:
                     pos, row = int(cell.get("c")), int(cell.get("r"))
                 except (TypeError, ValueError):
                     continue
-                verdict = _cell(cell.get("v")).lower()
+                verdict = next((ch for ch in _cell(cell.get("v")).lower() if ch in "ynm"), "")
                 card_id = local.get(pos)
-                if card_id and verdict in {"y", "n", "m"} and 1 <= row <= len(rows) and row not in known_cells.get(card_id, {}):
+                if card_id and verdict and 1 <= row <= len(rows):
                     cells_by_card.setdefault(card_id, {})[row] = (verdict, _cell(cell.get("w"))[:90])
 
         if errors and not cells_by_card:
@@ -880,19 +869,8 @@ class Cascade:
         карточкам. Матрицу ТЗ не трогает."""
         from .services import _shortlist_card_images
 
-        session_feedback = any(v.get("origin") == "session" for v in self.feedback_instructions)
-        cache_key = hashlib.sha256(json.dumps({
-            "version": "feedback-v1", "cards": [self._verdict_key(card) for card in cards],
-            "rows": rows, "instructions": self.feedback_instructions,
-        }, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
-        cached = _cache_get("feedback", cache_key) if not session_feedback else None
-        if isinstance(cached, dict) and isinstance(cached.get("instructions"), list):
-            self._apply_instructions(cached["instructions"], {str(c["id"]): c for c in cards}, False)
-            self.diagnostics["feedback_cache_hit"] = True
-            return
-        self.diagnostics["feedback_cache_hit"] = False
         images, image_ids = ([], [])
-        if session_feedback:
+        if any(v.get("origin") == "session" for v in self.feedback_instructions):
             images, image_ids = _shortlist_card_images(cards)
         instr_numbered = [
             f"{i}. ({'эта сессия' if v.get('origin') == 'session' else 'раньше на похожих позициях'}) {_cell(v.get('text'))}"
@@ -935,39 +913,17 @@ class Cascade:
                 continue
             raw, usage, local = result
             self._add_usage(usage, _AGENT_MODEL)
-            instructions = raw.get("instructions") if isinstance(raw.get("instructions"), list) else []
-            seen = []
-            valid = True
-            for item in instructions:
+            for item in raw.get("instructions") if isinstance(raw.get("instructions"), list) else []:
                 if isinstance(item, dict):
-                    item = dict(item)
-                    references = item.get("cards")
-                    if not isinstance(references, list):
-                        valid = False
-                        continue
-                    item["cards"] = [local.get(c, c) if isinstance(c, int) else c for c in references]
-                    valid = valid and (
-                        type(item.get("n")) is int
-                        and item.get("type") in {"priority", "exclude", "keep_only", "soften", "ranking"}
-                        and isinstance(item.get("applied"), bool)
-                        and all(str(c) in local.values() for c in item["cards"])
-                        and (bool(_cell(item.get("criterion"))) if item.get("type") != "ranking" else item.get("price") in {"asc", "desc"})
-                    )
-                    seen.append(item.get("n"))
+                    item["cards"] = [local.get(c, c) if isinstance(c, int) else c for c in (item.get("cards") or [])]
                     raw_instructions.append(item)
-                else:
-                    valid = False
-            if not valid or sorted(n for n in seen if type(n) is int) != list(range(1, len(self.feedback_instructions) + 1)):
-                errors.append("Неполный ответ по урокам")
 
-        if not errors and not session_feedback:
-            _cache_put("feedback", cache_key, {"instructions": raw_instructions})
         self._apply_instructions(raw_instructions, {str(c["id"]): c for c in cards}, bool(errors))
 
     def _apply_cells(self, card, cells, rows) -> None:
         matches, mismatches, unknown = [], [], []
         for index, (label, value) in enumerate(rows, 1):
-            verdict, reason = cells.get(index, ("m", "ещё не проверено"))
+            verdict, reason = cells.get(index, ("m", ""))
             tail = f" — {reason}" if reason else ""
             if verdict == "y":
                 matches.append(f"{label}: {value}{tail}")
@@ -1040,22 +996,19 @@ class Cascade:
             head = (
                 "Ты эксперт по подбору товара под тендер. Прочитай КАЖДУЮ карточку целиком "
                 "(название, характеристики, материалы, цвет, список вариантов, описание) и оцени "
-                "только перечисленные у карточки пункты «Проверить пункты» так, как это сделал бы человек.\n\n"
+                "КАЖДЫЙ пункт чек-листа так, как это сделал бы человек.\n\n"
                 f"Позиция: {_cell(self.line.get('name'))[:200]}\n\n"
                 f"Чек-лист ТЗ (1..{row_count}):\n{tz_block}\n"
                 f"{instr_block}\n"
-                "Для каждой карточки верни клетки только для её списка «Проверить пункты». Остальные уже проверены кодом. "
+                f"Для КАЖДОЙ карточки и КАЖДОГО пункта 1..{row_count} верни клетку "
                 "{\"c\":номер карточки,\"r\":номер пункта,\"v\":\"y|n|m\",\"w\":\"до 6 слов, только для n и m\"}:\n"
                 "- \"y\" — карточка (или её подходящий вариант) соответствует пункту;\n"
                 "- \"n\" — в карточке есть данные по пункту и они НЕ совпадают;\n"
                 "- \"m\" — в карточке про пункт ничего нет.\n"
-                "Не пропускай запрошенные клетки. m — только если данных нет; при противоречии или неоднозначности "
-                "не ставь y: пропусти клетку, она останется незавершённой и потребует проверки.\n"
-                "Для измеряемых числовых требований допуск 5%: равенство N → [N−0.05|N|, N+0.05|N|]; "
-                "не менее N → ≥N−0.05|N|; не более N → ≤N+0.05|N|. За границей допуска — n, не m. "
-                "Допуск не относится к версиям интерфейсов, артикулам и обозначениям размеров. "
-                "Не угадывай порядок осей в безымянной тройке размеров. "
-                "Не приписывай выбранному товару свойства другого варианта с иной ценой.\n"
+                f"Ровно {row_count} клеток на карточку. Пропущенная = \"m\". \"m\" — только когда данных реально нет.\n"
+                "Небольшое отклонение размера/веса → \"y\". Заметное, но возможно допустимое → \"m\" («X vs Y, проверить»). "
+                "Явно не то → \"n\". «Не менее N»: меньше N — \"n\". «Не более N»: больше N — \"n\". "
+                "Ёмкость/объём бери из названия варианта. «Флеш-карта USB 2.0» и «USB-флеш-накопитель» — одно и то же.\n"
                 f"Ответ: {{\"grid\":[{{\"c\":1,\"r\":1,\"v\":\"y\"}},{{\"c\":1,\"r\":5,\"v\":\"n\",\"w\":\"8 ГБ, нужно ≥32\"}}]{instr_schema}}}\n"
             )
         else:
