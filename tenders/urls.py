@@ -4,6 +4,11 @@ from . import views
 
 urlpatterns = [
     path("", views.home, name="tender_home"),
+    path("cascade-lab/", views.cascade_lab, name="cascade_lab"),
+    path("cascade-lab/runs/", views.cascade_lab_run_create, name="cascade_lab_run_create"),
+    path("cascade-lab/runs/<int:run_id>/", views.cascade_lab_run_detail, name="cascade_lab_run_detail"),
+    path("cascade-lab/runs/<int:run_id>/execute/", views.cascade_lab_run_execute, name="cascade_lab_run_execute"),
+    path("cascade-lab/runs/<int:run_id>/fork/", views.cascade_lab_run_fork, name="cascade_lab_run_fork"),
     path("knowledge/sync/", views.knowledge_sync, name="tender_knowledge_sync"),
     path("catalog/sync/", views.catalog_sync, name="tender_catalog_sync"),
     path("catalog/gifts/import-test/", views.gifts_import_test, name="gifts_import_test"),

@@ -448,3 +448,59 @@ class TenderLine(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class CascadeLabCase(models.Model):
+    """Повторяемый вход лаборатории; не участвует в обучении ассистента."""
+
+    name = models.CharField("Название теста", max_length=200)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cascade_lab_cases")
+    input_payload = models.JSONField("Позиция и ТЗ", default=dict)
+    custom_cards = models.JSONField("Тестовые карточки", default=list, blank=True)
+    expectations = models.JSONField("Ожидания", default=dict, blank=True)
+    settings = models.JSONField("Настройки шагов", default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "Тест лаборатории каскада"
+        verbose_name_plural = "Тесты лаборатории каскада"
+
+    def __str__(self):
+        return self.name
+
+
+class CascadeLabRun(models.Model):
+    STATUS_CHOICES = (
+        ("draft", "Черновик"), ("running", "Выполняется"),
+        ("paused", "Приостановлен"), ("completed", "Завершён"), ("error", "Ошибка"),
+    )
+
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cascade_lab_runs")
+    source_line = models.ForeignKey(TenderLine, on_delete=models.SET_NULL, null=True, blank=True, related_name="cascade_lab_runs")
+    test_case = models.ForeignKey(CascadeLabCase, on_delete=models.SET_NULL, null=True, blank=True, related_name="runs")
+    parent_run = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="forks")
+    title = models.CharField("Название", max_length=500)
+    input_payload = models.JSONField("Исходный вход", default=dict)
+    settings = models.JSONField("Настройки", default=dict, blank=True)
+    expectations = models.JSONField("Ожидания", default=dict, blank=True)
+    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default="draft")
+    current_step = models.PositiveSmallIntegerField("Последний шаг", default=0)
+    stop_after = models.PositiveSmallIntegerField("Остановиться после", default=8)
+    snapshots = models.JSONField("Снимки шагов", default=list, blank=True)
+    cascade_state = models.JSONField("Состояние каскада", default=dict, blank=True)
+    result = models.JSONField("Проверка ожиданий", default=dict, blank=True)
+    total_seconds = models.FloatField("Время, с", default=0)
+    total_cost_rub = models.FloatField("Стоимость, ₽", default=0)
+    error = models.TextField("Ошибка", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Прогон лаборатории каскада"
+        verbose_name_plural = "Прогоны лаборатории каскада"
+
+    def __str__(self):
+        return f"{self.title} · шаг {self.current_step}"

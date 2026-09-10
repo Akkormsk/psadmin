@@ -2,7 +2,7 @@
 {% block title %}Расчет тендеров{% endblock %}
 {% block content %}
 <div class="wrap app-home"><div class="container tender-page">
-<a class="back-link" href="{% url 'index' %}">← На главную</a><h1>Расчет тендеров</h1>
+<a class="back-link" href="{% url 'index' %}">← На главную</a><h1>Расчет тендеров</h1>{% if request.user.is_superuser %}<p><a class="button-secondary" href="{% url 'cascade_lab' %}">Лаборатория каскада</a></p>{% endif %}
 <form method="post" id="tender-form" class="content-stack">{% csrf_token %}<input type="hidden" name="lines_json" id="tender-lines-json"><input type="hidden" name="document_analysis_json" id="tender-document-analysis-json">
 <section class="panel"><div class="panel-header"><h2 class="panel-title">Просчёт тендера</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span><button type="button" class="button-secondary" id="new-tender">Новый просчёт</button></div></div>
 <div class="tender-meta">

@@ -200,6 +200,7 @@ class Cascade:
         client=None,
         progress=None,
         top: int = 10,
+        step_settings: dict | None = None,
     ):
         self.line = line if isinstance(line, dict) else {}
         self.session_feedback = [
@@ -213,6 +214,7 @@ class Cascade:
         self.client = client
         self.progress = progress
         self.top = top
+        self.step_settings = step_settings if isinstance(step_settings, dict) else {}
 
         try:
             self.quantity = int(Decimal(str(self.line.get("quantity") or 0).replace(",", ".")))
@@ -430,7 +432,8 @@ class Cascade:
                 seen.add(text.lower())
                 phrases.append(text)
         self.diagnostics["query_phrases"] = phrases
-        return phrases[:24]
+        maximum = max(1, min(40, int(self.step_settings.get("2", {}).get("max_phrases", 24))))
+        return phrases[:maximum]
 
     # -- шаг 3: поиск по названиям ------------------------------------- #
     def step_3_search_by_name(self, phrases) -> list:
@@ -722,8 +725,9 @@ class Cascade:
         """
         axis_cells = self._axis_prefill(todo, rows)
         ranked = sorted(todo, key=lambda card: self._preagent_key(card, axis_cells))
-        first = max(1, int(os.getenv("CASCADE_STEP6_FIRST", "25")))
-        ceiling = max(0, int(os.getenv("CASCADE_STEP6_CEILING", "75")))
+        settings = self.step_settings.get("6", {})
+        first = max(1, min(75, int(settings.get("first_batch", os.getenv("CASCADE_STEP6_FIRST", "25")))))
+        ceiling = max(0, min(100, int(settings.get("ceiling", os.getenv("CASCADE_STEP6_CEILING", "75")))))
         suitable = sum(self._suitable_for_stop(card) for card in cached_cards)
         diagnostics = {
             "pool": len(todo), "graded": 0, "batches": 0, "cached": len(cached_cards),

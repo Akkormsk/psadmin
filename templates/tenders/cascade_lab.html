@@ -1,0 +1,66 @@
+{% extends "base.html" %}{% load static %}
+{% block title %}Лаборатория каскада{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{% static 'tenders/cascade_lab.css' %}">
+<main class="cascade-lab" id="cascade-lab"
+      data-create-url="{% url 'cascade_lab_run_create' %}"
+      data-detail-url="{% url 'cascade_lab_run_detail' 0 %}"
+      data-execute-url="{% url 'cascade_lab_run_execute' 0 %}"
+      data-fork-url="{% url 'cascade_lab_run_fork' 0 %}">
+  <header class="cascade-lab__header">
+    <div><a class="back-link" href="{% url 'tender_home' %}">← К тендерам</a><h1>Лаборатория каскада</h1>
+      <p>Восемь изолированных шагов, снимки данных и повтор с выбранного места.</p></div>
+    <div class="cascade-lab__totals"><span>Время <strong id="lab-total-time">—</strong></span><span>Стоимость <strong id="lab-total-cost">—</strong></span></div>
+  </header>
+
+  <section class="cascade-lab__setup panel">
+    <form id="lab-run-form">
+      {% csrf_token %}
+      <div class="cascade-lab__source">
+        <label>Сохранённый тест<select name="case_id" id="lab-case"><option value="">Новый прогон</option>{% for case in lab_cases %}<option value="{{ case.pk }}">{{ case.name }}</option>{% endfor %}</select></label>
+        <label>Позиция тендера<select name="line_id" id="lab-line"><option value="">Вставить JSON ниже</option>{% for line in lines %}<option value="{{ line.pk }}">{{ line.estimate.tender_number }} · {{ line.name }}</option>{% endfor %}</select></label>
+        <label class="cascade-lab__wide">JSON позиции и ТЗ<textarea name="line_json" rows="5" placeholder='{"name":"Флешка","quantity":100,"requirements":{"requirements":[]}}'></textarea></label>
+        <label class="cascade-lab__wide">Собственные карточки, JSON-массив <small>Необязательно. Тогда поиск по каталогам будет пропущен.</small><textarea name="cards_json" rows="4" placeholder='[{"id":"test-1","name":"Флешка 32 ГБ","price":"500","attributes":[]}]'></textarea></label>
+        <label class="cascade-lab__wide">Ожидания теста, JSON <small>must_include, must_exclude, ranks, matrix, max_seconds, max_cost_rub</small><textarea name="expectations_json" rows="3" placeholder='{"must_include":["test-1"],"ranks":{"test-1":{"min":1,"max":3}},"matrix":{"test-1":{"mismatch_count":0}}}'></textarea></label>
+      </div>
+      <details class="cascade-lab__settings"><summary>Настройки прогона</summary><div>
+        <label>Остановиться после<select name="stop_after">{% for step in steps %}<option value="{{ step.step }}"{% if step.step == 5 %} selected{% endif %}>{{ step.step }}. {{ step.title }}</option>{% endfor %}</select><small>По умолчанию — перед дорогой матрицей.</small></label>
+        <label>Карточек в выдаче<input type="number" name="top" min="1" max="50" value="10"></label>
+        <label>Межблочный лимит, ₽<input type="number" name="max_cost_rub" min="0" step="0.01" value="10"></label>
+        <label>Межблочный лимит, секунд<input type="number" name="max_seconds" min="0" step="0.1" value="10"></label>
+        <label>Сохранить как тест<input type="text" name="case_name" maxlength="200" placeholder="Название теста"></label>
+        <label class="cascade-lab__wide">Параметры отдельных блоков, JSON<textarea name="step_settings_json" rows="3">{"2":{"max_phrases":24},"6":{"first_batch":25,"ceiling":75}}</textarea><small>Шаг 2: max_phrases. Шаг 6: first_batch и ceiling. Значения действуют только в лаборатории.</small></label>
+      </div></details>
+      <div class="cascade-lab__actions"><button type="submit" class="button-success">Запустить</button><span id="lab-message" role="status"></span></div>
+    </form>
+  </section>
+
+  <section class="cascade-lab__workspace">
+    <div class="cascade-graph" aria-label="Граф каскада">
+      {% for step in steps %}<button type="button" class="cascade-node" data-step="{{ step.step }}" data-method="{{ step.method }}">
+        <span class="cascade-node__number">{{ step.step }}</span><strong>{{ step.title }}</strong><small>{{ step.input }} → {{ step.output }}</small><span class="cascade-node__metrics">Не запускался</span>
+      </button>{% if not forloop.last %}<span class="cascade-edge" aria-hidden="true">→</span>{% endif %}{% endfor %}
+    </div>
+
+    <div class="cascade-lab__inspector panel">
+      <div class="cascade-lab__inspector-head"><div><small id="lab-step-method">Выберите блок</small><h2 id="lab-step-title">Данные шага</h2></div>
+        <div class="cascade-lab__node-actions"><button type="button" id="lab-run-next" class="button-secondary" hidden>Продолжить на шаг</button><button type="button" id="lab-rerun-step" class="button-secondary" hidden>Повторить отсюда</button></div>
+      </div>
+      <div class="cascade-lab__metrics" id="lab-step-metrics"></div>
+      <div class="cascade-lab__io">
+        <section><h3>Вход</h3><pre id="lab-step-input">Выберите выполненный блок на графе.</pre></section>
+        <section><h3>Выход</h3><pre id="lab-step-output">—</pre></section>
+      </div>
+    </div>
+    <div class="cascade-lab__checks panel" id="lab-checks" hidden>
+      <h2>Результат проверок</h2>
+      <div id="lab-check-list"></div>
+    </div>
+  </section>
+
+  <section class="panel cascade-lab__history"><h2>Последние прогоны</h2><div id="lab-run-list">
+    {% for run in lab_runs %}<button type="button" data-run-id="{{ run.pk }}"><strong>{{ run.title }}</strong><span>шаг {{ run.current_step }}/8 · {{ run.get_status_display }} · {{ run.total_seconds|floatformat:2 }} с · {{ run.total_cost_rub|floatformat:2 }} ₽</span></button>{% empty %}<p>Прогонов ещё нет.</p>{% endfor %}
+  </div></section>
+</main>
+<script src="{% static 'tenders/cascade_lab.js' %}"></script>
+{% endblock %}
