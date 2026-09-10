@@ -1111,23 +1111,16 @@ def _text_search_pool(supplier_code, phrases):
     if not stems:
         return []
     base = CatalogProduct.objects.filter(supplier__code=supplier_code, is_active=True)
-    # Case-insensitive substring match on Cyrillic is not portable at the DB
-    # (SQLite LIKE folds only ASCII), so the name scan runs in Python over a
-    # cheap (id, name) projection — ~0.8s for a 33k mirror, `_normalized`
-    # being lru-cached over the many repeated variant names — then the
-    # matched ids are re-fetched in one `in_bulk`.
-    ranked_ids = []
-    for pid, name, full_name in base.values_list("id", "name", "full_name").order_by("id").iterator(chunk_size=4000):
-        name_words = _normalized(f"{name or ''} {full_name or ''}").split()
-        hits = sum(1 for stem in stems if _stem_in_words(stem, name_words))
-        if hits:
-            ranked_ids.append((hits, pid))
+    from .name_index import rank_names
+
+    rows = base.values_list("id", "name", "full_name").order_by("id").iterator(chunk_size=4000)
+    ranked_ids = rank_names(rows, stems)
     if not ranked_ids:
         return []
     # More query words in the name first; stable within a tier, so cards
     # keep the id order the funnel and variant grouping expect.
     ranked_ids.sort(key=lambda value: -value[0])
-    by_id = base.in_bulk([pid for _, pid in ranked_ids])
+    by_id = base.select_related("supplier").in_bulk([pid for _, pid in ranked_ids])
     pool = []
     for hits, pid in ranked_ids:
         product = by_id.get(pid)
