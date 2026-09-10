@@ -8,12 +8,18 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase as DjangoTestCase
 
 from .cascade import Cascade
 from .models import (
     CascadeCache, CatalogProduct, CatalogSupplier, Lesson, RequirementSkipRule,
 )
+
+
+class TestCase(DjangoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch("tenders.catalog.OasisClient.get", return_value=[]))
 
 
 def _supplier(code="oasis"):
@@ -453,6 +459,7 @@ class CascadeNameFilterCacheTests(TestCase):
 
 class BuildHypothesisIntegrationTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.user = get_user_model().objects.create_user(username="a", password="p")
 
     def test_end_to_end_through_build_training_hypothesis(self):

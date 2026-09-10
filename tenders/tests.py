@@ -1039,7 +1039,8 @@ class TenderTests(TestCase):
         self.assertEqual(result["costs"][0]["source"], "Источник цены не подтверждён")
         self.assertTrue(result["learning_warnings"])
 
-    def test_only_admin_can_confirm_training_example(self):
+    @patch("tenders.services._embedding_vector", return_value=[])
+    def test_only_admin_can_confirm_training_example(self, embedding):
         production_type = ProductionType.objects.get(code="digital_sheet")
         payload = {"line": {"name": "Открытка", "requirements": {"requirements": []}}, "production_type": production_type.code, "features": ["тираж 100"], "routes": [{"name": "Под ключ", "processes": [{"role": "production", "name": "Цифровая листовая печать"}]}]}
         self.client.force_login(self.user)
