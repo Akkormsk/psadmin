@@ -1123,6 +1123,7 @@ class Cascade:
 
         live.sort(key=lambda c: (
             0 if c.get("priority") == 0 else 1,
+            0 if c.get("matrix_status", "complete") == "complete" else 1,
             c.get("mismatch_count", 0),
             -c.get("match_count", 0),
             c.get("unknown_count", 0),
