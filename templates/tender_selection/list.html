@@ -44,6 +44,20 @@
       </span>
     </div>
 
+    <details class="ts-wordfilter"{% if words_overridden %} open{% endif %}>
+      <summary>Плюс/минус-слова{% if words_overridden %} <span class="ts-wf-badge">черновик, не сохранён</span>{% endif %}</summary>
+      <form method="get" class="ts-wf-form">
+        <label>Плюс-слова<textarea name="inc" rows="3" placeholder="через запятую или с новой строки; + внутри = «все части»">{{ inc_value }}</textarea></label>
+        <label>Минус-слова<textarea name="exc" rows="3">{{ exc_value }}</textarea></label>
+        <div class="ts-wf-actions">
+          <button type="submit" class="button-secondary">Показать</button>
+          <button type="submit" class="button-success" formaction="{% url 'tender_selection:save_words' %}" formmethod="post">Сохранить в настройки</button>
+          {% if words_overridden %}<a href="{% url 'tender_selection:list' %}">Сбросить к сохранённым</a>{% endif %}
+        </div>
+        {% csrf_token %}
+      </form>
+    </details>
+
     {% for tender in page_obj.object_list %}
     <div class="saved-estimate ts-tender{% if tender.filtered_out %} is-dim{% endif %}{% if tender.on_estimate %} is-onestimate{% endif %}">
       <a class="saved-estimate__main" href="{% url 'tender_selection:detail' tender.pk %}">
@@ -127,6 +141,14 @@
   .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
   .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
   .ts-flag { color: #b8434e; font-weight: 700; font-size: 11px; }
+  .ts-wordfilter { margin: 4px 0 10px; font-size: 13px; }
+  .ts-wordfilter > summary { cursor: pointer; color: #4c5fd5; user-select: none; }
+  .ts-wf-badge { color: #b26a00; font-size: 11px; font-weight: 700; }
+  .ts-wf-form { display: grid; gap: 10px; margin-top: 10px; max-width: 720px; }
+  .ts-wf-form label { display: grid; gap: 4px; font-size: 12px; color: #6b7280; }
+  .ts-wf-form textarea { font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid #e1e5ea; border-radius: 8px; resize: vertical; }
+  .ts-wf-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .ts-wf-actions .button-secondary, .ts-wf-actions .button-success { font-size: 13px; padding: 6px 14px; }
   .saved-estimate__status-form.is-interesting::before { background: #5c9b70; }
   .saved-estimate__status-form.is-not_interesting::before { background: #cf7373; }
   .ts-warn { color: #b26a00; }

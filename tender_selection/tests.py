@@ -628,6 +628,27 @@ class SettingsViewTests(TestCase):
         self.assertNotContains(resp, "Дорогая кружка")
         self.assertContains(resp, "Ничего не подходит под фильтр")
 
+    def test_inc_exc_query_override_without_touching_settings(self):
+        FilterSettings.objects.update_or_create(pk=1, defaults={"include_words": "сувенир", "min_price": 0})
+        for t in ("Поставка сувениров", "Поставка бланков строгой отчётности", "Поставка щебня"):
+            FoundTender.objects.create(purchase_number=t[:20], object_info=t, title=t, last_pulled_at=timezone.now())
+        # override: only "бланк" passes now
+        resp = self.client.get(reverse("tender_selection:list") + "?inc=бланк")
+        self.assertContains(resp, "бланков")
+        self.assertNotContains(resp, "сувениров")
+        # saved settings untouched
+        self.assertEqual(FilterSettings.load().include_words, "сувенир")
+
+    def test_save_words_updates_only_words(self):
+        FilterSettings.objects.update_or_create(pk=1, defaults={
+            "include_words": "старое", "exclude_words": "", "min_price": 300000,
+        })
+        self.client.post(reverse("tender_selection:save_words"), {"inc": "бланк, конверт", "exc": "б/у"})
+        s = FilterSettings.load()
+        self.assertEqual(s.include_words, "бланк, конверт")
+        self.assertEqual(s.exclude_words, "б/у")
+        self.assertEqual(s.min_price, 300000)  # прочие настройки не тронуты
+
     def test_sort_by_deadline(self):
         import datetime
         near = timezone.now() + datetime.timedelta(days=2)

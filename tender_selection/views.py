@@ -47,8 +47,15 @@ def superuser_required(view):
 @superuser_required
 def tender_list(request):
     settings = FilterSettings.load()
-    include = parse_terms(settings.include_words)
-    exclude = parse_terms(settings.exclude_words)
+    # плюс/минус-слова можно временно переопределить прямо на странице (?inc=/?exc=),
+    # не трогая сохранённые настройки — для подбора формулировок
+    inc_raw = request.GET.get("inc")
+    exc_raw = request.GET.get("exc")
+    words_overridden = inc_raw is not None or exc_raw is not None
+    inc_value = inc_raw if inc_raw is not None else settings.include_words
+    exc_value = exc_raw if exc_raw is not None else settings.exclude_words
+    include = parse_terms(inc_value)
+    exclude = parse_terms(exc_value)
     show_all = request.GET.get("all") == "1"
     sort = request.GET.get("sort") if request.GET.get("sort") in SORTS else DEFAULT_SORT
     law_filter = request.GET.get("law") if request.GET.get("law") in ("fz44", "fz223") else "all"
@@ -100,6 +107,9 @@ def tender_list(request):
         "law_counts": {"all": sum(counts.values()), "fz44": counts.get("fz44", 0), "fz223": counts.get("fz223", 0)},
         "settings": settings,
         "last_run": PullRun.objects.first(),
+        "inc_value": inc_value,
+        "exc_value": exc_value,
+        "words_overridden": words_overridden,
     })
 
 
@@ -189,6 +199,17 @@ def filter_settings(request):
         "laws": [(code, label, code in chosen_laws) for code, label in FoundTender.LAW_CHOICES],
         "using_defaults": not settings.okpd2_codes,
     })
+
+
+@superuser_required
+@require_POST
+def save_words(request):
+    settings = FilterSettings.load()
+    settings.include_words = request.POST.get("inc", "").strip()
+    settings.exclude_words = request.POST.get("exc", "").strip()
+    settings.save()
+    messages.success(request, "Плюс/минус-слова сохранены.")
+    return redirect("tender_selection:list")
 
 
 @superuser_required
