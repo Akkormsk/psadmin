@@ -655,7 +655,7 @@ class SettingsViewTests(TestCase):
         far = timezone.now() + datetime.timedelta(days=20)
         FoundTender.objects.create(purchase_number="near", object_info="A", title="A", collecting_finished_at=near, last_pulled_at=timezone.now())
         FoundTender.objects.create(purchase_number="far", object_info="B", title="B", collecting_finished_at=far, last_pulled_at=timezone.now())
-        resp = self.client.get(reverse("tender_selection:list") + "?sort=deadline")
+        resp = self.client.get(reverse("tender_selection:list") + "?sort=deadline&inc=&exc=")
         body = resp.content.decode()
         self.assertLess(body.index("№ near"), body.index("№ far"))
 
