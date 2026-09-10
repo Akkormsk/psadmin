@@ -1074,18 +1074,28 @@ h1 {
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:var(--ink-3); }
 .tender-saved-estimate .saved-estimate__main { display:grid; grid-template-columns:minmax(0,1fr) minmax(140px,.42fr); }
-.saved-estimate__status-form { position:relative; display:flex; align-items:center; flex:0 0 160px; min-height:36px; box-sizing:border-box; border:1px solid var(--border); border-radius:10px; background:var(--surface); transition:border-color .16s ease,box-shadow .16s ease,opacity .16s ease; }
-.saved-estimate__status-form::before { content:""; position:absolute; left:11px; width:7px; height:7px; border-radius:50%; background:var(--ink-3); pointer-events:none; }
+/* Status = tinted chip + coloured dot + coloured label — same pattern as the
+   other status pills in the app, readable at a glance from across the list. */
+.saved-estimate__status-form { position:relative; display:flex; align-items:center; flex:0 0 172px; min-height:36px; box-sizing:border-box; border:1px solid var(--border); border-radius:10px; background:var(--surface); transition:border-color .16s ease,box-shadow .16s ease,opacity .16s ease,background-color .16s ease; }
+.saved-estimate__status-form::before { content:""; position:absolute; left:13px; top:50%; width:10px; height:10px; border-radius:50%; background:var(--ink-3); transform:translateY(-50%); box-shadow:0 0 0 3px color-mix(in srgb, var(--ink-3) 18%, transparent); pointer-events:none; }
 .saved-estimate__status-form::after { content:""; position:absolute; right:12px; top:50%; width:6px; height:6px; border-right:1.5px solid var(--ink-3); border-bottom:1.5px solid var(--ink-3); transform:translateY(-65%) rotate(45deg); pointer-events:none; }
 .saved-estimate__status-form:hover { border-color:var(--field-border); }
-.saved-estimate__status-form:focus-within { border-color:var(--field-border); box-shadow:0 0 0 3px var(--accent-ring); }
-.saved-estimate__status-form.is-pending::before { background:var(--warning-ink); }
-.saved-estimate__status-form.is-not_participated::before { background:var(--negative-ink); }
-.saved-estimate__status-form.is-lost::before { background:var(--negative-ink); }
-.saved-estimate__status-form.is-won::before { background:var(--positive-ink); }
+.saved-estimate__status-form:focus-within { box-shadow:0 0 0 3px var(--accent-ring); }
+.saved-estimate__status-form.is-pending { background:var(--tint-warning); border-color:var(--border-warning); }
+.saved-estimate__status-form.is-not_participated,
+.saved-estimate__status-form.is-lost { background:var(--tint-negative); border-color:var(--border-negative); }
+.saved-estimate__status-form.is-won { background:var(--tint-positive); border-color:var(--border-positive); }
+.saved-estimate__status-form.is-pending::before { background:var(--warning-ink); box-shadow:0 0 0 3px color-mix(in srgb, var(--warning-ink) 22%, transparent); }
+.saved-estimate__status-form.is-not_participated::before,
+.saved-estimate__status-form.is-lost::before { background:var(--negative-ink); box-shadow:0 0 0 3px color-mix(in srgb, var(--negative-ink) 22%, transparent); }
+.saved-estimate__status-form.is-won::before { background:var(--positive-ink); box-shadow:0 0 0 3px color-mix(in srgb, var(--positive-ink) 22%, transparent); }
+.saved-estimate__status-form.is-pending .saved-estimate__status { color:var(--warning-ink); }
+.saved-estimate__status-form.is-not_participated .saved-estimate__status,
+.saved-estimate__status-form.is-lost .saved-estimate__status { color:var(--negative-ink); }
+.saved-estimate__status-form.is-won .saved-estimate__status { color:var(--positive-ink); }
 .saved-estimate__status-form.is-saving { opacity:.58; }
 .saved-estimate__status-form.is-error { border-color:var(--border-negative); }
-.saved-estimate__status { width:100%; min-height:34px; box-sizing:border-box; padding:7px 28px 7px 27px; border:0; outline:0; appearance:none; background:transparent; color:var(--ink-2); font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+.saved-estimate__status { width:100%; min-height:34px; box-sizing:border-box; padding:7px 28px 7px 32px; border:0; outline:0; appearance:none; background:transparent; color:var(--ink-2); font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
 
 /* Compact two-row tender item. Editable cells are white; calculated cells are tinted. */
 .tender-line { padding:5px 6px; }
