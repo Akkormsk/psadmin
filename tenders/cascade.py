@@ -7,18 +7,9 @@
 :class:`CascadeResult`). Ни один шаг не парсит сырой текст ТЗ — шаг 1 превращает
 его в критерии, дальше работают только они.
 
-Прикидка стоимости на позицию (Timeweb AI Gateway):
-
-    шаг 1+2  ~$0.03    один вызов сильной модели, кэш по хэшу ТЗ
-    шаг 3    $0         скан зеркала, ~1 c
-    шаг 4    ~$0.012    дешёвая модель, только названия
-    шаг 5    $0         цвет + остаток + схлопывание по group_id
-    шаг 6    ~$0.15..0.30  сильная модель, кэш вердикта по (карточка, ТЗ)
-    шаг 7    $0
-    шаг 8    $0         один батч-запрос живой цены Oasis
-
-Повторный прогон того же ТЗ: ~$0 (всё из кэша). Пришли новые карточки — к модели
-идут только они.
+Шаг 6 ограничивает новые проверки и переиспользует полный кэш. Расход зависит
+от токенов и числа вызовов; без живого замера рублёвую стоимость не гарантируем.
+Контракты шагов, диагностика и границы изменений: docs/cascade_steps.md.
 """
 
 from __future__ import annotations
@@ -59,8 +50,6 @@ logger = logging.getLogger(__name__)
 
 _STRONG_MODEL = os.getenv("TIMEWEB_AI_MODEL_SEARCH_PLAN", "").strip() or "anthropic/claude-sonnet-4-5"
 _AGENT_MODEL = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or "anthropic/claude-sonnet-4-5"
-# Дешёвый слой матрицы (шаг 6, двухуровневый). CASCADE_TWO_TIER=0 отключает.
-_CHEAP_GRID_MODEL = os.getenv("TIMEWEB_AI_MODEL_GRID_CHEAP", "").strip() or "anthropic/claude-haiku-4-5"
 
 
 def _axis_short(value, axis: str) -> str:
@@ -665,16 +654,24 @@ class Cascade:
 
         # Матрица ТЗ — только по ТЗ, независимо от фидбека. Клетки из кэша
         # (карточка, хэш ТЗ); к модели идут только карточки без записи.
-        todo = []
+        todo, cached_cards = [], []
         for card in cards:
             cached = _cache_get("verdict", f"{self._tz_hash}|{card['id']}") if rows else None
-            if cached and isinstance(cached.get("grid"), dict):
-                self._apply_cells(card, {int(k): tuple(v) for k, v in cached["grid"].items()}, rows)
+            grid = cached.get("grid", {}) if isinstance(cached, dict) else {}
+            cells = {
+                index: tuple(grid[str(index)])
+                for index in range(1, len(rows) + 1)
+                if isinstance(grid, dict) and isinstance(grid.get(str(index)), (list, tuple))
+            }
+            if self._complete_grid(cells, rows):
+                self._apply_cells(card, cells, rows)
+                card["matrix_status"] = "complete"
+                cached_cards.append(card)
                 self.diagnostics["verdict_cache_hits"] += 1
             else:
                 todo.append(card)
-        if todo and rows:
-            self._grade_two_tier(todo, rows)
+        if rows:
+            self._grade_bounded(todo, rows, cached_cards=cached_cards)
 
         if self.feedback_instructions:
             self._classify_feedback(cards, rows)
@@ -688,60 +685,84 @@ class Cascade:
         card["match_count"] = 0
         card["unknown_count"] = len(rows)
         card["fit"] = "partial" if rows else "exact"
+        card["matrix_status"] = "pending" if rows else "complete"
+        card.pop("_ai_graded", None)
 
-    def _grade_two_tier(self, todo, rows) -> None:
-        """Дешёвая модель размечает сетку по ВСЕМ карточкам, сильная
-        перепроверяет только тех, кто претендует на верх списка. Каждую клетку
-        детерминированной оси (`axis` из шага 1) код проставляет сам.
-        Итоговую сетку кладём в кэш. `CASCADE_TWO_TIER=0` → только сильная."""
-        axis_cells = self._axis_prefill(todo, rows)  # {card_id: {row: (v, w)}}
-        strong_top = int(os.getenv("CASCADE_STRONG_TOP", "18"))
-        # По умолчанию ВЫКЛ: живой тест 10.09 показал, что дешёвые модели на
-        # сетке ленятся (возвращают "m" почти везде) — ранжировка для отбора в
-        # сильный слой получается недостоверной. Код оставлен под флагом.
-        two_tier = os.getenv("CASCADE_TWO_TIER", "0") == "1" and len(todo) > strong_top
+    @staticmethod
+    def _complete_grid(cells, rows) -> bool:
+        return bool(rows) and all(
+            index in cells and len(cells[index]) == 2 and cells[index][0] in {"y", "n", "m"}
+            for index in range(1, len(rows) + 1)
+        )
 
-        if two_tier:
-            cheap = self._grade_grid(todo, rows, model=_CHEAP_GRID_MODEL, batch_size=10)
-            for cid, cells in axis_cells.items():
-                cheap.setdefault(cid, {}).update(cells)
-            ranked = sorted(
-                todo, key=lambda c: self._cells_rank_key(c, cheap.get(str(c["id"]), {}), rows),
-            )
-            by_relevance = sorted(todo, key=lambda c: (c.get("relevance", 1), self._price_num(c)))
-            targets = {str(c["id"]) for c in ranked[:strong_top]} | {str(c["id"]) for c in by_relevance[:8]}
-            strong_cards = [c for c in todo if str(c["id"]) in targets]
-            strong = self._grade_grid(strong_cards, rows, model=_AGENT_MODEL, batch_size=3)
-            self.diagnostics["two_tier"] = {"cheap": len(todo), "strong": len(strong_cards)}
-            target_ids = {str(c["id"]) for c in strong_cards}
-            grids = {}
-            for card in todo:
+    @staticmethod
+    def _suitable_for_stop(card) -> bool:
+        return (
+            card.get("matrix_status") == "complete"
+            and card.get("mismatch_count", 0) <= 1
+            and card.get("match_count", 0) > 0
+        )
+
+    @staticmethod
+    def _preagent_key(card, axis_cells):
+        cells = axis_cells.get(str(card["id"]), {})
+        price = _decimal(card.get("price"))
+        return (
+            card.get("relevance", 1),
+            sum(v == "n" for v, _ in cells.values()),
+            -sum(v == "y" for v, _ in cells.values()),
+            price if price is not None else Decimal("Infinity"),
+        )
+
+    def _grade_bounded(self, todo, rows, *, cached_cards=()) -> None:
+        """Ограничивает новые проверки; кэш участвует в условии остановки.
+
+        matrix_status — контракт с шагом 7: complete / incomplete / pending.
+        Полный ответ «m» отличается от пропущенной клетки и может кэшироваться.
+        """
+        axis_cells = self._axis_prefill(todo, rows)
+        ranked = sorted(todo, key=lambda card: self._preagent_key(card, axis_cells))
+        first = max(1, int(os.getenv("CASCADE_STEP6_FIRST", "25")))
+        ceiling = max(0, int(os.getenv("CASCADE_STEP6_CEILING", "75")))
+        suitable = sum(self._suitable_for_stop(card) for card in cached_cards)
+        diagnostics = {
+            "pool": len(todo), "graded": 0, "batches": 0, "cached": len(cached_cards),
+            "complete": len(cached_cards), "suitable": suitable,
+        }
+        self.diagnostics["step6"] = diagnostics
+        stop_reason = "exhausted"
+        for offset in range(0, min(len(ranked), ceiling), first):
+            if suitable >= 10:
+                break
+            batch = ranked[offset:min(offset + first, ceiling)]
+            grids = self._grade_grid(batch, rows, model=_AGENT_MODEL, batch_size=3)
+            diagnostics["graded"] += len(batch)
+            diagnostics["batches"] += 1
+            for card in batch:
                 cid = str(card["id"])
-                if cid in target_ids:
-                    grids[cid] = dict(strong.get(cid, cheap.get(cid, {})))
-                else:
-                    # не перепроверено сильной: «плохо» от дешёвой держим, «хорошо»
-                    # понижаем до «неизвестно» — непроверенная карточка не займёт верх.
-                    grids[cid] = {
-                        r: (v, w) if v == "n" else ("m", "не перепроверено детально")
-                        for r, (v, w) in cheap.get(cid, {}).items()
-                    }
-            for cid, cells in strong.items():
-                grids.setdefault(cid, {}).update(cells)
-        else:
-            strong = self._grade_grid(todo, rows, model=_AGENT_MODEL, batch_size=3)
-            grids = {str(c["id"]): dict(strong.get(str(c["id"]), {})) for c in todo}
-
-        # Числовая ось — последнее слово за кодом: число он считает точнее модели.
-        for cid, cells in axis_cells.items():
-            grids.setdefault(cid, {}).update(cells)
-
-        by_id = {str(c["id"]): c for c in todo}
-        for cid, cells in grids.items():
-            card = by_id.get(cid)
-            if card is not None and cells:
+                model_cells = grids.get(cid, {})
+                complete = self._complete_grid(model_cells, rows)
+                cells = {**model_cells, **axis_cells.get(cid, {})}
                 self._apply_cells(card, cells, rows)
-                _cache_put("verdict", f"{self._tz_hash}|{cid}", {"grid": {str(k): list(v) for k, v in cells.items()}})
+                card["matrix_status"] = "complete" if complete else "incomplete"
+                if complete:
+                    diagnostics["complete"] += 1
+                    suitable += self._suitable_for_stop(card)
+                    _cache_put("verdict", f"{self._tz_hash}|{cid}", {
+                        "grid": {str(k): list(v) for k, v in cells.items()},
+                    })
+                else:
+                    card["fit"] = "partial"
+            if not grids:
+                stop_reason = "empty_response"
+                break
+        diagnostics["suitable"] = suitable
+        diagnostics["pending"] = len(todo) - diagnostics["graded"]
+        if suitable >= 10:
+            stop_reason = "enough_suitable"
+        elif stop_reason != "empty_response" and diagnostics["pending"]:
+            stop_reason = "ceiling"
+        diagnostics["stop_reason"] = stop_reason
 
     def _axis_prefill(self, cards, rows) -> dict:
         """Клетки, которые код считает точнее модели: числовая ось из шага 1
@@ -786,20 +807,6 @@ class Cascade:
             if ml is not None:
                 vols.append(ml)
         return {"capacity": caps, "volume": vols}
-
-    def _cells_rank_key(self, card, cells, rows):
-        n = m = u = 0
-        for i in range(1, len(rows) + 1):
-            v = cells.get(i, ("m", ""))[0]
-            n += v == "n"
-            m += v == "y"
-            u += v == "m"
-        return (n, -m, u, card.get("relevance", 1), self._price_num(card))
-
-    @staticmethod
-    def _price_num(card):
-        value = _decimal(card.get("price"))
-        return value if value is not None else Decimal("Infinity")
 
     def _grade_grid(self, cards, rows, *, model, batch_size) -> dict:
         """Возвращает {id карточки: {номер строки: (v, w)}}. Не применяет и не

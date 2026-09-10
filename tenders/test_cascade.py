@@ -44,22 +44,20 @@ def _product(name, *, external_id, group_id="", color_group_id="", price="100",
 class _Gateway:
     """Роутер ответов ИИ по маркеру промпта. Потокобезопасен (чистая функция)."""
 
-    def __init__(self, *, item="флешка", queries=None, criteria=None, grid=None, grid_cheap=None,
+    def __init__(self, *, item="флешка", queries=None, criteria=None, grid=None,
                  not_item=None, instructions=None, step1_error=False, step6_error=False):
         self.item = item
         self.queries = queries or ["флешка", "флеш-накопитель", "usb drive"]
         self.criteria = criteria or []
         self.grid = grid
-        self.grid_cheap = grid_cheap  # если задан — ответ дешёвой модели отличается
         self.not_item = not_item or []
         self.instructions = instructions
         self.step1_error = step1_error
         self.step6_error = step6_error
-        self.calls = {"step1": 0, "step4": 0, "step6": 0, "step6_cheap": 0, "step6_strong": 0}
+        self.calls = {"step1": 0, "step4": 0, "step6": 0}
 
     def __call__(self, prompt, **kwargs):
         usage = {"prompt_tokens": 10, "completion_tokens": 5}
-        model = kwargs.get("model", "")
         if "разбираешь ТЗ тендера" in prompt:
             self.calls["step1"] += 1
             if self.step1_error:
@@ -70,15 +68,13 @@ class _Gateway:
             return {"not_item": self.not_item}, usage
         if "эксперт по подбору товара под тендер" in prompt:
             self.calls["step6"] += 1
-            cheap = "haiku" in model
-            self.calls["step6_cheap" if cheap else "step6_strong"] += 1
             if self.step6_error:
                 raise RuntimeError("boom")
             body = {}
-            grid = self.grid_cheap if (cheap and self.grid_cheap is not None) else self.grid
+            grid = self.grid
             if grid is not None:
                 body["grid"] = self._grid_for(prompt, grid)
-            if self.instructions is not None and not cheap:
+            if self.instructions is not None:
                 body["instructions"] = self.instructions
             return body, usage
         raise AssertionError(f"unexpected prompt: {prompt[:120]}")
@@ -361,59 +357,6 @@ class CascadeFeedbackTests(TestCase):
         )
         self.assertEqual(gw.calls["step6"], 1)  # урок запустил проход агента
         self.assertEqual(result.instructions[0]["lesson_id"], 7)
-
-
-@patch.dict("os.environ", {"CASCADE_TWO_TIER": "1"})
-class CascadeTwoTierTests(TestCase):
-    def _many(self, n):
-        for i in range(n):
-            _product(f"Флешка {i:03d} 32 ГБ", external_id=f"N{i:03d}", group_id=f"G{i:03d}")
-
-    def _tz(self):
-        return _line(name="Флешка", rows=[{"label": "Ёмкость", "value": "не менее 32 ГБ"}])
-
-    def _crit(self):
-        return [{"n": 1, "concept": "ёмкость", "operator": ">=", "value": "32 ГБ", "keep": True}]
-
-    def test_two_tier_splits_cheap_all_strong_subset(self):
-        self._many(40)
-        gw = _Gateway(queries=["флешка"], criteria=self._crit(), grid=[{"id": "*", "cells": {"1": "y"}}])
-        result = _run(gw, self._tz())
-        d = result.diagnostics["two_tier"]
-        self.assertEqual(d["cheap"], 40)
-        self.assertLessEqual(d["strong"], 30)          # сильная модель — не по всем
-        self.assertGreater(gw.calls["step6_cheap"], 0)
-        self.assertGreater(gw.calls["step6_strong"], 0)
-
-    def test_flag_off_is_single_tier(self):
-        self._many(40)
-        gw = _Gateway(queries=["флешка"], criteria=self._crit(), grid=[{"id": "*", "cells": {"1": "y"}}])
-        with patch.dict("os.environ", {"CASCADE_TWO_TIER": "0"}):
-            result = _run(gw, self._tz())
-        self.assertEqual(gw.calls["step6_cheap"], 0)
-        self.assertNotIn("two_tier", result.diagnostics)
-
-    def test_small_pool_stays_single_tier(self):
-        self._many(5)
-        gw = _Gateway(queries=["флешка"], criteria=self._crit(), grid=[{"id": "*", "cells": {"1": "y"}}])
-        result = _run(gw, self._tz())
-        self.assertEqual(gw.calls["step6_cheap"], 0)
-
-    def test_strong_grid_overrides_cheap_for_top_cards(self):
-        _product("Флешка TOP 32 ГБ", external_id="TOP", group_id="GT", price="1")
-        for i in range(24):
-            _product(f"Флешка {i:02d} 32 ГБ", external_id=f"N{i:02d}", group_id=f"G{i:02d}", price="500")
-        # дешёвая модель считает TOP лучшей (y), остальных — мимо (n).
-        # сильная перепроверяет TOP и говорит n.
-        gw = _Gateway(
-            queries=["флешка"], criteria=self._crit(),
-            grid=[{"id": "*", "cells": {"1": "n"}}],
-            grid_cheap=[{"id": "TOP", "cells": {"1": "y"}}, {"id": "*", "cells": {"1": "n"}}],
-        )
-        result = _run(gw, self._tz())
-        top = result.candidates[0]
-        self.assertEqual(top["id"], "TOP")            # дешёвая вывела её вперёд
-        self.assertEqual(top["mismatch_count"], 1)     # но сильная перепроверила → n
 
 
 class CascadeAxisPrefillTests(TestCase):
