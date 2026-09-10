@@ -28,6 +28,13 @@ class CascadeLabViewTests(TestCase):
         self.assertContains(response, "8. Цена и топ-10")
         self.assertContains(response, "Результат проверок")
 
+    def test_assistant_drawer_has_superuser_lab_button(self):
+        self.client.force_login(self.user)
+        self.assertNotContains(self.client.get(reverse("tender_home")), "Открыть граф каскада")
+
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(reverse("tender_home")), "Открыть граф каскада")
+
     @patch("tenders.views._submit_cascade_lab")
     def test_create_run_from_tender_line(self, submit):
         self.client.force_login(self.admin)
