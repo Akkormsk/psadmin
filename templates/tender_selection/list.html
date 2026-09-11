@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% load tz tender_selection_extras %}
+
+{% block title %}Подбор тендеров{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="/" class="back-link">← На главную</a>
+  <h1>Подбор тендеров</h1>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Найденные тендеры <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
+      <div class="panel-actions">
+        <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
+        <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
+          {% csrf_token %}
+          <button type="submit" class="button-success">Обновить · от&nbsp;{{ settings.min_price|rub }}, за&nbsp;{{ settings.window_days }}&nbsp;дн.</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="ts-controls">
+      <label class="ts-sort">Сортировать
+        <select onchange="tsGo('sort', this.value)">
+          <option value="deadline" {% if sort == "deadline" %}selected{% endif %}>по сроку подачи</option>
+          <option value="deadline_far" {% if sort == "deadline_far" %}selected{% endif %}>по сроку подачи, поздние</option>
+          <option value="price_hi" {% if sort == "price_hi" %}selected{% endif %}>по сумме, крупные</option>
+          <option value="price_lo" {% if sort == "price_lo" %}selected{% endif %}>по сумме, мелкие</option>
+          <option value="new" {% if sort == "new" %}selected{% endif %}>по дате публикации</option>
+        </select>
+      </label>
+      <span class="ts-lawtabs">
+        <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Оба · {{ law_counts.all }}</button>
+        <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ · {{ law_counts.fz44 }}</button>
+        <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ · {{ law_counts.fz223 }}</button>
+      </span>
+      <span class="ts-controls__note">
+        {% if show_all %}
+          <a href="#" onclick="tsGo('all','');return false">← только актуальные и подходящие</a> · серым — скрытые
+        {% elif hidden_count or expired_count %}
+          <a href="#" onclick="tsGo('all','1');return false">Показать все ({% if hidden_count %}скрыто фильтром {{ hidden_count }}{% endif %}{% if hidden_count and expired_count %}, {% endif %}{% if expired_count %}срок истёк у {{ expired_count }}{% endif %})</a>
+        {% endif %}
+      </span>
+    </div>
+
+    <details class="ts-wordfilter"{% if words_overridden %} open{% endif %}>
+      <summary>Плюс/минус-слова{% if words_overridden %} <span class="ts-wf-badge">черновик, не сохранён</span>{% endif %}</summary>
+      <form method="get" class="ts-wf-form">
+        <label>Плюс-слова<textarea name="inc" rows="3" placeholder="через запятую или с новой строки; + внутри = «все части»">{{ inc_value }}</textarea></label>
+        <label>Минус-слова<textarea name="exc" rows="3">{{ exc_value }}</textarea></label>
+        <div class="ts-wf-actions">
+          <button type="submit" class="button-secondary">Показать</button>
+          <button type="submit" class="button-success" formaction="{% url 'tender_selection:save_words' %}" formmethod="post">Сохранить в настройки</button>
+          {% if words_overridden %}<a href="{% url 'tender_selection:list' %}">Сбросить к сохранённым</a>{% endif %}
+        </div>
+        {% csrf_token %}
+      </form>
+    </details>
+
+    {% for tender in page_obj.object_list %}
+    <div class="saved-estimate ts-tender{% if tender.filtered_out %} is-dim{% endif %}{% if tender.on_estimate %} is-onestimate{% endif %}">
+      <a class="saved-estimate__main" href="{% url 'tender_selection:detail' tender.pk %}">
+        <span>
+          <strong>{{ tender.title|default:tender.object_info }}</strong>
+          <small class="ts-tender__meta">
+            <span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span>
+            {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠&nbsp;жалоба</span>{% endif %}
+            № {{ tender.purchase_number }}
+            · {% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}
+            {% if tender.org.city or tender.region_label %} · {{ tender.org.city|default:tender.region_label }}{% endif %}
+            {% if tender.match_hits %} · <span class="ts-hits">{{ tender.match_hits|join:", " }}</span>{% endif %}
+          </small>
+        </span>
+        <span class="tender-saved-totals">
+          <strong>{{ tender.max_price|rub }}</strong>
+          <small{% if tender.is_soon %} class="ts-soon-label"{% endif %}>{% if tender.collecting_finished_at %}{% if tender.is_soon %}⏰ {% endif %}до {{ tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% else %}срок не указан{% endif %}</small>
+        </span>
+      </a>
+      {% if tender.on_estimate %}
+      <a class="ts-onestimate-pill" href="{% url 'tender_estimate' tender.pushed_estimate_id %}" title="Открыть просчёт">На расчёте →</a>
+      {% else %}
+      <form class="saved-estimate__status-form is-{{ tender.review }}" data-ts-review data-review="{{ tender.review }}" method="post" action="{% url 'tender_selection:review' tender.pk %}">
+        {% csrf_token %}
+        <select data-customized="true" class="saved-estimate__status" name="review" aria-label="Статус тендера">
+          {% for value, label in tender.REVIEW_CHOICES %}<option value="{{ value }}" {% if tender.review == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </form>
+      <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
+      </form>
+      {% endif %}
+    </div>
+    {% empty %}
+    <p class="settings-description">Ничего не подходит под фильтр. Нажмите «Обновить» или ослабьте плюс/минус-слова в настройках.</p>
+    {% endfor %}
+
+    {% if page_obj.has_other_pages %}
+    <div class="ts-pager">
+      {% if page_obj.has_previous %}<a href="#" onclick="tsPage({{ page_obj.previous_page_number }});return false">← назад</a>{% endif %}
+      <span>стр. {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span>
+      {% if page_obj.has_next %}<a href="#" onclick="tsPage({{ page_obj.next_page_number }});return false">вперёд →</a>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if last_run %}
+    <p class="settings-description ts-lastrun">
+      Последняя выгрузка {{ last_run.started_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}:
+      {{ last_run.records_received }} записей, {{ last_run.created_count }} новых, за {{ last_run.duration_seconds }} с{% if not last_run.ok %} · <span class="ts-warn">{{ last_run.error }}</span>{% endif %}.
+    </p>
+    {% endif %}
+  </section>
+</div>
+
+<div id="ts-overlay" hidden>
+  <div class="ts-overlay__box">
+    <div class="ts-spinner"></div>
+    <div>Обновляю список…<br><small>Запросы идут с паузами, чтобы не упереться в лимит сервиса. Это может занять до 2&nbsp;минут — страница обновится сама.</small></div>
+  </div>
+</div>
+
+<style>
+  .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
+  .ts-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 4px; font-size: 13px; }
+  .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
+  .ts-lawtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
+  .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--field-bg); color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--field-border); }
+  .ts-lawtabs button:first-child { border-left: 0; }
+  .ts-lawtabs button.is-active { background: #4c5fd5; color: #fff; font-weight: 700; }
+  .ts-controls__note { color: #6b7280; }
+  .ts-tender__meta { color: #6b7280 !important; overflow-wrap: anywhere; }
+  .ts-hits { color: #2e7d32; }
+  .ts-tender.is-dim { opacity: .45; }
+  .ts-tender.is-onestimate { background: var(--tint-info); }
+  .ts-tender .tender-saved-totals small { white-space: nowrap; }
+  .ts-soon-label { color: #b8434e !important; font-weight: 600; }
+  .ts-onestimate-pill { flex: 0 0 auto; align-self: center; padding: 6px 12px; border-radius: 999px;
+    background: #4c5fd5; color: #fff; font-size: 12px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+  .ts-onestimate-pill:hover { background: #3d4fc0; }
+  .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
+  .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
+  .ts-flag { color: #b8434e; font-weight: 700; font-size: 11px; }
+  .ts-wordfilter { margin: 4px 0 10px; font-size: 13px; }
+  .ts-wordfilter > summary { cursor: pointer; color: #4c5fd5; user-select: none; }
+  .ts-wf-badge { color: #b26a00; font-size: 11px; font-weight: 700; }
+  .ts-wf-form { display: grid; gap: 10px; margin-top: 10px; max-width: 720px; }
+  .ts-wf-form label { display: grid; gap: 4px; font-size: 12px; color: #6b7280; }
+  .ts-wf-form textarea { font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid #e1e5ea; border-radius: 8px; resize: vertical; }
+  .ts-wf-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .ts-wf-actions .button-secondary, .ts-wf-actions .button-success { font-size: 13px; padding: 6px 14px; }
+  .saved-estimate__status-form.is-interesting::before { background: #5c9b70; }
+  .saved-estimate__status-form.is-not_interesting::before { background: #cf7373; }
+  .ts-warn { color: #b26a00; }
+  .ts-lastrun { margin-top: 16px; font-size: 12px; }
+  .ts-pager { display: flex; gap: 12px; align-items: center; margin-top: 14px; font-size: 13px; }
+  #ts-overlay { position: fixed; inset: 0; background: var(--overlay-scrim); z-index: 1000; display: none; align-items: center; justify-content: center; }
+  #ts-overlay:not([hidden]) { display: flex; }
+  .ts-overlay__box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; max-width: 380px; text-align: center; box-shadow: var(--shadow-pop); font-size: 14px; }
+  .ts-overlay__box small { color: var(--ink-2); }
+  .ts-spinner { width: 34px; height: 34px; margin: 0 auto 14px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: ts-spin .8s linear infinite; }
+  @keyframes ts-spin { to { transform: rotate(360deg); } }
+</style>
+<script>
+  function tsGo(key, val) {
+    var p = new URLSearchParams(location.search);
+    if (val) p.set(key, val); else p.delete(key);
+    p.delete("page");
+    location.search = p.toString();
+  }
+  function tsPage(n) {
+    var p = new URLSearchParams(location.search);
+    p.set("page", n);
+    location.search = p.toString();
+  }
+
+  document.getElementById("ts-pull-form").addEventListener("submit", function () {
+    document.getElementById("ts-overlay").hidden = false;
+  });
+
+  document.querySelectorAll("[data-ts-review]").forEach(function (form) {
+    var select = form.querySelector("select");
+    form.addEventListener("submit", function (e) { e.preventDefault(); });
+    select.addEventListener("change", function () {
+      var prev = form.dataset.review;
+      var next = select.value;
+      var body = new FormData(form);
+      form.classList.remove("is-" + prev, "is-error");
+      form.classList.add("is-" + next, "is-saving");
+      select.disabled = true;
+      fetch(form.action, {
+        method: "POST",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        body: body,
+      })
+        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+        .then(function (data) { form.dataset.review = data.review; })
+        .catch(function () {
+          select.value = prev;
+          form.classList.remove("is-" + next);
+          form.classList.add("is-" + prev, "is-error");
+        })
+        .finally(function () {
+          select.disabled = false;
+          form.classList.remove("is-saving");
+        });
+    });
+  });
+</script>
+{% endblock %}

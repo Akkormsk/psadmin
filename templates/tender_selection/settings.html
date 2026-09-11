@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки подбора тендеров{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'tender_selection:list' %}" class="back-link">← Подбор тендеров</a>
+  <h1>Настройки подбора</h1>
+
+  <form method="post" class="content-stack">
+    {% csrf_token %}
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Фильтр по названию</h2>
+        <button type="submit" class="button-success">Сохранить</button>
+      </div>
+      <p class="settings-description">
+        Слова через запятую или с новой строки. Регистр и «ё/е» не важны.
+        Знак <b>+</b> внутри — «оба слова сразу»: <code>живых+цветов</code>.
+      </p>
+
+      <div class="form-group">
+        <label for="include_words">Плюс-слова — показываем, если сработало хотя бы одно (пусто = показываем все)</label>
+        <textarea id="include_words" name="include_words" rows="8">{{ settings.include_words }}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="exclude_words">Минус-слова — скрываем, если сработало хотя бы одно</label>
+        <textarea id="exclude_words" name="exclude_words" rows="8">{{ settings.exclude_words }}</textarea>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">Параметры выгрузки</h2></div>
+      <div class="settings-grid settings-grid--three">
+        <div class="form-group">
+          <label for="min_price">Минимальная НМЦК, ₽</label>
+          <input type="number" id="min_price" name="min_price" value="{{ settings.min_price|floatformat:0 }}" min="0" step="1000">
+        </div>
+        <div class="form-group">
+          <label for="window_days">Окно по дате публикации, дней</label>
+          <input type="number" id="window_days" name="window_days" value="{{ settings.window_days }}" min="1" max="30">
+        </div>
+      </div>
+
+      <h3 class="settings-subtitle">Источники</h3>
+      <div class="ts-checks">
+        {% for code, label, checked in laws %}
+        <label class="ts-check"><input type="checkbox" name="law" value="{{ code }}" {% if checked %}checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+      </div>
+      <p class="settings-description">223-ФЗ — закупки госкомпаний и ГУП/МУП. Данные беднее (нет разобранного перечня товаров), но рынок большой.</p>
+
+      <h3 class="settings-subtitle">Категории товаров (ОКПД2){% if using_defaults %} — сейчас работает список по умолчанию{% endif %}</h3>
+      <div class="ts-checks ts-checks--cols">
+        {% for code, label, checked in categories %}
+        <label class="ts-check"><input type="checkbox" name="okpd2" value="{{ code }}" {% if checked %}checked{% endif %}> {{ label }} <span class="ts-code">{{ code }}</span></label>
+        {% endfor %}
+      </div>
+      <p class="settings-description">Фильтр уходит в сам запрос к источнику — это главное, что режет поток. Снять все = взять список по умолчанию.</p>
+
+      <details class="ts-regions">
+        <summary>Регионы {% if settings.regions %}— выбрано {{ settings.regions|length }}{% else %}— все{% endif %}</summary>
+        <div class="ts-checks ts-checks--cols">
+          {% for code, name, checked in regions %}
+          <label class="ts-check"><input type="checkbox" name="region" value="{{ code }}" {% if checked %}checked{% endif %}> {{ name }}</label>
+          {% endfor %}
+        </div>
+        <p class="settings-description">Ничего не выбрано — берём все регионы.</p>
+      </details>
+    </section>
+  </form>
+</div>
+
+<style>
+  .ts-checks { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0; }
+  .ts-checks--cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 18px; }
+  .ts-check { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+  .ts-code { color: #9ca3af; font-size: 11px; }
+  .ts-regions { margin-top: 16px; }
+  .ts-regions summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  .ts-regions[open] summary { margin-bottom: 8px; }
+</style>
+{% endblock %}

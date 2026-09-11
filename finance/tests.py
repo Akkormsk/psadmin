@@ -183,3 +183,88 @@ class PersonalFinanceTests(TestCase):
         lines = list(calculation.context["lines"])
         self.assertEqual([line.manager_id for line in lines[:2]], [self.other_manager.pk, self.manager.pk])
         self.assertEqual(lines[-1].kind, PayrollLine.PRINTER)
+
+
+class OrderRecordsOnSalaryPageTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.admin = user_model.objects.create_superuser(username="admin", password="password")
+        self.manager = user_model.objects.create_user(
+            username="manager", first_name="Ирина", last_name="Иванова", password="password"
+        )
+        self.other_manager = user_model.objects.create_user(
+            username="other-manager", first_name="Ольга", last_name="Королева", password="password"
+        )
+        self.manager_record = OrderRecord.objects.create(
+            order_number="1001", gross_profit="150000.00", accounting_period="2026-04",
+            manager=self.manager, created_by=self.manager,
+        )
+        self.other_record = OrderRecord.objects.create(
+            order_number="1002", gross_profit="250000.00", accounting_period="2026-04",
+            manager=self.other_manager, created_by=self.other_manager,
+        )
+
+    def test_manager_sees_only_own_records_on_salary_page(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("finance:calculation"), {"period": "2026-04"})
+        self.assertContains(response, "1001")
+        self.assertNotContains(response, "1002")
+        self.assertEqual(response.context["total_gross_profit"], Decimal("150000.00"))
+
+    def test_admin_sees_all_and_can_filter_by_manager(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("finance:calculation"), {"period": "2026-04", "order_manager": self.manager.pk}
+        )
+        self.assertContains(response, "1001")
+        self.assertNotContains(response, "1002")
+        self.assertContains(response, "Ирина Иванова")
+
+    def test_manager_creates_design_record(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(reverse("finance:orders_create"), {
+            "record_type": OrderRecord.RECORD_DESIGN, "order_number": "макет вывески",
+            "gross_profit": "12000", "accounting_period": "2026-08", "period": "2026-08",
+        })
+        self.assertEqual(response.status_code, 302)
+        record = OrderRecord.objects.get(order_number="макет вывески")
+        self.assertEqual(record.record_type, OrderRecord.RECORD_DESIGN)
+        self.assertEqual(record.manager, self.manager)
+
+    def test_order_number_must_be_numeric(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(reverse("finance:orders_create"), {
+            "record_type": OrderRecord.RECORD_ORDER, "order_number": "заказ без номера",
+            "gross_profit": "12000", "accounting_period": "2026-08", "period": "2026-08",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Номер заказа должен содержать только цифры")
+        self.assertFalse(OrderRecord.objects.filter(order_number="заказ без номера").exists())
+
+    def test_admin_assigns_manager_on_create(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse("finance:orders_create"), {
+            "record_type": OrderRecord.RECORD_ORDER, "order_number": "5005",
+            "gross_profit": "9000", "accounting_period": "2026-08", "period": "2026-08",
+            "manager": self.other_manager.pk,
+        })
+        self.assertEqual(OrderRecord.objects.get(order_number="5005").manager, self.other_manager)
+
+    def test_manager_cannot_edit_another_managers_record(self):
+        self.client.force_login(self.manager)
+        self.client.post(reverse("finance:orders_update", args=[self.other_record.pk]), {
+            f"edit-{self.other_record.pk}-record_type": OrderRecord.RECORD_ORDER,
+            f"edit-{self.other_record.pk}-order_number": "9999",
+            f"edit-{self.other_record.pk}-gross_profit": "1",
+            f"edit-{self.other_record.pk}-accounting_period": "2026-08",
+        })
+        self.other_record.refresh_from_db()
+        self.assertEqual(self.other_record.order_number, "1002")
+
+    def test_admin_can_delete_any_record(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("finance:orders_delete", args=[self.manager_record.pk]), {"period": "2026-04"}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(OrderRecord.objects.filter(pk=self.manager_record.pk).exists())

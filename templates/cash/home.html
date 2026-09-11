@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% load humanize %}
 
-{% block title %}Касса{% endblock %}
+{% block title %}Финансы{% endblock %}
 
 {% block content %}
 <div class="container">
   <a href="/" class="back-link">← На главную</a>
-  <h1>Касса</h1>
+  <h1>Финансы</h1>
 
   <div class="content-stack">
     <section class="panel">
       <div class="panel-header panel-header--toolbar">
-        <h2 class="panel-title">Операционный день</h2>
+        <h2 class="panel-title">Касса · операционный день</h2>
         <form method="get" class="cash-date-controls">
           <a class="button-secondary" href="?date={{ today|date:'Y-m-d' }}">Сегодня</a>
           <label for="cash-date">Дата</label>
@@ -43,6 +43,8 @@
         {% include "cash/_ledger.html" with transactions=card_transactions income_transactions=card_income_transactions expense_transactions=card_expense_transactions balance=card_balance %}
       </section>
     </div>
+
+    {% include "cash/_bank_payments.html" %}
   </div>
 </div>
 <div class="modal-overlay cash-edit-modal" id="cash-create-modal" aria-hidden="true">

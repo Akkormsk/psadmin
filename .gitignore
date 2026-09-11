@@ -8,6 +8,7 @@ psadmin-local-export-*.json
 .knowledge_sync_token
 .codex/
 runserver*.log
+*.log
 staticfiles/
 .idea/
 tenders/assistant_knowledge.json

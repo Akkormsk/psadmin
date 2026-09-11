@@ -8,4 +8,7 @@ urlpatterns = [
     path("operations/<int:pk>/delete/", views.transaction_delete, name="transaction_delete"),
     path("reconcile/", views.reconcile, name="reconcile"),
     path("history/", views.audit_log, name="audit_log"),
+    path("bank/sync/", views.bank_sync_now, name="bank_sync_now"),
+    path("bank/webhook/", views.bank_webhook, name="bank_webhook"),
+    path("bank/<int:pk>/visibility/", views.bank_payment_toggle, name="bank_payment_toggle"),
 ]

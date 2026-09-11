@@ -2,7 +2,7 @@
 {% block title %}Настройки сотрудников{% endblock %}
 {% block content %}
 <div class="container">
-  <a href="{% url 'finance:dashboard' %}" class="back-link">← Финансы</a>
+  <a href="{% url 'finance:dashboard' %}" class="back-link">← Зарплата</a>
   <h1>Настройки сотрудников</h1>
   <form method="post" id="manager-settings-form" class="content-stack">{% csrf_token %}
     <input type="hidden" name="employee_order" id="employee-order">

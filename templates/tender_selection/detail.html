@@ -1,0 +1,320 @@
+{% extends "base.html" %}
+{% load tz tender_selection_extras %}
+
+{% block title %}{{ tender.title|default:tender.object_info|truncatechars:60 }}{% endblock %}
+
+{% block content %}
+<div class="container ts-detail">
+  <a href="{% url 'tender_selection:list' %}" class="back-link">← к списку</a>
+  <h1>Подбор тендеров</h1>
+
+  <section class="panel">
+    <div class="panel-header">
+      <div class="ts-detail__head">
+        <h2 class="panel-title"><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> {{ tender.title|default:tender.object_info }}</h2>
+        <p class="settings-description">
+          № {{ tender.purchase_number }}
+          · {% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}
+          {% if card.eis_href or tender.eis_url %} · <a href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
+          {% if card.print_form_url %} · <a href="{{ card.print_form_url }}" target="_blank" rel="noopener">печатная форма ↗</a>{% endif %}
+        </p>
+      </div>
+      <div class="panel-actions ts-detail__actions">
+        {% if pushed_estimate_id %}
+        <a class="ts-onestimate-pill" href="{% url 'tender_estimate' pushed_estimate_id %}">На расчёте — открыть просчёт →</a>
+        {% else %}
+        <form class="saved-estimate__status-form is-{{ tender.review }}" data-ts-review data-review="{{ tender.review }}" method="post" action="{% url 'tender_selection:review' tender.pk %}">
+          {% csrf_token %}
+          <select data-customized="true" class="saved-estimate__status" name="review" aria-label="Статус тендера">
+            {% for value, label in tender.REVIEW_CHOICES %}<option value="{{ value }}" {% if tender.review == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </form>
+        <form method="post" action="{% url 'tender_selection:push' tender.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="button-success">В расчёт тендеров</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2></div>
+    {% if is_fz223 %}
+    <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
+      <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку закупки ↗</a></p>
+    {% elif fetch_failed %}
+    <p class="ts-warn">Не удалось загрузить извещение (возможно, лимит запросов).
+      <a href="?refresh=1">Попробовать ещё раз</a>. Ниже — что известно из списка.</p>
+    {% endif %}
+
+    <dl class="ts-dl">
+      <div><dt>Заказчик</dt><dd>
+        {% if card.customer.name %}<strong>{{ card.customer.name }}</strong>
+          {% if card.customer.short_name %}<div class="ts-sub">{{ card.customer.short_name }}</div>{% endif %}
+          <div class="ts-sub">ИНН {{ card.customer.inn }}{% if card.customer.kpp %} · КПП {{ card.customer.kpp }}{% endif %}</div>
+          {% if card.customer.fact_address %}<div>{{ card.customer.fact_address }}</div>{% endif %}
+          {% if card.customer.contact_person %}<div class="ts-sub">{{ card.customer.contact_person }}{% if card.customer.email %}, {{ card.customer.email }}{% endif %}{% if card.customer.phone %}, {{ card.customer.phone }}{% endif %}</div>{% endif %}
+        {% elif org.name %}<strong>{{ org.name }}</strong>
+          {% if org.short_name and org.short_name != org.name %}<div class="ts-sub">{{ org.short_name }}</div>{% endif %}
+          <div class="ts-sub">ИНН {{ tender.customer_inn }}{% if region_label %} · {{ region_label }}{% endif %}</div>
+          {% if org.address %}<div>{{ org.address }}</div>{% endif %}
+          {% if org.email or org.website %}<div class="ts-sub">{{ org.email }}{% if org.email and org.website %} · {% endif %}{% if org.website %}<a href="http://{{ org.website }}" target="_blank" rel="noopener">{{ org.website }}</a>{% endif %}</div>{% endif %}
+        {% else %}ИНН {{ tender.customer_inn|default:"—" }}{% if region_label %} · {{ region_label }}{% endif %}{% endif %}
+      </dd></div>
+
+      <div><dt>Приём заявок</dt><dd>
+        {% if card.dates.collect_start %}{{ card.dates.collect_start|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} — {% endif %}
+        {% if card.dates.collect_end %}{{ card.dates.collect_end|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК
+        {% elif tender.collecting_finished_at %}до {{ tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% else %}—{% endif %}
+      </dd></div>
+      {% if card.dates.bidding %}<div><dt>Аукцион</dt><dd>{{ card.dates.bidding|timezone:"Europe/Moscow"|date:"d.m.Y" }}</dd></div>{% endif %}
+      {% if card.dates.summarizing %}<div><dt>Подведение итогов</dt><dd>{{ card.dates.summarizing|timezone:"Europe/Moscow"|date:"d.m.Y" }}</dd></div>{% endif %}
+      {% if card.dates.execution_end %}<div><dt>Исполнение до</dt><dd>{{ card.dates.execution_end|timezone:"Europe/Moscow"|date:"d.m.Y" }}</dd></div>{% endif %}
+
+      <div><dt>НМЦК</dt><dd><strong>{{ card.money.max_price|default:tender.max_price|rub }}</strong></dd></div>
+      {% if card.money.app_guarantee_amount %}<div><dt>Обеспечение заявки</dt><dd>{{ card.money.app_guarantee_amount|rub }}{% if card.money.app_guarantee_part %} ({{ card.money.app_guarantee_part }}%){% endif %}</dd></div>{% endif %}
+      {% if card.money.contract_guarantee_part %}<div><dt>Обеспечение контракта</dt><dd>{{ card.money.contract_guarantee_part }}%</dd></div>{% endif %}
+      {% if card.money.treasury_support %}<div><dt>Казначейское сопровождение</dt><dd>требуется</dd></div>{% endif %}
+
+      {% if card.etp.name %}<div><dt>Площадка</dt><dd>{{ card.etp.name }}{% if card.etp.url %} — <a href="{{ card.etp.url }}" target="_blank" rel="noopener">{{ card.etp.url }}</a>{% endif %}</dd></div>{% endif %}
+      {% if card.delivery_address %}<div><dt>Место поставки</dt><dd>{{ card.delivery_address }}</dd></div>{% endif %}
+      {% if is_fz223 and tender.okpd2 %}<div><dt>ОКПД2</dt><dd class="ts-sub">{{ tender.okpd2|join:", " }}</dd></div>{% endif %}
+    </dl>
+
+    {% if card.items %}
+    <h3 class="settings-subtitle">Перечень товаров ({{ card.items|length }})</h3>
+    <div class="table-wrapper"><table class="table ts-items">
+      <thead><tr><th>Наименование</th><th>ОКПД2 / КТРУ</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+      <tbody>
+        {% for item in card.items %}
+        <tr>
+          <td>
+            <strong>{{ item.name }}</strong>
+            {% if item.characteristics %}
+            <ul class="ts-chars">{% for ch in item.characteristics %}<li>{% if ch.name %}<span class="ts-sub">{{ ch.name }}:</span> {% endif %}{{ ch.value }}</li>{% endfor %}</ul>
+            {% endif %}
+          </td>
+          <td class="ts-sub">{{ item.code }}{% if item.code_name %}<br>{{ item.code_name }}{% endif %}</td>
+          <td class="ts-nowrap">{{ item.quantity|floatformat:"-2" }} {{ item.unit }}</td>
+          <td class="ts-nowrap">{{ item.price|rub }}</td>
+          <td class="ts-nowrap">{{ item.sum|rub }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% endif %}
+  </section>
+
+  {% if price_stats %}
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках</h2></div>
+    <p class="ts-stats-lead">
+      Медианное снижение <strong>{{ price_stats.median }}%</strong>, разброс {{ price_stats.range_lo }}–{{ price_stats.range_hi }}%.
+      Выборка: {{ price_stats.count }}{% if price_stats.same_region %} (в этом регионе — {{ price_stats.same_region }}){% endif %}.
+    </p>
+    {% if price_stats.customer_stats %}
+    <p class="ts-stats-lead">У этого заказчика в этой категории: {{ price_stats.customer_stats.count }}
+      закупк(и), снижение {{ price_stats.customer_stats.discounts|join:" / " }}% (медиана {{ price_stats.customer_stats.median }}%).</p>
+    {% endif %}
+    <p class="ts-stats-suggest">При переносе в расчёт подставим снижение <strong>{{ price_stats.suggested_reduction }}%</strong>.</p>
+
+    <details class="ts-stats-details">
+      <summary>Закупки, на которых основано ({{ price_stats.examples|length }})</summary>
+      <div class="table-wrapper"><table class="table ts-stats-table">
+        <thead><tr><th>Предмет</th><th>Регион</th><th>Начальная</th><th>Итог</th><th>Снижение</th><th>Дата</th></tr></thead>
+        <tbody>
+          {% for row in price_stats.examples %}
+          <tr>
+            <td>{{ row.subject|default:"—"|truncatechars:70 }}</td>
+            <td class="ts-sub">{{ row.region_label|default:"—" }}</td>
+            <td class="ts-nowrap">{{ row.nmck|rub }}</td>
+            <td class="ts-nowrap">{{ row.final_price|rub }}</td>
+            <td class="ts-nowrap"><strong>{{ row.discount_pct }}%</strong></td>
+            <td class="ts-nowrap ts-sub">{{ row.contract_date|date:"m.Y" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+    </details>
+    <p class="ts-sub">
+      {% if price_stats.match_level == "strong" %}Отбор: по совпадению товарного кода, слов в названии и заказчика.
+      {% else %}Отбор: по товарной категории {{ price_stats.categories|join:", " }} и близости суммы (точных совпадений по товару мало).{% endif %}
+      Совместные и многолотовые закупки исключены.
+    </p>
+  </section>
+  {% endif %}
+
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">Документы{% if card.documents %} <small class="ts-count">{{ card.documents|length }}</small>{% endif %}</h2></div>
+    {% if card.documents %}
+    <ul class="ts-docs">
+      {% for doc in card.documents %}
+      <li>
+        <div class="ts-doc-line">
+          <a href="{{ doc.url }}" target="_blank" rel="noopener">{{ doc.name }}</a>
+          <span class="ts-sub">{% if doc.kind %}{{ doc.kind }}{% endif %}{% if doc.kind and doc.size_kb %} · {% endif %}{% if doc.size_kb %}{{ doc.size_kb }} КБ{% endif %}</span>
+        </div>
+        <button type="button" class="button-secondary ts-doc-btn" data-doc-preview="{{ forloop.counter0 }}" data-doc-name="{{ doc.name }}">Просмотр</button>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="ts-sub">Просмотр разбирает файл на сервере (текст и таблицы). Оригинал — по названию.</p>
+    {% else %}
+    <p class="settings-description">Список файлов недоступен.</p>
+    {% endif %}
+  </section>
+
+  {% if clarifications %}
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">Разъяснения <small class="ts-count">{{ clarifications|length }}</small></h2></div>
+    <ul class="ts-extras">
+      {% for c in clarifications %}
+      <li>
+        <div class="ts-extra-head">
+          <span>{{ c.label }}{% if c.number %} № {{ c.number }}{% endif %}</span>
+          {% if c.published_at %}<span class="ts-sub">{{ c.published_at|timezone:"Europe/Moscow"|date:"d.m.Y" }}</span>{% endif %}
+        </div>
+        {% if c.question %}<p class="ts-extra-q"><span class="ts-sub">Вопрос.</span> {{ c.question }}</p>{% endif %}
+        {% if c.answer %}<p class="ts-extra-a"><span class="ts-sub">Ответ.</span> {{ c.answer }}</p>{% endif %}
+        {% if c.href or c.print_url %}
+        <div class="ts-sub ts-extra-links">
+          {% if c.href %}<a href="{{ c.href }}" target="_blank" rel="noopener">на ЕИС ↗</a>{% endif %}
+          {% if c.print_url %}{% if c.href %} · {% endif %}<a href="{{ c.print_url }}" target="_blank" rel="noopener">печатная форма ↗</a>{% endif %}
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if complaints %}
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">Жалобы в ФАС <small class="ts-count">{{ complaints|length }}</small></h2></div>
+    <p class="ts-warn">По закупке есть жалобы — аукцион может быть приостановлен, а закупка отменена или переиграна.
+      Текст жалоб и решения — на портале ЕИС:
+      <a href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">открыть карточку ↗</a></p>
+    <ul class="ts-extras">
+      {% for c in complaints %}
+      <li>
+        <div class="ts-extra-head">
+          <span>{% if c.kinds %}{{ c.kinds|join:", " }}{% else %}Жалоба{% endif %}{% if c.object %} · {{ c.object }}{% endif %}</span>
+          {% if c.published_at %}<span class="ts-sub">{{ c.published_at|timezone:"Europe/Moscow"|date:"d.m.Y" }}</span>{% endif %}
+        </div>
+        {% if c.reg_number %}<div class="ts-sub">рег. № {{ c.reg_number }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</div>
+
+<div class="modal-overlay" id="ts-doc-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="ts-doc-title">Документ</h2>
+      <button type="button" class="modal-close" id="ts-doc-close" aria-label="Закрыть">&times;</button>
+    </div>
+    <div id="ts-doc-body" class="ts-doc-body"></div>
+  </div>
+</div>
+
+<style>
+  .ts-detail__head { min-width: 0; flex: 1 1 auto; }
+  .ts-detail__head .panel-title { font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
+  .ts-detail__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 0 auto; }
+  .ts-detail__actions .saved-estimate__status-form { flex: 0 0 auto; }
+  .ts-detail .panel-title .ts-law { vertical-align: middle; margin-right: 4px; }
+  .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; background: #eef1f4; color: #6b7280; }
+  .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
+  .ts-onestimate-pill { display: inline-block; padding: 8px 16px; border-radius: 999px; background: #4c5fd5; color: #fff; font-size: 13px; font-weight: 700; text-decoration: none; }
+  .ts-onestimate-pill:hover { background: #3d4fc0; }
+  .ts-warn { color: #b26a00; }
+  .ts-dl { display: grid; gap: 12px; margin: 0; }
+  .ts-dl > div { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: baseline; }
+  .ts-dl dt { color: #8a929e; font-size: 13px; }
+  .ts-dl dd { margin: 0; }
+  .ts-sub { color: #9ca3af; font-size: 12px; }
+  .settings-subtitle { margin: 24px 0 12px; }
+  .ts-items { font-size: 13px; }
+  .ts-items td { vertical-align: top; }
+  .ts-nowrap { white-space: nowrap; }
+  .ts-chars { margin: 4px 0 0; padding-left: 16px; font-size: 12px; color: #555; }
+  .ts-docs { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .ts-docs li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+  .ts-doc-line { min-width: 0; }
+  .ts-doc-btn { font-size: 12px; padding: 4px 10px; flex: 0 0 auto; }
+  #ts-doc-modal .modal { width: min(920px, calc(100vw - 40px)); max-width: none; max-height: calc(100vh - 60px); overflow: auto; }
+  .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
+  .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
+  .ts-doc-body h4 { margin: 16px 0 6px; }
+  .ts-doc-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+  .ts-doc-table td { border: 1px solid #e0e4ea; padding: 4px 8px; vertical-align: top; }
+  .ts-doc-loading { color: #6b7280; }
+  .ts-extras { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  .ts-extras li { border-left: 2px solid #e1e5ea; padding-left: 12px; }
+  .ts-extra-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-weight: 600; font-size: 13px; }
+  .ts-extra-q, .ts-extra-a { margin: 6px 0 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ts-extra-a { color: #1f2937; }
+  .ts-extra-links { margin-top: 6px; }
+  .ts-stats-lead { margin: 0 0 8px; font-size: 14px; line-height: 1.55; }
+  .ts-stats-suggest { margin: 0 0 12px; font-size: 13px; color: #4c5fd5; }
+  .ts-stats-details { margin: 8px 0; }
+  .ts-stats-details summary { cursor: pointer; font-size: 13px; color: #4c5fd5; }
+  .ts-stats-table { font-size: 12px; margin-top: 10px; }
+  .ts-stats-table td { vertical-align: top; }
+  @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } }
+</style>
+<script>
+  document.querySelectorAll("[data-ts-review]").forEach(function (form) {
+    var select = form.querySelector("select");
+    form.addEventListener("submit", function (e) { e.preventDefault(); });
+    select.addEventListener("change", function () {
+      var prev = form.dataset.review, next = select.value;
+      var body = new FormData(form);
+      form.classList.remove("is-" + prev, "is-error");
+      form.classList.add("is-" + next, "is-saving");
+      select.disabled = true;
+      fetch(form.action, { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body })
+        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+        .then(function (data) { form.dataset.review = data.review; })
+        .catch(function () {
+          select.value = prev;
+          form.classList.remove("is-" + next);
+          form.classList.add("is-" + prev, "is-error");
+        })
+        .finally(function () { select.disabled = false; form.classList.remove("is-saving"); });
+    });
+  });
+
+  (function () {
+    var modal = document.getElementById("ts-doc-modal");
+    var title = document.getElementById("ts-doc-title");
+    var body = document.getElementById("ts-doc-body");
+    function close() { modal.classList.remove("is-open"); }
+    document.getElementById("ts-doc-close").addEventListener("click", close);
+    modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+
+    document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        title.textContent = btn.dataset.docName || "Документ";
+        body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
+        modal.classList.add("is-open");
+        fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", btn.dataset.docPreview))
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            title.textContent = data.name || "Документ";
+            if (data.error) {
+              body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
+            } else {
+              body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
+            }
+          })
+          .catch(function () { body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>'; });
+      });
+    });
+  })();
+</script>
+{% endblock %}

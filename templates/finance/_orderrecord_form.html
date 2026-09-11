@@ -1,0 +1,38 @@
+<form method="post" action="{% url 'finance:orders_create' %}">
+    {% csrf_token %}
+    <input type="hidden" name="period" value="{{ period.code }}">
+
+    <div class="form-group form-group--record-type">
+        <span class="form-label">Тип записи</span>
+        {{ order_form.record_type }}
+        {{ order_form.record_type.errors }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ order_form.order_number.id_for_label }}" class="order-reference-label">Номер заказа</label>
+        {{ order_form.order_number }}
+        {{ order_form.order_number.errors }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ order_form.gross_profit.id_for_label }}">Сумма</label>
+        {{ order_form.gross_profit }}
+        {{ order_form.gross_profit.errors }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ order_form.accounting_period.id_for_label }}">Учетный период</label>
+        {{ order_form.accounting_period }}
+        {{ order_form.accounting_period.errors }}
+    </div>
+
+    {% if order_form.manager %}
+    <div class="form-group">
+        <label for="{{ order_form.manager.id_for_label }}">Ответственный</label>
+        {{ order_form.manager }}
+        {{ order_form.manager.errors }}
+    </div>
+    {% endif %}
+
+    <button type="submit" class="button-success">Сохранить</button>
+</form>
