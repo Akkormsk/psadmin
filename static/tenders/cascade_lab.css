@@ -1,7 +1,4 @@
 .cascade-lab {
-  max-width: 1600px;
-  margin: 0 auto;
-  padding: 26px 22px 60px;
   color: var(--ink);
 }
 .cascade-lab [hidden] { display: none !important; }
@@ -13,6 +10,7 @@
   margin-bottom: 18px;
 }
 .cascade-lab__header h1 { margin: 8px 0 4px; font-size: 30px; }
+.cascade-lab__header h1 { min-height: 0; text-align: left; line-height: 1.2; }
 .cascade-lab__header p { margin: 0; color: var(--ink-3); }
 .cascade-lab__totals { display: flex; gap: 10px; }
 .cascade-lab__totals span {
@@ -26,9 +24,12 @@
 .cascade-lab__setup { padding: 18px; }
 .cascade-lab__source {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(220px, 280px) minmax(360px, 620px);
   gap: 12px;
+  align-items: end;
 }
+.cascade-lab__source > label { min-width: 0; }
+.cascade-lab__source > label > select { height: 44px; padding: 9px 34px 9px 12px; }
 .cascade-lab label {
   display: grid;
   gap: 6px;
@@ -159,6 +160,7 @@
   margin-top: 14px;
 }
 .cascade-lab__actions #lab-message { color: var(--ink-3); font-size: 13px; }
+.cascade-lab__active-config { margin: 9px 0 0; color: var(--ink-3); font-size: 12px; }
 .cascade-lab__workspace { margin-top: 18px; }
 .cascade-graph {
   display: flex;
@@ -368,6 +370,7 @@
   .cascade-lab__io { grid-template-columns: 1fr; }
   .cascade-lab__io pre,
   .cascade-lab__readable { height: 300px; }
+  .cascade-lab__source { grid-template-columns: minmax(190px, .7fr) minmax(300px, 1.3fr); }
 }
 @media (max-width: 600px) {
   .cascade-lab { padding: 16px 10px 40px; }

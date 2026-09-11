@@ -2807,8 +2807,11 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     cascade_result = None
     try:
         from .gateway_budget import preflight, report_line
+        from .models import CascadeConfigVersion
         preflight()
-        cascade_result = Cascade(
+        active_config = CascadeConfigVersion.objects.filter(is_active=True).first()
+        cascade_settings = active_config.settings if active_config and isinstance(active_config.settings, dict) else {}
+        cascade = Cascade(
             line,
             session_feedback=catalog_instructions,
             lessons_provider=lambda item_word, tz_labels: _retrieve_lessons("catalog", item_word, tz_labels),
@@ -2816,7 +2819,13 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
             skip_labels=skip_labels,
             ranking_override=ranking_override,
             progress=progress_callback,
-        ).run()
+            top=max(1, min(50, int(cascade_settings.get("top", 10) or 10))),
+            step_settings=cascade_settings.get("steps", {}),
+            max_cost_rub=float(cascade_settings.get("max_cost_rub", 0) or 0),
+        )
+        if float(cascade_settings.get("max_seconds", 0) or 0) > 0:
+            cascade.deadline = time.perf_counter() + float(cascade_settings["max_seconds"])
+        cascade_result = cascade.run()
         logger.info(
             "cascade %s: %s (%.1f c)", _cell_text(line.get("name"))[:60],
             report_line(cascade_result.usage, cascade_result.usage_by_model),

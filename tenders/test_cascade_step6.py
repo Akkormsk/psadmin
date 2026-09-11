@@ -62,6 +62,14 @@ class CascadeBoundedTests(TestCase):
             gateway = self.grade(self.cards(71), [])
         self.assertEqual(gateway.calls["step6"], 0)
 
+    def test_matrix_keeps_per_criterion_verdict_reason_and_source(self):
+        cards = self.cards(1)
+        self.grade(cards, [{"id": "*", "cells": {"1": "y", "2": "m"}}])
+
+        self.assertEqual([cell["verdict"] for cell in cards[0]["matrix"]], ["yes", "unknown"])
+        self.assertTrue(all(cell["criterion"] for cell in cards[0]["matrix"]))
+        self.assertTrue(all(cell["source"] == "agent" for cell in cards[0]["matrix"]))
+
     def test_complete_unknowns_are_cached_but_do_not_stop_expansion(self):
         self.grade(self.cards(40), [{"id": "*", "cells": {"1": "m", "2": "m"}}])
         self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 40)
@@ -76,16 +84,17 @@ class CascadeBoundedTests(TestCase):
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
         self.assertTrue(all(c["matrix_status"] == "incomplete" for c in cards))
 
-    def test_axis_prefill_cannot_hide_an_empty_model_answer(self):
+    def test_axis_prefill_completes_clear_cell_without_model_answer(self):
         self.cascade.tz = [Criterion(
             label="Ёмкость", raw_value="32 ГБ", concept="ёмкость", operator=">=",
             value="32 ГБ", axis="capacity", num_min=Decimal(32768),
         )]
         cards = [{"id": "A", "name": "Флешка 32 ГБ", "price": "100", "relevance": 0}]
         self.grade(cards, [])
-        self.assertEqual(cards[0]["matrix_status"], "incomplete")
-        self.assertNotEqual(cards[0]["fit"], "exact")
-        self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
+        self.assertEqual(cards[0]["matrix_status"], "complete")
+        self.assertEqual(cards[0]["fit"], "exact")
+        self.assertEqual(cards[0]["matrix"][0]["source"], "code")
+        self.assertTrue(CascadeCache.objects.filter(kind="verdict").exists())
 
     def test_repeat_uses_cached_suitable_cards_without_grading_the_tail(self):
         grid = [{"id": "*", "cells": {"1": "y", "2": "y"}}]

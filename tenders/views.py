@@ -17,7 +17,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core import serializers
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -26,8 +26,9 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeLabCase, CascadeLabRun, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
+from .cascade_lab import execute_cascade_steps
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, recognize_tender_items, refresh_training_example_embedding
 
@@ -43,11 +44,9 @@ SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
 # "Повторить" clicks used to exhaust RAM. All assistant jobs share one small pool,
 # and a session already being processed is never queued twice.
 _ASSISTANT_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="assistant-job")
-_CASCADE_LAB_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cascade-lab")
 _ASSISTANT_INFLIGHT = set()
 _ASSISTANT_INFLIGHT_LOCK = threading.Lock()
 atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
-atexit.register(_CASCADE_LAB_EXECUTOR.shutdown, wait=False)
 
 _STAGE_LABELS = {
     "cases": "Готовлю поиск…",
@@ -101,12 +100,6 @@ def _submit_assistant_job(session_id, work, fallback=None):
     _ASSISTANT_EXECUTOR.submit(_run_assistant_job, session_id, work, fallback or {})
 
 
-def _submit_cascade_lab(run_id):
-    from .cascade_lab import run_cascade_lab
-
-    _CASCADE_LAB_EXECUTOR.submit(run_cascade_lab, run_id)
-
-
 def _cascade_lab_allowed(request):
     return request.user.is_authenticated and request.user.is_superuser
 
@@ -118,11 +111,22 @@ def cascade_lab(request):
         return HttpResponse(status=403)
     from .cascade_lab import STEP_DEFINITIONS
 
+    selected_line = None
+    try:
+        selected_line_id = int(request.GET.get("line_id") or 0)
+    except (TypeError, ValueError):
+        selected_line_id = 0
+    if selected_line_id:
+        selected_line = TenderLine.objects.select_related("estimate").filter(pk=selected_line_id).first()
     return render(request, "tenders/cascade_lab.html", {
         "steps": STEP_DEFINITIONS,
         "lines": TenderLine.objects.select_related("estimate").order_by("-estimate__updated_at", "sort_order")[:250],
-        "lab_cases": CascadeLabCase.objects.filter(created_by=request.user)[:100],
-        "lab_runs": CascadeLabRun.objects.filter(created_by=request.user)[:50],
+        "selected_line": selected_line,
+        "lab_presets": [
+            {"id": preset.pk, "name": preset.name, "settings_json": json.dumps(preset.settings, ensure_ascii=False)}
+            for preset in CascadeLabPreset.objects.filter(created_by=request.user)[:100]
+        ],
+        "active_config": CascadeConfigVersion.objects.filter(is_active=True).first(),
     })
 
 
@@ -165,6 +169,7 @@ def _lab_step_settings(request, current=None):
         if isinstance(values, dict)
     }
     fields = {
+        "step_1_max_requirements": ("1", "max_active_requirements", 0, 100),
         "step_2_min_phrases": ("2", "min_phrases", 1, 40),
         "step_2_max_phrases": ("2", "max_phrases", 1, 40),
         "step_5_tolerance_percent": ("5", "tolerance_percent", 0, 50),
@@ -204,133 +209,85 @@ def _lab_step_settings(request, current=None):
     return steps
 
 
-@login_required
-@require_POST
-def cascade_lab_run_create(request):
-    if not _cascade_lab_allowed(request):
-        return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
-    try:
-        test_case = None
-        case_id = int(request.POST.get("case_id") or 0)
-        source_line = None
-        if case_id:
-            test_case = CascadeLabCase.objects.get(pk=case_id, created_by=request.user)
-            line = test_case.input_payload
-            cards = test_case.custom_cards
-            expectations = test_case.expectations
-            settings = dict(test_case.settings)
-        else:
-            line_id = int(request.POST.get("line_id") or 0)
-            if line_id:
-                source_line = TenderLine.objects.get(pk=line_id)
-                line = _line_payload(source_line)
-            elif str(request.POST.get("line_json") or "").strip():
-                line = _lab_json(request.POST.get("line_json"), {})
-            else:
-                line = _lab_line_from_fields(request)
-            cards = _lab_json(request.POST.get("cards_json"), [])
-            expectations = _lab_json(request.POST.get("expectations_json"), {})
-            settings = {"steps": {}}
-        if str(request.POST.get("step_settings_json") or "").strip():
-            settings["steps"] = _lab_json(request.POST.get("step_settings_json"), {})
+def _lab_request_payload(request):
+    line_id = int(request.POST.get("line_id") or 0)
+    if line_id:
+        line = _line_payload(TenderLine.objects.get(pk=line_id))
+    elif str(request.POST.get("line_json") or "").strip():
+        line = _lab_json(request.POST.get("line_json"), {})
+    else:
+        line = _lab_line_from_fields(request)
+    settings = _lab_json(request.POST.get("settings"), {"steps": {}})
+    if "settings" not in request.POST:
         settings["steps"] = _lab_step_settings(request, settings.get("steps"))
-        if not isinstance(line, dict) or not str(line.get("name", "")).strip():
-            raise ValueError
-        if len(cards) > 250 or any(not isinstance(card, dict) for card in cards):
-            raise ValueError
-        stop_after = max(1, min(8, int(request.POST.get("stop_after") or 5)))
         settings.update({
-            "custom_cards": cards,
-            "top": max(1, min(50, int(request.POST.get("step_8_top") or request.POST.get("top") or settings.get("top") or 10))),
-            "max_cost_rub": max(0, float(request.POST.get("max_cost_rub") or settings.get("max_cost_rub") or 10)),
-            "max_seconds": max(0, float(request.POST.get("max_seconds") or settings.get("max_seconds") or 10)),
+            "custom_cards": _lab_json(request.POST.get("cards_json"), []),
+            "top": max(1, min(50, int(request.POST.get("step_8_top") or 10))),
+            "max_cost_rub": max(0, float(request.POST.get("max_cost_rub") or 10)),
+            "max_seconds": max(0, float(request.POST.get("max_seconds") or 10)),
         })
-    except (ValueError, TypeError, json.JSONDecodeError, TenderLine.DoesNotExist, CascadeLabCase.DoesNotExist):
-        return JsonResponse({"error": "Проверьте товар, его характеристики и дополнительные тестовые данные."}, status=400)
+    if not str(line.get("name") or "").strip():
+        raise ValueError
+    return line, settings
 
-    case_name = str(request.POST.get("case_name", "")).strip()[:200]
-    if case_name and test_case is None:
-        test_case = CascadeLabCase.objects.create(
-            name=case_name, created_by=request.user, input_payload=line,
-            custom_cards=cards, expectations=expectations, settings=settings,
+
+@login_required
+@require_POST
+def cascade_lab_execute(request):
+    if not _cascade_lab_allowed(request):
+        return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
+    try:
+        line, settings = _lab_request_payload(request)
+        result = execute_cascade_steps(
+            line=line,
+            settings=settings,
+            from_step=max(1, min(8, int(request.POST.get("from_step") or 1))),
+            stop_after=max(1, min(8, int(request.POST.get("stop_after") or 8))),
+            snapshots=_lab_json(request.POST.get("snapshots"), []),
+            cascade_state=_lab_json(request.POST.get("cascade_state"), {}),
+            expectations=_lab_json(request.POST.get("expectations_json"), {}),
+            prior_total_seconds=float(request.POST["prior_total_seconds"]) if request.POST.get("prior_total_seconds") else None,
+            prior_total_cost_rub=float(request.POST["prior_total_cost_rub"]) if request.POST.get("prior_total_cost_rub") else None,
         )
-    run = CascadeLabRun.objects.create(
-        created_by=request.user, source_line=source_line, test_case=test_case,
-        title=str(line.get("name"))[:500], input_payload=line, settings=settings,
-        expectations=expectations, stop_after=stop_after, status="running",
-    )
-    _submit_cascade_lab(run.pk)
-    return JsonResponse({"status": "running", "run_id": run.pk}, status=202)
-
-
-def _cascade_lab_run_payload(run):
-    return {
-        "id": run.pk, "title": run.title, "status": run.status,
-        "current_step": run.current_step, "stop_after": run.stop_after,
-        "snapshots": run.snapshots, "settings": run.settings,
-        "input_payload": run.input_payload,
-        "expectations": run.expectations, "result": run.result,
-        "total_seconds": run.total_seconds, "total_cost_rub": run.total_cost_rub,
-        "error": run.error, "parent_run_id": run.parent_run_id,
-        "created_at": run.created_at.isoformat(), "updated_at": run.updated_at.isoformat(),
-    }
-
-
-@login_required
-@require_GET
-def cascade_lab_run_detail(request, run_id):
-    if not _cascade_lab_allowed(request):
-        return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
-    run = get_object_or_404(CascadeLabRun, pk=run_id, created_by=request.user)
-    return JsonResponse(_cascade_lab_run_payload(run), json_dumps_params={"ensure_ascii": False})
+        return JsonResponse(result, json_dumps_params={"ensure_ascii": False})
+    except (ValueError, TypeError, json.JSONDecodeError, TenderLine.DoesNotExist) as exc:
+        return JsonResponse({"error": str(exc) or "Проверьте входные данные."}, status=400)
 
 
 @login_required
 @require_POST
-def cascade_lab_run_execute(request, run_id):
+def cascade_lab_preset_save(request):
     if not _cascade_lab_allowed(request):
         return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
-    run = get_object_or_404(CascadeLabRun, pk=run_id, created_by=request.user)
-    if run.status == "running":
-        return JsonResponse({"error": "Прогон уже выполняется."}, status=409)
-    if run.current_step >= 8:
-        return JsonResponse({"error": "Прогон уже завершён. Используйте «Повторить отсюда»."}, status=409)
     try:
-        target = max(run.current_step + 1, min(8, int(request.POST.get("stop_after") or 8)))
-    except (TypeError, ValueError):
-        return JsonResponse({"error": "Некорректный номер шага."}, status=400)
-    run.stop_after, run.status, run.error = target, "running", ""
-    run.save(update_fields=["stop_after", "status", "error", "updated_at"])
-    _submit_cascade_lab(run.pk)
-    return JsonResponse({"status": "running", "run_id": run.pk}, status=202)
+        name = str(request.POST.get("name") or "").strip()[:200]
+        settings = _lab_json(request.POST.get("settings"), {})
+        if not name:
+            raise ValueError("Введите название набора настроек.")
+        preset, created = CascadeLabPreset.objects.update_or_create(
+            created_by=request.user, name=name, defaults={"settings": settings},
+        )
+        return JsonResponse({"id": preset.pk, "name": preset.name, "settings": preset.settings, "created": created})
+    except (ValueError, json.JSONDecodeError) as exc:
+        return JsonResponse({"error": str(exc) or "Некорректные настройки."}, status=400)
 
 
 @login_required
 @require_POST
-def cascade_lab_run_fork(request, run_id):
+def cascade_lab_activate(request):
     if not _cascade_lab_allowed(request):
         return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
-    source = get_object_or_404(CascadeLabRun, pk=run_id, created_by=request.user)
     try:
-        from_step = max(1, min(8, int(request.POST.get("from_step"))))
-        stop_after = max(from_step, min(8, int(request.POST.get("stop_after") or 8)))
-    except (TypeError, ValueError):
-        return JsonResponse({"error": "Некорректный номер шага."}, status=400)
-    if from_step > source.current_step + 1:
-        return JsonResponse({"error": "До выбранного шага ещё нет сохранённого входа."}, status=400)
-    snapshots = [item for item in source.snapshots if item.get("step", 0) < from_step]
-    state = snapshots[-1].get("state", {}) if snapshots else {}
-    fork = CascadeLabRun.objects.create(
-        created_by=request.user, source_line=source.source_line, test_case=source.test_case,
-        parent_run=source, title=source.title, input_payload=source.input_payload,
-        settings=source.settings, expectations=source.expectations,
-        current_step=from_step - 1, stop_after=stop_after, snapshots=snapshots,
-        cascade_state=state, total_seconds=sum(item.get("metrics", {}).get("seconds", 0) for item in snapshots),
-        total_cost_rub=sum(item.get("metrics", {}).get("cost_rub", 0) for item in snapshots),
-        status="running",
-    )
-    _submit_cascade_lab(fork.pk)
-    return JsonResponse({"status": "running", "run_id": fork.pk}, status=202)
+        name = str(request.POST.get("name") or "Текущие настройки").strip()[:200]
+        settings = _lab_json(request.POST.get("settings"), {})
+        with transaction.atomic():
+            CascadeConfigVersion.objects.filter(is_active=True).update(is_active=False)
+            version = CascadeConfigVersion.objects.create(
+                name=name, settings=settings, created_by=request.user, is_active=True,
+            )
+        return JsonResponse({"id": version.pk, "name": version.name, "created_at": version.created_at.isoformat()})
+    except (ValueError, json.JSONDecodeError) as exc:
+        return JsonResponse({"error": str(exc) or "Некорректные настройки."}, status=400)
 
 
 def knowledge_sync(request):
@@ -1156,14 +1113,23 @@ def home(request, pk=None):
     if posted_lines is not None:
         initial_lines = posted_lines
     elif estimate:
-        initial_lines = [{"name": line.name, "quantity": str(line.quantity), "nmck_unit": str(line.nmck_unit), "material_unit": str(line.material_unit), "application_unit": str(line.application_unit), "logistics_unit": str(line.logistics_unit), "product_url": line.product_url, "comment": line.comment, "requirements": line.requirements} for line in estimate.lines.all()]
+        initial_lines = [{"id": line.pk, "name": line.name, "quantity": str(line.quantity), "nmck_unit": str(line.nmck_unit), "material_unit": str(line.material_unit), "application_unit": str(line.application_unit), "logistics_unit": str(line.logistics_unit), "product_url": line.product_url, "comment": line.comment, "requirements": line.requirements} for line in estimate.lines.all()]
     initial_analysis = posted_analysis if posted_analysis is not None else (estimate.document_analysis if estimate else {})
     estimates = TenderEstimate.objects.all() if request.user.is_superuser else TenderEstimate.objects.filter(owner=request.user)
     users = get_user_model().objects.filter(is_active=True).order_by("last_name", "first_name", "username") if request.user.is_superuser else None
     knowledge_sources = []
     if request.user.is_superuser:
         knowledge_sources = list(TenderKnowledgeSource.objects.filter(is_active=True).values("id", "title", "supplier_name", "source_type", "url")[:100])
-    return render(request, "tenders/home.html", {"estimate": estimate, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "users": users})
+    source_tender = None
+    if estimate:
+        from tender_selection.models import FoundTender, Organization
+        from tender_selection.regions import region_name
+
+        source_tender = FoundTender.objects.filter(pushed_estimate_id=estimate.pk).first()
+        if source_tender:
+            source_tender.org = Organization.objects.filter(inn=source_tender.customer_inn).first()
+            source_tender.region_label = region_name(source_tender.region) if source_tender.region else ""
+    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users})
 
 
 @login_required
@@ -1180,6 +1146,7 @@ def save_estimate(request, pk=None):
     return JsonResponse({
         "pk": estimate.pk,
         "url": reverse("tender_estimate", args=[estimate.pk]),
+        "line_ids": list(estimate.lines.order_by("sort_order", "pk").values_list("pk", flat=True)),
         "saved_at": timezone.localtime(estimate.updated_at).strftime("%H:%M"),
         "incomplete": meta["incomplete"],
     })

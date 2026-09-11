@@ -495,6 +495,7 @@ def sync_gifts_catalog(client=None, category=None, limit=None):
         run.created_count = created_count
         run.updated_count = updated_count
         run.save(update_fields=["status", "finished_at", "received_count", "created_count", "updated_count"])
+        rebuild_catalog_families("gifts")
         run.imported_rows = rows
         return run
     except Exception as exc:
@@ -736,6 +737,7 @@ def sync_oasis_catalog(client=None):
         run.updated_count = updated
         run.deactivated_count = deactivated
         run.save(update_fields=["status", "finished_at", "received_count", "created_count", "updated_count", "deactivated_count"])
+        rebuild_catalog_families("oasis")
         return run
     except Exception as exc:
         now = timezone.now()
@@ -956,7 +958,9 @@ def _aggregate_color_variants(products, supplier_code="oasis"):
     gifts_keys = _gifts_variant_keys(products) if supplier_code == "gifts" else {}
     grouped = {}
     for product in products:
-        if _text(product.color_group_id, 120):
+        if _text(getattr(product, "family_key", ""), 180):
+            key = product.family_key
+        elif _text(product.color_group_id, 120):
             key = product.color_group_id
         elif supplier_code == "gifts":
             key = gifts_keys.get(id(product), product.external_id)
@@ -1011,8 +1015,45 @@ def _aggregate_color_variants(products, supplier_code="oasis"):
             "sizes": sizes,
             "variants": variant_details,
         }
+        representative._variant_products = variants
+        representative._family_key = family_id
         result.append(representative)
     return result
+
+
+def rebuild_catalog_families(supplier_code=None):
+    """Нормализует семейства и оси вариантов без сетевых запросов и LLM."""
+    queryset = CatalogProduct.objects.select_related("supplier").order_by("supplier_id", "pk")
+    if supplier_code:
+        queryset = queryset.filter(supplier__code=supplier_code)
+    products = list(queryset)
+    gifts = [product for product in products if product.supplier.code == "gifts"]
+    gifts_keys = _gifts_variant_keys(gifts)
+    changed = []
+    for product in products:
+        if product.supplier.code == "oasis":
+            base = product.group_id or product.article_base or product.article or product.external_id
+            family_key = f"oasis:{base}"
+        elif product.supplier.code == "gifts":
+            family_key = gifts_keys.get(id(product), f"gifts:{product.article or product.external_id}")
+        else:
+            family_key = f"{product.supplier.code}:{product.group_id or product.article_base or product.article or product.external_id}"
+        label = _variant_size(product)
+        axes = {}
+        capacity = _capacity_mb(f"{product.name} {product.full_name} {product.size}")
+        if capacity is not None:
+            axes["capacity_mb"] = str(capacity)
+        if label:
+            axes["size"] = label
+        if isinstance(product.colors, list) and product.colors:
+            axes["colors"] = product.colors
+        if product.family_key != family_key or product.variant_axes != axes:
+            product.family_key = family_key
+            product.variant_axes = axes
+            changed.append(product)
+    if changed:
+        CatalogProduct.objects.bulk_update(changed, ["family_key", "variant_axes"], batch_size=1000)
+    return {"products": len(products), "updated": len(changed), "families": len({p.family_key for p in products})}
 
 
 def _product_variants(product):

@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 
 from .cascade import Cascade
+from .cascade import Criterion
 
 
 class CascadeContractTests(SimpleTestCase):
@@ -35,3 +36,21 @@ class CascadeContractTests(SimpleTestCase):
             result = cascade.run()
         self.assertEqual(calls, names)
         self.assertIs(result.candidates, outputs[7])
+
+    def test_step_1_limit_keeps_only_most_important_non_explicit_criteria(self):
+        cascade = Cascade({"name": "Товар"}, step_settings={"1": {"max_active_requirements": 2}})
+        rows = [
+            {"label": "Цвет", "value": "синий"},
+            {"label": "Совместимость", "value": "USB-C"},
+            {"label": "Материал", "value": "металл"},
+        ]
+        payload = {"criteria": [
+            {"label": "Цвет", "raw_value": "синий", "concept": "цвет", "value": "синий", "keep": True, "importance": 20},
+            {"label": "Совместимость", "raw_value": "USB-C", "concept": "совместимость", "value": "USB-C", "keep": True, "importance": 100},
+            {"label": "Материал", "raw_value": "металл", "concept": "материал", "value": "металл", "keep": True, "importance": 70},
+        ]}
+
+        cascade._load_step1(payload, rows)
+
+        self.assertEqual([c.label for c in cascade.tz if c.checked], ["Совместимость", "Материал"])
+        self.assertEqual(len(cascade.tz), 3)

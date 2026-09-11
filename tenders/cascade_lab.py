@@ -7,11 +7,9 @@ import time
 from dataclasses import asdict
 from decimal import Decimal
 
-from django.db import close_old_connections
-
 from .cascade import Cascade, Criterion
 from .gateway_budget import preflight, spend_rub
-from .models import CascadeLabRun, CatalogProduct
+from .models import CatalogProduct
 
 
 STEP_DEFINITIONS = [
@@ -40,7 +38,7 @@ def _json_value(value):
     return json.loads(json.dumps(value, ensure_ascii=False, default=_json_default))
 
 
-def _encode_output(value):
+def _encode_output(value, *, include_matrix=True):
     rows = list(value) if not isinstance(value, list) and hasattr(value, "__iter__") else value
     if isinstance(rows, list) and rows and isinstance(rows[0], CatalogProduct):
         return _json_value({
@@ -54,6 +52,12 @@ def _encode_output(value):
             "count": len(rows),
         })
     if isinstance(rows, list):
+        if not include_matrix:
+            return [
+                _json_value({key: cell for key, cell in item.items() if key != "matrix"})
+                if isinstance(item, dict) else _json_value(item)
+                for item in rows
+            ]
         return [_json_value(item) for item in rows]
     return _json_value(rows)
 
@@ -61,7 +65,20 @@ def _encode_output(value):
 def _decode_output(value):
     if isinstance(value, dict) and value.get("kind") == "catalog_products":
         products = CatalogProduct.objects.select_related("supplier").in_bulk(value.get("ids", []))
-        return [products[pk] for pk in value.get("ids", []) if pk in products]
+        ordered = [products[pk] for pk in value.get("ids", []) if pk in products]
+        family_keys = {product.family_key for product in ordered if product.family_key}
+        variants_by_family = {}
+        if family_keys:
+            variants = CatalogProduct.objects.select_related("supplier").filter(
+                is_active=True, family_key__in=family_keys,
+            )
+            for variant in variants:
+                variants_by_family.setdefault((variant.supplier_id, variant.family_key), []).append(variant)
+        for product in ordered:
+            product._variant_products = variants_by_family.get(
+                (product.supplier_id, product.family_key), [product],
+            )
+        return ordered
     return value
 
 
@@ -150,90 +167,97 @@ def _skip_labels():
     return {row["label_normalized"] for row in _requirement_skip_labels()}
 
 
-def run_cascade_lab(run_id):
-    """Выполнить граф до stop_after, сохраняя снимок после каждого узла."""
-    close_old_connections()
-    run = CascadeLabRun.objects.get(pk=run_id)
-    try:
-        preflight()
-        run.status, run.error = "running", ""
-        run.save(update_fields=["status", "error", "updated_at"])
-        cascade = Cascade(
-            run.input_payload, lessons_provider=_lessons_provider, skip_labels=_skip_labels(),
-            top=max(1, min(50, int(run.settings.get("top", 10) or 10))),
-            step_settings=run.settings.get("steps", {}),
+def execute_cascade_steps(*, line, settings, from_step=1, stop_after=8, snapshots=None,
+                          cascade_state=None, expectations=None, prior_total_seconds=None,
+                          prior_total_cost_rub=None):
+    """Выполняет выбранный диапазон без сохранения прогонов в базе."""
+    preflight()
+    from_step = max(1, min(8, int(from_step)))
+    stop_after = max(from_step, min(8, int(stop_after)))
+    snapshots = [item for item in (snapshots or []) if int(item.get("step", 0)) < from_step]
+    state = snapshots[-1].get("state", {}) if snapshots else (cascade_state or {})
+    cascade = Cascade(
+        line, lessons_provider=_lessons_provider, skip_labels=_skip_labels(),
+        top=max(1, min(50, int(settings.get("top", 10) or 10))),
+        step_settings=settings.get("steps", {}),
+        max_cost_rub=float(settings.get("max_cost_rub", 0) or 0),
+    )
+    _restore_state(cascade, state)
+    previous = _decode_output(snapshots[-1]["output"]) if snapshots else None
+    snapshot_seconds = sum(float(item.get("metrics", {}).get("seconds", 0) or 0) for item in snapshots)
+    snapshot_cost = sum(float(item.get("metrics", {}).get("cost_rub", 0) or 0) for item in snapshots)
+    total_seconds = snapshot_seconds if prior_total_seconds is None else max(0, float(prior_total_seconds))
+    total_cost = round(snapshot_cost if prior_total_cost_rub is None else max(0, float(prior_total_cost_rub)), 4)
+    time_limit = float(settings.get("max_seconds", 0) or 0)
+    cost_limit = float(settings.get("max_cost_rub", 0) or 0)
+    pause_reason = ""
+    if time_limit:
+        cascade.deadline = time.perf_counter() + max(0, time_limit - total_seconds)
+
+    for definition in STEP_DEFINITIONS[from_step - 1:stop_after]:
+        if cost_limit and total_cost >= cost_limit:
+            pause_reason = f"Достигнут лимит {cost_limit:g} ₽"
+            break
+        if time_limit and total_seconds >= time_limit:
+            pause_reason = f"Достигнут лимит {time_limit:g} секунд"
+            break
+        step = definition["step"]
+        input_data = line.get("requirements", {}) if step == 1 else {"name": line.get("name", "")} if step == 2 else _encode_output(previous)
+        before_usage = _json_value(cascade.usage_by_model)
+        before_error = cascade.error
+        started = time.perf_counter()
+        skipped = False
+        custom_cards = settings.get("custom_cards")
+        if custom_cards and step in {3, 4}:
+            output, skipped = {"custom_cards_bypass": True, "count": len(custom_cards)}, True
+        elif custom_cards and step == 5:
+            output = _json_value(custom_cards)
+        elif step in {1, 2}:
+            output = getattr(cascade, definition["method"])()
+        else:
+            output = getattr(cascade, definition["method"])(_decode_output(previous))
+        seconds = time.perf_counter() - started
+        encoded = _encode_output(output, include_matrix=step != 7)
+        usage = _usage_delta(before_usage, cascade.usage_by_model)
+        cost = _cost(usage)
+        total_seconds += seconds
+        total_cost = round(total_cost + cost, 4)
+        step_error = cascade.error if cascade.error and cascade.error != before_error else ""
+        snapshot = {
+            "step": step, "method": definition["method"], "title": definition["title"],
+            "status": "skipped" if skipped else "fallback" if step_error else "completed",
+            "error": step_error, "input": input_data, "output": encoded,
+            "state": _cascade_state(cascade),
+            "metrics": {"seconds": round(seconds, 4), "cost_rub": cost, "usage_by_model": usage,
+                        "input_count": _count_payload(input_data), "output_count": _count_payload(encoded)},
+        }
+        snapshots.append(snapshot)
+        previous = encoded
+        if step_error and "лимит" in step_error.lower() and step < stop_after:
+            pause_reason = step_error
+            break
+        if cost_limit and total_cost >= cost_limit and step < stop_after:
+            pause_reason = f"Достигнут лимит {cost_limit:g} ₽"
+            break
+        if time_limit and total_seconds >= time_limit and step < stop_after:
+            pause_reason = f"Достигнут лимит {time_limit:g} секунд"
+            break
+
+    current_step = int(snapshots[-1]["step"]) if snapshots else from_step - 1
+    result = {"pause_reason": pause_reason} if pause_reason else {}
+    if current_step == 8:
+        result = evaluate_expectations(
+            _decode_output(previous), expectations or {},
+            total_seconds=total_seconds, total_cost_rub=total_cost,
         )
-        _restore_state(cascade, run.cascade_state)
-        previous = _decode_output(run.snapshots[-1]["output"]) if run.snapshots else None
-        snapshots = list(run.snapshots)
-        pause_reason = ""
-        for definition in STEP_DEFINITIONS[run.current_step:run.stop_after]:
-            step = definition["step"]
-            if step == 1:
-                input_data = run.input_payload.get("requirements", {})
-            elif step == 2:
-                input_data = {"name": run.input_payload.get("name", "")}
-            else:
-                input_data = _encode_output(previous)
-            before_usage = _json_value(cascade.usage_by_model)
-            before_error = cascade.error
-            started = time.perf_counter()
-            skipped = False
-            custom_cards = run.settings.get("custom_cards")
-            if custom_cards and step in {3, 4}:
-                output = {"custom_cards_bypass": True, "count": len(custom_cards)}
-                skipped = True
-            elif custom_cards and step == 5:
-                output = _json_value(custom_cards)
-            elif step in {1, 2}:
-                output = getattr(cascade, definition["method"])()
-            else:
-                output = getattr(cascade, definition["method"])(_decode_output(previous))
-            seconds = time.perf_counter() - started
-            encoded = _encode_output(output)
-            usage = _usage_delta(before_usage, cascade.usage_by_model)
-            cost = _cost(usage)
-            step_error = cascade.error if cascade.error and cascade.error != before_error else ""
-            snapshot = {
-                "step": step, "method": definition["method"], "title": definition["title"],
-                "status": "skipped" if skipped else "fallback" if step_error else "completed",
-                "error": step_error,
-                "input": input_data, "output": encoded, "state": _cascade_state(cascade),
-                "metrics": {"seconds": round(seconds, 4), "cost_rub": cost, "usage_by_model": usage,
-                            "input_count": _count_payload(input_data), "output_count": _count_payload(encoded)},
-            }
-            snapshots.append(snapshot)
-            previous = encoded
-            run.snapshots = snapshots
-            run.cascade_state = snapshot["state"]
-            run.current_step = step
-            run.total_seconds = run.total_seconds + seconds
-            run.total_cost_rub = round(sum(item["metrics"]["cost_rub"] for item in snapshots), 4)
-            run.status = "completed" if step == 8 else "running"
-            run.save()
-            cost_limit = float(run.settings.get("max_cost_rub", 0) or 0)
-            time_limit = float(run.settings.get("max_seconds", 0) or 0)
-            if step < run.stop_after and cost_limit and run.total_cost_rub >= cost_limit:
-                pause_reason = f"Достигнут лимит {cost_limit:g} ₽"
-                break
-            if step < run.stop_after and time_limit and run.total_seconds >= time_limit:
-                pause_reason = f"Достигнут лимит {time_limit:g} секунд"
-                break
-        run.status = "completed" if run.current_step == 8 else "paused"
-        if pause_reason:
-            run.result = {"pause_reason": pause_reason}
-        if run.current_step == 8:
-            run.result = evaluate_expectations(
-                _decode_output(previous), run.expectations,
-                total_seconds=run.total_seconds, total_cost_rub=run.total_cost_rub,
-            )
-        run.save()
-    except Exception as exc:
-        run.status, run.error = "error", str(exc)[:1000]
-        run.save(update_fields=["status", "error", "updated_at"])
-        raise
-    finally:
-        close_old_connections()
+    return {
+        "status": "completed" if current_step == 8 else "paused",
+        "current_step": current_step, "stop_after": stop_after,
+        "snapshots": snapshots, "cascade_state": _cascade_state(cascade),
+        "input_payload": line, "settings": settings, "result": result,
+        "total_seconds": round(total_seconds, 4), "total_cost_rub": total_cost,
+        "error": "",
+    }
 
 
 def _count_payload(value):

@@ -1074,6 +1074,14 @@ h1 {
 .tender-result-note textarea { width:100%; min-height:72px; box-sizing:border-box; resize:vertical; padding:10px 12px; border:1px solid var(--field-border); border-radius:9px; background:var(--surface); color:var(--ink); font:inherit; font-weight:400; }
 .tender-result-note textarea:focus { border-color:var(--field-border); outline:0; box-shadow:0 0 0 3px var(--accent-ring); }
 .tender-result-note small { color:var(--ink-3); font-size:11px; font-weight:400; }
+.tender-source-card { display:grid; gap:10px; margin-top:14px; padding:13px 16px; border:1px solid var(--border); border-radius:11px; background:var(--tint-cool); }
+.tender-source-card header { display:flex; align-items:start; justify-content:space-between; gap:18px; }
+.tender-source-card header > div { display:grid; gap:3px; min-width:0; }
+.tender-source-card header small { color:var(--ink-3); font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
+.tender-source-card header strong { overflow:hidden; color:var(--ink); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+.tender-source-card header a { flex:none; color:var(--accent); font-size:11px; font-weight:700; }
+.tender-source-card__facts { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--ink-2); font-size:11px; }
+.tender-source-card__facts span { white-space:nowrap; }
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:var(--ink-3); }
 .tender-saved-estimate .saved-estimate__main { display:grid; grid-template-columns:minmax(0,1fr) minmax(140px,.42fr); }
@@ -1364,6 +1372,8 @@ h1 {
 .training-catalog-card small, .training-catalog-card em { color:var(--ink-3); font-size:9px; font-style:normal; }
 .training-catalog-card .training-catalog-supplier { color:var(--positive-ink); font-weight:650; }
 .training-catalog-card .training-catalog-price { margin:2px 0; color:var(--positive-ink); font-size:12px; font-weight:750; }
+.training-catalog-card .catalog-price-over-nmck { color:var(--negative-ink); }
+.training-catalog-card .catalog-price-over-nmck em { display:inline-block; margin-left:7px; padding:1px 5px; border-radius:5px; background:var(--tint-negative); color:var(--negative-ink); font-size:9px; font-weight:700; }
 .training-catalog-card em { color:var(--positive-ink); }
 .training-catalog-card em.is-warning { color:var(--warning-ink); }
 .training-catalog-card button { min-height:28px; padding:5px 10px; font-size:10px; }
@@ -1476,6 +1486,8 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .training-route__step > summary:hover { background:var(--tint-positive); }
 .training-route__step > summary > b { display:grid; flex:0 0 22px; height:22px; place-items:center; border-radius:50%; background:var(--tint-positive); color:var(--positive-ink); font-size:10px; font-weight:800; }
 .training-route__step-body { position:relative; display:grid; gap:10px; padding:12px; }
+.training-cascade-link { justify-self:start; color:var(--ink-3); font-size:9px; line-height:1; text-decoration:none; }
+.training-cascade-link:hover { color:var(--positive-ink); text-decoration:underline; }
 .training-route__fix { border:1px dashed var(--border-positive); border-radius:9px; background:var(--tint-positive); }
 .training-route__fix > summary { padding:8px 10px; color:var(--positive-ink); font-size:10px; font-weight:650; cursor:pointer; list-style:none; }
 .training-route__fix > summary::-webkit-details-marker { display:none; }

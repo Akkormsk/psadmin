@@ -7,6 +7,8 @@ from django.db import models
 
 class TenderSettings(models.Model):
     vat_rate = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
+    auto_start_product_search = models.BooleanField("Автозапуск подбора при открытии", default=False)
+    auto_recalculate_requirements = models.BooleanField("Автопересчёт при изменении ТЗ", default=False)
 
     class Meta:
         verbose_name = "Настройки тендеров"
@@ -260,6 +262,8 @@ class CatalogProduct(models.Model):
     article_base = models.CharField("Базовый артикул", max_length=120, blank=True)
     group_id = models.CharField("Группа товара", max_length=120, blank=True)
     color_group_id = models.CharField("Группа цвета", max_length=120, blank=True)
+    family_key = models.CharField("Нормализованное семейство", max_length=180, blank=True, db_index=True)
+    variant_axes = models.JSONField("Оси варианта", default=dict, blank=True)
     name = models.CharField("Название", max_length=500)
     full_name = models.CharField("Полное название", max_length=1000, blank=True)
     description = models.TextField("Описание", blank=True)
@@ -451,57 +455,38 @@ class TenderLine(models.Model):
         return self.name
 
 
-class CascadeLabCase(models.Model):
-    """Повторяемый вход лаборатории; не участвует в обучении ассистента."""
+class CascadeLabPreset(models.Model):
+    """Явно сохранённая администратором комбинация параметров каскада."""
 
-    name = models.CharField("Название теста", max_length=200)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cascade_lab_cases")
-    input_payload = models.JSONField("Позиция и ТЗ", default=dict)
-    custom_cards = models.JSONField("Тестовые карточки", default=list, blank=True)
-    expectations = models.JSONField("Ожидания", default=dict, blank=True)
+    name = models.CharField("Название набора", max_length=200)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cascade_lab_presets")
     settings = models.JSONField("Настройки шагов", default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
-        verbose_name = "Тест лаборатории каскада"
-        verbose_name_plural = "Тесты лаборатории каскада"
+        constraints = [models.UniqueConstraint(fields=["created_by", "name"], name="unique_cascade_lab_preset_name")]
+        verbose_name = "Набор настроек каскада"
+        verbose_name_plural = "Наборы настроек каскада"
 
     def __str__(self):
         return self.name
 
 
-class CascadeLabRun(models.Model):
-    STATUS_CHOICES = (
-        ("draft", "Черновик"), ("running", "Выполняется"),
-        ("paused", "Приостановлен"), ("completed", "Завершён"), ("error", "Ошибка"),
-    )
+class CascadeConfigVersion(models.Model):
+    """Версия настроек, используемая основным подбором товаров."""
 
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cascade_lab_runs")
-    source_line = models.ForeignKey(TenderLine, on_delete=models.SET_NULL, null=True, blank=True, related_name="cascade_lab_runs")
-    test_case = models.ForeignKey(CascadeLabCase, on_delete=models.SET_NULL, null=True, blank=True, related_name="runs")
-    parent_run = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="forks")
-    title = models.CharField("Название", max_length=500)
-    input_payload = models.JSONField("Исходный вход", default=dict)
+    name = models.CharField("Название", max_length=200)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cascade_config_versions")
     settings = models.JSONField("Настройки", default=dict, blank=True)
-    expectations = models.JSONField("Ожидания", default=dict, blank=True)
-    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default="draft")
-    current_step = models.PositiveSmallIntegerField("Последний шаг", default=0)
-    stop_after = models.PositiveSmallIntegerField("Остановиться после", default=8)
-    snapshots = models.JSONField("Снимки шагов", default=list, blank=True)
-    cascade_state = models.JSONField("Состояние каскада", default=dict, blank=True)
-    result = models.JSONField("Проверка ожиданий", default=dict, blank=True)
-    total_seconds = models.FloatField("Время, с", default=0)
-    total_cost_rub = models.FloatField("Стоимость, ₽", default=0)
-    error = models.TextField("Ошибка", blank=True)
+    is_active = models.BooleanField("Активна", default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "Прогон лаборатории каскада"
-        verbose_name_plural = "Прогоны лаборатории каскада"
+        verbose_name = "Версия настроек каскада"
+        verbose_name_plural = "Версии настроек каскада"
 
     def __str__(self):
-        return f"{self.title} · шаг {self.current_step}"
+        return f"{self.name}{' · активна' if self.is_active else ''}"

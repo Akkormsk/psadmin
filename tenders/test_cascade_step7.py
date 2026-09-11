@@ -50,3 +50,12 @@ class CascadeVerifiedSortTests(SimpleTestCase):
             del card["matrix_status"]
         ranked = self.cascade.step_7_collapse_and_sort(cards)
         self.assertEqual([c["id"] for c in ranked], ["cheap", "expensive"])
+
+    def test_step_7_never_drops_cards_marked_by_feedback(self):
+        cards = [self.card("kept", "complete"), self.card("removed", "complete")]
+        cards[1]["_removed"] = True
+
+        ranked = self.cascade.step_7_collapse_and_sort(cards)
+
+        self.assertEqual(len(ranked), len(cards))
+        self.assertEqual(ranked[-1]["id"], "removed")

@@ -2,7 +2,7 @@
 
 from django.test import SimpleTestCase
 
-from .catalog import _normalized, _query_stems, _stem_in_words, _text_search_pool
+from .catalog import _aggregate_color_variants, _normalized, _query_stems, _stem_in_words, _text_search_pool
 from .test_cascade import TestCase, _product
 
 
@@ -32,6 +32,17 @@ class NameIndexTests(SimpleTestCase):
 
 
 class IndexedSearchTests(TestCase):
+    def test_normalized_family_reaches_name_filter_as_one_parent_with_children(self):
+        first = _product("Флешка 16 ГБ", external_id="F16")
+        second = _product("Флешка 32 ГБ", external_id="F32")
+        type(first).objects.filter(pk__in=[first.pk, second.pk]).update(family_key="oasis:flash")
+        first.family_key = second.family_key = "oasis:flash"
+
+        parents = _aggregate_color_variants([first, second], "oasis")
+
+        self.assertEqual(len(parents), 1)
+        self.assertEqual({item.external_id for item in parents[0]._variant_products}, {"F16", "F32"})
+
     def test_index_refreshes_after_bulk_rename_and_deactivation(self):
         product = _product("Флешка", external_id="P")
         self.assertEqual(len(_text_search_pool("oasis", ["флешка"])), 1)

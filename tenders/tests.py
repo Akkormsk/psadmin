@@ -9,12 +9,13 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from docx import Document
 from openpyxl import Workbook
 
 from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderSettings
+from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
 from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _retrieve_lessons, _run_name_filter, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
 
@@ -70,15 +71,110 @@ class TenderTests(TestCase):
         self.assertContains(response, "function applyTechnicalResultToNmckRows")
         self.assertContains(response, "function findExistingTenderLine")
 
-    def test_line_ai_button_opens_drawer_and_starts_hypothesis_immediately(self):
+    def test_line_ai_button_opens_drawer_without_starting_product_search(self):
         self.client.force_login(self.user)
 
         response = self.client.get(reverse("tender_home"))
 
-        self.assertContains(response, "openRequirements=(index,autoCalculate=false)=>")
-        self.assertContains(response, "questionControl.onclick=()=>openRequirements(index,true)")
-        self.assertContains(response, "shouldAutoCalculate=autoCalculate&&!info.production")
-        self.assertContains(response, "if(shouldAutoCalculate)build.click()")
+        self.assertContains(response, "frozenRoutePreview(line)")
+        self.assertContains(response, "autoStartProductSearch=false")
+        self.assertContains(response, "autoRecalculateRequirements=false")
+        self.assertContains(response, "activeProduction=(autoStartProductSearch||manuallyStartedLines.has(line))?info.production:null")
+        self.assertContains(response, "updateRouteToolbar(body,line,displayProduction)")
+        self.assertContains(response, "questionControl.onclick=()=>openRequirements(index)")
+        self.assertNotContains(response, "if(shouldAutoCalculate)build.click()")
+        self.assertContains(response, "if(autoStartProductSearch&&!activeProduction)build.click()")
+        self.assertContains(response, "Запустить подбор товара")
+
+    def test_calculation_shows_linked_tender_card_without_repeating_products(self):
+        from tender_selection.models import FoundTender
+
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="0123", name="Заказчик")
+        source = FoundTender.objects.create(
+            law="fz44", purchase_number="0123", object_info="Поставка сувениров",
+            title="Сувенирная продукция", max_price=Decimal("500000"),
+            customer_inn="1234567890", region=63, status=FoundTender.PUSHED,
+            pushed_estimate_id=estimate.pk, last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, "Исходный тендер")
+        self.assertContains(response, "44-ФЗ")
+        self.assertContains(response, "ИНН 1234567890")
+        self.assertContains(response, "Сувенирная продукция")
+        self.assertContains(response, reverse("tender_selection:detail", args=[source.pk]))
+        self.assertNotContains(response, "Перечень товаров")
+
+    def test_general_tender_comment_is_always_visible(self):
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Черновик")
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, "Комментарий к тендеру")
+        html = response.content.decode()
+        note = html[html.index('class="tender-result-note"'):]
+        note = note[:note.index("</div>")]
+        self.assertNotIn(" hidden", note)
+        self.assertNotContains(response, "resultNote.hidden=!result.requires_result")
+
+    def test_catalog_cards_mark_price_above_nmck_without_ranking_by_it(self):
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("tender_home")).content.decode()
+
+        self.assertIn("catalog-price-over-nmck", content)
+        self.assertIn("Цена выше НМЦК", content)
+        self.assertIn("n(item.price)>n(nmckUnit)", content)
+
+    def test_assistant_auto_behaviors_can_be_enabled_independently(self):
+        TenderSettings.objects.update_or_create(pk=1, defaults={
+            "auto_start_product_search": True,
+            "auto_recalculate_requirements": True,
+        })
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, "autoStartProductSearch=true")
+        self.assertContains(response, "autoRecalculateRequirements=true")
+
+    def test_saved_line_id_is_available_to_the_cascade_lab_link(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Поло")
+        line = TenderLine.objects.create(
+            estimate=estimate, name="Рубашка-поло", quantity=50, nmck_unit=1000,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, f'"id": {line.pk}')
+        self.assertContains(response, "line_id=${encodeURIComponent(result.source_line_id)}")
+
+    def test_cascade_lab_preselects_the_line_from_the_assistant_link(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Поло")
+        line = TenderLine.objects.create(
+            estimate=estimate, name="Рубашка-поло", quantity=50, nmck_unit=1000,
+        )
+        other = TenderLine.objects.create(
+            estimate=estimate, name="Кружка", quantity=10, nmck_unit=500, sort_order=1,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("cascade_lab"), {"line_id": line.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_line"], line)
+        self.assertContains(response, f'<option value="{line.pk}" selected>')
+        self.assertContains(response, f'<option value="{other.pk}">')
 
     def test_catalog_ui_distinguishes_empty_results_from_supplier_failure(self):
         self.client.force_login(self.user)
@@ -166,7 +262,7 @@ class TenderTests(TestCase):
         self.assertLess(markup.index("training-route__fix"), markup.index("training-dialogue__costs"))
         # Accepted corrections ("Ваши корректировки") sit with the catalog
         # feedback box inside the product step, not in the route block.
-        self.assertIn("${catalogSuggestionsHtml(result)}${changesHtml}${feedbackWidgetHtml('catalog'", fn)
+        self.assertIn("${emptyCatalog}${changesHtml}", fn)
         self.assertIn("Ваши корректировки", fn)
         # The standalone "add supplier" block is gone while the route is frozen.
         self.assertNotIn("Добавить поставщика или источник", fn)
@@ -225,6 +321,7 @@ class TenderTests(TestCase):
         pk = created.json()["pk"]
         self.assertEqual(TenderEstimate.objects.count(), 1)
         self.assertFalse(created.json()["incomplete"])
+        self.assertEqual(created.json()["line_ids"], [TenderEstimate.objects.get().lines.get().pk])
 
         updated = self.client.post(reverse("tender_estimate_save", args=[pk]), {
             "tender_number": "555", "name": "Автосейв 2", "reduction_percent": "30",

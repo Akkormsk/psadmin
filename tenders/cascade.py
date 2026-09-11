@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -102,6 +103,9 @@ class Criterion:
     num_min: Decimal | None = None   # нижняя граница в канонических единицах (МБ / мл)
     num_max: Decimal | None = None
     options: list[str] = field(default_factory=list)  # набор допустимых значений
+    axis_mode: str = "choose_one"  # choose_one | fulfill_set
+    importance: int = 50
+    importance_reason: str = ""
 
     def as_row(self) -> tuple[str, str]:
         return (self.label or self.concept, self.value or self.raw_value)
@@ -218,6 +222,7 @@ class Cascade:
         progress=None,
         top: int = 10,
         step_settings: dict | None = None,
+        max_cost_rub: float = 0,
     ):
         self.line = line if isinstance(line, dict) else {}
         self.session_feedback = [
@@ -232,6 +237,7 @@ class Cascade:
         self.progress = progress
         self.top = top
         self.step_settings = step_settings if isinstance(step_settings, dict) else {}
+        self.max_cost_rub = max(0, float(max_cost_rub or 0))
 
         try:
             self.quantity = int(Decimal(str(self.line.get("quantity") or 0).replace(",", ".")))
@@ -249,6 +255,26 @@ class Cascade:
         self._oasis_mirror = False
         self._tz_hash = ""
         self.error = ""
+        self.deadline = None
+
+    def _remaining_timeout(self, default):
+        if not self.deadline:
+            return default
+        remaining = self.deadline - time.perf_counter()
+        if remaining <= 0:
+            raise TimeoutError("Достигнут лимит времени прогона")
+        return max(1, min(default, remaining))
+
+    def _call_ai(self, prompt, *, max_tokens, timeout, model, images=None):
+        if self.max_cost_rub:
+            from .gateway_budget import spend_rub
+            spent = sum(spend_rub(usage, used_model) or 0 for used_model, usage in self.usage_by_model.items())
+            estimate = spend_rub({"prompt_tokens": max(1, len(prompt) // 3), "completion_tokens": max_tokens}, model) or 0
+            if spent + estimate > self.max_cost_rub:
+                raise RuntimeError(f"Следующий вызов может превысить лимит {self.max_cost_rub:g} ₽")
+        return _ai_json(
+            prompt, max_tokens=max_tokens, timeout=self._remaining_timeout(timeout), model=model, images=images,
+        )
 
     # -- запуск ----------------------------------------------------------- #
     def run(self) -> CascadeResult:
@@ -304,7 +330,7 @@ class Cascade:
         settings = self.step_settings.get("1", {})
         model = _selected_model(settings.get("model"), _STRONG_MODEL)
         use_cache = settings.get("cache", "yes") != "no"
-        criteria_cache_key = f"criteria-v1|{self._tz_hash}|{model}"
+        criteria_cache_key = f"criteria-v2|{self._tz_hash}|{model}"
         cached = _cache_get("criteria", criteria_cache_key) if use_cache else None
         if cached:
             self._load_step1(cached, rows)
@@ -325,17 +351,19 @@ class Cascade:
 {numbered}
 
 Верни только JSON:
-{{"criteria":[{{"n":1,"concept":"о чём строка, своими словами","operator":">=|<=|=|!=|~|in","value":"...","unit":"...","keep":true,"axis":"","num_min":null,"num_max":null,"options":[]}}]}}
+{{"criteria":[{{"n":1,"concept":"о чём строка, своими словами","operator":">=|<=|=|!=|~|in","value":"...","unit":"...","keep":true,"importance":80,"importance_reason":"почему важно","axis":"","axis_mode":"choose_one|fulfill_set","num_min":null,"num_max":null,"options":[]}}]}}
 
 Правила:
 - criteria: одна запись на СМЫСЛОВУЮ характеристику. Объедини дубли («синий» и «цвет: синий» — одна; «объём», «ёмкость», «память» — одно понятие; возьми самую полную формулировку).
 - keep=false для строк, которые НЕ признак готового товара: маркировка (Честный Знак, ЦРПТ), требования к пошиву и швам, макет и расположение логотипа, бумажные документы, сроки, гарантия. Физические свойства (материал, размер, цвет, конструкция, интерфейс) — keep=true.
 - axis: "capacity" (память), "volume" (объём), "size" (размер одежды) — если это то, чем отличаются варианты ОДНОГО товара. Иначе "".
+- axis_mode: "choose_one", когда для заказа выбирается одно значение оси; "fulfill_set", когда заказ собирается из нескольких вариантов (например, размерный ряд).
+- importance: 0..100 — насколько критерий влияет на пригодность товара. importance_reason — короткое объяснение.
 - num_min/num_max: переведи границу в канонические единицы — МБ для памяти (32 ГБ → 32768), мл для объёма (0,5 л → 500). «не менее» → num_min, «не более» → num_max, диапазон → оба. Иначе null.
 - options: список допустимых значений, если требование перечислением (размеры «M, L, XL»; несколько цветов). Иначе [].
 """
         try:
-            result, usage = _ai_json(
+            result, usage = self._call_ai(
                 prompt, max_tokens=max(900, min(5000, 250 + len(rows) * 150)), timeout=50, model=model,
             )
             self._add_usage(usage, model)
@@ -386,6 +414,9 @@ class Cascade:
                 "num_min": str(_decimal(entry.get("num_min"))) if _decimal(entry.get("num_min")) is not None else None,
                 "num_max": str(_decimal(entry.get("num_max"))) if _decimal(entry.get("num_max")) is not None else None,
                 "options": options,
+                "axis_mode": "fulfill_set" if _cell(entry.get("axis_mode")) == "fulfill_set" else "choose_one",
+                "importance": max(0, min(100, int(entry.get("importance") or 50))),
+                "importance_reason": _cell(entry.get("importance_reason"))[:160],
             })
         return {"criteria": criteria}
 
@@ -417,7 +448,24 @@ class Cascade:
                 num_min=_decimal(entry.get("num_min")),
                 num_max=_decimal(entry.get("num_max")),
                 options=[_cell(v) for v in (entry.get("options") or []) if _cell(v)],
+                axis_mode="fulfill_set" if entry.get("axis_mode") == "fulfill_set" else "choose_one",
+                importance=max(0, min(100, int(entry.get("importance") or 50))),
+                importance_reason=_cell(entry.get("importance_reason"))[:160],
             ))
+        limit = max(0, min(100, int(self.step_settings.get("1", {}).get("max_active_requirements", 0) or 0)))
+        if limit:
+            explicit_labels = {
+                _norm_label(row.get("label")) for row in rows
+                if isinstance(row, dict) and row.get("selected") is True
+            }
+            explicit_count = sum(c.checked and _norm_label(c.label) in explicit_labels for c in self.tz)
+            candidates = [c for c in self.tz if c.checked and _norm_label(c.label) not in explicit_labels]
+            selected = {id(c) for c in sorted(candidates, key=lambda c: -c.importance)[:max(0, limit - explicit_count)]}
+            for criterion in candidates:
+                if id(criterion) not in selected:
+                    criterion.checked = False
+                    criterion.importance_reason = criterion.importance_reason or f"Не вошло в лимит {limit}"
+            self.diagnostics["active_requirement_limit"] = limit
 
     def _fallback_criterion(self, row) -> Criterion:
         return Criterion(
@@ -453,7 +501,7 @@ class Cascade:
 Не создавай бессмысленные дубли только ради количества.
 """
             try:
-                raw, usage = _ai_json(
+                raw, usage = self._call_ai(
                     prompt, max_tokens=max(300, min(1000, 120 + maximum * 28)), timeout=35, model=model,
                 )
                 self._add_usage(usage, model)
@@ -573,7 +621,13 @@ class Cascade:
         settings = self.step_settings.get("5", {})
         colour = next((c for c in self.tz if c.checked and ("цвет" in _norm_label(c.concept) or "цвет" in _norm_label(c.label) or c.axis == "color")), None)
         survivors = []
-        for product in pool:
+        expanded = []
+        for representative in pool:
+            variants = getattr(representative, "_variant_products", None) or [representative]
+            for product in variants:
+                product._relevance = getattr(representative, "_relevance", getattr(product, "_relevance", 1))
+                expanded.append(product)
+        for product in expanded:
             if settings.get("color_filter", "family") != "off" and colour and self._colour_conflict(product, colour.value):
                 continue
             transit = max(0, int(getattr(product, "stock_transit", 0) or 0))
@@ -587,7 +641,7 @@ class Cascade:
         axis_criteria = [c for c in self.tz if c.checked and c.axis in {"capacity", "volume", "size"}]
         groups: dict[str, list] = {}
         for product in survivors:
-            groups.setdefault(product.group_id or product.external_id, []).append(product)
+            groups.setdefault(product.family_key or product.group_id or product.external_id, []).append(product)
 
         cards = []
         for skus in groups.values():
@@ -597,6 +651,7 @@ class Cascade:
                 key=lambda p: (getattr(p, "_name_hits", 0), -(p.effective_price or Decimal("Infinity"))),
             )
             card = self._serialize(face, skus)
+            card["eligible_variant_ids"] = [product.external_id for product in fitting] if fitting else []
             if "tolerance_percent" in settings:
                 card["_axis_tolerance_percent"] = max(0, min(50, int(settings["tolerance_percent"])))
             cards.append(card)
@@ -755,7 +810,7 @@ class Cascade:
                 if isinstance(grid, dict) and isinstance(grid.get(str(index)), (list, tuple))
             }
             if self._complete_grid(cells, rows):
-                self._apply_cells(card, cells, rows)
+                self._apply_cells(card, cells, rows, sources={index: "cache" for index in cells})
                 card["matrix_status"] = "complete"
                 cached_cards.append(card)
                 self.diagnostics["verdict_cache_hits"] += 1
@@ -788,6 +843,10 @@ class Cascade:
         card["unknown_count"] = len(rows)
         card["fit"] = "partial" if rows else "exact"
         card["matrix_status"] = "pending" if rows else "complete"
+        card["matrix"] = [
+            {"criterion": label, "required": value, "verdict": "not_checked", "reason": "", "source": "not_checked"}
+            for label, value in rows
+        ]
         card.pop("_ai_graded", None)
 
     @staticmethod
@@ -829,29 +888,35 @@ class Cascade:
         ceiling = max(0, min(100, int(settings.get("ceiling", os.getenv("CASCADE_STEP6_CEILING", "75")))))
         model = _selected_model(settings.get("model"), _AGENT_MODEL)
         suitable = sum(self._suitable_for_stop(card) for card in cached_cards)
+        verified = list(cached_cards)
         diagnostics = {
             "pool": len(todo), "graded": 0, "batches": 0, "cached": len(cached_cards),
             "complete": len(cached_cards), "suitable": suitable,
+            "code_prefilled_cells": sum(len(cells) for cells in axis_cells.values()),
+            "wave_size": first, "ai_ceiling": ceiling,
         }
         self.diagnostics["step6"] = diagnostics
         stop_reason = "exhausted"
         for offset in range(0, min(len(ranked), ceiling), first):
-            if suitable >= 10:
+            if self._safe_early_stop(verified, ranked[offset:]):
                 break
             batch = ranked[offset:min(offset + first, ceiling)]
-            grids = self._grade_grid(batch, rows, model=model, batch_size=3)
+            grids = self._grade_grid(batch, rows, model=model, batch_size=3, prefilled=axis_cells)
             diagnostics["graded"] += len(batch)
             diagnostics["batches"] += 1
             for card in batch:
                 cid = str(card["id"])
                 model_cells = grids.get(cid, {})
-                complete = self._complete_grid(model_cells, rows)
                 cells = {**model_cells, **axis_cells.get(cid, {})}
-                self._apply_cells(card, cells, rows)
+                complete = self._complete_grid(cells, rows)
+                sources = {index: "agent" for index in model_cells}
+                sources.update({index: "code" for index in axis_cells.get(cid, {})})
+                self._apply_cells(card, cells, rows, sources=sources)
                 card["matrix_status"] = "complete" if complete else "incomplete"
                 if complete:
                     diagnostics["complete"] += 1
                     suitable += self._suitable_for_stop(card)
+                    verified.append(card)
                     if use_cache:
                         _cache_put("verdict", self._verdict_cache_key(cid), {
                             "grid": {str(k): list(v) for k, v in cells.items()},
@@ -863,11 +928,30 @@ class Cascade:
                 break
         diagnostics["suitable"] = suitable
         diagnostics["pending"] = len(todo) - diagnostics["graded"]
-        if suitable >= 10:
+        if self._safe_early_stop(verified, ranked[diagnostics["graded"]:]):
             stop_reason = "enough_suitable"
         elif stop_reason != "empty_response" and diagnostics["pending"]:
             stop_reason = "ceiling"
         diagnostics["stop_reason"] = stop_reason
+
+    def _safe_early_stop(self, verified, remaining):
+        """Останавливает ИИ, только если оставшиеся не смогут обойти топ-10."""
+        if self.feedback_instructions:
+            return False
+        exact = [
+            card for card in verified
+            if card.get("matrix_status") == "complete"
+            and card.get("mismatch_count", 0) == 0 and card.get("unknown_count", 0) == 0
+        ]
+        if len(exact) < 10:
+            return False
+
+        def key(card):
+            price = _decimal(card.get("price"))
+            return card.get("relevance", 1), price if price is not None else Decimal("Infinity")
+
+        boundary = sorted(key(card) for card in exact)[9]
+        return all(key(card) >= boundary for card in remaining)
 
     def _axis_prefill(self, cards, rows) -> dict:
         """Клетки, которые код считает точнее модели: числовая ось из шага 1
@@ -876,7 +960,12 @@ class Cascade:
         axis_by_row = {}
         checked = [c for c in self.tz if c.checked]
         for idx, crit in enumerate(checked, 1):
+            label = _norm_label(f"{crit.label} {crit.concept}")
             if crit.axis in {"capacity", "volume"} and (crit.num_min is not None or crit.num_max is not None):
+                axis_by_row[idx] = crit
+            elif crit.axis == "size" and crit.options:
+                axis_by_row[idx] = crit
+            elif "цвет" in label or "материал" in label or "состав" in label:
                 axis_by_row[idx] = crit
         if not axis_by_row:
             return {}
@@ -885,6 +974,28 @@ class Cascade:
             tolerance = Decimal(str(max(0, min(50, int(card.get("_axis_tolerance_percent", 0)))))) / 100
             caps = self._card_axis_values(card)
             for row_idx, crit in axis_by_row.items():
+                label = _norm_label(f"{crit.label} {crit.concept}")
+                if crit.axis == "size" and crit.options:
+                    offered = {_normalized(value) for value in (card.get("sizes") or []) if _cell(value)}
+                    required = {_normalized(value) for value in crit.options if _cell(value)}
+                    if offered and required:
+                        verdict = "y" if required <= offered else "n"
+                        reason = "есть весь размерный ряд" if verdict == "y" else "нет: " + ", ".join(sorted(required - offered))
+                        out.setdefault(str(card["id"]), {})[row_idx] = (verdict, reason[:90])
+                    continue
+                if "цвет" in label:
+                    offered = ", ".join(_cell(value) for value in (card.get("colors") or []) if _cell(value))
+                    if offered:
+                        verdict = "y" if _colors_compatible(crit.value, offered)[0] else "n"
+                        out.setdefault(str(card["id"]), {})[row_idx] = (verdict, offered[:90])
+                    continue
+                if "материал" in label or "состав" in label:
+                    offered = ", ".join(_cell(value) for value in (card.get("materials") or []) if _cell(value))
+                    required_tokens = set(_meaningful_tokens(crit.value))
+                    offered_tokens = set(_meaningful_tokens(offered))
+                    if offered and required_tokens and required_tokens <= offered_tokens:
+                        out.setdefault(str(card["id"]), {})[row_idx] = ("y", offered[:90])
+                    continue
                 values = caps.get(crit.axis, [])
                 if not values:
                     continue  # карточка молчит про ось — пусть судит агент
@@ -915,11 +1026,12 @@ class Cascade:
                 vols.append(ml)
         return {"capacity": caps, "volume": vols}
 
-    def _grade_grid(self, cards, rows, *, model, batch_size) -> dict:
+    def _grade_grid(self, cards, rows, *, model, batch_size, prefilled=None) -> dict:
         """Возвращает {id карточки: {номер строки: (v, w)}}. Не применяет и не
         кэширует — это делает вызывающий."""
         if not cards:
             return {}
+        prefilled = prefilled or {}
         batches = [cards[i:i + batch_size] for i in range(0, len(cards), batch_size)] or [cards]
         cells_by_card: dict[str, dict[int, tuple]] = {}
         errors = []
@@ -929,6 +1041,9 @@ class Cascade:
             local = {pos: str(card["id"]) for pos, card in enumerate(batch, 1)}
             cards_text = "\n\n".join(
                 f"КАРТОЧКА {pos} | id {card['id']}\n{self._card_brief(card)}"
+                + ("\n   Код уже проверил пункты: " + ", ".join(
+                    f"{row}={value[0]}" for row, value in prefilled.get(str(card["id"]), {}).items()
+                ) if prefilled.get(str(card["id"])) else "")
                 for pos, card in enumerate(batch, 1)
             )
             prompt = self._step6_prompt(
@@ -936,8 +1051,8 @@ class Cascade:
                 batch_ids=", ".join(f"{p}={c['id']}" for p, c in enumerate(batch, 1)) if len(batches) > 1 else "",
             )
             try:
-                raw, usage = _ai_json(prompt, max_tokens=700 + len(batch) * (len(rows) + 2) * 24,
-                                      timeout=60, model=model)
+                raw, usage = self._call_ai(prompt, max_tokens=700 + len(batch) * (len(rows) + 2) * 24,
+                                           timeout=60, model=model)
             except Exception as exc:
                 logger.exception("Cascade step 6 grid batch failed (%s)", model)
                 return {"_error": _cell(exc)[:200]}, {}
@@ -1002,9 +1117,9 @@ class Cascade:
                 batch_ids=", ".join(f"{p}={c['id']}" for p, c in enumerate(batch, 1)) if len(batches) > 1 else "",
             )
             try:
-                raw, usage = _ai_json(prompt, max_tokens=400 + len(self.feedback_instructions) * 120,
-                                      timeout=60, model=model,
-                                      images=images if with_images else None)
+                raw, usage = self._call_ai(prompt, max_tokens=400 + len(self.feedback_instructions) * 120,
+                                           timeout=60, model=model,
+                                           images=images if with_images else None)
             except Exception as exc:
                 logger.exception("Cascade feedback classification batch failed")
                 return {"_error": _cell(exc)[:200]}, {}
@@ -1028,8 +1143,10 @@ class Cascade:
 
         self._apply_instructions(raw_instructions, {str(c["id"]): c for c in cards}, bool(errors))
 
-    def _apply_cells(self, card, cells, rows) -> None:
+    def _apply_cells(self, card, cells, rows, *, sources=None) -> None:
         matches, mismatches, unknown = [], [], []
+        matrix = []
+        sources = sources or {}
         for index, (label, value) in enumerate(rows, 1):
             verdict, reason = cells.get(index, ("m", ""))
             tail = f" — {reason}" if reason else ""
@@ -1039,7 +1156,15 @@ class Cascade:
                 mismatches.append(f"{label}: требуется {value}{tail}")
             else:
                 unknown.append(f"{label}{tail or ' — нет данных в карточке'}")
+            matrix.append({
+                "criterion": label,
+                "required": value,
+                "verdict": {"y": "yes", "n": "no", "m": "unknown"}.get(verdict, "not_checked"),
+                "reason": reason or ("Нет данных в карточке" if verdict == "m" else ""),
+                "source": sources.get(index, "not_checked"),
+            })
         card["matches"], card["mismatches"], card["unknown"] = matches, mismatches, unknown
+        card["matrix"] = matrix
         card["match_count"] = len(matches)
         card["mismatch_count"] = len(mismatches)
         card["unknown_count"] = len(unknown)
@@ -1113,7 +1238,8 @@ class Cascade:
                 "- \"y\" — карточка (или её подходящий вариант) соответствует пункту;\n"
                 "- \"n\" — в карточке есть данные по пункту и они НЕ совпадают;\n"
                 "- \"m\" — в карточке про пункт ничего нет.\n"
-                f"Ровно {row_count} клеток на карточку. Пропущенная = \"m\". \"m\" — только когда данных реально нет.\n"
+                f"Верни все клетки, кроме помеченных «Код уже проверил»: их не повторяй. "
+                "Пропущенная непроверенная клетка означает неполный ответ, а не НЗ. \"m\" — только когда данных реально нет.\n"
                 "Небольшое отклонение размера/веса → \"y\". Заметное, но возможно допустимое → \"m\" («X vs Y, проверить»). "
                 "Явно не то → \"n\". «Не менее N»: меньше N — \"n\". «Не более N»: больше N — \"n\". "
                 "Ёмкость/объём бери из названия варианта. «Флеш-карта USB 2.0» и «USB-флеш-накопитель» — одно и то же.\n"
@@ -1220,7 +1346,7 @@ class Cascade:
     def step_7_collapse_and_sort(self, cards) -> list[dict]:
         """Финальный фиксированный ключ. БЕЗ обрезки. Ручной приоритет (0)
         ставит ТОЛЬКО замечание «подними X» из фидбека — см. _apply_instructions."""
-        live = [c for c in cards if not c.get("_removed")]
+        live = list(cards)
         settings = self.step_settings.get("7", {})
         price_order = settings.get("price_order") or self.ranking.get("price") or "asc"
         price_desc = price_order == "desc"
@@ -1240,6 +1366,7 @@ class Cascade:
             return (card.get("mismatch_count", 0), -card.get("match_count", 0), card.get("unknown_count", 0))
 
         live.sort(key=lambda c: (
+            1 if c.get("_removed") else 0,
             0 if c.get("priority") == 0 else 1,
             0 if c.get("matrix_status", "complete") == "complete" else 1,
             *matrix_key(c),
@@ -1253,10 +1380,12 @@ class Cascade:
 
     # -- шаг 8: цена + показ ~10 ------------------------------------ #
     def step_8_price_and_top(self, cards, top=None) -> list[dict]:
-        shown = cards[: top or self.top]
+        shown = [card for card in cards if not card.get("_removed")][: top or self.top]
         if self.step_settings.get("8", {}).get("live_prices", "yes") != "no" and self._oasis_mirror and shown:
             try:
-                self.client = self.client or OasisClient()
+                self.client = self.client or OasisClient(
+                    timeout=self._remaining_timeout(8), min_interval=0, max_attempts=1,
+                )
                 _refresh_live_oasis_prices(self.client, shown, quantity=self.quantity)
             except (CatalogSyncError, Exception):
                 logger.exception("Cascade step 8 live price refresh skipped")

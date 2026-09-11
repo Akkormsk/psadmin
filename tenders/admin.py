@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 
 
 class TenderLineInline(admin.TabularInline):
@@ -19,10 +19,20 @@ class TenderEstimateAdmin(admin.ModelAdmin):
 
 @admin.register(TenderSettings)
 class TenderSettingsAdmin(admin.ModelAdmin):
-    list_display = ("vat_rate",)
+    list_display = ("vat_rate", "auto_start_product_search", "auto_recalculate_requirements")
 
     def has_add_permission(self, request):
         return not TenderSettings.objects.exists()
+
+
+@admin.register(CascadeLabPreset)
+class CascadeLabPresetAdmin(admin.ModelAdmin):
+    list_display = ("name", "created_by", "updated_at")
+
+
+@admin.register(CascadeConfigVersion)
+class CascadeConfigVersionAdmin(admin.ModelAdmin):
+    list_display = ("name", "is_active", "created_by", "created_at")
 
 
 @admin.register(ProductionType)

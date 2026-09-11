@@ -2,11 +2,10 @@
 {% block title %}Лаборатория каскада{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{% static 'tenders/cascade_lab.css' %}">
-<main class="cascade-lab" id="cascade-lab"
-      data-create-url="{% url 'cascade_lab_run_create' %}"
-      data-detail-url="{% url 'cascade_lab_run_detail' 0 %}"
-      data-execute-url="{% url 'cascade_lab_run_execute' 0 %}"
-      data-fork-url="{% url 'cascade_lab_run_fork' 0 %}">
+<div class="wrap app-home"><main class="container cascade-lab" id="cascade-lab"
+      data-execute-url="{% url 'cascade_lab_execute' %}"
+      data-preset-url="{% url 'cascade_lab_preset_save' %}"
+      data-activate-url="{% url 'cascade_lab_activate' %}">
   <header class="cascade-lab__header">
     <div><a class="back-link" href="{% url 'tender_home' %}">← К тендерам</a><h1>Лаборатория каскада</h1>
       <p>Восемь изолированных шагов, снимки данных и повтор с выбранного места.</p></div>
@@ -17,8 +16,8 @@
     <form id="lab-run-form">
       {% csrf_token %}
       <div class="cascade-lab__source">
-        <label>Сохранённый тест<select name="case_id" id="lab-case"><option value="">Новый прогон</option>{% for case in lab_cases %}<option value="{{ case.pk }}">{{ case.name }}</option>{% endfor %}</select></label>
-        <label>Позиция тендера<select name="line_id" id="lab-line"><option value="">Новый товар</option>{% for line in lines %}<option value="{{ line.pk }}">{{ line.estimate.tender_number }} · {{ line.name }}</option>{% endfor %}</select></label>
+        <label>Набор настроек<select id="lab-preset" data-customized="true"><option value="">Текущие значения</option>{% for preset in lab_presets %}<option value="{{ preset.id }}" data-settings="{{ preset.settings_json|escape }}">{{ preset.name }}</option>{% endfor %}</select></label>
+        <label>Позиция тендера<select name="line_id" id="lab-line" data-customized="true"><option value="">Новый товар</option>{% for line in lines %}<option value="{{ line.pk }}"{% if selected_line.pk == line.pk %} selected{% endif %}>{{ line.estimate.tender_number }} · {{ line.name }}</option>{% endfor %}</select></label>
         <div class="cascade-lab__product cascade-lab__wide" id="lab-product-fields">
           <label>Название товара<input type="text" name="line_name" placeholder="Например, флешка"></label>
           <label>Количество<input type="number" name="line_quantity" min="0" step="1" placeholder="100"></label>
@@ -39,27 +38,27 @@
       </div>
       <details class="cascade-lab__settings" open><summary>Настройки восьми шагов</summary>
         <div class="cascade-lab__limits">
-          <label>Первый запуск до шага<select name="stop_after">{% for step in steps %}<option value="{{ step.step }}"{% if step.step == 1 %} selected{% endif %}>{{ step.step }}. {{ step.title }}</option>{% endfor %}</select><small>Для пошаговой отладки оставьте шаг 1.</small></label>
+          <label>Запустить до шага<select name="stop_after" id="lab-stop-after">{% for step in steps %}<option value="{{ step.step }}"{% if step.step == 1 %} selected{% endif %}>{{ step.step }}. {{ step.title }}</option>{% endfor %}</select><small>Просмотр блока не меняет эту цель.</small></label>
           <label>Лимит всего прогона, ₽<input type="number" name="max_cost_rub" min="0" step="0.01" value="10"></label>
           <label>Лимит всего прогона, секунд<input type="number" name="max_seconds" min="0" step="0.1" value="10"></label>
-          <label>Сохранить как тест<input type="text" name="case_name" maxlength="200" placeholder="Название теста"></label>
+          <label>Название набора<input type="text" id="lab-preset-name" maxlength="200" placeholder="Например, Быстрый поиск"></label>
         </div>
         <div class="cascade-lab__step-settings">
           {% for step in steps %}<article data-settings-step="{{ step.step }}">
             <header><b>{{ step.step }}</b><strong>{{ step.title }}</strong></header>
             <p><span>Вход:</span> {{ step.input }}<br><span>Выход:</span> {{ step.output }}</p>
-            {% if step.step == 1 %}<label>Агент разбора ТЗ<select name="step_1_model"><option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 · сильный</option><option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5 · средний</option><option value="openai/gpt-4.1-mini">GPT-4.1 mini · средний</option><option value="gemini/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite · слабый</option><option value="openai/gpt-4.1-nano">GPT-4.1 nano · слабый</option></select></label><label>Использовать кэш<select name="step_1_cache"><option value="yes">Да — повтор бесплатно</option><option value="no">Нет — проверить заново</option></select></label>
+            {% if step.step == 1 %}<label>Агент разбора ТЗ<select name="step_1_model"><option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 · сильный</option><option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5 · средний</option><option value="openai/gpt-4.1-mini">GPT-4.1 mini · средний</option><option value="gemini/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite · слабый</option><option value="openai/gpt-4.1-nano">GPT-4.1 nano · слабый</option></select></label><label>Максимум активных требований<input type="number" name="step_1_max_requirements" min="0" max="100" value="0"><small>0 — использовать все. Остальные останутся видны как неактивные.</small></label><label>Использовать кэш<select name="step_1_cache"><option value="yes">Да — повтор бесплатно</option><option value="no">Нет — проверить заново</option></select></label>
             {% elif step.step == 2 %}<label>Агент чистки названия<select name="step_2_model"><option value="openai/gpt-4.1-mini">GPT-4.1 mini · средний</option><option value="openai/gpt-4.1-nano">GPT-4.1 nano · слабый</option><option value="gemini/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite · слабый</option><option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5 · средний</option><option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 · сильный</option></select></label><label>Использовать кэш<select name="step_2_cache"><option value="yes">Да — повтор бесплатно</option><option value="no">Нет — проверить заново</option></select></label><label>Минимум поисковых фраз<input type="number" name="step_2_min_phrases" min="1" max="40" value="12"><small>Если фраз меньше, шаг покажет предупреждение и не будет создавать бессмысленные дубли.</small></label><label>Максимум поисковых фраз<input type="number" name="step_2_max_phrases" min="1" max="40" value="24"><small>Сколько вариантов названия передать поиску шага 3.</small></label>
             {% elif step.step == 3 %}<label>Каталоги для поиска<select name="step_3_sources"><option value="all">Oasis и Gifts</option><option value="oasis">Только Oasis</option><option value="gifts">Только Gifts</option></select><small>Полезно для сравнения полноты поставщиков.</small></label>
             {% elif step.step == 4 %}<label>Агент отсева<select name="step_4_model"><option value="openai/gpt-4.1-mini">GPT-4.1 mini · средний</option><option value="openai/gpt-4.1-nano">GPT-4.1 nano · слабый</option><option value="gemini/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite · слабый</option><option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5 · средний</option><option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 · сильный</option></select></label><label>Интенсивность отсева<select name="step_4_intensity"><option value="cautious">Осторожно — спорное оставить</option><option value="strict">Строго — спорное убрать</option><option value="off">Выключить отсев</option></select></label><label>Использовать кэш<select name="step_4_cache"><option value="yes">Да</option><option value="no">Нет — проверить заново</option></select></label>
             {% elif step.step == 5 %}<label>Фильтр цвета<select name="step_5_color_filter"><option value="family">По семейству цвета</option><option value="off">Не фильтровать</option></select></label><label>Требование к остатку<select name="step_5_stock_policy"><option value="available">Есть хоть сколько-то / в пути</option><option value="enough">Хватает на весь тираж</option><option value="ignore">Не учитывать остаток</option></select></label><label>Допуск числовых вариантов, %<input type="number" name="step_5_tolerance_percent" min="0" max="50" value="5"><small>Например, размер или объём в пределах допуска.</small></label>
-            {% elif step.step == 6 %}<label>Агент матрицы и фидбека<select name="step_6_model"><option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 · сильный</option><option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5 · средний</option><option value="openai/gpt-4.1-mini">GPT-4.1 mini · средний</option><option value="gemini/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite · слабый</option><option value="openai/gpt-4.1-nano">GPT-4.1 nano · слабый</option></select></label><label>Использовать кэш матрицы<select name="step_6_cache"><option value="yes">Да — проверять только новое</option><option value="no">Нет — перепроверить всё</option></select></label><label>Понятные числа считать кодом<select name="step_6_numeric_prefill"><option value="yes">Да — дешевле</option><option value="no">Нет — всё отдать ИИ</option></select></label><label>Карточек в первой проверке<input type="number" name="step_6_first_batch" min="1" max="75" value="25"></label><label>Максимум карточек для ИИ<input type="number" name="step_6_ceiling" min="0" max="100" value="75"><small>Новые партии прекращаются, когда найдено 10 подходящих.</small></label>
+            {% elif step.step == 6 %}<label>Агент матрицы и фидбека<select name="step_6_model"><option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 · сильный</option><option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5 · средний</option><option value="openai/gpt-4.1-mini">GPT-4.1 mini · средний</option><option value="gemini/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite · слабый</option><option value="openai/gpt-4.1-nano">GPT-4.1 nano · слабый</option></select></label><label>Использовать кэш матрицы<select name="step_6_cache"><option value="yes">Да — проверять только новое</option><option value="no">Нет — перепроверить всё</option></select></label><label>Понятные числа считать кодом<select name="step_6_numeric_prefill"><option value="yes">Да — дешевле</option><option value="no">Нет — всё отдать ИИ</option></select></label><label>Карточек в одной волне<input type="number" name="step_6_first_batch" min="1" max="75" value="25"><small>Размер очереди. После каждой волны код проверяет, можно ли безопасно остановиться.</small></label><label>Максимум новых карточек для ИИ<input type="number" name="step_6_ceiling" min="0" max="100" value="75"><small>Общий предел карточек для агента за прогон. 0 — не вызывать ИИ.</small></label>
             {% elif step.step == 7 %}<label>Приоритет матрицы<select name="step_7_matrix_order"><option value="no_then_yes">Сначала меньше «Нет»</option><option value="yes_then_no">Сначала больше «Да»</option></select></label><label>Цена при равной матрице<select name="step_7_price_order"><option value="asc">Сначала дешевле</option><option value="desc">Сначала дороже</option></select></label>
             {% elif step.step == 8 %}<label>Показать в результате<input type="number" name="step_8_top" min="1" max="50" value="10"><small>Размер финального списка.</small></label><label>Обновить цены перед показом<select name="step_8_live_prices"><option value="yes">Да — точные цена и остаток</option><option value="no">Нет — быстрее, из зеркала</option></select></label>{% endif %}
           </article>{% endfor %}
         </div>
       </details>
-      <div class="cascade-lab__actions"><button type="submit" class="button-success">Запустить</button><span id="lab-message" role="status"></span></div>
+      <div class="cascade-lab__actions"><button type="submit" class="button-success" id="lab-run">Запустить до выбранного шага</button><button type="button" class="button-secondary" id="lab-save-preset">Сохранить набор</button><button type="button" class="button-secondary" id="lab-activate">Применить настройки к подбору товаров</button><span id="lab-message" role="status"></span></div><p class="cascade-lab__active-config">Активные настройки подбора: <strong id="lab-active-config">{% if active_config %}{{ active_config.name }} · {{ active_config.created_at|date:"d.m.Y H:i" }}{% else %}по умолчанию{% endif %}</strong></p>
     </form>
   </section>
 
@@ -86,9 +85,6 @@
     </div>
   </section>
 
-  <section class="panel cascade-lab__history"><h2>Последние прогоны</h2><div id="lab-run-list">
-    {% for run in lab_runs %}<button type="button" data-run-id="{{ run.pk }}"><strong>{{ run.title }}</strong><span>шаг {{ run.current_step }}/8 · {{ run.get_status_display }} · {{ run.total_seconds|floatformat:2 }} с · {{ run.total_cost_rub|floatformat:2 }} ₽</span></button>{% empty %}<p>Прогонов ещё нет.</p>{% endfor %}
-  </div></section>
-</main>
+</main></div>
 <script src="{% static 'tenders/cascade_lab.js' %}"></script>
 {% endblock %}
