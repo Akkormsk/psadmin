@@ -1,6 +1,7 @@
 import json
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -33,6 +34,13 @@ class CascadeLabViewTests(TestCase):
         self.assertContains(response, "Максимум поисковых фраз")
         self.assertContains(response, "Карточек в первой проверке")
         self.assertContains(response, "Показать в результате")
+        self.assertContains(response, "Модель разбора")
+        self.assertContains(response, "Каталоги для поиска")
+        self.assertContains(response, "Интенсивность отсева")
+        self.assertContains(response, "Требование к остатку")
+        self.assertContains(response, "Модель матрицы")
+        self.assertContains(response, "Приоритет матрицы")
+        self.assertContains(response, "Обновить цены перед показом")
         self.assertNotContains(response, "Параметры отдельных блоков, JSON")
         self.assertContains(response, 'id="lab-view-prev"')
         self.assertContains(response, 'id="lab-view-next"')
@@ -50,11 +58,26 @@ class CascadeLabViewTests(TestCase):
             "line_quantity": "50",
             "requirement_label": ["Объём", "Цвет"],
             "requirement_value": ["не менее 300 мл", "белый"],
+            "step_1_model": "fast",
+            "step_1_cache": "no",
             "step_2_min_phrases": "8",
             "step_2_max_phrases": "12",
+            "step_3_sources": "gifts",
+            "step_4_model": "strong",
+            "step_4_intensity": "strict",
+            "step_4_cache": "no",
+            "step_5_color_filter": "off",
+            "step_5_stock_policy": "enough",
+            "step_5_tolerance_percent": "5",
             "step_6_first_batch": "15",
             "step_6_ceiling": "60",
+            "step_6_model": "fast",
+            "step_6_cache": "no",
+            "step_6_numeric_prefill": "yes",
+            "step_7_matrix_order": "yes_then_no",
+            "step_7_price_order": "desc",
             "step_8_top": "10",
+            "step_8_live_prices": "no",
             "stop_after": "3",
         })
 
@@ -64,8 +87,14 @@ class CascadeLabViewTests(TestCase):
         self.assertEqual(run.input_payload["quantity"], "50")
         self.assertEqual(run.input_payload["requirements"]["requirements"][1], {"label": "Цвет", "value": "белый"})
         self.assertEqual(run.settings["steps"], {
+            "1": {"model": "fast", "cache": "no"},
             "2": {"min_phrases": 8, "max_phrases": 12},
-            "6": {"first_batch": 15, "ceiling": 60},
+            "3": {"sources": "gifts"},
+            "4": {"model": "strong", "intensity": "strict", "cache": "no"},
+            "5": {"color_filter": "off", "stock_policy": "enough", "tolerance_percent": 5},
+            "6": {"first_batch": 15, "ceiling": 60, "model": "fast", "cache": "no", "numeric_prefill": "yes"},
+            "7": {"matrix_order": "yes_then_no", "price_order": "desc"},
+            "8": {"live_prices": "no"},
         })
         self.assertEqual(run.settings["top"], 10)
         submit.assert_called_once_with(run.pk)
@@ -229,6 +258,108 @@ class CascadeLabRunnerTests(TestCase):
             "actual": 2,
             "minimum_met": False,
         })
+
+    @patch("tenders.cascade._ai_json")
+    @patch("tenders.cascade._cache_get", return_value=None)
+    def test_step_1_can_use_fast_model_without_cache(self, cache_get, ai_json):
+        ai_json.return_value = ({"item": "кружка", "queries": ["кружка"], "criteria": []}, {})
+        cascade = Cascade({"name": "Кружка"}, step_settings={"1": {"model": "fast", "cache": "no"}})
+
+        cascade.step_1_parse_tz()
+
+        cache_get.assert_not_called()
+        self.assertEqual(ai_json.call_args.kwargs["model"], "openai/gpt-4.1-mini")
+
+    @patch("tenders.cascade._text_search_pool", return_value=[])
+    def test_step_3_can_search_only_selected_supplier(self, search):
+        CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://oasis.test")
+        CatalogSupplier.objects.create(code="gifts", name="Gifts", base_url="https://gifts.test")
+        cascade = Cascade({"name": "Кружка"}, step_settings={"3": {"sources": "gifts"}})
+
+        cascade.step_3_search_by_name(["кружка"])
+
+        search.assert_called_once_with("gifts", ["кружка"])
+
+    @patch("tenders.services._run_name_filter", return_value={"1"})
+    def test_step_4_passes_model_and_intensity_and_can_skip_cache(self, name_filter):
+        product = SimpleNamespace(external_id="1", full_name="Кружка", name="Кружка")
+        cascade = Cascade({"name": "Кружка"}, step_settings={
+            "4": {"model": "strong", "intensity": "strict", "cache": "no"},
+        })
+        cascade.item = "кружка"
+
+        self.assertEqual(cascade.step_4_name_filter([product]), [product])
+        self.assertEqual(name_filter.call_args.kwargs["model"], "anthropic/claude-sonnet-4-5")
+        self.assertEqual(name_filter.call_args.kwargs["intensity"], "strict")
+
+    def test_step_5_can_require_enough_stock(self):
+        supplier = CatalogSupplier.objects.create(code="gifts", name="Gifts", base_url="https://gifts.test")
+        enough = CatalogProduct.objects.create(supplier=supplier, external_id="enough", name="Кружка", total_stock=100)
+        short = CatalogProduct.objects.create(supplier=supplier, external_id="short", name="Кружка", total_stock=10)
+        cascade = Cascade({"name": "Кружка", "quantity": 50}, step_settings={"5": {"stock_policy": "enough"}})
+
+        cards = cascade.step_5_hard_gates_and_collapse([enough, short])
+
+        self.assertEqual([card["id"] for card in cards], ["enough"])
+
+    def test_step_5_applies_numeric_tolerance_when_choosing_variant(self):
+        from .cascade import Criterion
+
+        supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://oasis.test")
+        near = CatalogProduct.objects.create(
+            supplier=supplier, external_id="near", group_id="one", name="Флешка 31 ГБ",
+            size="31 ГБ", price=Decimal("100"), total_stock=100,
+        )
+        exact = CatalogProduct.objects.create(
+            supplier=supplier, external_id="exact", group_id="one", name="Флешка 32 ГБ",
+            size="32 ГБ", price=Decimal("200"), total_stock=100,
+        )
+        cascade = Cascade({"name": "Флешка", "quantity": 10}, step_settings={"5": {"tolerance_percent": 5}})
+        cascade.tz = [Criterion(
+            label="Объём памяти", raw_value="не менее 32 ГБ", concept="Объём памяти",
+            operator=">=", value="32", axis="capacity", num_min=Decimal("32768"),
+        )]
+
+        cards = cascade.step_5_hard_gates_and_collapse([near, exact])
+
+        self.assertEqual(cards[0]["id"], "near")
+        self.assertEqual(cards[0]["_axis_tolerance_percent"], 5)
+
+    @patch.object(Cascade, "_grade_grid")
+    def test_step_6_can_use_fast_model(self, grade_grid):
+        from .cascade import Criterion
+
+        grade_grid.return_value = {"one": {1: ("y", "")}}
+        cascade = Cascade({"name": "Кружка"}, step_settings={
+            "6": {"model": "fast", "cache": "no", "first_batch": 1, "ceiling": 1},
+        })
+        cascade._tz_hash = "tz"
+        cascade.tz = [Criterion(label="Цвет", raw_value="белый", concept="Цвет", operator="=", value="белый")]
+        card = {"id": "one", "name": "Кружка", "price": "100", "relevance": 0}
+
+        cascade.step_6_agent_matrix([card])
+
+        self.assertEqual(grade_grid.call_args.kwargs["model"], "openai/gpt-4.1-mini")
+
+    def test_step_7_can_rank_yes_before_no_and_price_descending(self):
+        cards = [
+            {"id": "cheap", "name": "A", "article": "1", "price": "100", "match_count": 2, "mismatch_count": 0, "unknown_count": 0},
+            {"id": "rich", "name": "B", "article": "2", "price": "300", "match_count": 5, "mismatch_count": 1, "unknown_count": 0},
+            {"id": "mid", "name": "C", "article": "3", "price": "200", "match_count": 5, "mismatch_count": 1, "unknown_count": 0},
+        ]
+        cascade = Cascade({"name": "Товар"}, step_settings={"7": {"matrix_order": "yes_then_no", "price_order": "desc"}})
+
+        ranked = cascade.step_7_collapse_and_sort(cards)
+
+        self.assertEqual([card["id"] for card in ranked], ["rich", "mid", "cheap"])
+
+    @patch("tenders.cascade._refresh_live_oasis_prices")
+    def test_step_8_can_disable_live_price_refresh(self, refresh):
+        cascade = Cascade({"name": "Товар"}, step_settings={"8": {"live_prices": "no"}})
+        cascade._oasis_mirror = True
+
+        self.assertEqual(cascade.step_8_price_and_top([{"id": "1"}]), [{"id": "1"}])
+        refresh.assert_not_called()
 
     def test_runner_records_input_output_metrics_and_can_stop(self):
         from .cascade_lab import run_cascade_lab

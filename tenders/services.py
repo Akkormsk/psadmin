@@ -2470,7 +2470,7 @@ _NAME_FILTER_MODEL_DEFAULT = "openai/gpt-4.1-mini"
 _NAME_FILTER_BATCH = 240
 
 
-def _run_name_filter(item, id_names, *, usage=None):
+def _run_name_filter(item, id_names, *, usage=None, model=None, intensity="cautious"):
     """Step 4: the cheap AI name pass. `gpt-4.1-mini` reads each product
     NAME (nothing else) and drops the ones that are not the requested
     `item` — a case / box / holder / cable / a gift set of several things,
@@ -2486,10 +2486,15 @@ def _run_name_filter(item, id_names, *, usage=None):
     if not item or not pairs:
         return None
     batches = [pairs[index:index + _NAME_FILTER_BATCH] for index in range(0, len(pairs), _NAME_FILTER_BATCH)]
-    model = os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or _NAME_FILTER_MODEL_DEFAULT
+    model = model or os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or _NAME_FILTER_MODEL_DEFAULT
 
     def run_batch(batch):
         numbered = "\n".join(f"{number}. {name}" for number, (_, name) in enumerate(batch, 1))
+        decision_rule = (
+            "Если название двусмысленно или товар может быть не тем типом — тоже отклоняй.\n"
+            if intensity == "strict" else
+            "Если по названию непонятно — оставляй.\n"
+        )
         prompt = (
             "Ниже пронумерованный список названий товаров из каталога сувенирной продукции.\n"
             f"Нужен именно товар: «{item}».\n\n"
@@ -2497,7 +2502,7 @@ def _run_name_filter(item, id_names, *, usage=None):
             "НЕ товар — это другой предмет, аксессуар к нему, чехол / коробка / упаковка / "
             "органайзер / держатель / подставка, запасная часть, ИЛИ подарочный набор из "
             "нескольких предметов. Сам товар в любом исполнении, форме, объёме, цвете и "
-            "материале — оставляй. Если по названию непонятно — оставляй.\n\n"
+            "материале — оставляй. " + decision_rule + "\n"
             f"{numbered}"
         )
         try:

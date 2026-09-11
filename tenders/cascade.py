@@ -50,6 +50,11 @@ logger = logging.getLogger(__name__)
 
 _STRONG_MODEL = os.getenv("TIMEWEB_AI_MODEL_SEARCH_PLAN", "").strip() or "anthropic/claude-sonnet-4-5"
 _AGENT_MODEL = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or "anthropic/claude-sonnet-4-5"
+_FAST_MODEL = os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or "openai/gpt-4.1-mini"
+
+
+def _selected_model(value, default):
+    return _FAST_MODEL if value == "fast" else _STRONG_MODEL if value == "strong" else default
 
 
 def _axis_short(value, axis: str) -> str:
@@ -286,7 +291,11 @@ class Cascade:
             ).encode("utf-8")
         ).hexdigest()
 
-        cached = _cache_get("tz", self._tz_hash)
+        settings = self.step_settings.get("1", {})
+        model = _selected_model(settings.get("model"), _STRONG_MODEL)
+        use_cache = settings.get("cache", "yes") != "no"
+        tz_cache_key = self._tz_hash if model == _STRONG_MODEL else f"{self._tz_hash}|{model}"
+        cached = _cache_get("tz", tz_cache_key) if use_cache else None
         if cached:
             self._load_step1(cached, rows)
             self.diagnostics["tz_cache_hit"] = True
@@ -317,8 +326,8 @@ class Cascade:
 - options: список допустимых значений, если требование перечислением (размеры «M, L, XL»; несколько цветов). Иначе [].
 """
         try:
-            result, usage = _ai_json(prompt, max_tokens=1600, timeout=50, model=_STRONG_MODEL)
-            self._add_usage(usage, _STRONG_MODEL)
+            result, usage = _ai_json(prompt, max_tokens=1600, timeout=50, model=model)
+            self._add_usage(usage, model)
         except Exception as exc:
             logger.exception("Cascade step 1 failed")
             self.error = _cell(exc)[:200]
@@ -329,7 +338,8 @@ class Cascade:
             return self.tz
 
         payload = self._parse_step1(result, rows)
-        _cache_put("tz", self._tz_hash, payload)
+        if use_cache:
+            _cache_put("tz", tz_cache_key, payload)
         self._load_step1(payload, rows)
         self._pull_lessons()
         return self.tz
@@ -446,19 +456,20 @@ class Cascade:
     # -- шаг 3: поиск по названиям ------------------------------------- #
     def step_3_search_by_name(self, phrases) -> list:
         pool = []
-        if CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists():
+        sources = self.step_settings.get("3", {}).get("sources", "all")
+        if sources in {"all", "oasis"} and CatalogProduct.objects.filter(supplier__code="oasis", is_active=True).exists():
             self._oasis_mirror = True
             oasis = _aggregate_color_variants(_text_search_pool("oasis", phrases), "oasis")
             pool.extend(oasis)
             self.sources["oasis"] = {"status": "success", "received": len(oasis)}
         else:
-            self.sources["oasis"] = {"status": "not_configured"}
-        if CatalogSupplier.objects.filter(code="gifts", is_active=True).exists():
+            self.sources["oasis"] = {"status": "disabled" if sources == "gifts" else "not_configured"}
+        if sources in {"all", "gifts"} and CatalogSupplier.objects.filter(code="gifts", is_active=True).exists():
             gifts = _aggregate_color_variants(_text_search_pool("gifts", phrases), "gifts")
             pool.extend(gifts)
             self.sources["gifts"] = {"status": "success", "received": len(gifts)}
         else:
-            self.sources["gifts"] = {"status": "not_configured"}
+            self.sources["gifts"] = {"status": "disabled" if sources == "oasis" else "not_configured"}
         pool = _score_pool_relevance(pool, self.item, phrases)
         for product in pool:
             if not hasattr(product, "_relevance"):
@@ -476,37 +487,55 @@ class Cascade:
             return pool
         from .services import _run_name_filter
 
+        settings = self.step_settings.get("4", {})
+        intensity = settings.get("intensity", "cautious")
+        if intensity == "off":
+            self.diagnostics["name_filter"] = "disabled"
+            self.diagnostics["name_filter_removed"] = 0
+            return pool
+        model = _selected_model(settings.get("model"), _FAST_MODEL)
+        use_cache = settings.get("cache", "yes") != "no"
+
         ids = sorted(str(p.external_id) for p in pool)
+        cache_variant = "" if model == _FAST_MODEL and intensity == "cautious" else f"|{model}|{intensity}"
         key = hashlib.sha1(
-            (_norm_label(self.item) + "|" + "|".join(ids)).encode("utf-8")
+            (_norm_label(self.item) + cache_variant + "|" + "|".join(ids)).encode("utf-8")
         ).hexdigest()
-        cached = _cache_get("namefilter", key)
+        cached = _cache_get("namefilter", key) if use_cache else None
         if cached and isinstance(cached.get("keep"), list):
             keep = {str(v) for v in cached["keep"]}
             self.diagnostics["name_filter"] = "cache"
         else:
             id_names = [(p.external_id, p.full_name or p.name) for p in pool]
             nf_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-            keep = _run_name_filter(self.item or _cell(self.line.get("name")), id_names, usage=nf_usage)
-            self._add_usage(nf_usage, os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or "openai/gpt-4.1-mini")
+            keep = _run_name_filter(
+                self.item or _cell(self.line.get("name")), id_names,
+                usage=nf_usage, model=model, intensity=intensity,
+            )
+            self._add_usage(nf_usage, model)
             if keep is None:
                 self.diagnostics["name_filter"] = "skipped"
                 return pool
             keep = {str(v) for v in keep}
-            _cache_put("namefilter", key, {"keep": sorted(keep)})
+            if use_cache:
+                _cache_put("namefilter", key, {"keep": sorted(keep)})
         kept = [p for p in pool if str(p.external_id) in keep]
         self.diagnostics["name_filter_removed"] = len(pool) - len(kept)
         return kept
 
     # -- шаг 5: цвет + остаток + схлопывание -------------------------- #
     def step_5_hard_gates_and_collapse(self, pool) -> list[dict]:
+        settings = self.step_settings.get("5", {})
         colour = next((c for c in self.tz if c.checked and ("цвет" in _norm_label(c.concept) or "цвет" in _norm_label(c.label) or c.axis == "color")), None)
         survivors = []
         for product in pool:
-            if colour and self._colour_conflict(product, colour.value):
+            if settings.get("color_filter", "family") != "off" and colour and self._colour_conflict(product, colour.value):
                 continue
             transit = max(0, int(getattr(product, "stock_transit", 0) or 0))
-            if self.quantity > 0 and product.total_stock <= 0 and transit <= 0 and not product.is_on_order:
+            stock_policy = settings.get("stock_policy", "available")
+            if stock_policy == "available" and self.quantity > 0 and product.total_stock <= 0 and transit <= 0 and not product.is_on_order:
+                continue
+            if stock_policy == "enough" and self.quantity > 0 and product.total_stock + transit < self.quantity and not product.is_on_order:
                 continue
             survivors.append(product)
 
@@ -522,7 +551,10 @@ class Cascade:
                 fitting or skus,
                 key=lambda p: (getattr(p, "_name_hits", 0), -(p.effective_price or Decimal("Infinity"))),
             )
-            cards.append(self._serialize(face, skus))
+            card = self._serialize(face, skus)
+            if "tolerance_percent" in settings:
+                card["_axis_tolerance_percent"] = max(0, min(50, int(settings["tolerance_percent"])))
+            cards.append(card)
         self.diagnostics["groups"] = len(cards)
         return cards
 
@@ -551,14 +583,15 @@ class Cascade:
         if not criteria:
             return []
         fitting = []
+        tolerance = Decimal(str(max(0, min(50, int(self.step_settings.get("5", {}).get("tolerance_percent", 0)))))) / 100
         for product in skus:
             ok = True
             for crit in criteria:
                 value = self._axis_value(product, crit.axis)
                 if value is not None:
-                    if crit.num_min is not None and value < crit.num_min:
+                    if crit.num_min is not None and value < crit.num_min * (1 - tolerance):
                         ok = False
-                    if crit.num_max is not None and value > crit.num_max:
+                    if crit.num_max is not None and value > crit.num_max * (1 + tolerance):
                         ok = False
                 if crit.options:
                     label = _variant_size(product)
@@ -653,6 +686,8 @@ class Cascade:
 
     # -- шаг 6: умный агент, матрица ТЗ ------------------------------- #
     def step_6_agent_matrix(self, cards) -> list[dict]:
+        settings = self.step_settings.get("6", {})
+        use_cache = settings.get("cache", "yes") != "no"
         rows = [c.as_row() for c in self.tz if c.checked]
         self.feedback_instructions_result = []
         for card in cards:
@@ -667,7 +702,7 @@ class Cascade:
         # (карточка, хэш ТЗ); к модели идут только карточки без записи.
         todo, cached_cards = [], []
         for card in cards:
-            cached = _cache_get("verdict", f"{self._tz_hash}|{card['id']}") if rows else None
+            cached = _cache_get("verdict", self._verdict_cache_key(card["id"])) if rows and use_cache else None
             grid = cached.get("grid", {}) if isinstance(cached, dict) else {}
             cells = {
                 index: tuple(grid[str(index)])
@@ -682,11 +717,22 @@ class Cascade:
             else:
                 todo.append(card)
         if rows:
-            self._grade_bounded(todo, rows, cached_cards=cached_cards)
+            self._grade_bounded(todo, rows, cached_cards=cached_cards, use_cache=use_cache)
 
         if self.feedback_instructions:
             self._classify_feedback(cards, rows)
         return cards
+
+    def _verdict_cache_key(self, card_id):
+        settings = self.step_settings.get("6", {})
+        model = _selected_model(settings.get("model"), _AGENT_MODEL)
+        parts = []
+        if model != _AGENT_MODEL:
+            parts.append(model)
+        if settings.get("numeric_prefill", "yes") == "no":
+            parts.append("no-prefill")
+        suffix = "|" + "|".join(parts) if parts else ""
+        return f"{self._tz_hash}|{card_id}{suffix}"
 
     def _init_unknown(self, card, rows) -> None:
         card["matches"] = []
@@ -725,17 +771,18 @@ class Cascade:
             price if price is not None else Decimal("Infinity"),
         )
 
-    def _grade_bounded(self, todo, rows, *, cached_cards=()) -> None:
+    def _grade_bounded(self, todo, rows, *, cached_cards=(), use_cache=True) -> None:
         """Ограничивает новые проверки; кэш участвует в условии остановки.
 
         matrix_status — контракт с шагом 7: complete / incomplete / pending.
         Полный ответ «m» отличается от пропущенной клетки и может кэшироваться.
         """
-        axis_cells = self._axis_prefill(todo, rows)
-        ranked = sorted(todo, key=lambda card: self._preagent_key(card, axis_cells))
         settings = self.step_settings.get("6", {})
+        axis_cells = self._axis_prefill(todo, rows) if settings.get("numeric_prefill", "yes") != "no" else {}
+        ranked = sorted(todo, key=lambda card: self._preagent_key(card, axis_cells))
         first = max(1, min(75, int(settings.get("first_batch", os.getenv("CASCADE_STEP6_FIRST", "25")))))
         ceiling = max(0, min(100, int(settings.get("ceiling", os.getenv("CASCADE_STEP6_CEILING", "75")))))
+        model = _selected_model(settings.get("model"), _AGENT_MODEL)
         suitable = sum(self._suitable_for_stop(card) for card in cached_cards)
         diagnostics = {
             "pool": len(todo), "graded": 0, "batches": 0, "cached": len(cached_cards),
@@ -747,7 +794,7 @@ class Cascade:
             if suitable >= 10:
                 break
             batch = ranked[offset:min(offset + first, ceiling)]
-            grids = self._grade_grid(batch, rows, model=_AGENT_MODEL, batch_size=3)
+            grids = self._grade_grid(batch, rows, model=model, batch_size=3)
             diagnostics["graded"] += len(batch)
             diagnostics["batches"] += 1
             for card in batch:
@@ -760,9 +807,10 @@ class Cascade:
                 if complete:
                     diagnostics["complete"] += 1
                     suitable += self._suitable_for_stop(card)
-                    _cache_put("verdict", f"{self._tz_hash}|{cid}", {
-                        "grid": {str(k): list(v) for k, v in cells.items()},
-                    })
+                    if use_cache:
+                        _cache_put("verdict", self._verdict_cache_key(cid), {
+                            "grid": {str(k): list(v) for k, v in cells.items()},
+                        })
                 else:
                     card["fit"] = "partial"
             if not grids:
@@ -789,6 +837,7 @@ class Cascade:
             return {}
         out: dict[str, dict] = {}
         for card in cards:
+            tolerance = Decimal(str(max(0, min(50, int(card.get("_axis_tolerance_percent", 0)))))) / 100
             caps = self._card_axis_values(card)
             for row_idx, crit in axis_by_row.items():
                 values = caps.get(crit.axis, [])
@@ -796,7 +845,8 @@ class Cascade:
                     continue  # карточка молчит про ось — пусть судит агент
                 fits = [
                     v for v in values
-                    if (crit.num_min is None or v >= crit.num_min) and (crit.num_max is None or v <= crit.num_max)
+                    if (crit.num_min is None or v >= crit.num_min * (1 - tolerance))
+                    and (crit.num_max is None or v <= crit.num_max * (1 + tolerance))
                 ]
                 if fits:
                     out.setdefault(str(card["id"]), {})[row_idx] = ("y", "по варианту")
@@ -1125,7 +1175,12 @@ class Cascade:
         """Финальный фиксированный ключ. БЕЗ обрезки. Ручной приоритет (0)
         ставит ТОЛЬКО замечание «подними X» из фидбека — см. _apply_instructions."""
         live = [c for c in cards if not c.get("_removed")]
-        price_desc = self.ranking.get("price") == "desc"
+        settings = self.step_settings.get("7", {})
+        price_order = settings.get("price_order") or self.ranking.get("price") or "asc"
+        price_desc = price_order == "desc"
+        if settings.get("price_order") or self.ranking.get("price"):
+            self.ranking = {"price": price_order}
+        matrix_order = settings.get("matrix_order", "no_then_yes")
 
         def price_key(value):
             number = _decimal(value)
@@ -1133,12 +1188,15 @@ class Cascade:
                 return Decimal("-Infinity") if price_desc else Decimal("Infinity")
             return -number if price_desc else number
 
+        def matrix_key(card):
+            if matrix_order == "yes_then_no":
+                return (-card.get("match_count", 0), card.get("mismatch_count", 0), card.get("unknown_count", 0))
+            return (card.get("mismatch_count", 0), -card.get("match_count", 0), card.get("unknown_count", 0))
+
         live.sort(key=lambda c: (
             0 if c.get("priority") == 0 else 1,
             0 if c.get("matrix_status", "complete") == "complete" else 1,
-            c.get("mismatch_count", 0),
-            -c.get("match_count", 0),
-            c.get("unknown_count", 0),
+            *matrix_key(c),
             c.get("relevance", 1),
             0 if _decimal(c.get("price")) is not None else 1,
             price_key(c.get("price")),
@@ -1150,7 +1208,7 @@ class Cascade:
     # -- шаг 8: цена + показ ~10 ------------------------------------ #
     def step_8_price_and_top(self, cards, top=None) -> list[dict]:
         shown = cards[: top or self.top]
-        if self._oasis_mirror and shown:
+        if self.step_settings.get("8", {}).get("live_prices", "yes") != "no" and self._oasis_mirror and shown:
             try:
                 self.client = self.client or OasisClient()
                 _refresh_live_oasis_prices(self.client, shown, quantity=self.quantity)

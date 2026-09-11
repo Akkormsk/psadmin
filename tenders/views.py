@@ -167,6 +167,7 @@ def _lab_step_settings(request, current=None):
     fields = {
         "step_2_min_phrases": ("2", "min_phrases", 1, 40),
         "step_2_max_phrases": ("2", "max_phrases", 1, 40),
+        "step_5_tolerance_percent": ("5", "tolerance_percent", 0, 50),
         "step_6_first_batch": ("6", "first_batch", 1, 75),
         "step_6_ceiling": ("6", "ceiling", 0, 100),
     }
@@ -174,6 +175,26 @@ def _lab_step_settings(request, current=None):
         raw = str(request.POST.get(field) or "").strip()
         if raw:
             steps.setdefault(step, {})[key] = max(minimum, min(maximum, int(raw)))
+    choices = {
+        "step_1_model": ("1", "model", {"strong", "fast"}),
+        "step_1_cache": ("1", "cache", {"yes", "no"}),
+        "step_3_sources": ("3", "sources", {"all", "oasis", "gifts"}),
+        "step_4_model": ("4", "model", {"strong", "fast"}),
+        "step_4_intensity": ("4", "intensity", {"off", "cautious", "strict"}),
+        "step_4_cache": ("4", "cache", {"yes", "no"}),
+        "step_5_color_filter": ("5", "color_filter", {"family", "off"}),
+        "step_5_stock_policy": ("5", "stock_policy", {"available", "enough", "ignore"}),
+        "step_6_model": ("6", "model", {"strong", "fast"}),
+        "step_6_cache": ("6", "cache", {"yes", "no"}),
+        "step_6_numeric_prefill": ("6", "numeric_prefill", {"yes", "no"}),
+        "step_7_matrix_order": ("7", "matrix_order", {"no_then_yes", "yes_then_no"}),
+        "step_7_price_order": ("7", "price_order", {"asc", "desc"}),
+        "step_8_live_prices": ("8", "live_prices", {"yes", "no"}),
+    }
+    for field, (step, key, allowed) in choices.items():
+        value = str(request.POST.get(field) or "").strip()
+        if value in allowed:
+            steps.setdefault(step, {})[key] = value
     return steps
 
 
