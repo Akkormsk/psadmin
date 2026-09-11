@@ -175,16 +175,22 @@ def _lab_step_settings(request, current=None):
         raw = str(request.POST.get(field) or "").strip()
         if raw:
             steps.setdefault(step, {})[key] = max(minimum, min(maximum, int(raw)))
+    agents = {
+        "openai/gpt-4.1-nano", "gemini/gemini-3.1-flash-lite", "openai/gpt-4.1-mini",
+        "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5", "strong", "fast",
+    }
     choices = {
-        "step_1_model": ("1", "model", {"strong", "fast"}),
+        "step_1_model": ("1", "model", agents),
         "step_1_cache": ("1", "cache", {"yes", "no"}),
+        "step_2_model": ("2", "model", agents),
+        "step_2_cache": ("2", "cache", {"yes", "no"}),
         "step_3_sources": ("3", "sources", {"all", "oasis", "gifts"}),
-        "step_4_model": ("4", "model", {"strong", "fast"}),
+        "step_4_model": ("4", "model", agents),
         "step_4_intensity": ("4", "intensity", {"off", "cautious", "strict"}),
         "step_4_cache": ("4", "cache", {"yes", "no"}),
         "step_5_color_filter": ("5", "color_filter", {"family", "off"}),
         "step_5_stock_policy": ("5", "stock_policy", {"available", "enough", "ignore"}),
-        "step_6_model": ("6", "model", {"strong", "fast"}),
+        "step_6_model": ("6", "model", agents),
         "step_6_cache": ("6", "cache", {"yes", "no"}),
         "step_6_numeric_prefill": ("6", "numeric_prefill", {"yes", "no"}),
         "step_7_matrix_order": ("7", "matrix_order", {"no_then_yes", "yes_then_no"}),

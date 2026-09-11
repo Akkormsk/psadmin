@@ -190,7 +190,8 @@
   }
 
   function plannedInput(step) {
-    if (step === 1) return activeRun?.input_payload;
+    if (step === 1) return activeRun?.input_payload?.requirements || {};
+    if (step === 2) return { name: activeRun?.input_payload?.name || "" };
     return snapshot(step - 1)?.output;
   }
 
@@ -216,6 +217,12 @@
         + metric("Токены", Object.values(values.usage_by_model || {}).reduce(
           (total, usage) => total + (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), 0,
         ));
+      if (item.error) {
+        const error = document.createElement("span");
+        error.className = "cascade-lab__metric-error";
+        error.textContent = `Ошибка агента: ${item.error}`;
+        metrics.append(error);
+      }
     } else {
       const input = plannedInput(selectedStep);
       inputTerminal.textContent = input === undefined ? "До этого шага ещё нет входных данных." : pretty(input);
@@ -243,7 +250,7 @@
       const item = snapshot(step);
       node.classList.remove("is-running", "is-completed", "is-skipped", "is-error");
       if (item) {
-        node.classList.add(item.status === "skipped" ? "is-skipped" : "is-completed");
+        node.classList.add(item.status === "skipped" ? "is-skipped" : item.status === "fallback" ? "is-error" : "is-completed");
         const values = item.metrics || {};
         node.querySelector(".cascade-node__metrics").textContent = `${values.output_count ?? 0} · ${Number(values.seconds || 0).toFixed(2)} с · ${Number(values.cost_rub || 0).toFixed(2)} ₽`;
       } else if (run.status === "running" && step === run.current_step + 1) {

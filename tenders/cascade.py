@@ -51,10 +51,22 @@ logger = logging.getLogger(__name__)
 _STRONG_MODEL = os.getenv("TIMEWEB_AI_MODEL_SEARCH_PLAN", "").strip() or "anthropic/claude-sonnet-4-5"
 _AGENT_MODEL = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or "anthropic/claude-sonnet-4-5"
 _FAST_MODEL = os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or "openai/gpt-4.1-mini"
+_TITLE_MODEL = os.getenv("TIMEWEB_AI_MODEL_TITLE", "").strip() or "openai/gpt-4.1-mini"
+_SELECTABLE_MODELS = frozenset({
+    "openai/gpt-4.1-nano",
+    "gemini/gemini-3.1-flash-lite",
+    "openai/gpt-4.1-mini",
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-sonnet-4-5",
+})
 
 
 def _selected_model(value, default):
-    return _FAST_MODEL if value == "fast" else _STRONG_MODEL if value == "strong" else default
+    if value == "fast":
+        return _FAST_MODEL
+    if value == "strong":
+        return _STRONG_MODEL
+    return value if value in _SELECTABLE_MODELS else default
 
 
 def _axis_short(value, axis: str) -> str:
@@ -279,10 +291,8 @@ class Cascade:
 
     # -- шаг 1: разбор ТЗ ------------------------------------------------- #
     def step_1_parse_tz(self) -> list[Criterion]:
-        """Один вызов сильной модели: сырые строки ТЗ → критерии {понятие,
-        оператор, значение, ед., ось, границы} + чистое название товара +
-        12–20 синонимов того же товара. Смысловой дедуп, нормализация
-        единиц, решение по галочкам. Кэш по хэшу отмеченных строк."""
+        """Сырые строки ТЗ → нормализованные критерии. Название товара и
+        поисковые фразы принадлежат шагу 2 и здесь не вычисляются."""
         rows = self._raw_requirement_rows()
         self._tz_hash = hashlib.sha1(
             json.dumps(
@@ -294,31 +304,30 @@ class Cascade:
         settings = self.step_settings.get("1", {})
         model = _selected_model(settings.get("model"), _STRONG_MODEL)
         use_cache = settings.get("cache", "yes") != "no"
-        tz_cache_key = self._tz_hash if model == _STRONG_MODEL else f"{self._tz_hash}|{model}"
-        cached = _cache_get("tz", tz_cache_key) if use_cache else None
+        criteria_cache_key = f"criteria-v1|{self._tz_hash}|{model}"
+        cached = _cache_get("criteria", criteria_cache_key) if use_cache else None
         if cached:
             self._load_step1(cached, rows)
             self.diagnostics["tz_cache_hit"] = True
-            self._pull_lessons()
+            return self.tz
+
+        if not rows:
+            self.tz = []
             return self.tz
 
         numbered = "\n".join(
             f"{i}. {_cell(r.get('label'))}: {_cell(r.get('value'))}" for i, r in enumerate(rows, 1)
-        ) or "(явных требований нет — дай только название и синонимы)"
-        prompt = f"""Ты разбираешь ТЗ тендера на сувенирную/полиграфическую продукцию и готовишь поиск товара.
+        )
+        prompt = f"""Ты нормализуешь критерии ТЗ тендера для последующей проверки товара.
 
 Позиция: {_cell(self.line.get('name'))[:300]}
 Строки ТЗ:
 {numbered}
 
 Верни только JSON:
-{{"item":"короткое название товара, 1-3 слова",
-  "queries":["12-20 названий ЭТОГО ЖЕ товара: синонимы, разговорные, англ., альтернативные написания"],
-  "criteria":[{{"n":1,"concept":"о чём строка, своими словами","operator":">=|<=|=|!=|~|in","value":"...","unit":"...","keep":true,"axis":"","num_min":null,"num_max":null,"options":[]}}]}}
+{{"criteria":[{{"n":1,"concept":"о чём строка, своими словами","operator":">=|<=|=|!=|~|in","value":"...","unit":"...","keep":true,"axis":"","num_min":null,"num_max":null,"options":[]}}]}}
 
 Правила:
-- item — конкретный вид товара. Убери «с логотипом», «с символикой», «услуги по изготовлению и поставке». Не заменяй вид товара более общим словом.
-- queries — только названия ВИДА товара, без характеристик (цвет/объём/размер/материал). Не уходи в другой товар: флешка не карта microSD, шопер не рюкзак. Каталог называет один товар по-разному — дай все формы.
 - criteria: одна запись на СМЫСЛОВУЮ характеристику. Объедини дубли («синий» и «цвет: синий» — одна; «объём», «ёмкость», «память» — одно понятие; возьми самую полную формулировку).
 - keep=false для строк, которые НЕ признак готового товара: маркировка (Честный Знак, ЦРПТ), требования к пошиву и швам, макет и расположение логотипа, бумажные документы, сроки, гарантия. Физические свойства (материал, размер, цвет, конструкция, интерфейс) — keep=true.
 - axis: "capacity" (память), "volume" (объём), "size" (размер одежды) — если это то, чем отличаются варианты ОДНОГО товара. Иначе "".
@@ -326,35 +335,26 @@ class Cascade:
 - options: список допустимых значений, если требование перечислением (размеры «M, L, XL»; несколько цветов). Иначе [].
 """
         try:
-            result, usage = _ai_json(prompt, max_tokens=1600, timeout=50, model=model)
+            result, usage = _ai_json(
+                prompt, max_tokens=max(900, min(5000, 250 + len(rows) * 150)), timeout=50, model=model,
+            )
             self._add_usage(usage, model)
+            if not isinstance(result, dict) or not isinstance(result.get("criteria"), list):
+                raise ValueError("Агент не вернул список критериев ТЗ")
         except Exception as exc:
             logger.exception("Cascade step 1 failed")
             self.error = _cell(exc)[:200]
-            self.item = _cell(self.line.get("name"))[:120]
-            self.queries = [self.item] if self.item else []
             self.tz = [self._fallback_criterion(r) for r in rows]
-            self._pull_lessons()
             return self.tz
 
         payload = self._parse_step1(result, rows)
         if use_cache:
-            _cache_put("tz", tz_cache_key, payload)
+            _cache_put("criteria", criteria_cache_key, payload)
         self._load_step1(payload, rows)
-        self._pull_lessons()
         return self.tz
 
     def _parse_step1(self, result, rows) -> dict:
         result = result if isinstance(result, dict) else {}
-        item = _cell(result.get("item"))[:120] or _cell(self.line.get("name"))[:120]
-        queries, seen = [], set()
-        for value in result.get("queries") if isinstance(result.get("queries"), list) else []:
-            text = _cell(value)[:150]
-            if text and text.lower() not in seen:
-                seen.add(text.lower())
-                queries.append(text)
-        if item and item.lower() not in seen:
-            queries.insert(0, item)
         raw_criteria = result.get("criteria") if isinstance(result.get("criteria"), list) else []
         by_n = {}
         for entry in raw_criteria:
@@ -387,14 +387,9 @@ class Cascade:
                 "num_max": str(_decimal(entry.get("num_max"))) if _decimal(entry.get("num_max")) is not None else None,
                 "options": options,
             })
-        return {"item": item, "queries": queries[:24], "criteria": criteria}
+        return {"criteria": criteria}
 
     def _load_step1(self, payload, rows) -> None:
-        self.item = _cell(payload.get("item"))[:120] or _cell(self.line.get("name"))[:120]
-        self.queries = [
-            _cell(v)[:150] for v in (payload.get("queries") if isinstance(payload.get("queries"), list) else [])
-            if _cell(v)
-        ] or ([self.item] if self.item else [])
         explicit = {
             _norm_label(r.get("label")): r.get("selected")
             for r in rows if isinstance(r, dict) and "selected" in r
@@ -433,17 +428,58 @@ class Cascade:
 
     # -- шаг 2: план поиска --------------------------------------------- #
     def step_2_search_plan(self) -> list[str]:
-        """Синонимы получены в шаге 1 (один вызов на оба). Здесь — сбор
-        уникальных поисковых фраз."""
+        """Сырое название позиции → чистый вид товара и поисковые фразы."""
+        settings = self.step_settings.get("2", {})
+        maximum = max(1, min(40, int(settings.get("max_phrases", 24))))
+        minimum = max(1, min(maximum, int(settings.get("min_phrases", 12))))
+        model = _selected_model(settings.get("model"), _TITLE_MODEL)
+        use_cache = settings.get("cache", "yes") != "no"
+        raw_name = _cell(self.line.get("name"))[:300]
+        cache_key = hashlib.sha1(f"title-v1|{model}|{raw_name}".encode("utf-8")).hexdigest()
+        payload = _cache_get("searchplan", cache_key) if use_cache else None
+
+        if not self._valid_search_plan(payload):
+            prompt = f"""Ты готовишь поиск одного товара в каталогах поставщиков.
+
+Исходное название позиции: {raw_name}
+
+Верни только JSON:
+{{"item":"чистое конкретное название товара, 1-3 слова","queries":["от {minimum} до {maximum} вариантов названия этого же товара"]}}
+
+Убери канцелярские и закупочные слова, упоминания заказчика, символики, логотипа, изготовления и поставки.
+В queries дай синонимы, разговорные названия, английские варианты и альтернативные написания только этого вида товара.
+Не добавляй характеристики: цвет, материал, объём, размер и способ нанесения.
+Не переходи к соседнему товару: флешка не карта памяти, шопер не рюкзак.
+Не создавай бессмысленные дубли только ради количества.
+"""
+            try:
+                raw, usage = _ai_json(
+                    prompt, max_tokens=max(300, min(1000, 120 + maximum * 28)), timeout=35, model=model,
+                )
+                self._add_usage(usage, model)
+                if not self._valid_search_plan(raw):
+                    raise ValueError("Агент не вернул чистое название и поисковые фразы")
+                payload = {"item": _cell(raw["item"])[:120], "queries": list(raw["queries"])}
+                if use_cache:
+                    _cache_put("searchplan", cache_key, payload)
+            except Exception as exc:
+                logger.exception("Cascade step 2 failed")
+                self.error = _cell(exc)[:200]
+                self.diagnostics["search_plan_error"] = self.error
+                payload = {"item": raw_name[:120], "queries": [raw_name] if raw_name else []}
+        else:
+            self.diagnostics["search_plan_cache_hit"] = True
+
+        self.item = _cell(payload.get("item"))[:120]
+        self.queries = list(payload.get("queries", []))
         phrases, seen = [], set()
         for value in [self.item, *self.queries]:
             text = _text(value, 150)
             if text and text.lower() not in seen:
                 seen.add(text.lower())
                 phrases.append(text)
-        maximum = max(1, min(40, int(self.step_settings.get("2", {}).get("max_phrases", 24))))
-        minimum = max(1, min(maximum, int(self.step_settings.get("2", {}).get("min_phrases", 12))))
         phrases = phrases[:maximum]
+        self.queries = list(phrases)
         self.diagnostics["query_phrases"] = phrases
         self.diagnostics["query_phrase_limits"] = {
             "minimum": minimum,
@@ -451,7 +487,16 @@ class Cascade:
             "actual": len(phrases),
             "minimum_met": len(phrases) >= minimum,
         }
+        self._pull_lessons()
         return phrases
+
+    @staticmethod
+    def _valid_search_plan(payload) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        item = _cell(payload.get("item"))
+        queries = payload.get("queries")
+        return bool(item and len(item.split()) <= 5 and isinstance(queries, list) and any(_cell(v) for v in queries))
 
     # -- шаг 3: поиск по названиям ------------------------------------- #
     def step_3_search_by_name(self, phrases) -> list:
@@ -931,6 +976,7 @@ class Cascade:
         карточкам. Матрицу ТЗ не трогает."""
         from .services import _shortlist_card_images
 
+        model = _selected_model(self.step_settings.get("6", {}).get("model"), _AGENT_MODEL)
         images, image_ids = ([], [])
         if any(v.get("origin") == "session" for v in self.feedback_instructions):
             images, image_ids = _shortlist_card_images(cards)
@@ -957,7 +1003,7 @@ class Cascade:
             )
             try:
                 raw, usage = _ai_json(prompt, max_tokens=400 + len(self.feedback_instructions) * 120,
-                                      timeout=60, model=_AGENT_MODEL,
+                                      timeout=60, model=model,
                                       images=images if with_images else None)
             except Exception as exc:
                 logger.exception("Cascade feedback classification batch failed")
@@ -974,7 +1020,7 @@ class Cascade:
                 errors.append(result[0].get("_error", ""))
                 continue
             raw, usage, local = result
-            self._add_usage(usage, _AGENT_MODEL)
+            self._add_usage(usage, model)
             for item in raw.get("instructions") if isinstance(raw.get("instructions"), list) else []:
                 if isinstance(item, dict):
                     item["cards"] = [local.get(c, c) if isinstance(c, int) else c for c in (item.get("cards") or [])]

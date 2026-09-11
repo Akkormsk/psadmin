@@ -34,11 +34,14 @@ class CascadeLabViewTests(TestCase):
         self.assertContains(response, "Максимум поисковых фраз")
         self.assertContains(response, "Карточек в первой проверке")
         self.assertContains(response, "Показать в результате")
-        self.assertContains(response, "Модель разбора")
+        self.assertContains(response, "Агент разбора ТЗ")
+        self.assertContains(response, "Агент чистки названия")
+        self.assertContains(response, "GPT-4.1 nano · слабый")
+        self.assertContains(response, "Claude Sonnet 4.5 · сильный")
         self.assertContains(response, "Каталоги для поиска")
         self.assertContains(response, "Интенсивность отсева")
         self.assertContains(response, "Требование к остатку")
-        self.assertContains(response, "Модель матрицы")
+        self.assertContains(response, "Агент матрицы и фидбека")
         self.assertContains(response, "Приоритет матрицы")
         self.assertContains(response, "Обновить цены перед показом")
         self.assertNotContains(response, "Параметры отдельных блоков, JSON")
@@ -58,12 +61,14 @@ class CascadeLabViewTests(TestCase):
             "line_quantity": "50",
             "requirement_label": ["Объём", "Цвет"],
             "requirement_value": ["не менее 300 мл", "белый"],
-            "step_1_model": "fast",
+            "step_1_model": "openai/gpt-4.1-mini",
             "step_1_cache": "no",
             "step_2_min_phrases": "8",
             "step_2_max_phrases": "12",
+            "step_2_model": "openai/gpt-4.1-nano",
+            "step_2_cache": "no",
             "step_3_sources": "gifts",
-            "step_4_model": "strong",
+            "step_4_model": "anthropic/claude-sonnet-4-5",
             "step_4_intensity": "strict",
             "step_4_cache": "no",
             "step_5_color_filter": "off",
@@ -71,7 +76,7 @@ class CascadeLabViewTests(TestCase):
             "step_5_tolerance_percent": "5",
             "step_6_first_batch": "15",
             "step_6_ceiling": "60",
-            "step_6_model": "fast",
+            "step_6_model": "openai/gpt-4.1-mini",
             "step_6_cache": "no",
             "step_6_numeric_prefill": "yes",
             "step_7_matrix_order": "yes_then_no",
@@ -87,12 +92,12 @@ class CascadeLabViewTests(TestCase):
         self.assertEqual(run.input_payload["quantity"], "50")
         self.assertEqual(run.input_payload["requirements"]["requirements"][1], {"label": "Цвет", "value": "белый"})
         self.assertEqual(run.settings["steps"], {
-            "1": {"model": "fast", "cache": "no"},
-            "2": {"min_phrases": 8, "max_phrases": 12},
+            "1": {"model": "openai/gpt-4.1-mini", "cache": "no"},
+            "2": {"min_phrases": 8, "max_phrases": 12, "model": "openai/gpt-4.1-nano", "cache": "no"},
             "3": {"sources": "gifts"},
-            "4": {"model": "strong", "intensity": "strict", "cache": "no"},
+            "4": {"model": "anthropic/claude-sonnet-4-5", "intensity": "strict", "cache": "no"},
             "5": {"color_filter": "off", "stock_policy": "enough", "tolerance_percent": 5},
-            "6": {"first_batch": 15, "ceiling": 60, "model": "fast", "cache": "no", "numeric_prefill": "yes"},
+            "6": {"first_batch": 15, "ceiling": 60, "model": "openai/gpt-4.1-mini", "cache": "no", "numeric_prefill": "yes"},
             "7": {"matrix_order": "yes_then_no", "price_order": "desc"},
             "8": {"live_prices": "no"},
         })
@@ -160,6 +165,8 @@ class CascadeLabViewTests(TestCase):
         self.assertIn("Выполняется…", script)
         self.assertIn("renderReadable", script)
         self.assertIn('localStorage.setItem(`cascade-lab-${side}-view`', script)
+        self.assertIn('if (step === 2) return { name:', script)
+        self.assertIn('item.status === "fallback" ? "is-error"', script)
 
     def test_run_detail_cannot_be_read_by_another_admin(self):
         other = get_user_model().objects.create_superuser("other-admin", "other@example.com", "password")
@@ -236,39 +243,53 @@ class CascadeLabRunnerTests(TestCase):
             name for name in vars(Cascade) if name.startswith("step_")
         ))
 
-    def test_lab_step_settings_do_not_change_default_cascade(self):
-        default = Cascade({"name": "Товар"})
-        default.item, default.queries = "товар", ["товар", "изделие"]
-        configured = Cascade({"name": "Товар"}, step_settings={"2": {"max_phrases": 1}})
-        configured.item, configured.queries = "товар", ["товар", "изделие"]
-        self.assertEqual(default.step_2_search_plan(), ["товар", "изделие"])
-        self.assertEqual(configured.step_2_search_plan(), ["товар"])
-
-    def test_step_2_records_when_minimum_phrase_count_is_not_met(self):
+    @patch("tenders.cascade._cache_put")
+    @patch("tenders.cascade._cache_get", return_value=None)
+    @patch("tenders.cascade._ai_json")
+    def test_step_2_cleans_name_with_its_own_agent(self, ai_json, cache_get, cache_put):
+        ai_json.return_value = ({
+            "item": "рубашка поло",
+            "queries": ["рубашка поло", "поло", "polo shirt"],
+        }, {"prompt_tokens": 20, "completion_tokens": 10})
         cascade = Cascade(
-            {"name": "Товар"},
-            step_settings={"2": {"min_phrases": 4, "max_phrases": 12}},
+            {"name": "сувенир рубашка-поло с символикой Думы"},
+            step_settings={"2": {
+                "model": "openai/gpt-4.1-nano", "cache": "yes",
+                "min_phrases": 4, "max_phrases": 12,
+            }},
         )
-        cascade.item, cascade.queries = "товар", ["изделие"]
 
-        self.assertEqual(cascade.step_2_search_plan(), ["товар", "изделие"])
+        self.assertEqual(cascade.step_2_search_plan(), ["рубашка поло", "поло", "polo shirt"])
+        self.assertEqual(cascade.item, "рубашка поло")
+        self.assertEqual(ai_json.call_args.kwargs["model"], "openai/gpt-4.1-nano")
+        self.assertIn("сувенир рубашка-поло с символикой Думы", ai_json.call_args.args[0])
+        cache_get.assert_called_once()
+        cache_put.assert_called_once()
         self.assertEqual(cascade.diagnostics["query_phrase_limits"], {
             "minimum": 4,
             "maximum": 12,
-            "actual": 2,
+            "actual": 3,
             "minimum_met": False,
         })
 
     @patch("tenders.cascade._ai_json")
     @patch("tenders.cascade._cache_get", return_value=None)
-    def test_step_1_can_use_fast_model_without_cache(self, cache_get, ai_json):
-        ai_json.return_value = ({"item": "кружка", "queries": ["кружка"], "criteria": []}, {})
-        cascade = Cascade({"name": "Кружка"}, step_settings={"1": {"model": "fast", "cache": "no"}})
+    def test_step_1_only_parses_tz_and_can_use_selected_agent(self, cache_get, ai_json):
+        ai_json.return_value = ({"item": "не должно использоваться", "queries": ["лишнее"], "criteria": []}, {})
+        cascade = Cascade({
+            "name": "Кружка",
+            "requirements": {"requirements": [{"label": "Цвет", "value": "белый"}]},
+        }, step_settings={
+            "1": {"model": "anthropic/claude-haiku-4-5", "cache": "no"},
+        })
 
         cascade.step_1_parse_tz()
 
         cache_get.assert_not_called()
-        self.assertEqual(ai_json.call_args.kwargs["model"], "openai/gpt-4.1-mini")
+        self.assertEqual(ai_json.call_args.kwargs["model"], "anthropic/claude-haiku-4-5")
+        self.assertNotIn('"queries"', ai_json.call_args.args[0])
+        self.assertEqual(cascade.item, "")
+        self.assertEqual(cascade.queries, [])
 
     @patch("tenders.cascade._text_search_pool", return_value=[])
     def test_step_3_can_search_only_selected_supplier(self, search):
@@ -281,10 +302,10 @@ class CascadeLabRunnerTests(TestCase):
         search.assert_called_once_with("gifts", ["кружка"])
 
     @patch("tenders.services._run_name_filter", return_value={"1"})
-    def test_step_4_passes_model_and_intensity_and_can_skip_cache(self, name_filter):
+    def test_step_4_passes_selected_agent_and_intensity_and_can_skip_cache(self, name_filter):
         product = SimpleNamespace(external_id="1", full_name="Кружка", name="Кружка")
         cascade = Cascade({"name": "Кружка"}, step_settings={
-            "4": {"model": "strong", "intensity": "strict", "cache": "no"},
+            "4": {"model": "anthropic/claude-sonnet-4-5", "intensity": "strict", "cache": "no"},
         })
         cascade.item = "кружка"
 
@@ -326,12 +347,12 @@ class CascadeLabRunnerTests(TestCase):
         self.assertEqual(cards[0]["_axis_tolerance_percent"], 5)
 
     @patch.object(Cascade, "_grade_grid")
-    def test_step_6_can_use_fast_model(self, grade_grid):
+    def test_step_6_can_use_selected_agent(self, grade_grid):
         from .cascade import Criterion
 
         grade_grid.return_value = {"one": {1: ("y", "")}}
         cascade = Cascade({"name": "Кружка"}, step_settings={
-            "6": {"model": "fast", "cache": "no", "first_batch": 1, "ceiling": 1},
+            "6": {"model": "openai/gpt-4.1-mini", "cache": "no", "first_batch": 1, "ceiling": 1},
         })
         cascade._tz_hash = "tz"
         cascade.tz = [Criterion(label="Цвет", raw_value="белый", concept="Цвет", operator="=", value="белый")]
@@ -340,6 +361,18 @@ class CascadeLabRunnerTests(TestCase):
         cascade.step_6_agent_matrix([card])
 
         self.assertEqual(grade_grid.call_args.kwargs["model"], "openai/gpt-4.1-mini")
+
+    @patch("tenders.services._shortlist_card_images", return_value=([], []))
+    @patch("tenders.cascade._ai_json", return_value=({"instructions": []}, {}))
+    def test_step_6_uses_selected_agent_for_feedback_too(self, ai_json, _images):
+        cascade = Cascade({"name": "Кружка"}, step_settings={
+            "6": {"model": "anthropic/claude-haiku-4-5"},
+        })
+        cascade.feedback_instructions = [{"text": "подними белые", "origin": "session"}]
+
+        cascade._classify_feedback([{"id": "one", "name": "Кружка"}], [])
+
+        self.assertEqual(ai_json.call_args.kwargs["model"], "anthropic/claude-haiku-4-5")
 
     def test_step_7_can_rank_yes_before_no_and_price_descending(self):
         cards = [
@@ -384,6 +417,24 @@ class CascadeLabRunnerTests(TestCase):
         self.assertIn("output", self.run.snapshots[0])
         self.assertIn("seconds", self.run.snapshots[0]["metrics"])
         self.assertIn("cost_rub", self.run.snapshots[0]["metrics"])
+        self.assertEqual(self.run.snapshots[0]["input"], {"requirements": []})
+        self.assertEqual(self.run.snapshots[1]["input"], {"name": "Любой товар"})
+
+    def test_runner_marks_agent_fallback_in_snapshot(self):
+        from .cascade_lab import run_cascade_lab
+
+        def fallback(cascade):
+            cascade.error = "Ответ агента не соответствует контракту"
+            return []
+
+        self.run.stop_after = 1
+        self.run.save(update_fields=["stop_after"])
+        with patch.object(Cascade, "step_1_parse_tz", fallback):
+            run_cascade_lab(self.run.pk)
+
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.snapshots[0]["status"], "fallback")
+        self.assertEqual(self.run.snapshots[0]["error"], "Ответ агента не соответствует контракту")
 
     def test_criterion_numeric_bounds_are_json_serializable(self):
         from .cascade_lab import _json_value

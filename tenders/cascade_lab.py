@@ -15,8 +15,8 @@ from .models import CascadeLabRun, CatalogProduct
 
 
 STEP_DEFINITIONS = [
-    {"step": 1, "method": "step_1_parse_tz", "title": "Разбор ТЗ", "input": "Позиция и JSON-ТЗ", "output": "Критерии, название и синонимы"},
-    {"step": 2, "method": "step_2_search_plan", "title": "Поисковый план", "input": "Название и синонимы", "output": "Поисковые фразы"},
+    {"step": 1, "method": "step_1_parse_tz", "title": "Разбор ТЗ", "input": "JSON-ТЗ", "output": "Критерии ТЗ"},
+    {"step": 2, "method": "step_2_search_plan", "title": "Чистка названия", "input": "Исходное название", "output": "Чистое название и поисковые фразы"},
     {"step": 3, "method": "step_3_search_by_name", "title": "Поиск по каталогам", "input": "Поисковые фразы", "output": "Пул товаров"},
     {"step": 4, "method": "step_4_name_filter", "title": "Отсев названий", "input": "Пул товаров", "output": "Подходящие типы товаров"},
     {"step": 5, "method": "step_5_hard_gates_and_collapse", "title": "Фильтры и варианты", "input": "Товары каталога", "output": "Карточки групп"},
@@ -169,8 +169,14 @@ def run_cascade_lab(run_id):
         pause_reason = ""
         for definition in STEP_DEFINITIONS[run.current_step:run.stop_after]:
             step = definition["step"]
-            input_data = run.input_payload if step == 1 else _encode_output(previous)
+            if step == 1:
+                input_data = run.input_payload.get("requirements", {})
+            elif step == 2:
+                input_data = {"name": run.input_payload.get("name", "")}
+            else:
+                input_data = _encode_output(previous)
             before_usage = _json_value(cascade.usage_by_model)
+            before_error = cascade.error
             started = time.perf_counter()
             skipped = False
             custom_cards = run.settings.get("custom_cards")
@@ -187,9 +193,11 @@ def run_cascade_lab(run_id):
             encoded = _encode_output(output)
             usage = _usage_delta(before_usage, cascade.usage_by_model)
             cost = _cost(usage)
+            step_error = cascade.error if cascade.error and cascade.error != before_error else ""
             snapshot = {
                 "step": step, "method": definition["method"], "title": definition["title"],
-                "status": "skipped" if skipped else "completed",
+                "status": "skipped" if skipped else "fallback" if step_error else "completed",
+                "error": step_error,
                 "input": input_data, "output": encoded, "state": _cascade_state(cascade),
                 "metrics": {"seconds": round(seconds, 4), "cost_rub": cost, "usage_by_model": usage,
                             "input_count": _count_payload(input_data), "output_count": _count_payload(encoded)},

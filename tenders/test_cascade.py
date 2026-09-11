@@ -1,7 +1,7 @@
 """Тесты каскада подбора (tenders/cascade.py). Шлюз замокан — 0 обращений к ИИ.
 
-Один роутер отвечает по маркеру в промпте: шаг 1 (разбор ТЗ), шаг 4 (фильтр
-названий, из services._run_name_filter), шаг 6 (матрица агента)."""
+Один роутер отвечает по маркеру в промпте: шаг 1 (разбор ТЗ), шаг 2 (чистка
+названия), шаг 4 (фильтр названий), шаг 6 (матрица агента)."""
 
 import json
 from decimal import Decimal
@@ -54,15 +54,18 @@ class _Gateway:
         self.instructions = instructions
         self.step1_error = step1_error
         self.step6_error = step6_error
-        self.calls = {"step1": 0, "step4": 0, "step6": 0}
+        self.calls = {"step1": 0, "step2": 0, "step4": 0, "step6": 0}
 
     def __call__(self, prompt, **kwargs):
         usage = {"prompt_tokens": 10, "completion_tokens": 5}
-        if "разбираешь ТЗ тендера" in prompt:
+        if "нормализуешь критерии ТЗ тендера" in prompt:
             self.calls["step1"] += 1
             if self.step1_error:
                 raise RuntimeError("boom")
-            return {"item": self.item, "queries": self.queries, "criteria": self.criteria}, usage
+            return {"criteria": self.criteria}, usage
+        if "готовишь поиск одного товара" in prompt:
+            self.calls["step2"] += 1
+            return {"item": self.item, "queries": self.queries}, usage
         if "пронумерованный список названий товаров" in prompt:
             self.calls["step4"] += 1
             return {"not_item": self.not_item}, usage
@@ -118,7 +121,7 @@ class CascadeStep1Tests(TestCase):
         self.assertEqual(result.tz[1].num_min, Decimal("32768"))
         self.assertEqual(result.tz[1].axis, "capacity")
         self.assertEqual(gw.calls["step1"], 1)
-        self.assertTrue(CascadeCache.objects.filter(kind="tz").exists())
+        self.assertTrue(CascadeCache.objects.filter(kind="criteria").exists())
 
         # второй прогон того же ТЗ — вызова шага 1 нет
         gw2 = _Gateway(criteria=[])
