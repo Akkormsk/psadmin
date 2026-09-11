@@ -29,12 +29,17 @@ class CascadeLabViewTests(TestCase):
         self.assertContains(response, "Лаборатория каскада")
         self.assertContains(response, "8. Цена и топ-10")
         self.assertContains(response, "Результат проверок")
+        self.assertContains(response, "Минимум поисковых фраз")
         self.assertContains(response, "Максимум поисковых фраз")
         self.assertContains(response, "Карточек в первой проверке")
         self.assertContains(response, "Показать в результате")
         self.assertNotContains(response, "Параметры отдельных блоков, JSON")
         self.assertContains(response, 'id="lab-view-prev"')
         self.assertContains(response, 'id="lab-view-next"')
+        self.assertContains(response, 'data-io-view="readable"', count=2)
+        self.assertContains(response, 'data-io-view="json"', count=2)
+        self.assertContains(response, 'id="lab-step-input-readable"')
+        self.assertContains(response, 'id="lab-step-output-readable"')
 
     @patch("tenders.views._submit_cascade_lab")
     def test_create_run_from_readable_fields_and_step_controls(self, submit):
@@ -45,6 +50,7 @@ class CascadeLabViewTests(TestCase):
             "line_quantity": "50",
             "requirement_label": ["Объём", "Цвет"],
             "requirement_value": ["не менее 300 мл", "белый"],
+            "step_2_min_phrases": "8",
             "step_2_max_phrases": "12",
             "step_6_first_batch": "15",
             "step_6_ceiling": "60",
@@ -58,7 +64,7 @@ class CascadeLabViewTests(TestCase):
         self.assertEqual(run.input_payload["quantity"], "50")
         self.assertEqual(run.input_payload["requirements"]["requirements"][1], {"label": "Цвет", "value": "белый"})
         self.assertEqual(run.settings["steps"], {
-            "2": {"max_phrases": 12},
+            "2": {"min_phrases": 8, "max_phrases": 12},
             "6": {"first_batch": 15, "ceiling": 60},
         })
         self.assertEqual(run.settings["top"], 10)
@@ -123,6 +129,8 @@ class CascadeLabViewTests(TestCase):
 
         self.assertIn("selectedStep = target", script)
         self.assertIn("Выполняется…", script)
+        self.assertIn("renderReadable", script)
+        self.assertIn('localStorage.setItem(`cascade-lab-${side}-view`', script)
 
     def test_run_detail_cannot_be_read_by_another_admin(self):
         other = get_user_model().objects.create_superuser("other-admin", "other@example.com", "password")
@@ -206,6 +214,21 @@ class CascadeLabRunnerTests(TestCase):
         configured.item, configured.queries = "товар", ["товар", "изделие"]
         self.assertEqual(default.step_2_search_plan(), ["товар", "изделие"])
         self.assertEqual(configured.step_2_search_plan(), ["товар"])
+
+    def test_step_2_records_when_minimum_phrase_count_is_not_met(self):
+        cascade = Cascade(
+            {"name": "Товар"},
+            step_settings={"2": {"min_phrases": 4, "max_phrases": 12}},
+        )
+        cascade.item, cascade.queries = "товар", ["изделие"]
+
+        self.assertEqual(cascade.step_2_search_plan(), ["товар", "изделие"])
+        self.assertEqual(cascade.diagnostics["query_phrase_limits"], {
+            "minimum": 4,
+            "maximum": 12,
+            "actual": 2,
+            "minimum_met": False,
+        })
 
     def test_runner_records_input_output_metrics_and_can_stop(self):
         from .cascade_lab import run_cascade_lab

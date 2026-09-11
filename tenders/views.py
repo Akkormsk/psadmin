@@ -165,6 +165,7 @@ def _lab_step_settings(request, current=None):
         if isinstance(values, dict)
     }
     fields = {
+        "step_2_min_phrases": ("2", "min_phrases", 1, 40),
         "step_2_max_phrases": ("2", "max_phrases", 1, 40),
         "step_6_first_batch": ("6", "first_batch", 1, 75),
         "step_6_ceiling": ("6", "ceiling", 0, 100),

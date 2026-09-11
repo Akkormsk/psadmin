@@ -48,7 +48,7 @@
           {% for step in steps %}<article data-settings-step="{{ step.step }}">
             <header><b>{{ step.step }}</b><strong>{{ step.title }}</strong></header>
             <p><span>Вход:</span> {{ step.input }}<br><span>Выход:</span> {{ step.output }}</p>
-            {% if step.step == 2 %}<label>Максимум поисковых фраз<input type="number" name="step_2_max_phrases" min="1" max="40" value="24"><small>Сколько вариантов названия передать поиску шага 3.</small></label>
+            {% if step.step == 2 %}<label>Минимум поисковых фраз<input type="number" name="step_2_min_phrases" min="1" max="40" value="12"><small>Если фраз меньше, шаг покажет предупреждение и не будет создавать бессмысленные дубли.</small></label><label>Максимум поисковых фраз<input type="number" name="step_2_max_phrases" min="1" max="40" value="24"><small>Сколько вариантов названия передать поиску шага 3.</small></label>
             {% elif step.step == 6 %}<label>Карточек в первой проверке<input type="number" name="step_6_first_batch" min="1" max="75" value="25"></label><label>Максимум карточек для ИИ<input type="number" name="step_6_ceiling" min="0" max="100" value="75"><small>Новые партии прекращаются, когда найдено 10 подходящих.</small></label>
             {% elif step.step == 8 %}<label>Показать в результате<input type="number" name="step_8_top" min="1" max="50" value="10"><small>Размер финального списка.</small></label>
             {% else %}<small class="cascade-lab__fixed-setting">Параметров нет: шаг выполняется по фиксированным правилам.</small>{% endif %}
@@ -72,8 +72,8 @@
       </div>
       <div class="cascade-lab__metrics" id="lab-step-metrics"></div>
       <div class="cascade-lab__io">
-        <section><h3>Вход</h3><pre id="lab-step-input">Выберите выполненный блок на графе.</pre></section>
-        <section><h3>Выход</h3><pre id="lab-step-output">—</pre></section>
+        <section data-io-side="input"><header><h3>Вход</h3><div class="cascade-lab__view-switch"><button type="button" data-io-view="readable" class="is-active">Понятно</button><button type="button" data-io-view="json">JSON</button></div></header><div id="lab-step-input-readable" class="cascade-lab__readable">Выберите выполненный блок на графе.</div><pre id="lab-step-input" hidden>Выберите выполненный блок на графе.</pre></section>
+        <section data-io-side="output"><header><h3>Выход</h3><div class="cascade-lab__view-switch"><button type="button" data-io-view="readable" class="is-active">Понятно</button><button type="button" data-io-view="json">JSON</button></div></header><div id="lab-step-output-readable" class="cascade-lab__readable">—</div><pre id="lab-step-output" hidden>—</pre></section>
       </div>
     </div>
     <div class="cascade-lab__checks panel" id="lab-checks" hidden>

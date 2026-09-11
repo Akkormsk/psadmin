@@ -431,9 +431,17 @@ class Cascade:
             if text and text.lower() not in seen:
                 seen.add(text.lower())
                 phrases.append(text)
-        self.diagnostics["query_phrases"] = phrases
         maximum = max(1, min(40, int(self.step_settings.get("2", {}).get("max_phrases", 24))))
-        return phrases[:maximum]
+        minimum = max(1, min(maximum, int(self.step_settings.get("2", {}).get("min_phrases", 12))))
+        phrases = phrases[:maximum]
+        self.diagnostics["query_phrases"] = phrases
+        self.diagnostics["query_phrase_limits"] = {
+            "minimum": minimum,
+            "maximum": maximum,
+            "actual": len(phrases),
+            "minimum_met": len(phrases) >= minimum,
+        }
+        return phrases
 
     # -- шаг 3: поиск по названиям ------------------------------------- #
     def step_3_search_by_name(self, phrases) -> list:

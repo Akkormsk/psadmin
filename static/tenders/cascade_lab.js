@@ -7,6 +7,8 @@
   const nodes = [...document.querySelectorAll(".cascade-node")];
   const inputTerminal = document.getElementById("lab-step-input");
   const outputTerminal = document.getElementById("lab-step-output");
+  const inputReadable = document.getElementById("lab-step-input-readable");
+  const outputReadable = document.getElementById("lab-step-output-readable");
   const metrics = document.getElementById("lab-step-metrics");
   const previousButton = document.getElementById("lab-view-prev");
   const followingButton = document.getElementById("lab-view-next");
@@ -22,6 +24,147 @@
   const metric = (label, value) => `<span>${label}: <strong>${value}</strong></span>`;
   const snapshot = step => activeRun?.snapshots?.find(item => item.step === Number(step));
   const availableStep = () => Math.min(8, (activeRun?.current_step || 0) + (activeRun?.status === "running" ? 1 : 0));
+
+  const cellText = value => value === null || value === undefined || value === "" ? "—" : String(value);
+
+  function appendSummary(target, text, tone = "") {
+    const summary = document.createElement("p");
+    summary.className = `cascade-lab__data-summary ${tone}`.trim();
+    summary.textContent = text;
+    target.append(summary);
+  }
+
+  function appendTable(target, columns, rows) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cascade-lab__table-wrap";
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    columns.forEach(column => {
+      const th = document.createElement("th");
+      th.textContent = column.label;
+      headRow.append(th);
+    });
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    rows.forEach(row => {
+      const tr = document.createElement("tr");
+      columns.forEach(column => {
+        const td = document.createElement("td");
+        const value = typeof column.value === "function" ? column.value(row) : row[column.value];
+        td.textContent = cellText(value);
+        tr.append(td);
+      });
+      body.append(tr);
+    });
+    table.append(head, body);
+    wrapper.append(table);
+    target.append(wrapper);
+  }
+
+  function renderLine(target, value) {
+    appendSummary(target, `${cellText(value.name)} · количество: ${cellText(value.quantity)}`);
+    const requirements = value.requirements?.requirements || [];
+    if (requirements.length) appendTable(target, [
+      {label: "Параметр", value: "label"},
+      {label: "Требование", value: "value"},
+      {label: "Учитывать", value: row => row.selected === false ? "Нет" : "Да"},
+    ], requirements);
+  }
+
+  function renderCriteria(target, rows) {
+    appendSummary(target, `${rows.filter(row => row.checked !== false).length} учитываются · ${rows.length} всего`);
+    appendTable(target, [
+      {label: "Учитывать", value: row => row.checked === false ? "Нет" : "Да"},
+      {label: "Параметр", value: row => row.concept || row.label},
+      {label: "Условие", value: "operator"},
+      {label: "Значение", value: row => [row.value, row.unit].filter(Boolean).join(" ")},
+    ], rows);
+  }
+
+  function renderProducts(target, value) {
+    const rows = value.preview || value;
+    const total = value.count ?? rows.length;
+    appendSummary(target, `Найдено: ${total}. Показано: ${rows.length}.`);
+    appendTable(target, [
+      {label: "Товар", value: row => row.name || row.title || row.id},
+      {label: "Поставщик", value: row => row.supplier_name || row.supplier_code || row.supplier},
+      {label: "Артикул", value: row => row.article || row.id || row.external_id},
+      {label: "Цена, ₽", value: "price"},
+      {label: "Остаток", value: row => row.stock ?? row.total_stock},
+      {label: "Проверка", value: row => {
+        const yes = row.match_count ?? row.matches?.length;
+        const no = row.mismatch_count ?? row.mismatches?.length;
+        const unknown = row.unknown_count ?? row.unknown?.length;
+        return [yes !== undefined ? `Да ${yes}` : "", no !== undefined ? `Нет ${no}` : "", unknown !== undefined ? `НЗ ${unknown}` : ""].filter(Boolean).join(" · ");
+      }},
+    ], rows);
+  }
+
+  function renderPhrases(target, rows, step, side) {
+    if (step === 2 && side === "output") {
+      const limits = activeRun?.settings?.steps?.["2"] || {};
+      const minimum = Number(limits.min_phrases || 12);
+      const maximum = Number(limits.max_phrases || 24);
+      appendSummary(
+        target,
+        `${rows.length} фраз · минимум ${minimum} · максимум ${maximum}`,
+        rows.length >= minimum ? "is-ok" : "is-warning",
+      );
+    } else {
+      appendSummary(target, `${rows.length} поисковых фраз`);
+    }
+    const list = document.createElement("ol");
+    list.className = "cascade-lab__phrase-list";
+    rows.forEach(value => {
+      const item = document.createElement("li");
+      item.textContent = value;
+      list.append(item);
+    });
+    target.append(list);
+  }
+
+  function renderObject(target, value) {
+    const rows = Object.entries(value).filter(([, item]) => (
+      item === null || ["string", "number", "boolean"].includes(typeof item)
+    )).map(([key, item]) => ({key, value: cellText(item)}));
+    if (rows.length) appendTable(target, [
+      {label: "Поле", value: "key"},
+      {label: "Значение", value: "value"},
+    ], rows);
+    else appendSummary(target, "Структурированные данные доступны во вкладке JSON.");
+  }
+
+  function renderReadable(target, value, step, side) {
+    target.replaceChildren();
+    if (value === undefined) {
+      appendSummary(target, "До этого шага ещё нет входных данных.");
+    } else if (value === null) {
+      appendSummary(target, "Нет данных.");
+    } else if (value?.kind === "catalog_products") {
+      renderProducts(target, value);
+    } else if (Array.isArray(value) && value.every(item => typeof item === "string")) {
+      renderPhrases(target, value, step, side);
+    } else if (Array.isArray(value) && value.some(item => item && typeof item === "object" && "checked" in item)) {
+      renderCriteria(target, value);
+    } else if (Array.isArray(value) && value.some(item => item && typeof item === "object")) {
+      renderProducts(target, value);
+    } else if (value && typeof value === "object" && value.name && value.requirements) {
+      renderLine(target, value);
+    } else if (value && typeof value === "object") {
+      renderObject(target, value);
+    } else {
+      appendSummary(target, cellText(value));
+    }
+  }
+
+  function setIoView(side, view) {
+    const section = document.querySelector(`[data-io-side="${side}"]`);
+    section.querySelectorAll("[data-io-view]").forEach(button => button.classList.toggle("is-active", button.dataset.ioView === view));
+    section.querySelector("pre").hidden = view !== "json";
+    section.querySelector(".cascade-lab__readable").hidden = view !== "readable";
+    localStorage.setItem(`cascade-lab-${side}-view`, view);
+  }
 
   function renderChecks(run) {
     const panel = document.getElementById("lab-checks");
@@ -63,6 +206,8 @@
     if (item) {
       inputTerminal.textContent = pretty(item.input);
       outputTerminal.textContent = pretty(item.output);
+      renderReadable(inputReadable, item.input, selectedStep, "input");
+      renderReadable(outputReadable, item.output, selectedStep, "output");
       const values = item.metrics || {};
       metrics.innerHTML = metric("Статус", item.status)
         + metric("Время", `${Number(values.seconds || 0).toFixed(3)} с`)
@@ -75,6 +220,9 @@
       const input = plannedInput(selectedStep);
       inputTerminal.textContent = input === undefined ? "До этого шага ещё нет входных данных." : pretty(input);
       outputTerminal.textContent = isRunning ? "Выполняется…" : "Шаг ещё не выполнялся.";
+      renderReadable(inputReadable, input, selectedStep, "input");
+      outputReadable.replaceChildren();
+      appendSummary(outputReadable, isRunning ? "Выполняется…" : "Шаг ещё не выполнялся.");
       metrics.innerHTML = isRunning ? metric("Статус", "Выполняется") : "";
     }
 
@@ -163,6 +311,13 @@
   };
   previousButton.onclick = () => selectStep(selectedStep - 1);
   followingButton.onclick = () => selectStep(selectedStep + 1);
+  document.querySelectorAll("[data-io-side]").forEach(section => {
+    const side = section.dataset.ioSide;
+    section.querySelectorAll("[data-io-view]").forEach(button => {
+      button.onclick = () => setIoView(side, button.dataset.ioView);
+    });
+    setIoView(side, localStorage.getItem(`cascade-lab-${side}-view`) || "readable");
+  });
 
   form.onsubmit = async event => {
     event.preventDefault();
