@@ -18,19 +18,43 @@
       {% csrf_token %}
       <div class="cascade-lab__source">
         <label>Сохранённый тест<select name="case_id" id="lab-case"><option value="">Новый прогон</option>{% for case in lab_cases %}<option value="{{ case.pk }}">{{ case.name }}</option>{% endfor %}</select></label>
-        <label>Позиция тендера<select name="line_id" id="lab-line"><option value="">Вставить JSON ниже</option>{% for line in lines %}<option value="{{ line.pk }}">{{ line.estimate.tender_number }} · {{ line.name }}</option>{% endfor %}</select></label>
-        <label class="cascade-lab__wide">JSON позиции и ТЗ<textarea name="line_json" rows="5" placeholder='{"name":"Флешка","quantity":100,"requirements":{"requirements":[]}}'></textarea></label>
-        <label class="cascade-lab__wide">Собственные карточки, JSON-массив <small>Необязательно. Тогда поиск по каталогам будет пропущен.</small><textarea name="cards_json" rows="4" placeholder='[{"id":"test-1","name":"Флешка 32 ГБ","price":"500","attributes":[]}]'></textarea></label>
-        <label class="cascade-lab__wide">Ожидания теста, JSON <small>must_include, must_exclude, ranks, matrix, max_seconds, max_cost_rub</small><textarea name="expectations_json" rows="3" placeholder='{"must_include":["test-1"],"ranks":{"test-1":{"min":1,"max":3}},"matrix":{"test-1":{"mismatch_count":0}}}'></textarea></label>
+        <label>Позиция тендера<select name="line_id" id="lab-line"><option value="">Новый товар</option>{% for line in lines %}<option value="{{ line.pk }}">{{ line.estimate.tender_number }} · {{ line.name }}</option>{% endfor %}</select></label>
+        <div class="cascade-lab__product cascade-lab__wide" id="lab-product-fields">
+          <label>Название товара<input type="text" name="line_name" placeholder="Например, флешка"></label>
+          <label>Количество<input type="number" name="line_quantity" min="0" step="1" placeholder="100"></label>
+          <section class="cascade-lab__requirements">
+            <header><div><strong>Требования ТЗ</strong><small>Каждая характеристика — отдельная строка.</small></div><button type="button" class="button-secondary" id="lab-add-requirement">+ Добавить</button></header>
+            <div id="lab-requirement-list">
+              <div class="cascade-lab__requirement-row"><input name="requirement_label" placeholder="Параметр, например Ёмкость"><input name="requirement_value" placeholder="Требование, например не менее 32 ГБ"><button type="button" data-remove-requirement aria-label="Удалить">×</button></div>
+            </div>
+          </section>
+        </div>
+        <details class="cascade-lab__advanced cascade-lab__wide"><summary>Расширенный тест для разработчика</summary>
+          <div>
+            <label>Готовая позиция, JSON<textarea name="line_json" rows="4" placeholder="Заменяет поля товара выше"></textarea></label>
+            <label>Собственные карточки, JSON-массив <small>Поиск на шагах 3–4 будет пропущен.</small><textarea name="cards_json" rows="4"></textarea></label>
+            <label>Автоматические ожидания, JSON<textarea name="expectations_json" rows="4"></textarea></label>
+          </div>
+        </details>
       </div>
-      <details class="cascade-lab__settings"><summary>Настройки прогона</summary><div>
-        <label>Остановиться после<select name="stop_after">{% for step in steps %}<option value="{{ step.step }}"{% if step.step == 5 %} selected{% endif %}>{{ step.step }}. {{ step.title }}</option>{% endfor %}</select><small>По умолчанию — перед дорогой матрицей.</small></label>
-        <label>Карточек в выдаче<input type="number" name="top" min="1" max="50" value="10"></label>
-        <label>Межблочный лимит, ₽<input type="number" name="max_cost_rub" min="0" step="0.01" value="10"></label>
-        <label>Межблочный лимит, секунд<input type="number" name="max_seconds" min="0" step="0.1" value="10"></label>
-        <label>Сохранить как тест<input type="text" name="case_name" maxlength="200" placeholder="Название теста"></label>
-        <label class="cascade-lab__wide">Параметры отдельных блоков, JSON<textarea name="step_settings_json" rows="3">{"2":{"max_phrases":24},"6":{"first_batch":25,"ceiling":75}}</textarea><small>Шаг 2: max_phrases. Шаг 6: first_batch и ceiling. Значения действуют только в лаборатории.</small></label>
-      </div></details>
+      <details class="cascade-lab__settings" open><summary>Настройки восьми шагов</summary>
+        <div class="cascade-lab__limits">
+          <label>Первый запуск до шага<select name="stop_after">{% for step in steps %}<option value="{{ step.step }}"{% if step.step == 1 %} selected{% endif %}>{{ step.step }}. {{ step.title }}</option>{% endfor %}</select><small>Для пошаговой отладки оставьте шаг 1.</small></label>
+          <label>Лимит всего прогона, ₽<input type="number" name="max_cost_rub" min="0" step="0.01" value="10"></label>
+          <label>Лимит всего прогона, секунд<input type="number" name="max_seconds" min="0" step="0.1" value="10"></label>
+          <label>Сохранить как тест<input type="text" name="case_name" maxlength="200" placeholder="Название теста"></label>
+        </div>
+        <div class="cascade-lab__step-settings">
+          {% for step in steps %}<article data-settings-step="{{ step.step }}">
+            <header><b>{{ step.step }}</b><strong>{{ step.title }}</strong></header>
+            <p><span>Вход:</span> {{ step.input }}<br><span>Выход:</span> {{ step.output }}</p>
+            {% if step.step == 2 %}<label>Максимум поисковых фраз<input type="number" name="step_2_max_phrases" min="1" max="40" value="24"><small>Сколько вариантов названия передать поиску шага 3.</small></label>
+            {% elif step.step == 6 %}<label>Карточек в первой проверке<input type="number" name="step_6_first_batch" min="1" max="75" value="25"></label><label>Максимум карточек для ИИ<input type="number" name="step_6_ceiling" min="0" max="100" value="75"><small>Новые партии прекращаются, когда найдено 10 подходящих.</small></label>
+            {% elif step.step == 8 %}<label>Показать в результате<input type="number" name="step_8_top" min="1" max="50" value="10"><small>Размер финального списка.</small></label>
+            {% else %}<small class="cascade-lab__fixed-setting">Параметров нет: шаг выполняется по фиксированным правилам.</small>{% endif %}
+          </article>{% endfor %}
+        </div>
+      </details>
       <div class="cascade-lab__actions"><button type="submit" class="button-success">Запустить</button><span id="lab-message" role="status"></span></div>
     </form>
   </section>
@@ -44,7 +68,7 @@
 
     <div class="cascade-lab__inspector panel">
       <div class="cascade-lab__inspector-head"><div><small id="lab-step-method">Выберите блок</small><h2 id="lab-step-title">Данные шага</h2></div>
-        <div class="cascade-lab__node-actions"><button type="button" id="lab-run-next" class="button-secondary" hidden>Продолжить на шаг</button><button type="button" id="lab-rerun-step" class="button-secondary" hidden>Повторить отсюда</button></div>
+        <div class="cascade-lab__node-actions"><button type="button" id="lab-view-prev" class="button-secondary" hidden>← Предыдущий</button><button type="button" id="lab-view-next" class="button-secondary" hidden>Следующий →</button><button type="button" id="lab-run-next" class="button-success" hidden>Выполнить следующий шаг</button><button type="button" id="lab-rerun-step" class="button-secondary" hidden>Повторить отсюда</button></div>
       </div>
       <div class="cascade-lab__metrics" id="lab-step-metrics"></div>
       <div class="cascade-lab__io">

@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -7,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from .cascade import Cascade
-from .models import CascadeLabCase, CascadeLabRun, TenderEstimate, TenderLine
+from .models import CatalogProduct, CatalogSupplier, CascadeLabCase, CascadeLabRun, TenderEstimate, TenderLine
 
 
 class CascadeLabViewTests(TestCase):
@@ -28,6 +29,40 @@ class CascadeLabViewTests(TestCase):
         self.assertContains(response, "Лаборатория каскада")
         self.assertContains(response, "8. Цена и топ-10")
         self.assertContains(response, "Результат проверок")
+        self.assertContains(response, "Максимум поисковых фраз")
+        self.assertContains(response, "Карточек в первой проверке")
+        self.assertContains(response, "Показать в результате")
+        self.assertNotContains(response, "Параметры отдельных блоков, JSON")
+        self.assertContains(response, 'id="lab-view-prev"')
+        self.assertContains(response, 'id="lab-view-next"')
+
+    @patch("tenders.views._submit_cascade_lab")
+    def test_create_run_from_readable_fields_and_step_controls(self, submit):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(reverse("cascade_lab_run_create"), {
+            "line_name": "Кружка",
+            "line_quantity": "50",
+            "requirement_label": ["Объём", "Цвет"],
+            "requirement_value": ["не менее 300 мл", "белый"],
+            "step_2_max_phrases": "12",
+            "step_6_first_batch": "15",
+            "step_6_ceiling": "60",
+            "step_8_top": "10",
+            "stop_after": "3",
+        })
+
+        self.assertEqual(response.status_code, 202)
+        run = CascadeLabRun.objects.get()
+        self.assertEqual(run.input_payload["name"], "Кружка")
+        self.assertEqual(run.input_payload["quantity"], "50")
+        self.assertEqual(run.input_payload["requirements"]["requirements"][1], {"label": "Цвет", "value": "белый"})
+        self.assertEqual(run.settings["steps"], {
+            "2": {"max_phrases": 12},
+            "6": {"first_batch": 15, "ceiling": 60},
+        })
+        self.assertEqual(run.settings["top"], 10)
+        submit.assert_called_once_with(run.pk)
 
     def test_assistant_drawer_has_superuser_lab_button(self):
         self.client.force_login(self.user)
@@ -73,12 +108,21 @@ class CascadeLabViewTests(TestCase):
 
         response = self.client.post(reverse("cascade_lab_run_create"), {
             "case_id": case.pk,
-            "step_settings_json": json.dumps({"2": {"max_phrases": 8}}),
+            "step_2_max_phrases": "8",
+            "step_6_first_batch": "25",
+            "step_6_ceiling": "75",
+            "step_8_top": "10",
         })
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(CascadeLabRun.objects.get().settings["steps"]["2"]["max_phrases"], 8)
         submit.assert_called_once()
+
+    def test_debugger_selects_the_step_being_executed(self):
+        script = (Path(__file__).resolve().parents[1] / "static" / "tenders" / "cascade_lab.js").read_text(encoding="utf-8")
+
+        self.assertIn("selectedStep = target", script)
+        self.assertIn("Выполняется…", script)
 
     def test_run_detail_cannot_be_read_by_another_admin(self):
         other = get_user_model().objects.create_superuser("other-admin", "other@example.com", "password")
@@ -197,6 +241,21 @@ class CascadeLabRunnerTests(TestCase):
         ))
 
         self.assertEqual(json.loads(json.dumps(value))["num_min"], "32768")
+
+    def test_step_3_catalogue_snapshot_is_json_serializable(self):
+        from .cascade_lab import _encode_output
+
+        supplier = CatalogSupplier.objects.create(
+            code="gifts", name="Gifts", base_url="https://example.com",
+        )
+        product = CatalogProduct.objects.create(
+            supplier=supplier, external_id="flash-32", name="Флешка 32 ГБ",
+            price=Decimal("499.90"), total_stock=20,
+        )
+
+        encoded = _encode_output([product])
+
+        self.assertEqual(json.loads(json.dumps(encoded))["preview"][0]["price"], "499.90")
 
     def test_expectations_are_evaluated_on_final_cards(self):
         from .cascade_lab import evaluate_expectations

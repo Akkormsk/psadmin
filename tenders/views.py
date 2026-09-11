@@ -142,6 +142,40 @@ def _line_payload(line):
     }
 
 
+def _lab_line_from_fields(request):
+    requirements = [
+        {"label": label.strip(), "value": value.strip()}
+        for label, value in zip(
+            request.POST.getlist("requirement_label"),
+            request.POST.getlist("requirement_value"),
+        )
+        if label.strip() and value.strip()
+    ]
+    return {
+        "name": str(request.POST.get("line_name") or "").strip(),
+        "quantity": str(request.POST.get("line_quantity") or "").strip(),
+        "requirements": {"requirements": requirements},
+    }
+
+
+def _lab_step_settings(request, current=None):
+    steps = {
+        str(step): dict(values)
+        for step, values in (current or {}).items()
+        if isinstance(values, dict)
+    }
+    fields = {
+        "step_2_max_phrases": ("2", "max_phrases", 1, 40),
+        "step_6_first_batch": ("6", "first_batch", 1, 75),
+        "step_6_ceiling": ("6", "ceiling", 0, 100),
+    }
+    for field, (step, key, minimum, maximum) in fields.items():
+        raw = str(request.POST.get(field) or "").strip()
+        if raw:
+            steps.setdefault(step, {})[key] = max(minimum, min(maximum, int(raw)))
+    return steps
+
+
 @login_required
 @require_POST
 def cascade_lab_run_create(request):
@@ -162,13 +196,16 @@ def cascade_lab_run_create(request):
             if line_id:
                 source_line = TenderLine.objects.get(pk=line_id)
                 line = _line_payload(source_line)
-            else:
+            elif str(request.POST.get("line_json") or "").strip():
                 line = _lab_json(request.POST.get("line_json"), {})
+            else:
+                line = _lab_line_from_fields(request)
             cards = _lab_json(request.POST.get("cards_json"), [])
             expectations = _lab_json(request.POST.get("expectations_json"), {})
-            settings = {"steps": _lab_json(request.POST.get("step_settings_json"), {})}
+            settings = {"steps": {}}
         if str(request.POST.get("step_settings_json") or "").strip():
             settings["steps"] = _lab_json(request.POST.get("step_settings_json"), {})
+        settings["steps"] = _lab_step_settings(request, settings.get("steps"))
         if not isinstance(line, dict) or not str(line.get("name", "")).strip():
             raise ValueError
         if len(cards) > 250 or any(not isinstance(card, dict) for card in cards):
@@ -176,12 +213,12 @@ def cascade_lab_run_create(request):
         stop_after = max(1, min(8, int(request.POST.get("stop_after") or 5)))
         settings.update({
             "custom_cards": cards,
-            "top": max(1, min(50, int(request.POST.get("top") or settings.get("top") or 10))),
+            "top": max(1, min(50, int(request.POST.get("step_8_top") or request.POST.get("top") or settings.get("top") or 10))),
             "max_cost_rub": max(0, float(request.POST.get("max_cost_rub") or settings.get("max_cost_rub") or 10)),
             "max_seconds": max(0, float(request.POST.get("max_seconds") or settings.get("max_seconds") or 10)),
         })
     except (ValueError, TypeError, json.JSONDecodeError, TenderLine.DoesNotExist, CascadeLabCase.DoesNotExist):
-        return JsonResponse({"error": "Проверьте позицию, JSON карточек и ожиданий."}, status=400)
+        return JsonResponse({"error": "Проверьте товар, его характеристики и дополнительные тестовые данные."}, status=400)
 
     case_name = str(request.POST.get("case_name", "")).strip()[:200]
     if case_name and test_case is None:
@@ -203,6 +240,7 @@ def _cascade_lab_run_payload(run):
         "id": run.pk, "title": run.title, "status": run.status,
         "current_step": run.current_step, "stop_after": run.stop_after,
         "snapshots": run.snapshots, "settings": run.settings,
+        "input_payload": run.input_payload,
         "expectations": run.expectations, "result": run.result,
         "total_seconds": run.total_seconds, "total_cost_rub": run.total_cost_rub,
         "error": run.error, "parent_run_id": run.parent_run_id,

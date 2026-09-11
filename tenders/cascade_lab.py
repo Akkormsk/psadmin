@@ -43,7 +43,7 @@ def _json_value(value):
 def _encode_output(value):
     rows = list(value) if not isinstance(value, list) and hasattr(value, "__iter__") else value
     if isinstance(rows, list) and rows and isinstance(rows[0], CatalogProduct):
-        return {
+        return _json_value({
             "kind": "catalog_products",
             "ids": [row.pk for row in rows],
             "preview": [
@@ -52,7 +52,7 @@ def _encode_output(value):
                 for row in rows[:50]
             ],
             "count": len(rows),
-        }
+        })
     if isinstance(rows, list):
         return [_json_value(item) for item in rows]
     return _json_value(rows)
