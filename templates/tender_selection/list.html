@@ -123,16 +123,16 @@
 <style>
   .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
   .ts-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 4px; font-size: 13px; }
-  .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid #e1e5ea; border-radius: 8px; background: #fff; }
-  .ts-lawtabs { display: inline-flex; border: 1px solid #e1e5ea; border-radius: 8px; overflow: hidden; }
-  .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: #fff; color: #6b7280; cursor: pointer; border-left: 1px solid #e1e5ea; }
+  .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
+  .ts-lawtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
+  .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--field-bg); color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--field-border); }
   .ts-lawtabs button:first-child { border-left: 0; }
   .ts-lawtabs button.is-active { background: #4c5fd5; color: #fff; font-weight: 700; }
   .ts-controls__note { color: #6b7280; }
   .ts-tender__meta { color: #6b7280 !important; overflow-wrap: anywhere; }
   .ts-hits { color: #2e7d32; }
   .ts-tender.is-dim { opacity: .45; }
-  .ts-tender.is-onestimate { background: #f7f9ff; }
+  .ts-tender.is-onestimate { background: var(--tint-info); }
   .ts-tender .tender-saved-totals small { white-space: nowrap; }
   .ts-soon-label { color: #b8434e !important; font-weight: 600; }
   .ts-onestimate-pill { flex: 0 0 auto; align-self: center; padding: 6px 12px; border-radius: 999px;
@@ -154,11 +154,11 @@
   .ts-warn { color: #b26a00; }
   .ts-lastrun { margin-top: 16px; font-size: 12px; }
   .ts-pager { display: flex; gap: 12px; align-items: center; margin-top: 14px; font-size: 13px; }
-  #ts-overlay { position: fixed; inset: 0; background: rgba(255,255,255,.72); z-index: 1000; display: none; align-items: center; justify-content: center; }
+  #ts-overlay { position: fixed; inset: 0; background: var(--overlay-scrim); z-index: 1000; display: none; align-items: center; justify-content: center; }
   #ts-overlay:not([hidden]) { display: flex; }
-  .ts-overlay__box { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 24px 28px; max-width: 380px; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,.12); font-size: 14px; }
-  .ts-overlay__box small { color: #777; }
-  .ts-spinner { width: 34px; height: 34px; margin: 0 auto 14px; border: 3px solid #e0e0e0; border-top-color: #2e7d32; border-radius: 50%; animation: ts-spin .8s linear infinite; }
+  .ts-overlay__box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; max-width: 380px; text-align: center; box-shadow: var(--shadow-pop); font-size: 14px; }
+  .ts-overlay__box small { color: var(--ink-2); }
+  .ts-spinner { width: 34px; height: 34px; margin: 0 auto 14px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: ts-spin .8s linear infinite; }
   @keyframes ts-spin { to { transform: rotate(360deg); } }
 </style>
 <script>
