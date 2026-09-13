@@ -5,3 +5,7 @@ class TendersConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "tenders"
     verbose_name = "Расчет тендеров"
+
+    def ready(self):
+        from . import scheduler
+        scheduler.start()
