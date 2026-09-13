@@ -1969,17 +1969,6 @@ def _question_is_answered_by_evidence(question, evidence):
     return True
 
 
-def _unanswered_production_questions(raw_questions, line, features=None, limit=2):
-    evidence = _cell_text(f"{_production_evidence_text(line)} {' '.join(features or [])}").lower()
-    result = []
-    for raw in raw_questions if isinstance(raw_questions, list) else []:
-        question = raw.get("question") if isinstance(raw, dict) else raw
-        question = _cell_text(question)
-        if question and not _question_is_answered_by_evidence(question, evidence) and question not in result:
-            result.append(question)
-        if len(result) >= limit:
-            break
-    return result
 
 
 def _embeddings_enabled():
@@ -2409,14 +2398,6 @@ _PROCUREMENT_TAIL_RE = re.compile(
 )
 
 
-def _strip_procurement_boilerplate(name):
-    """A tender position name almost always carries a trailing procurement
-    clause ("... с символикой Думы...", "... с логотипом") that is real
-    text but not part of the item's identity — left in, its words dilute
-    the one word that actually names the item. Strip it for search only;
-    the original stays on display everywhere else."""
-    stripped = _PROCUREMENT_TAIL_RE.sub("", name).strip()
-    return stripped or name
 
 
 
@@ -2594,11 +2575,6 @@ def _shortlist_card_images(shortlist, limit=8, side=300):
 
 
 
-def _price_decimal(value):
-    try:
-        return Decimal(str(value)) if value not in (None, "") else None
-    except (InvalidOperation, TypeError, ValueError):
-        return None
 
 
 def _lesson_outcome_hint(outcome):

@@ -31,11 +31,12 @@ def _supplier(code="oasis"):
 
 def _product(name, *, external_id, group_id="", color_group_id="", price="100",
              stock=50, colors=None, description="", article="", size="", attributes=None,
-             transit=0, on_order=False, supplier_code="oasis"):
+             materials=None, transit=0, on_order=False, supplier_code="oasis"):
     return CatalogProduct.objects.create(
         supplier=_supplier(supplier_code), external_id=external_id, article=article or external_id,
         group_id=group_id, color_group_id=color_group_id, name=name, full_name=name,
         description=description, size=size, colors=colors or [], attributes=attributes or [],
+        materials=materials or [],
         price=Decimal(price), discount_price=None, total_stock=stock, stock_transit=transit,
         is_on_order=on_order, is_active=True,
     )
@@ -186,7 +187,7 @@ class CascadeHardGateTests(TestCase):
     def _colour_gateway(self, grid=None):
         return _Gateway(
             queries=["кружка"],
-            criteria=[{"n": 1, "concept": "цвет", "operator": "=", "value": "синий", "keep": True}],
+            criteria=[{"n": 1, "concept": "цвет", "operator": "=", "value": "синий", "keep": True, "maps_to": "color"}],
             grid=grid,
         )
 
@@ -386,6 +387,152 @@ class CascadeAxisPrefillTests(TestCase):
         )
         result = _run(gw, _line(name="Флешка", rows=[{"label": "Ёмкость", "value": "не менее 32 ГБ"}]))
         self.assertEqual(result.candidates[0]["unknown_count"], 1)
+
+
+class CascadeGenericNumericAttributeTests(TestCase):
+    """Числовой критерий без готового regex (не ёмкость/объём) — код ищет
+    число в характеристиках карточки по пересечению слов, без гадания
+    единиц измерения. Название атрибута поставщика может не совпадать со
+    словом из ТЗ («плотность» — «граммаж»); в этом случае молчит, пока
+    агент (шаг 6) не подскажет атрибут явно (см. CascadeDiscoveryTests)."""
+
+    def _criterion(self, **overrides):
+        base = {"n": 1, "concept": "плотность бумаги", "operator": ">=", "value": "140 г/м²",
+                "unit": "г/м²", "num_min": 140, "keep": True}
+        base.update(overrides)
+        return [base]
+
+    def test_matching_attribute_name_is_resolved_by_code(self):
+        _product("Бумага офисная", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "150 г/м²"}])
+        gw = _Gateway(queries=["бумага"], criteria=self._criterion(), grid=[])
+        result = _run(gw, _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)
+        self.assertEqual(card["match_count"], 1)
+
+    def test_below_the_bound_is_a_mismatch_by_code(self):
+        _product("Бумага тонкая", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "80 г/м²"}])
+        gw = _Gateway(queries=["бумага"], criteria=self._criterion(), grid=[])
+        result = _run(gw, _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 1)
+
+    def test_no_matching_attribute_name_is_left_to_the_agent(self):
+        _product("Бумага", external_id="P1", attributes=[{"name": "Граммаж", "value": "150 г/м²"}])
+        gw = _Gateway(queries=["бумага"], criteria=self._criterion(), grid=[{"id": "P1", "cells": {"1": "y"}}])
+        result = _run(gw, _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "agent")
+
+    def test_conflicting_matches_are_ambiguous_and_left_to_the_agent(self):
+        _product("Бумага", external_id="P1", attributes=[
+            {"name": "Плотность крышки", "value": "150 г/м²"},
+            {"name": "Плотность дна", "value": "170 г/м²"},
+        ])
+        gw = _Gateway(queries=["бумага"], criteria=self._criterion(), grid=[{"id": "P1", "cells": {"1": "y"}}])
+        result = _run(gw, _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        self.assertEqual(result.candidates[0]["matrix"][0]["source"], "agent")
+
+    def test_unit_mismatch_is_never_guessed(self):
+        _product("Лампа", external_id="P1", attributes=[{"name": "Яркость", "value": "800 Лм"}])
+        gw = _Gateway(queries=["лампа"], criteria=[
+            {"n": 1, "concept": "яркость", "operator": ">=", "value": "500 Кд",
+             "unit": "Кд", "num_min": 500, "keep": True},
+        ], grid=[{"id": "P1", "cells": {"1": "m"}}])
+        result = _run(gw, _line(name="Лампа", rows=[{"label": "Яркость", "value": "не менее 500 Кд"}]))
+        self.assertEqual(result.candidates[0]["matrix"][0]["source"], "agent")
+
+    def test_material_maps_to_is_resolved_by_code(self):
+        _product("Кружка", external_id="P1", materials=["керамика"])
+        gw = _Gateway(queries=["кружка"], criteria=[
+            {"n": 1, "concept": "материал", "operator": "=", "value": "керамика", "keep": True, "maps_to": "material"},
+        ], grid=[])
+        result = _run(gw, _line(name="Кружка", rows=[{"label": "Материал", "value": "керамика"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)
+
+    def test_size_axis_choose_one_needs_only_one_matching_value(self):
+        _product("Футболка M", external_id="F1", group_id="G1", size="M")
+        _product("Футболка L", external_id="F2", group_id="G1", size="L")
+        gw = _Gateway(queries=["футболка"], criteria=[
+            {"n": 1, "concept": "размер", "operator": "in", "value": "M или XL", "keep": True,
+             "options": ["M", "XL"], "axis_mode": "choose_one"},
+        ], grid=[])
+        result = _run(gw, _line(name="Футболка", rows=[{"label": "Размер", "value": "M или XL"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)  # есть M — этого достаточно, XL не обязателен
+
+    def test_size_axis_fulfill_set_needs_every_value(self):
+        _product("Футболка M", external_id="F1", group_id="G1", size="M")
+        gw = _Gateway(queries=["футболка"], criteria=[
+            {"n": 1, "concept": "размерный ряд", "operator": "in", "value": "M, L, XL", "keep": True,
+             "options": ["M", "L", "XL"], "axis_mode": "fulfill_set"},
+        ], grid=[])
+        result = _run(gw, _line(name="Футболка", rows=[{"label": "Размерный ряд", "value": "M, L, XL"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 1)  # только M из целого ряда — не хватает
+
+
+class CascadeDiscoveryTests(TestCase):
+    def test_agent_attribute_hint_closes_the_cell_for_the_next_wave_without_a_call(self):
+        _product("Бумага 1", external_id="P1", price="1",
+                 attributes=[{"name": "Граммаж", "value": "150 г/м²"}])
+        _product("Бумага 2", external_id="P2", price="2",
+                 attributes=[{"name": "Граммаж", "value": "120 г/м²"}])
+        criteria = [{"n": 1, "concept": "плотность", "operator": ">=", "value": "140 г/м²",
+                     "unit": "г/м²", "num_min": 140, "keep": True}]
+        calls = {"step6": 0}
+
+        def gateway(prompt, **kwargs):
+            usage = {"prompt_tokens": 1, "completion_tokens": 1}
+            if "нормализуешь критерии ТЗ тендера" in prompt:
+                return {"criteria": criteria}, usage
+            if "готовишь поиск одного товара" in prompt:
+                return {"item": "бумага", "queries": ["бумага"]}, usage
+            if "пронумерованный список названий товаров" in prompt:
+                return {"not_item": []}, usage
+            if "эксперт по подбору товара под тендер" in prompt:
+                calls["step6"] += 1
+                return {"grid": [{"c": 1, "r": 1, "v": "y", "w": "150", "a": "Граммаж"}]}, usage
+            raise AssertionError(prompt[:80])
+
+        with patch("tenders.services._ai_gateway_json", side_effect=gateway):
+            result = Cascade(
+                _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]),
+                step_settings={"6": {"first_batch": 1, "ceiling": 10}},
+            ).run()
+
+        self.assertEqual(calls["step6"], 1)  # вторая карточка не звала агента вовсе
+        by_id = {c["id"]: c for c in result.candidates}
+        self.assertEqual(by_id["P1"]["matrix"][0]["source"], "agent")
+        self.assertEqual(by_id["P2"]["matrix"][0]["source"], "code")
+        self.assertEqual(by_id["P2"]["mismatch_count"], 1)  # 120 < 140, найдено кодом по подсказке
+
+
+class CascadeOpenAxisTests(TestCase):
+    """axis больше не ограничен списком capacity/volume/size — модель может
+    назвать любую ось (мощность, толщина…), и для нечисловых способов её
+    достать код использует ту же общую сверку по атрибутам SKU."""
+
+    def test_family_face_picks_the_sku_that_fits_a_custom_axis(self):
+        _product("Дрель 500 Вт", external_id="D500", group_id="G1", price="1000",
+                 attributes=[{"name": "Мощность", "value": "500 Вт"}])
+        _product("Дрель 900 Вт", external_id="D900", group_id="G1", price="1500",
+                 attributes=[{"name": "Мощность", "value": "900 Вт"}])
+        gw = _Gateway(queries=["дрель"], criteria=[
+            {"n": 1, "concept": "мощность", "operator": ">=", "value": "800 Вт", "unit": "Вт",
+             "num_min": 800, "keep": True, "axis": "power"},
+        ], grid=[{"id": "*", "cells": {"1": "y"}}])
+        result = _run(gw, _line(name="Дрель", rows=[{"label": "Мощность", "value": "не менее 800 Вт"}]))
+        self.assertEqual(len(result.candidates), 1)
+        self.assertEqual(result.candidates[0]["id"], "D900")
 
 
 class CascadeNameFilterCacheTests(TestCase):

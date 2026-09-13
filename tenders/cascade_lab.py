@@ -17,8 +17,8 @@ STEP_DEFINITIONS = [
     {"step": 2, "method": "step_2_search_plan", "title": "Чистка названия", "input": "Исходное название", "output": "Чистое название и поисковые фразы"},
     {"step": 3, "method": "step_3_search_by_name", "title": "Поиск по каталогам", "input": "Поисковые фразы", "output": "Пул товаров"},
     {"step": 4, "method": "step_4_name_filter", "title": "Отсев названий", "input": "Пул товаров", "output": "Подходящие типы товаров"},
-    {"step": 5, "method": "step_5_hard_gates_and_collapse", "title": "Фильтры и варианты", "input": "Товары каталога", "output": "Карточки групп"},
-    {"step": 6, "method": "step_6_agent_matrix", "title": "Матрица ТЗ", "input": "Карточки и критерии", "output": "Матрица да / нет / НЗ"},
+    {"step": 5, "method": "step_5_hard_gates_and_collapse", "title": "Фильтры, варианты и проверка кодом", "input": "Товары каталога", "output": "Карточки семей + матрица, закрытая кодом где возможно"},
+    {"step": 6, "method": "step_6_agent_matrix", "title": "Матрица ТЗ — агент на остатке", "input": "Карточки семей + незакрытые кодом строки матрицы", "output": "Полная матрица да / нет / НЗ"},
     {"step": 7, "method": "step_7_collapse_and_sort", "title": "Сортировка", "input": "Проверенные карточки", "output": "Ранжированный список"},
     {"step": 8, "method": "step_8_price_and_top", "title": "Цена и топ-10", "input": "Ранжированный список", "output": "Итоговая выдача"},
 ]

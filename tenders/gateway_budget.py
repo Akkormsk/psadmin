@@ -68,6 +68,51 @@ def account_balance(*, force: bool = False) -> tuple[float | None, dict]:
     return balance, finances
 
 
+_MODELS_URL_ENV = "TIMEWEB_AI_BASE_URL"
+_models_cache: dict = {"at": 0.0, "value": None}
+# Список на случай, если шлюз недоступен (офлайн-дев, нет ключа) — не список
+# «разрешённых», а последний известный рабочий набор, чтобы форма не осталась
+# пустой.
+_FALLBACK_MODELS = (
+    "anthropic/claude-sonnet-4-5", "anthropic/claude-haiku-4-5",
+    "openai/gpt-4.1-mini", "openai/gpt-4.1-nano", "gemini/gemini-3.1-flash-lite",
+)
+
+
+def available_models(*, force: bool = False) -> tuple[str, ...]:
+    """Модели шлюза, пригодные для чата (не embedding/image/audio/…),
+    кэш 6 часов. Список не захардкожен — шлюз добавляет модели чаще, чем мы
+    правим код. При недоступности шлюза — последний известный набор."""
+    if _UNDER_TEST and not force:
+        return _FALLBACK_MODELS
+    now = time.monotonic()
+    if not force and _models_cache["value"] is not None and now - _models_cache["at"] < 21_600:
+        return _models_cache["value"]
+    key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
+    base_url = os.getenv(_MODELS_URL_ENV, "https://api.timeweb.ai/v1").rstrip("/")
+    if not key:
+        return _models_cache["value"] or _FALLBACK_MODELS
+    request = urllib.request.Request(
+        f"{base_url}/models", headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        logger.warning("AI Gateway /models недоступен", exc_info=True)
+        return _models_cache["value"] or _FALLBACK_MODELS
+    rows = data.get("data", data) if isinstance(data, dict) else data
+    models = tuple(sorted(
+        row["id"] for row in rows if isinstance(row, dict)
+        and isinstance(row.get("id"), str)
+        and (row.get("mode") or "chat") == "chat"
+    )) if isinstance(rows, list) else ()
+    if not models:
+        return _models_cache["value"] or _FALLBACK_MODELS
+    _models_cache.update(at=now, value=models)
+    return models
+
+
 def spend_rub(usage: dict, model: str) -> float | None:
     """Оценка стоимости одного вызова, ₽. None если тариф модели не задан."""
     rate = RATES_RUB_PER_M.get(model)

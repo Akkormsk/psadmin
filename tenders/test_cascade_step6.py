@@ -26,6 +26,14 @@ class CascadeBoundedTests(TestCase):
         ]
 
     def grade(self, cards, grid):
+        # Шаг 5 обычно инициализирует matrix (и, если включено, прикрывает
+        # часть клеток кодом) до того, как карточка попадёт на шаг 6 — эти
+        # тесты проверяют шаг 6 в изоляции, поэтому сами кладут пустую
+        # (полностью открытую) матрицу, как будто шаг 5 ничего не решил.
+        _checked, rows = self.cascade._checked_rows()
+        for card in cards:
+            if "matrix" not in card:
+                self.cascade._init_unknown(card, rows)
         gateway = _Gateway(grid=grid)
         with patch("tenders.services._ai_gateway_json", side_effect=gateway):
             self.cascade.step_6_agent_matrix(cards)
@@ -84,17 +92,28 @@ class CascadeBoundedTests(TestCase):
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
         self.assertTrue(all(c["matrix_status"] == "incomplete" for c in cards))
 
-    def test_axis_prefill_completes_clear_cell_without_model_answer(self):
+    def test_a_cell_step_5_already_closed_needs_no_agent_call(self):
+        # Прикрытая шагом 5 клетка (source="code") приходит на шаг 6 уже
+        # решённой — сама детерминированная проверка живёт в шаге 5
+        # (_prefill_card), здесь важно только то, что шаг 6 её не трогает
+        # и не тратит на неё вызов агента.
         self.cascade.tz = [Criterion(
             label="Ёмкость", raw_value="32 ГБ", concept="ёмкость", operator=">=",
             value="32 ГБ", axis="capacity", num_min=Decimal(32768),
         )]
-        cards = [{"id": "A", "name": "Флешка 32 ГБ", "price": "100", "relevance": 0}]
-        self.grade(cards, [])
-        self.assertEqual(cards[0]["matrix_status"], "complete")
-        self.assertEqual(cards[0]["fit"], "exact")
-        self.assertEqual(cards[0]["matrix"][0]["source"], "code")
-        self.assertTrue(CascadeCache.objects.filter(kind="verdict").exists())
+        checked, rows = self.cascade._checked_rows()
+        card = {"id": "A", "name": "Флешка 32 ГБ", "price": "100", "relevance": 0}
+        self.cascade._init_unknown(card, rows)
+        self.cascade._apply_cell(card, rows, 1, "y", "по варианту", "code")
+        self.cascade._recompute_card_summary(card)
+        gateway = self.grade([card], [])
+        self.assertEqual(gateway.calls["step6"], 0)
+        self.assertEqual(card["matrix_status"], "complete")
+        self.assertEqual(card["fit"], "exact")
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        # Чисто кодовое решение не кэшируется — пересчитать его бесплатно,
+        # кэш нужен только чтобы не звать агента повторно.
+        self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
 
     def test_repeat_uses_cached_suitable_cards_without_grading_the_tail(self):
         grid = [{"id": "*", "cells": {"1": "y", "2": "y"}}]
@@ -123,23 +142,28 @@ class CascadeBoundedTests(TestCase):
         self.assertEqual(gateway.calls["step6"], 1)
 
     def test_failed_gateway_stops_without_spending_on_more_batches(self):
+        cards = self.cards(71)
+        _checked, rows = self.cascade._checked_rows()
+        for card in cards:
+            self.cascade._init_unknown(card, rows)
         gateway = _Gateway(step6_error=True)
         with patch("tenders.services._ai_gateway_json", side_effect=gateway):
-            self.cascade.step_6_agent_matrix(self.cards(71))
+            self.cascade.step_6_agent_matrix(cards)
         self.assertEqual(gateway.calls["step6"], 9)
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
         self.assertTrue(self.cascade.error)
 
-    def test_preagent_key_uses_only_relevance_axis_verdicts_and_price(self):
+    def test_preagent_key_uses_only_relevance_matrix_verdicts_and_price(self):
+        def matrix(verdict):
+            return [{"criterion": "x", "required": "y", "verdict": verdict, "reason": "", "source": "code"}]
+
         cards = [
-            {"id": "bad", "relevance": 0, "price": "1"},
-            {"id": "good", "relevance": 0, "price": "200"},
-            {"id": "silent", "relevance": 0, "price": "2"},
-            {"id": "less-relevant", "relevance": 1, "price": "0"},
+            {"id": "bad", "relevance": 0, "price": "1", "matrix": matrix("no")},
+            {"id": "good", "relevance": 0, "price": "200", "matrix": matrix("yes")},
+            {"id": "silent", "relevance": 0, "price": "2", "matrix": matrix("not_checked")},
+            {"id": "less-relevant", "relevance": 1, "price": "0", "matrix": matrix("yes")},
         ]
-        axes = {"bad": {1: ("n", "")}, "good": {1: ("y", "")},
-                "less-relevant": {1: ("y", "")}}
-        ranked = sorted(cards, key=lambda card: self.cascade._preagent_key(card, axes))
+        ranked = sorted(cards, key=self.cascade._preagent_key)
         self.assertEqual([c["id"] for c in ranked], ["good", "silent", "bad", "less-relevant"])
 
 
