@@ -1101,6 +1101,8 @@ def rebuild_catalog_embeddings(supplier_code=None, *, batch_size=300, limit=None
     изменились с прошлого раза (сверка по хешу) — повтор ничего не платит.
     `limit` — сколько товаров обработать за один вызов (для ручных пробных
     запусков с ограниченным бюджетом); без него — весь недостающий остаток."""
+    from django.db import reset_queries
+
     from .gateway_budget import preflight
     from .services import _embedding_vectors, _embedding_model
 
@@ -1126,12 +1128,34 @@ def rebuild_catalog_embeddings(supplier_code=None, *, batch_size=300, limit=None
             skipped += 1
             continue
         todo.append((product.pk, text, text_hash))
+        if total % 5000 == 0:
+            reset_queries()  # с DEBUG=1 (обычный локальный дев) Django копит
+            # каждый SQL-запрос в памяти на весь процесс — на десятках тысяч
+            # строк это реально накапливается, без связи с самими данными.
+
+    from .services import TenderAIError
 
     work = todo[:limit] if limit else todo
-    embedded = 0
+    embedded = failed = 0
     for i in range(0, len(work), batch_size):
         chunk = work[i:i + batch_size]
-        vectors = _embedding_vectors([text for _, text, _ in chunk], model=model)
+        vectors = None
+        # Одиночный сетевой сбой не должен обрушивать весь прогон — на
+        # десятках тысяч запросов к шлюзу транзиентные обрывы реальны, а
+        # без повтора каждый такой обрыв означал полный перезапуск (с
+        # пересканированием всего каталога ради resume-по-хешу — дольше
+        # самого повтора).
+        for attempt in range(3):
+            try:
+                vectors = _embedding_vectors([text for _, text, _ in chunk], model=model)
+                break
+            except TenderAIError:
+                if attempt == 2:
+                    break
+                time.sleep(2 ** attempt)
+        if vectors is None:
+            failed += len(chunk)
+            continue
         now = timezone.now()
         updates = [
             CatalogProduct(
@@ -1145,7 +1169,13 @@ def rebuild_catalog_embeddings(supplier_code=None, *, batch_size=300, limit=None
             batch_size=batch_size,
         )
         embedded += len(chunk)
-    return {"total": total, "skipped": skipped, "embedded": embedded, "remaining": len(todo) - embedded}
+        reset_queries()  # см. комментарий выше — тут особенно важно: без
+        # сброса лог с DEBUG=1 держал бы сами векторы (1536 чисел на
+        # товар) в памяти процесса на каждый прошедший батч.
+    return {
+        "total": total, "skipped": skipped, "embedded": embedded, "failed": failed,
+        "remaining": len(todo) - embedded - failed,
+    }
 
 
 def _product_variants(product):

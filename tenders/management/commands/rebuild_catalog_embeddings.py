@@ -18,5 +18,6 @@ class Command(BaseCommand):
             raise CommandError(str(exc)) from exc
         self.stdout.write(self.style.SUCCESS(
             f"Всего: {result['total']}; пропущено (без изменений): {result['skipped']}; "
-            f"проиндексировано: {result['embedded']}; осталось: {result['remaining']}"
+            f"проиндексировано: {result['embedded']}; сбоев (после 3 попыток): {result['failed']}; "
+            f"осталось: {result['remaining']}"
         ))
