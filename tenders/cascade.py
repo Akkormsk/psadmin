@@ -345,9 +345,19 @@ class Cascade:
             estimate = spend_rub({"prompt_tokens": max(1, len(prompt) // 3), "completion_tokens": max_tokens}, model) or 0
             if spent + estimate > self.max_cost_rub:
                 raise RuntimeError(f"Следующий вызов может превысить лимит {self.max_cost_rub:g} ₽")
-        return _ai_json(
-            prompt, max_tokens=max_tokens, timeout=self._remaining_timeout(timeout), model=model, images=images,
-        )
+        try:
+            return _ai_json(
+                prompt, max_tokens=max_tokens, timeout=self._remaining_timeout(timeout), model=model, images=images,
+            )
+        except Exception as exc:
+            # Даже проваленный вызов мог реально потратить токены (JSON не
+            # распарсился обеими попытками, например) — иначе шаг уходит на
+            # fallback, а лаборатория показывает 0 ₽ вместо реального
+            # расхода (см. _ai_error в services.py).
+            usage = getattr(exc, "usage", None)
+            if usage:
+                self._add_usage(usage, model)
+            raise
 
     # -- запуск ----------------------------------------------------------- #
     def run(self) -> CascadeResult:
@@ -437,8 +447,15 @@ class Cascade:
 - maps_to: "color", если критерий про цвет товара целиком (не про цвет логотипа/принта/упаковки); "material", если критерий про материал/состав товара целиком. Иначе "".
 """
         try:
+            # Каждый критерий — это ~14 полей JSON (concept/operator/value/
+            # unit/keep/importance/importance_reason/axis/axis_mode/num_min/
+            # num_max/options/maps_to + n) — старый бюджет (250 + 150×строк)
+            # был рассчитан по дефолтной модели, которая отвечает лаконично
+            # и строго по формату. Модели, которые добавляют рассуждение
+            # перед JSON или менее компактны, упирались в лимит на середине
+            # ответа — JSON обрывался и не парсился (см. разбор 14.09.2026).
             result, usage = self._call_ai(
-                prompt, max_tokens=max(900, min(5000, 250 + len(rows) * 150)), timeout=50, model=model,
+                prompt, max_tokens=max(1500, min(8000, 400 + len(rows) * 300)), timeout=50, model=model,
             )
             self._add_usage(usage, model)
             if not isinstance(result, dict) or not isinstance(result.get("criteria"), list):

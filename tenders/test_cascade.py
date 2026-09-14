@@ -159,6 +159,27 @@ class CascadeStep1Tests(TestCase):
         self.assertEqual(result.tz[0].value, "синий")
         self.assertTrue(result.error)
 
+    def test_step1_failure_with_spent_tokens_still_counts_them(self):
+        """Регрессия к разбору 14.09.2026: JSON не распарсился (например,
+        модель упёрлась в лимит токенов) — деньги реально потрачены, а
+        Cascade падает на fallback. Потраченное не должно пропасть из
+        usage/usage_by_model только потому, что шаг в итоге не удался."""
+        from .services import TenderAIError
+
+        def gateway(prompt, **kwargs):
+            error = TenderAIError("Модель вернула ответ в неожиданном формате.")
+            error.usage = {"prompt_tokens": 400, "completion_tokens": 1450}
+            raise error
+
+        rows = [{"label": "Цвет", "value": "синий"}]
+        cascade = Cascade(_line(rows=rows))
+        with patch("tenders.services._ai_gateway_json", side_effect=gateway):
+            cascade.step_1_parse_tz()  # только шаг 1 — шаг 2 позвал бы тот же мок и добавил свои токены
+
+        self.assertTrue(cascade.error)
+        self.assertEqual(cascade.usage["prompt_tokens"], 400)
+        self.assertEqual(cascade.usage["completion_tokens"], 1450)
+
 
 class CascadeSearchTests(TestCase):
     def test_step3_matches_product_name_not_description(self):

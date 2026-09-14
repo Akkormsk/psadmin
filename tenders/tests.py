@@ -17,7 +17,7 @@ from calculator.models import CalculatorSettings, PriceItem
 from . import views as tender_views
 from .models import CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .catalog import CatalogSyncError, GiftsXmlClient, OasisClient, parse_gifts_catalog, sync_gifts_catalog, sync_gifts_categories, sync_oasis_catalog
-from .services import _VisibleTextParser, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _retrieve_lessons, _run_name_filter, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
+from .services import _VisibleTextParser, _ai_gateway_json, _collapse_requirements, _evaluate_cost_recipe, _format_html_tables, _json_from_model, _knowledge_sources_for_line, _normalize_training_hypothesis, _paper_candidates, _parse_document_decimal, _resolve_line_match, _retrieve_lessons, _run_name_filter, _select_html_price_quote, _shorten_structured_item_names, _source_text_quality, _strip_shared_item_boilerplate, _technical_source_chunks, _validate_public_url, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_sheet_imposition, calculate_tender, detect_tender_document_type, extract_tender_source, inspect_tender_document, recognize_tender_items, TenderAIError
 
 
 class _StubOasisClient:
@@ -632,6 +632,44 @@ class TenderTests(TestCase):
         result = _json_from_model('Ответ модели:\n```json\n{"items":[{"name":"строка\tс табуляцией"}]}\n```')
 
         self.assertEqual(result["items"][0]["name"], "строка\tс табуляцией")
+
+    @patch("tenders.services.urlopen")
+    def test_failed_json_parse_still_carries_the_real_spent_tokens(self, urlopen_mock):
+        """Регрессия к разбору 14.09.2026: обе попытки шага 1 (или любого
+        другого вызова через _ai_gateway_json) реально тратят токены даже
+        когда ответ не распарсился как JSON — эти токены не должны
+        пропадать из учёта, иначе лаборатория покажет "0 ₽" при реальном
+        расходе."""
+        class Response:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return self.body
+
+        # Оба раза модель обрывается на середине JSON (например, упёрлась в
+        # max_tokens) — ни одна попытка не парсится, но обе реально стоили
+        # денег согласно usage в ответе шлюза.
+        broken_response = json.dumps({
+            "choices": [{"message": {"content": '{"criteria": [{"n": 1, "concept": "не закры'}}],
+            "usage": {"prompt_tokens": 400, "completion_tokens": 1450},
+        }).encode("utf-8")
+        urlopen_mock.side_effect = [Response(broken_response), Response(broken_response)]
+
+        with self.assertRaises(TenderAIError) as ctx:
+            _ai_gateway_json("тестовый промпт", model="some/verbose-model")
+
+        self.assertEqual(urlopen_mock.call_count, 2)
+        usage = getattr(ctx.exception, "usage", None)
+        self.assertIsNotNone(usage, "исключение обязано нести потраченные токены")
+        self.assertEqual(usage["prompt_tokens"], 800)
+        self.assertEqual(usage["completion_tokens"], 2900)
 
     @patch("tenders.views.detect_tender_document_type", return_value="unknown")
     @patch("tenders.views.analyze_tender_requirements")

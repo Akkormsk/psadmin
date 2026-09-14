@@ -49,6 +49,18 @@ class TenderAIError(Exception):
     pass
 
 
+def _ai_error(message, usage=None):
+    """TenderAIError с фактически потраченными токенами на борту (если уже
+    были) — иначе провал вызова (например, JSON не распарсился обеими
+    попытками) списывает реальные деньги, а учёт каскада видит 0 токенов
+    и 0 ₽. Вызывающий код читает getattr(exc, "usage", None) и досчитывает
+    его в usage/usage_by_model перед тем как откатиться на fallback."""
+    error = TenderAIError(message)
+    if usage:
+        error.usage = dict(usage)
+    return error
+
+
 class _VisibleTextParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -819,7 +831,7 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
                         detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message")
                     except Exception:
                         detail = None
-                    raise TenderAIError(detail or "AI Gateway отклонил запрос.") from exc
+                    raise _ai_error(detail or "AI Gateway отклонил запрос.", total_usage) from exc
                 last_network_error = exc
             except (URLError, TimeoutError, ConnectionError, OSError, json.JSONDecodeError) as exc:
                 last_network_error = exc
@@ -827,17 +839,18 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
             if network_attempt < network_attempts:
                 time.sleep(1 + (network_attempt - 1) * 2)
         if response_data is None:
-            raise TenderAIError("AI Gateway не ответил после нескольких попыток. Попробуйте позже.") from last_network_error
+            raise _ai_error("AI Gateway не ответил после нескольких попыток. Попробуйте позже.", total_usage) from last_network_error
         usage = response_data.get("usage", {})
         total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
         total_usage["completion_tokens"] += usage.get("completion_tokens", 0) or 0
         try:
             content = response_data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise TenderAIError("AI Gateway не вернул результат анализа.") from exc
+            raise _ai_error("AI Gateway не вернул результат анализа.", total_usage) from exc
         try:
             return _json_from_model(content), total_usage
-        except TenderAIError:
+        except TenderAIError as exc:
+            exc.usage = dict(total_usage)
             if not attempt:
                 continue
             raise
