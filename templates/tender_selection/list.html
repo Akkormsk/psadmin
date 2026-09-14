@@ -65,6 +65,7 @@
           <strong>{{ tender.title|default:tender.object_info }}</strong>
           <small class="ts-tender__meta">
             <span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span>
+            {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠&nbsp;нет данных</span>{% endif %}
             {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠&nbsp;жалоба</span>{% endif %}
             № {{ tender.purchase_number }}
             · {% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}
@@ -141,6 +142,7 @@
   .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
   .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
   .ts-flag { color: #b8434e; font-weight: 700; font-size: 11px; }
+  .ts-flag--data { color: var(--warning-ink); }
   .ts-wordfilter { margin: 4px 0 10px; font-size: 13px; }
   .ts-wordfilter > summary { cursor: pointer; color: #4c5fd5; user-select: none; }
   .ts-wf-badge { color: #b26a00; font-size: 11px; font-weight: 700; }
