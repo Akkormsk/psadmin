@@ -342,27 +342,36 @@
         var docUrl = btn.dataset.docUrl;
         var docName = btn.dataset.docName || "Документ";
         title.textContent = docName;
-        body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
-        fallback.hidden = true;
         uploadInput.value = "";
         uploadStatus.textContent = "";
         modal.classList.add("is-open");
 
-        // 1) качаем файл прямо в браузере пользователя (у него сеть до ЕИС есть — ссылка
-        //    и так открывается) и сразу отдаём байты серверу на разбор, без сохранения на диск
-        (docUrl ? fetch(docUrl).then(function (r) {
-          if (!r.ok) throw new Error("http " + r.status);
-          return r.blob();
-        }) : Promise.reject(new Error("no url")))
-          .then(function (blob) { return uploadBlob(blob, docName); })
-          .then(showResult)
-          .catch(function () {
-            // 2) браузер не смог (например, ЕИС не отдаёт CORS-заголовки) — сервер сам всё
-            // равно не достучится (сеть с прод-IP до zakupki.gov.ru не открывается вовсе),
-            // ждать его смысла нет — сразу просим файл руками
-            body.innerHTML = '<p class="ts-sub">Браузер не смог скачать файл напрямую. Скачайте по ссылке выше и загрузите его сюда.</p>';
-            fallback.hidden = false;
-          });
+        if (!docUrl) {
+          body.innerHTML = '<p class="ts-sub">Ссылка на файл недоступна.</p>';
+          fallback.hidden = true;
+          return;
+        }
+
+        // ЕИС не отдаёт CORS-заголовки — прочитать байты через fetch() из браузера нельзя
+        // (проверено), а сервер до zakupki.gov.ru вообще не достучится. Поэтому сразу:
+        // 1) запускаем настоящее скачивание именно этого файла (обычная навигация, не
+        //    fetch — она и так работает), 2) сразу открываем диалог выбора файла — юзеру
+        //    остаётся только выбрать только что скачанный файл (первый/самый свежий).
+        var a = document.createElement("a");
+        a.href = docUrl;
+        a.download = docName;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+
+        var p = document.createElement("p");
+        p.className = "ts-sub";
+        p.textContent = "«" + docName + "» скачивается — выберите его в открывшемся диалоге (обычно первый/самый свежий файл).";
+        body.innerHTML = "";
+        body.appendChild(p);
+        fallback.hidden = false;
+        uploadInput.click();
       });
     });
 
