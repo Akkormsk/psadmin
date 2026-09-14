@@ -1657,6 +1657,11 @@ class TenderTests(TestCase):
         self.assertEqual(product.product_url, "https://www.oasiscatalog.com/item/1-000032048")
         self.assertTrue(product.is_active)
         self.assertEqual(product.raw_data, {"discount_group_id": None, "included_branding": None})
+        # Семья/оси теперь считаются построчно прямо в синхронизации, без
+        # отдельного rebuild_catalog_families() после — group_id есть в
+        # фикстуре, значит family_key строится из него.
+        self.assertEqual(product.family_key, "oasis:100032034")
+        self.assertEqual(product.variant_axes, {"colors": ["белый"]})
 
     def test_failed_oasis_sync_does_not_deactivate_previous_catalog(self):
         supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://api.oasiscatalog.com")

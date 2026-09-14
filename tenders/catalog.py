@@ -598,12 +598,15 @@ def _product_from_payload(supplier, raw, category_map, marker):
     attribute_text = " ".join(f"{_text(item.get('name'), 150)} {_text(item.get('value'), 300)}" for item in attributes)
     search_text = " ".join([name, full_name, _text(raw.get("description"), 3000), _text(raw.get("brand"), 200), *category_names, *materials, *colors, *branding, attribute_text])
     search_text = re.sub(r"\s+", " ", search_text.lower().replace("ё", "е")).strip()[:20_000]
-    return CatalogProduct(
+    article = _text(raw.get("article"), 120)
+    article_base = _text(raw.get("article_base"), 120)
+    group_id = _text(raw.get("group_id"), 120)
+    product = CatalogProduct(
         supplier=supplier,
         external_id=external_id,
-        article=_text(raw.get("article"), 120),
-        article_base=_text(raw.get("article_base"), 120),
-        group_id=_text(raw.get("group_id"), 120),
+        article=article,
+        article_base=article_base,
+        group_id=group_id,
         color_group_id=_text(raw.get("color_group_id"), 120),
         name=name or external_id,
         full_name=full_name,
@@ -637,6 +640,24 @@ def _product_from_payload(supplier, raw, category_map, marker):
             "included_branding": raw.get("included_branding"),
         },
     )
+    # Семья и оси варианта — прямо здесь, в потоковом проходе по странице API,
+    # а не отдельным проходом по всей таблице после записи (rebuild_catalog_families):
+    # для Oasis всё нужное для этого уже есть в самой строке, второй полный
+    # проход по ~37 тыс. товаров разом в память (см. историю падения
+    # 14.09.2026 в tenders/scheduler.py) был лишним. Формулы совпадают с
+    # оазис-веткой rebuild_catalog_families — держать в синхроне при правках.
+    product.family_key = f"oasis:{group_id or article_base or article or external_id}"
+    axes = {}
+    capacity = _capacity_mb(f"{product.name} {product.full_name} {product.size}")
+    if capacity is not None:
+        axes["capacity_mb"] = str(capacity)
+    label = _variant_size(product)
+    if label:
+        axes["size"] = label
+    if colors:
+        axes["colors"] = colors
+    product.variant_axes = axes
+    return product
 
 
 PRODUCT_UPDATE_FIELDS = [
@@ -646,6 +667,16 @@ PRODUCT_UPDATE_FIELDS = [
     "image_url", "product_url", "supply_terms", "warning", "defect", "search_text", "source_updated_at",
     "sync_marker", "is_active", "raw_data", "synced_at",
 ]
+
+# Oasis-only: family_key/variant_axes are computed inline per row in
+# _product_from_payload (streamed, no second full-table pass — see its
+# docstring comment). Gifts keeps PRODUCT_UPDATE_FIELDS as-is on purpose —
+# its rebuild_catalog_families("gifts") pass still needs the whole table at
+# once (article-prefix matching across rows), and if these two fields were
+# in the shared list, Gifts's own bulk_create would blank them on every
+# sync for the whole window until its trailing rebuild_catalog_families
+# call catches up — a regression this constant must not reintroduce.
+OASIS_PRODUCT_UPDATE_FIELDS = PRODUCT_UPDATE_FIELDS + ["family_key", "variant_axes"]
 
 
 def _sync_categories(client, supplier):
@@ -718,7 +749,7 @@ def sync_oasis_catalog(client=None):
             external_ids = [value.external_id for value in objects]
             existing = set(CatalogProduct.objects.filter(supplier=supplier, external_id__in=external_ids).values_list("external_id", flat=True))
             with transaction.atomic():
-                CatalogProduct.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=PRODUCT_UPDATE_FIELDS)
+                CatalogProduct.objects.bulk_create(objects, update_conflicts=True, unique_fields=["supplier", "external_id"], update_fields=OASIS_PRODUCT_UPDATE_FIELDS)
             received += len(objects)
             updated += len(existing)
             created += len(objects) - len(existing)
@@ -737,7 +768,10 @@ def sync_oasis_catalog(client=None):
         run.updated_count = updated
         run.deactivated_count = deactivated
         run.save(update_fields=["status", "finished_at", "received_count", "created_count", "updated_count", "deactivated_count"])
-        rebuild_catalog_families("oasis")
+        # Семьи/оси уже посчитаны построчно в _product_from_payload — второй
+        # полный проход по таблице (rebuild_catalog_families) больше не нужен
+        # здесь. Функция остаётся доступна как ручная команда для Gifts и
+        # для пересчёта задним числом, если формулы семей изменятся.
         return run
     except Exception as exc:
         now = timezone.now()
