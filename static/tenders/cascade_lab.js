@@ -281,7 +281,7 @@
       steps: {
         "1": {model: value("step_1_model"), cache: value("step_1_cache"), max_active_requirements: integer("step_1_max_requirements", 0)},
         "2": {model: value("step_2_model"), cache: value("step_2_cache"), min_phrases: integer("step_2_min_phrases", 12), max_phrases: integer("step_2_max_phrases", 24)},
-        "3": {sources: value("step_3_sources")},
+        "3": {sources: value("step_3_sources"), semantic: value("step_3_semantic")},
         "4": {model: value("step_4_model"), intensity: value("step_4_intensity"), cache: value("step_4_cache")},
         "5": {color_filter: value("step_5_color_filter"), stock_policy: value("step_5_stock_policy"), tolerance_percent: integer("step_5_tolerance_percent", 5), numeric_prefill: value("step_5_numeric_prefill")},
         "6": {model: value("step_6_model"), cache: value("step_6_cache"), first_batch: integer("step_6_first_batch", 25), ceiling: integer("step_6_ceiling", 75)},
@@ -300,7 +300,7 @@
     const map = {
       step_1_model: ["1", "model"], step_1_cache: ["1", "cache"], step_1_max_requirements: ["1", "max_active_requirements"],
       step_2_model: ["2", "model"], step_2_cache: ["2", "cache"], step_2_min_phrases: ["2", "min_phrases"], step_2_max_phrases: ["2", "max_phrases"],
-      step_3_sources: ["3", "sources"], step_4_model: ["4", "model"], step_4_intensity: ["4", "intensity"], step_4_cache: ["4", "cache"],
+      step_3_sources: ["3", "sources"], step_3_semantic: ["3", "semantic"], step_4_model: ["4", "model"], step_4_intensity: ["4", "intensity"], step_4_cache: ["4", "cache"],
       step_5_color_filter: ["5", "color_filter"], step_5_stock_policy: ["5", "stock_policy"], step_5_tolerance_percent: ["5", "tolerance_percent"], step_5_numeric_prefill: ["5", "numeric_prefill"],
       step_6_model: ["6", "model"], step_6_cache: ["6", "cache"], step_6_first_batch: ["6", "first_batch"], step_6_ceiling: ["6", "ceiling"],
       step_7_matrix_order: ["7", "matrix_order"], step_7_price_order: ["7", "price_order"], step_8_live_prices: ["8", "live_prices"],

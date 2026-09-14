@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -1090,6 +1091,63 @@ def rebuild_catalog_families(supplier_code=None):
     return {"products": len(products), "updated": len(changed), "families": len({p.family_key for p in products})}
 
 
+def rebuild_catalog_embeddings(supplier_code=None, *, batch_size=300, limit=None):
+    """Строит/обновляет смысловой индекс каталога (для гибридного поиска
+    шага 3 — только в лаборатории, см. её docstring). Ручной шаг, отдельный
+    от обычной синхронизации: эмбеддинг требует сетевых вызовов к шлюзу,
+    а sync и так не быстрый (см. tenders/scheduler.py).
+
+    Пропускает товары, у которых текст названия и модель эмбеддинга не
+    изменились с прошлого раза (сверка по хешу) — повтор ничего не платит.
+    `limit` — сколько товаров обработать за один вызов (для ручных пробных
+    запусков с ограниченным бюджетом); без него — весь недостающий остаток."""
+    from .gateway_budget import preflight
+    from .services import _embedding_vectors, _embedding_model
+
+    preflight()
+    queryset = CatalogProduct.objects.filter(is_active=True)
+    if supplier_code:
+        queryset = queryset.filter(supplier__code=supplier_code)
+    model = _embedding_model()
+
+    todo = []
+    total = skipped = 0
+    for product in queryset.only(
+        "id", "name", "full_name", "embedding_text_hash", "embedding_model",
+    ).iterator(chunk_size=2000):
+        # Всегда досматриваем весь каталог до конца — total/skipped должны
+        # быть честными, а не оборванными на месте, где хватило limit.
+        # limit ограничивает, сколько из найденного будет реально
+        # проиндексировано СЕЙЧАС (ниже), не то, сколько мы посчитаем.
+        total += 1
+        text = _text((product.full_name or product.name), 2000)
+        text_hash = hashlib.sha1(text.encode("utf-8")).hexdigest()
+        if product.embedding_text_hash == text_hash and product.embedding_model == model:
+            skipped += 1
+            continue
+        todo.append((product.pk, text, text_hash))
+
+    work = todo[:limit] if limit else todo
+    embedded = 0
+    for i in range(0, len(work), batch_size):
+        chunk = work[i:i + batch_size]
+        vectors = _embedding_vectors([text for _, text, _ in chunk], model=model)
+        now = timezone.now()
+        updates = [
+            CatalogProduct(
+                pk=pk, embedding=vector, embedding_model=model,
+                embedding_text_hash=text_hash, embedding_updated_at=now,
+            )
+            for (pk, _, text_hash), vector in zip(chunk, vectors)
+        ]
+        CatalogProduct.objects.bulk_update(
+            updates, ["embedding", "embedding_model", "embedding_text_hash", "embedding_updated_at"],
+            batch_size=batch_size,
+        )
+        embedded += len(chunk)
+    return {"total": total, "skipped": skipped, "embedded": embedded, "remaining": len(todo) - embedded}
+
+
 def _product_variants(product):
     if isinstance(product.raw_data, dict) and isinstance(product.raw_data.get("variants"), list):
         return [value for value in product.raw_data["variants"] if isinstance(value, dict)]
@@ -1203,6 +1261,101 @@ def _text_search_pool(supplier_code, phrases):
             product._name_hits = hits
             pool.append(product)
     return pool
+
+
+# Гибридное расширение пула по смыслу — ТОЛЬКО для лаборатории (см. её
+# docstring про ограничение памяти на проде). Кэш индекса в памяти процесса,
+# не в БД: держать в резиденте матрицу векторов всего каталога на 1‑ГБ
+# проде рядом с воркером сайта — то же самое, из-за чего падал синк Oasis
+# 14.09.2026, поэтому включать этот шаг в обычный автоматический подбор
+# нельзя без отдельного решения по хранению (например, pgvector).
+_semantic_cache: dict = {"at": 0.0, "ids": None, "suppliers": None, "texts": None, "matrix": None}
+_SEMANTIC_CACHE_SECONDS = 3600
+
+
+def _semantic_catalog_index(*, force=False):
+    """(ids, supplier_codes, texts, матрица нормированных векторов) в одном
+    порядке — только товары, у которых уже есть смысловой индекс
+    (rebuild_catalog_embeddings). None вместо матрицы, если индекса ещё нет
+    ни у одного товара."""
+    import numpy as np
+
+    now = time.monotonic()
+    if not force and _semantic_cache["matrix"] is not None and now - _semantic_cache["at"] < _SEMANTIC_CACHE_SECONDS:
+        return _semantic_cache["ids"], _semantic_cache["suppliers"], _semantic_cache["texts"], _semantic_cache["matrix"]
+
+    rows = list(
+        CatalogProduct.objects.filter(is_active=True)
+        .exclude(embedding=[])
+        .values_list("id", "supplier__code", "name", "full_name", "embedding")
+    )
+    if not rows:
+        ids, suppliers, texts, matrix = [], [], [], None
+    else:
+        ids = [row[0] for row in rows]
+        suppliers = [row[1] for row in rows]
+        texts = [(row[3] or row[2]) for row in rows]
+        matrix = np.array([row[4] for row in rows], dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        matrix /= norms
+    _semantic_cache.update(at=now, ids=ids, suppliers=suppliers, texts=texts, matrix=matrix)
+    return ids, suppliers, texts, matrix
+
+
+def _semantic_candidates(query_text, *, supplier_codes=None, top_k=40):
+    """Кандидаты по смыслу, а не по общим словам — то, чего лексический
+    поиск в принципе не найдёт (другое название той же вещи). Сходство
+    само по себе ничего не решает: без проверки ниже эмбеддинг иногда
+    тащит случайный мусор по созвучным брендам (см. docs — пример
+    «линейка»/«Liner»), поэтому каждый кандидат обязан разделить с запросом
+    хотя бы один корень слова — та же проверка, что уже отбирает
+    лексический пул (`_query_stems`/`_meaningful_tokens`), просто по-новому
+    применённая к более широкому списку кандидатов."""
+    query_text = _text(query_text, 300)
+    if not query_text:
+        return []
+    query_stems = set(_query_stems([query_text]))
+    if not query_stems:
+        return []
+    ids, suppliers, texts, matrix = _semantic_catalog_index()
+    if matrix is None:
+        return []
+    from .services import _embedding_model, _embedding_vectors
+
+    import numpy as np
+
+    vector = _embedding_vectors([query_text], model=_embedding_model())[0]
+    query_vector = np.array(vector, dtype=np.float32)
+    norm = np.linalg.norm(query_vector)
+    if norm:
+        query_vector /= norm
+    similarity = matrix @ query_vector
+    order = np.argsort(-similarity)
+    kept_ids = []
+    for idx in order:
+        if len(kept_ids) >= top_k:
+            break
+        if supplier_codes and suppliers[idx] not in supplier_codes:
+            continue
+        candidate_stems = {token[:6] for token in _meaningful_tokens(texts[idx])}
+        shared = candidate_stems & query_stems
+        if not shared:
+            continue
+        kept_ids.append((ids[idx], len(shared)))
+    if not kept_ids:
+        return []
+    hits_by_id = dict(kept_ids)
+    products = list(CatalogProduct.objects.select_related("supplier").filter(pk__in=hits_by_id))
+    # _score_pool_relevance (следующий шаг того же пула) отбрасывает всё без
+    # _name_hits, что не пересекается по корню уже с ФРАЗАМИ поиска — а не с
+    # именем позиции, по которому отбирали здесь. Проставляем ту же метку
+    # заранее, чтобы кандидат по смыслу не потерялся именно там, где он и
+    # должен быть полезен: когда со фразами общих слов нет, а с самим
+    # названием позиции — есть.
+    for product in products:
+        product._name_hits = hits_by_id[product.pk]
+    return products
 
 
 def _score_pool_relevance(pool, item_phrase, phrases):

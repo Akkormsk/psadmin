@@ -41,6 +41,7 @@ from .catalog import (
     _product_variants,
     _refresh_live_oasis_prices,
     _score_pool_relevance,
+    _semantic_candidates,
     _text,
     _text_search_pool,
     _variant_size,
@@ -641,6 +642,13 @@ class Cascade:
             self.sources["gifts"] = {"status": "success", "received": len(gifts)}
         else:
             self.sources["gifts"] = {"status": "disabled" if sources == "oasis" else "not_configured"}
+        if self.step_settings.get("3", {}).get("semantic") == "yes":
+            existing_keys = {(p.supplier_id, p.external_id) for p in pool}
+            allowed = {"oasis"} if sources == "oasis" else {"gifts"} if sources == "gifts" else None
+            semantic_hits = _semantic_candidates(self.item or self.line.get("name", ""), supplier_codes=allowed)
+            semantic_new = [p for p in semantic_hits if (p.supplier_id, p.external_id) not in existing_keys]
+            pool.extend(semantic_new)
+            self.diagnostics["semantic_added"] = len(semantic_new)
         pool = _score_pool_relevance(pool, self.item, phrases)
         for product in pool:
             if not hasattr(product, "_relevance"):

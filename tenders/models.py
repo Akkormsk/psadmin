@@ -295,6 +295,10 @@ class CatalogProduct(models.Model):
     sync_marker = models.CharField(max_length=36, blank=True, db_index=True, editable=False)
     is_active = models.BooleanField("Активен", default=True)
     raw_data = models.JSONField("Служебные данные", default=dict, blank=True)
+    embedding = models.JSONField("Смысловой индекс", default=list, blank=True)
+    embedding_model = models.CharField("Модель смыслового индекса", max_length=100, blank=True)
+    embedding_text_hash = models.CharField("Хеш текста индекса", max_length=64, blank=True)
+    embedding_updated_at = models.DateTimeField("Индекс обновлён", null=True, blank=True)
 
     class Meta:
         ordering = ["supplier", "name", "article"]

@@ -15,7 +15,7 @@ from .models import CatalogProduct
 STEP_DEFINITIONS = [
     {"step": 1, "method": "step_1_parse_tz", "title": "Разбор ТЗ", "input": "JSON-ТЗ", "output": "Критерии ТЗ"},
     {"step": 2, "method": "step_2_search_plan", "title": "Чистка названия", "input": "Исходное название", "output": "Чистое название и поисковые фразы"},
-    {"step": 3, "method": "step_3_search_by_name", "title": "Поиск по каталогам", "input": "Поисковые фразы", "output": "Пул товаров"},
+    {"step": 3, "method": "step_3_search_by_name", "title": "Поиск по каталогам", "input": "Поисковые фразы (+ смысловой индекс, если включён)", "output": "Пул товаров"},
     {"step": 4, "method": "step_4_name_filter", "title": "Отсев названий", "input": "Пул товаров", "output": "Подходящие типы товаров"},
     {"step": 5, "method": "step_5_hard_gates_and_collapse", "title": "Фильтры, варианты и проверка кодом", "input": "Товары каталога", "output": "Карточки семей + матрица, закрытая кодом где возможно"},
     {"step": 6, "method": "step_6_agent_matrix", "title": "Матрица ТЗ — агент на остатке", "input": "Карточки семей + незакрытые кодом строки матрицы", "output": "Полная матрица да / нет / НЗ"},
