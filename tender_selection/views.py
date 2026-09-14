@@ -161,16 +161,17 @@ def doc_preview(request, pk, idx):
         return JsonResponse({"name": name, "kind": cached.kind, "html": cached.html, "error": cached.error})
 
     try:
-        # публичная ссылка — быстро (15с), она стала часто не отвечать; при отказе
-        # проваливаемся на официальный канал ЕИС по номеру закупки (getDocsIP)
-        data = fetch_document(url, timeout=15)
-    except DocumentError as direct_exc:
+        # публичная ссылка ЕИС стала стабильно не отвечать (проверено на проде) — основной
+        # путь теперь официальный канал по токену; публичная ссылка остаётся подстраховкой
+        # на случай, если у ЕИС-токена кончится лимит или сервис ляжет
+        data = fetch_document_via_eis(tender.purchase_number, name)
+    except EisDocsError as eis_exc:
         try:
-            data = fetch_document_via_eis(tender.purchase_number, name)
-        except EisDocsError as eis_exc:
+            data = fetch_document(url, timeout=15)
+        except DocumentError as direct_exc:
             # сетевые сбои не кэшируем — на проде повтор может пройти
             return JsonResponse({"name": name, "kind": "", "html": "",
-                                 "error": f"{direct_exc} Резервный канал ЕИС: {eis_exc}"})
+                                 "error": f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}"})
 
     result = extract_preview(data, name)
     DocumentPreview.objects.update_or_create(url=url, defaults={

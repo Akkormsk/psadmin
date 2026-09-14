@@ -235,13 +235,13 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document", return_value=self._docx_bytes()) as f:
+        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=self._docx_bytes()) as f:
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Описание объекта закупки", resp.json()["html"])
         f.assert_called_once()
         # second call served from cache — no fetch
-        with mock.patch("tender_selection.views.fetch_document") as f2:
+        with mock.patch("tender_selection.views.fetch_document_via_eis") as f2:
             self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         f2.assert_not_called()
 
@@ -254,43 +254,43 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("ЕИС недоступен")), \
-             mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("токен не задан")):
+        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("токен не задан")), \
+             mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("ЕИС недоступен")):
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
-        self.assertIn("ЕИС недоступен", resp.json()["error"])
         self.assertIn("токен не задан", resp.json()["error"])
+        self.assertIn("ЕИС недоступен", resp.json()["error"])
         from .models import DocumentPreview
         self.assertFalse(DocumentPreview.objects.exists())  # сетевой сбой не кэшируется
 
-    def test_view_falls_back_to_eis_when_direct_link_fails(self):
-        from .documents import DocumentError
+    def test_view_falls_back_to_direct_link_when_eis_fails(self):
+        from .eis_docs import EisDocsError
         User = get_user_model()
         self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
         tender = FoundTender.objects.create(
             purchase_number="123", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("недоступен")) as direct, \
-             mock.patch("tender_selection.views.fetch_document_via_eis", return_value=self._docx_bytes()) as via_eis:
+        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("лимит ЕИС исчерпан")) as via_eis, \
+             mock.patch("tender_selection.views.fetch_document", return_value=self._docx_bytes()) as direct:
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
-        direct.assert_called_once()
         via_eis.assert_called_once_with("123", mock.ANY)
+        direct.assert_called_once()
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Описание объекта закупки", resp.json()["html"])
         from .models import DocumentPreview
         self.assertTrue(DocumentPreview.objects.exists())  # успешный резервный путь кэшируется
 
-    def test_view_uses_direct_link_without_touching_eis_when_it_works(self):
+    def test_view_uses_eis_without_touching_direct_link_when_it_works(self):
         User = get_user_model()
         self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
         tender = FoundTender.objects.create(
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document", return_value=self._docx_bytes()), \
-             mock.patch("tender_selection.views.fetch_document_via_eis") as via_eis:
+        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=self._docx_bytes()), \
+             mock.patch("tender_selection.views.fetch_document") as direct:
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
-        via_eis.assert_not_called()
+        direct.assert_not_called()
         self.assertIn("Описание объекта закупки", resp.json()["html"])
 
 
