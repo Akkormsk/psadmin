@@ -155,7 +155,7 @@
           <a href="{{ doc.url }}" target="_blank" rel="noopener">{{ doc.name }}</a>
           <span class="ts-sub">{% if doc.kind %}{{ doc.kind }}{% endif %}{% if doc.kind and doc.size_kb %} · {% endif %}{% if doc.size_kb %}{{ doc.size_kb }} КБ{% endif %}</span>
         </div>
-        <button type="button" class="button-secondary ts-doc-btn" data-doc-preview="{{ forloop.counter0 }}" data-doc-name="{{ doc.name }}">Просмотр</button>
+        <button type="button" class="button-secondary ts-doc-btn" data-doc-preview="{{ forloop.counter0 }}" data-doc-name="{{ doc.name }}" data-doc-url="{{ doc.url }}">Просмотр</button>
       </li>
       {% endfor %}
     </ul>
@@ -327,21 +327,46 @@
       }
     }
 
+    function uploadBlob(blobOrFile, filename) {
+      var body2 = new FormData();
+      body2.append("csrfmiddlewaretoken", csrfToken);
+      body2.append("file", blobOrFile, filename);
+      return fetch("{% url 'tender_selection:doc_upload' tender.pk 999999 %}".replace("999999", currentIdx), {
+        method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body2,
+      }).then(function (r) { return r.json(); });
+    }
+
+    function viaServer() {
+      return fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
+        .then(function (r) { return r.json(); });
+    }
+
     document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         currentIdx = btn.dataset.docPreview;
-        title.textContent = btn.dataset.docName || "Документ";
+        var docUrl = btn.dataset.docUrl;
+        var docName = btn.dataset.docName || "Документ";
+        title.textContent = docName;
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
         fallback.hidden = true;
         uploadInput.value = "";
         uploadStatus.textContent = "";
         modal.classList.add("is-open");
-        fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
-          .then(function (r) { return r.json(); })
+
+        // 1) качаем файл прямо в браузере пользователя (у него сеть до ЕИС есть — ссылка
+        //    и так открывается) и сразу отдаём байты серверу на разбор, без сохранения на диск
+        (docUrl ? fetch(docUrl).then(function (r) {
+          if (!r.ok) throw new Error("http " + r.status);
+          return r.blob();
+        }) : Promise.reject(new Error("no url")))
+          .then(function (blob) { return uploadBlob(blob, docName); })
           .then(showResult)
           .catch(function () {
-            body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
-            fallback.hidden = false;
+            // 2) браузер не смог (например, ЕИС не отдаёт CORS-заголовки) — пробуем через сервер
+            viaServer().then(showResult).catch(function () {
+              body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
+              fallback.hidden = false;
+            });
           });
       });
     });
@@ -350,13 +375,7 @@
       var file = uploadInput.files[0];
       if (!file || currentIdx === null) return;
       uploadStatus.textContent = "Загружаю и разбираю…";
-      var body2 = new FormData();
-      body2.append("csrfmiddlewaretoken", csrfToken);
-      body2.append("file", file);
-      fetch("{% url 'tender_selection:doc_upload' tender.pk 999999 %}".replace("999999", currentIdx), {
-        method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body2,
-      })
-        .then(function (r) { return r.json(); })
+      uploadBlob(file, file.name)
         .then(function (data) {
           uploadStatus.textContent = "";
           showResult(data);
