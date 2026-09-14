@@ -321,6 +321,48 @@ class DocumentPreviewTests(TestCase):
         resp = self.client.get(reverse("tender_selection:eis_diag"))
         self.assertEqual(resp.status_code, 403)
 
+    def test_doc_upload_parses_and_caches(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        upload = SimpleUploadedFile("ООЗ.docx", self._docx_bytes())
+        resp = self.client.post(reverse("tender_selection:doc_upload", args=[tender.pk, 0]), {"file": upload})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Описание объекта закупки", resp.json()["html"])
+        from .models import DocumentPreview
+        self.assertTrue(DocumentPreview.objects.exists())
+
+    def test_doc_upload_requires_file(self):
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        resp = self.client.post(reverse("tender_selection:doc_upload", args=[tender.pk, 0]))
+        self.assertIn("Файл не выбран", resp.json()["error"])
+
+    def test_doc_upload_requires_superuser(self):
+        User = get_user_model()
+        self.client.force_login(User.objects.create_user("u", "u@e.ru", "p"))
+        resp = self.client.post(reverse("tender_selection:doc_upload", args=[1, 0]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_doc_upload_rejects_get(self):
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        resp = self.client.get(reverse("tender_selection:doc_upload", args=[tender.pk, 0]))
+        self.assertEqual(resp.status_code, 405)
+
 
 class EisDocsTests(TestCase):
     """Официальный резервный канал ЕИС (getDocsIP) — без сети, всё замокано."""

@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .documents import DocumentError, extract_preview, fetch_document
+from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .filtering import match_title, parse_terms
 from .models import DocumentPreview, FilterSettings, FoundTender, Organization, PullRun
@@ -174,6 +174,36 @@ def doc_preview(request, pk, idx):
                                  "error": f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}"})
 
     result = extract_preview(data, name)
+    DocumentPreview.objects.update_or_create(url=url, defaults={
+        "filename": name, "kind": result.get("kind", ""),
+        "html": result.get("html", ""), "error": result.get("error", ""),
+    })
+    return JsonResponse({"name": name, "kind": result.get("kind", ""),
+                         "html": result.get("html", ""), "error": result.get("error", "")})
+
+
+@superuser_required
+@require_POST
+def doc_upload(request, pk, idx):
+    """Ручной запасной путь: сервер не может сам скачать файл с ЕИС (весь домен
+    zakupki.gov.ru не открывается с прод-IP — подтверждено диагностикой), а в браузере
+    у пользователя открывается и скачивается нормально. Он скачивает файл сам и
+    загружает сюда — дальше тот же разбор (extract_preview), что и при автоскачивании."""
+    tender = get_object_or_404(FoundTender, pk=pk)
+    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    docs = (card or {}).get("documents", [])
+    if not 0 <= idx < len(docs):
+        return JsonResponse({"error": "Документ не найден."}, status=404)
+    doc = docs[idx]
+    url, name = doc.get("url", ""), doc.get("name", "")
+
+    uploaded = request.FILES.get("file")
+    if not uploaded:
+        return JsonResponse({"name": name, "kind": "", "html": "", "error": "Файл не выбран."})
+    if uploaded.size > MAX_BYTES:
+        return JsonResponse({"name": name, "kind": "", "html": "", "error": "Файл слишком большой для предпросмотра."})
+
+    result = extract_preview(uploaded.read(), name)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),

@@ -217,8 +217,14 @@
       <button type="button" class="modal-close" id="ts-doc-close" aria-label="Закрыть">&times;</button>
     </div>
     <div id="ts-doc-body" class="ts-doc-body"></div>
+    <div class="ts-doc-fallback" id="ts-doc-fallback" hidden>
+      <p class="ts-sub">Сервер не может сам скачать файл с портала ЕИС. В браузере ссылка выше открывается — скачайте файл и загрузите его сюда:</p>
+      <input type="file" id="ts-doc-upload-input" accept=".docx,.xlsx,.pdf,.doc,.zip">
+      <p class="ts-doc-upload-status ts-sub" id="ts-doc-upload-status"></p>
+    </div>
   </div>
 </div>
+<form id="ts-csrf-form" hidden>{% csrf_token %}</form>
 
 <style>
   .ts-detail__head { min-width: 0; flex: 1 1 auto; }
@@ -252,6 +258,8 @@
   .ts-doc-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
   .ts-doc-table td { border: 1px solid #e0e4ea; padding: 4px 8px; vertical-align: top; }
   .ts-doc-loading { color: #6b7280; }
+  .ts-doc-fallback { margin-top: 14px; padding-top: 14px; border-top: 1px solid #e0e4ea; }
+  .ts-doc-upload-status { margin-top: 6px; }
   .ts-extras { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
   .ts-extras li { border-left: 2px solid #e1e5ea; padding-left: 12px; }
   .ts-extra-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-weight: 600; font-size: 13px; }
@@ -292,28 +300,68 @@
     var modal = document.getElementById("ts-doc-modal");
     var title = document.getElementById("ts-doc-title");
     var body = document.getElementById("ts-doc-body");
-    function close() { modal.classList.remove("is-open"); }
+    var fallback = document.getElementById("ts-doc-fallback");
+    var uploadInput = document.getElementById("ts-doc-upload-input");
+    var uploadStatus = document.getElementById("ts-doc-upload-status");
+    var csrfToken = document.querySelector("#ts-csrf-form [name=csrfmiddlewaretoken]").value;
+    var currentIdx = null;
+
+    function close() {
+      modal.classList.remove("is-open");
+      fallback.hidden = true;
+      uploadInput.value = "";
+      uploadStatus.textContent = "";
+    }
     document.getElementById("ts-doc-close").addEventListener("click", close);
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
 
+    function showResult(data) {
+      title.textContent = data.name || "Документ";
+      if (data.error) {
+        body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
+        fallback.hidden = false;
+      } else {
+        body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
+        fallback.hidden = true;
+      }
+    }
+
     document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        currentIdx = btn.dataset.docPreview;
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
+        fallback.hidden = true;
+        uploadInput.value = "";
+        uploadStatus.textContent = "";
         modal.classList.add("is-open");
-        fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", btn.dataset.docPreview))
+        fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
           .then(function (r) { return r.json(); })
-          .then(function (data) {
-            title.textContent = data.name || "Документ";
-            if (data.error) {
-              body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
-            } else {
-              body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
-            }
-          })
-          .catch(function () { body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>'; });
+          .then(showResult)
+          .catch(function () {
+            body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
+            fallback.hidden = false;
+          });
       });
+    });
+
+    uploadInput.addEventListener("change", function () {
+      var file = uploadInput.files[0];
+      if (!file || currentIdx === null) return;
+      uploadStatus.textContent = "Загружаю и разбираю…";
+      var body2 = new FormData();
+      body2.append("csrfmiddlewaretoken", csrfToken);
+      body2.append("file", file);
+      fetch("{% url 'tender_selection:doc_upload' tender.pk 999999 %}".replace("999999", currentIdx), {
+        method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body2,
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          uploadStatus.textContent = "";
+          showResult(data);
+        })
+        .catch(function () { uploadStatus.textContent = "Не удалось загрузить файл."; });
     });
   })();
 </script>
