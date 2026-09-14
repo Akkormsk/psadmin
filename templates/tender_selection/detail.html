@@ -152,10 +152,10 @@
       {% for doc in card.documents %}
       <li>
         <div class="ts-doc-line">
-          <a href="{{ doc.url }}" target="_blank" rel="noopener">{{ doc.name }}</a>
+          <button type="button" class="ts-doc-link" data-doc-preview="{{ forloop.counter0 }}" data-doc-name="{{ doc.name }}">{{ doc.name }}</button>
           <span class="ts-sub">{% if doc.kind %}{{ doc.kind }}{% endif %}{% if doc.kind and doc.size_kb %} · {% endif %}{% if doc.size_kb %}{{ doc.size_kb }} КБ{% endif %}</span>
         </div>
-        <button type="button" class="button-secondary ts-doc-btn" data-doc-preview="{{ forloop.counter0 }}" data-doc-name="{{ doc.name }}" data-doc-url="{{ doc.url }}">Просмотр</button>
+        <a class="button-secondary ts-doc-btn" href="{{ doc.url }}" target="_blank" rel="noopener">Скачать</a>
       </li>
       {% endfor %}
     </ul>
@@ -250,7 +250,12 @@
   .ts-docs { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
   .ts-docs li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
   .ts-doc-line { min-width: 0; }
+  .ts-doc-link { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 14px;
+                 color: #3366cc; text-decoration: underline; cursor: pointer; text-align: left; }
+  .ts-doc-link:hover { color: #1a4fb0; }
   .ts-doc-btn { font-size: 12px; padding: 4px 10px; flex: 0 0 auto; }
+  .ts-zip-entries { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+  .ts-zip-entries .ts-doc-link { font-size: 13px; }
   #ts-doc-modal .modal { width: min(920px, calc(100vw - 40px)); max-width: none; max-height: calc(100vh - 60px); overflow: auto; }
   .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
   .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
@@ -316,14 +321,39 @@
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
 
+    var zipEntryUrlTpl = "{% url 'tender_selection:doc_zip_entry' tender.pk 999999 'ZZZPATHZZZ' %}";
+
+    function loadZipEntry(path) {
+      body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
+      var url = zipEntryUrlTpl.replace("999999", currentIdx)
+        .replace("ZZZPATHZZZ", path.split("/").map(encodeURIComponent).join("/"));
+      fetch(url).then(function (r) { return r.json(); }).then(showResult)
+        .catch(function () { body.innerHTML = '<p class="ts-sub">Не удалось открыть файл из архива.</p>'; });
+    }
+
     function showResult(data) {
       title.textContent = data.name || "Документ";
       if (data.error) {
         body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
         fallback.hidden = false;
-      } else {
-        body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
-        fallback.hidden = true;
+        return;
+      }
+      body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
+      fallback.hidden = true;
+      if (data.zip_entries && data.zip_entries.length) {
+        var list = document.createElement("ul");
+        list.className = "ts-zip-entries";
+        data.zip_entries.forEach(function (path) {
+          var li = document.createElement("li");
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "ts-doc-link";
+          btn.textContent = path;
+          btn.addEventListener("click", function () { loadZipEntry(path); });
+          li.appendChild(btn);
+          list.appendChild(li);
+        });
+        body.appendChild(list);
       }
     }
 

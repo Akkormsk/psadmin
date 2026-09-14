@@ -223,6 +223,43 @@ class DocumentPreviewTests(TestCase):
         r = extract_preview(b"random bytes", "notes.txt")
         self.assertIn("error", r)
 
+    def _zip_with(self, files: dict) -> bytes:
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name, data in files.items():
+                zf.writestr(name, data)
+        return buf.getvalue()
+
+    def test_extract_zip_with_multiple_files_lists_clickable_entries(self):
+        from .documents import extract_preview
+        archive = self._zip_with({
+            "Пр1.docx": self._docx_bytes(),
+            "Пр2.xlsx": self._xlsx_bytes(),
+            "картинка.jpg": b"not-really-an-image",
+        })
+        r = extract_preview(archive, "bundle.zip")
+        self.assertEqual(r["kind"], "zip")
+        self.assertIn("Пр1.docx", r["zip_entries"])
+        self.assertIn("Пр2.xlsx", r["zip_entries"])
+        self.assertNotIn("картинка.jpg", r["zip_entries"])
+
+    def test_extract_zip_entry_returns_bytes(self):
+        from .documents import extract_zip_entry
+        archive = self._zip_with({"inner.docx": self._docx_bytes()})
+        data = extract_zip_entry(archive, "inner.docx")
+        self.assertEqual(data, self._docx_bytes())
+
+    def test_extract_zip_entry_missing_returns_none(self):
+        from .documents import extract_zip_entry
+        archive = self._zip_with({"inner.docx": self._docx_bytes()})
+        self.assertIsNone(extract_zip_entry(archive, "absent.docx"))
+
+    def test_extract_zip_entry_bad_archive_returns_none(self):
+        from .documents import extract_zip_entry
+        self.assertIsNone(extract_zip_entry(b"not a zip", "inner.docx"))
+
     def test_fetch_document_blocks_foreign_url(self):
         from .documents import DocumentError, fetch_document
         with self.assertRaises(DocumentError):
@@ -292,6 +329,31 @@ class DocumentPreviewTests(TestCase):
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         direct.assert_not_called()
         self.assertIn("Описание объекта закупки", resp.json()["html"])
+
+    def test_doc_zip_entry_returns_inner_file(self):
+        archive = self._zip_with({"Пр1.docx": self._docx_bytes(), "Пр2.xlsx": self._xlsx_bytes()})
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=archive):
+            resp = self.client.get(reverse("tender_selection:doc_zip_entry", args=[tender.pk, 0, "Пр1.docx"]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Описание объекта закупки", resp.json()["html"])
+
+    def test_doc_zip_entry_missing_file_reports_error(self):
+        archive = self._zip_with({"Пр1.docx": self._docx_bytes()})
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=archive):
+            resp = self.client.get(reverse("tender_selection:doc_zip_entry", args=[tender.pk, 0, "absent.docx"]))
+        self.assertIn("не найден", resp.json()["error"])
 
     def test_eis_diag_reports_probe_results(self):
         import socket as socket_mod

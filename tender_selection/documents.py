@@ -110,6 +110,15 @@ def _pdf_html(data: bytes) -> str:
     return "\n".join(parts) or "<p class='ts-sub'>В PDF нет извлекаемого текста (возможно, скан).</p>"
 
 
+def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
+    """Достаём один файл из архива по имени (провал внутрь многофайлового zip)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_data)) as zf:
+            return zf.read(path)
+    except (zipfile.BadZipFile, KeyError):
+        return None
+
+
 def extract_preview(data: bytes, filename: str) -> dict:
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
@@ -124,8 +133,11 @@ def extract_preview(data: bytes, filename: str) -> dict:
                 if len(office) == 1:
                     return extract_preview(zf.read(office[0]), office[0])
                 if names:
+                    clickable = {n for n in office}
+                    clickable |= {n for n in names if n.lower().endswith(".zip")}
                     listing = "".join(f"<li>{escape(n)}</li>" for n in names[:50])
-                    return {"kind": "zip", "html": f"<p>Архив, файлы внутри:</p><ul>{listing}</ul>"}
+                    return {"kind": "zip", "html": f"<p>Архив, файлы внутри:</p><ul>{listing}</ul>",
+                            "zip_entries": [n for n in names if n in clickable]}
         except zipfile.BadZipFile:
             pass
 

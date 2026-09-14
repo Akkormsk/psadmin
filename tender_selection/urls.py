@@ -12,6 +12,7 @@ urlpatterns = [
     path("<int:pk>/", views.tender_detail, name="detail"),
     path("<int:pk>/doc/<int:idx>/", views.doc_preview, name="doc_preview"),
     path("<int:pk>/doc/<int:idx>/upload/", views.doc_upload, name="doc_upload"),
+    path("<int:pk>/doc/<int:idx>/zip/<path:entry>/", views.doc_zip_entry, name="doc_zip_entry"),
     path("diag/eis/", views.eis_diag, name="eis_diag"),
     path("<int:pk>/review/", views.set_review, name="review"),
     path("<int:pk>/push/", views.push_estimate, name="push"),

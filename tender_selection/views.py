@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
+from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .filtering import match_title, parse_terms
 from .models import DocumentPreview, FilterSettings, FoundTender, Organization, PullRun
@@ -146,70 +146,106 @@ def tender_detail(request, pk):
     })
 
 
-@superuser_required
-def doc_preview(request, pk, idx):
-    tender = get_object_or_404(FoundTender, pk=pk)
+def _doc_by_idx(tender, idx):
+    """(doc-словарь | None, JsonResponse-ошибка | None)."""
     card = parse_notification(tender.notification_raw) if tender.notification_raw else None
     docs = (card or {}).get("documents", [])
     if not 0 <= idx < len(docs):
-        return JsonResponse({"error": "Документ не найден."}, status=404)
-    doc = docs[idx]
+        return None, JsonResponse({"error": "Документ не найден."}, status=404)
+    return docs[idx], None
+
+
+def _fetch_doc_bytes(tender, url, name):
+    """Официальный канал ЕИС первым (сеть с сервера теперь есть), прямая ссылка —
+    подстраховка на случай проблем с токеном/лимитом. Общее для просмотра и захода
+    внутрь архива — оба раза нужен весь файл заново, кэшируем только итог разбора."""
+    try:
+        return fetch_document_via_eis(tender.purchase_number, name)
+    except EisDocsError as eis_exc:
+        try:
+            return fetch_document(url, timeout=15)
+        except DocumentError as direct_exc:
+            raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
+
+
+def _result_json(name, result):
+    return JsonResponse({"name": name, "kind": result.get("kind", ""),
+                         "html": result.get("html", ""), "error": result.get("error", ""),
+                         "zip_entries": result.get("zip_entries", [])})
+
+
+@superuser_required
+def doc_preview(request, pk, idx):
+    tender = get_object_or_404(FoundTender, pk=pk)
+    doc, err = _doc_by_idx(tender, idx)
+    if err:
+        return err
     url, name = doc.get("url", ""), doc.get("name", "")
 
     cached = DocumentPreview.objects.filter(url=url).first()
     if cached and request.GET.get("refresh") != "1":
-        return JsonResponse({"name": name, "kind": cached.kind, "html": cached.html, "error": cached.error})
+        return _result_json(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
 
     try:
-        # публичная ссылка ЕИС стала стабильно не отвечать (проверено на проде) — основной
-        # путь теперь официальный канал по токену; публичная ссылка остаётся подстраховкой
-        # на случай, если у ЕИС-токена кончится лимит или сервис ляжет
-        data = fetch_document_via_eis(tender.purchase_number, name)
-    except EisDocsError as eis_exc:
-        try:
-            data = fetch_document(url, timeout=15)
-        except DocumentError as direct_exc:
-            # сетевые сбои не кэшируем — на проде повтор может пройти
-            return JsonResponse({"name": name, "kind": "", "html": "",
-                                 "error": f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}"})
+        data = _fetch_doc_bytes(tender, url, name)
+    except DocumentError as exc:
+        # сетевые сбои не кэшируем — на проде повтор может пройти
+        return _result_json(name, {"error": str(exc)})
 
     result = extract_preview(data, name)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),
     })
-    return JsonResponse({"name": name, "kind": result.get("kind", ""),
-                         "html": result.get("html", ""), "error": result.get("error", "")})
+    return _result_json(name, result)
 
 
 @superuser_required
 @require_POST
 def doc_upload(request, pk, idx):
-    """Ручной запасной путь: сервер не может сам скачать файл с ЕИС (весь домен
-    zakupki.gov.ru не открывается с прод-IP — подтверждено диагностикой), а в браузере
-    у пользователя открывается и скачивается нормально. Он скачивает файл сам и
-    загружает сюда — дальше тот же разбор (extract_preview), что и при автоскачивании."""
+    """Ручной запасной путь: если у сервера вдруг снова не будет сети до ЕИС —
+    пользователь скачивает файл сам и загружает сюда, дальше тот же разбор
+    (extract_preview), что и при автоскачивании."""
     tender = get_object_or_404(FoundTender, pk=pk)
-    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
-    docs = (card or {}).get("documents", [])
-    if not 0 <= idx < len(docs):
-        return JsonResponse({"error": "Документ не найден."}, status=404)
-    doc = docs[idx]
+    doc, err = _doc_by_idx(tender, idx)
+    if err:
+        return err
     url, name = doc.get("url", ""), doc.get("name", "")
 
     uploaded = request.FILES.get("file")
     if not uploaded:
-        return JsonResponse({"name": name, "kind": "", "html": "", "error": "Файл не выбран."})
+        return _result_json(name, {"error": "Файл не выбран."})
     if uploaded.size > MAX_BYTES:
-        return JsonResponse({"name": name, "kind": "", "html": "", "error": "Файл слишком большой для предпросмотра."})
+        return _result_json(name, {"error": "Файл слишком большой для предпросмотра."})
 
     result = extract_preview(uploaded.read(), name)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),
     })
-    return JsonResponse({"name": name, "kind": result.get("kind", ""),
-                         "html": result.get("html", ""), "error": result.get("error", "")})
+    return _result_json(name, result)
+
+
+@superuser_required
+def doc_zip_entry(request, pk, idx, entry):
+    """Провал внутрь многофайлового архива: качаем документ заново (файл-то один
+    и тот же — кэш предпросмотра держит только итог разбора КОНКРЕТНОГО вложенного
+    файла, не сырые байты архива) и достаём из него нужный вложенный файл."""
+    tender = get_object_or_404(FoundTender, pk=pk)
+    doc, err = _doc_by_idx(tender, idx)
+    if err:
+        return err
+    url, name = doc.get("url", ""), doc.get("name", "")
+
+    try:
+        data = _fetch_doc_bytes(tender, url, name)
+    except DocumentError as exc:
+        return _result_json(entry, {"error": str(exc)})
+
+    inner = extract_zip_entry(data, entry)
+    if inner is None:
+        return _result_json(entry, {"error": "Файл не найден в архиве."})
+    return _result_json(entry, extract_preview(inner, entry))
 
 
 @superuser_required
