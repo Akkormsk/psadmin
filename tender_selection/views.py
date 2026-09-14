@@ -250,13 +250,31 @@ def eis_diag(request):
             results.append({"probe": label, "ok": False, "ms": round((time.monotonic() - t0) * 1000),
                              "error": f"{type(exc).__name__}: {exc}"})
 
+    # свой внешний IP — чтобы проверить снаружи (по базам geo/ASN), где он реально числится,
+    # независимо от того, что написано в личном кабинете Timeweb
+    my_ip = None
+    try:
+        req = _Req("https://api.ipify.org?format=json")
+        with _urlopen(req, timeout=8) as resp:
+            import json as _json
+            my_ip = _json.loads(resp.read().decode("utf-8")).get("ip")
+        results.append({"probe": "свой внешний IP", "ok": True, "ms": 0, "note": my_ip})
+    except Exception as exc:
+        results.append({"probe": "свой внешний IP", "ok": False, "ms": 0, "error": f"{type(exc).__name__}: {exc}"})
+
     # контроль: то, что точно работает (автосбор дёргает это же каждые 30 мин)
     probe_tcp("TCP v2test.gosplan.info (контроль, точно работает)", "v2test.gosplan.info")
     probe_tcp("TCP zakupki.gov.ru", "zakupki.gov.ru")
     probe_tcp("TCP int44.zakupki.gov.ru", "int44.zakupki.gov.ru")
     probe_http("GET https://zakupki.gov.ru/ (главная, не файл)", "https://zakupki.gov.ru/")
 
-    return JsonResponse({"results": results})
+    # масштаб блокировки: только ЕИС или весь рунет с этого сервера?
+    probe_tcp("TCP www.gosuslugi.ru (другой gov.ru)", "www.gosuslugi.ru")
+    probe_tcp("TCP www.nalog.gov.ru (другой gov.ru)", "www.nalog.gov.ru")
+    probe_tcp("TCP www.cbr.ru (ЦБ РФ, не gov.ru)", "www.cbr.ru")
+    probe_tcp("TCP ya.ru (обычный рунет, контроль)", "ya.ru")
+
+    return JsonResponse({"results": results, "my_ip": my_ip})
 
 
 @superuser_required

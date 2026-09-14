@@ -310,7 +310,7 @@ class DocumentPreviewTests(TestCase):
             resp = self.client.get(reverse("tender_selection:eis_diag"))
         self.assertEqual(resp.status_code, 200)
         results = resp.json()["results"]
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 9)
         by_probe = {r["probe"]: r for r in results}
         self.assertTrue(any("gosplan" in k and v["ok"] for k, v in by_probe.items()))
         self.assertTrue(any("zakupki" in k and not v["ok"] for k, v in by_probe.items()))
