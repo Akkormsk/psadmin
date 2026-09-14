@@ -997,7 +997,7 @@ h1 {
 .summary-cost__metric { display:grid; gap:3px; text-align:right; }
 .summary-cost__metric small { color:var(--ink-3); font-size:12px; font-weight:400; }
 .summary-cost__metric strong { white-space:nowrap; }
-.summary-head, .summary-row { display:grid; grid-template-columns:1.35fr 1fr 1fr 1fr; gap:12px; align-items:center; padding:11px 14px; border-bottom:1px solid var(--border); }
+.summary-head, .summary-row { display:grid; grid-template-columns:1.2fr 1fr 1fr 1fr 1fr; gap:12px; align-items:center; padding:11px 14px; border-bottom:1px solid var(--border); }
 .summary-head { color:var(--ink-3); font-size:13px; font-weight:700; text-transform:uppercase; }
 .summary-head span:not(:first-child) { text-align:right; }
 .summary-row span:not(:first-child), .summary-row strong { text-align:right; white-space:nowrap; }
@@ -1665,6 +1665,7 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
   .summary-row span:first-child { font-weight:700; }
   .summary-row span:nth-child(3)::before { content:'Маржа: '; color:var(--ink-3); }
   .summary-row span:nth-child(4)::before { content:'За ед.: '; color:var(--ink-3); }
+  .summary-row span:nth-child(5)::before { content:'С НДС: '; color:var(--ink-3); }
   .summary-row--standard { background:var(--tint-positive); }
   .tender-meta { grid-template-columns:1fr; }
   .tender-meta__name { grid-column:auto; }

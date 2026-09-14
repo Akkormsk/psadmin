@@ -96,6 +96,7 @@ class CalculatorSettings(models.Model):
     regular_discount = models.DecimalField("Скидка постоянника, %", max_digits=5, decimal_places=2, default=Decimal("10.00"))
     partner_discount = models.DecimalField("Скидка контрагента, %", max_digits=5, decimal_places=2, default=Decimal("15.00"))
     urgency_multiplier = models.DecimalField("Коэффициент без очереди", max_digits=7, decimal_places=3, default=Decimal("1.500"))
+    vat_rate = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
 
     class Meta:
         verbose_name = "Настройки листового калькулятора"

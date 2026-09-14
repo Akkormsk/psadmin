@@ -64,7 +64,7 @@ class CanonPriceItemAdmin(PriceItemAdminBase):
 
 @admin.register(CalculatorSettings)
 class CalculatorSettingsAdmin(admin.ModelAdmin):
-    list_display = ("hourly_rate", "material_coefficient", "time_coefficient", "regular_discount", "partner_discount", "urgency_multiplier")
+    list_display = ("hourly_rate", "material_coefficient", "time_coefficient", "regular_discount", "partner_discount", "urgency_multiplier", "vat_rate")
 
     def has_add_permission(self, request):
         return not CalculatorSettings.objects.exists()
