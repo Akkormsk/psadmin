@@ -71,11 +71,42 @@ def _loop() -> None:
         time.sleep(_PULL_EVERY_SECONDS)
 
 
+def _network_probe_once() -> None:
+    """Разовый сетевой зонд при старте — только для ручной диагностики (см. EIS_NETPROBE_ON_START).
+    Никакого HTTP/логина не нужно, результат смотрим в логах приложения. Не трогает БД."""
+    import socket
+
+    targets = [
+        ("v2test.gosplan.info", 443, "контроль — точно работает"),
+        ("zakupki.gov.ru", 443, ""),
+        ("int44.zakupki.gov.ru", 443, ""),
+        ("www.gosuslugi.ru", 443, "контроль — другой gov.ru"),
+    ]
+    for host, port, note in targets:
+        t0 = time.monotonic()
+        try:
+            conn = socket.create_connection((host, port), timeout=8)
+            conn.close()
+            logger.warning("netprobe: %s:%d OK %dms %s", host, port,
+                           round((time.monotonic() - t0) * 1000), note)
+        except Exception as exc:
+            logger.warning("netprobe: %s:%d FAIL %dms %s: %s %s", host, port,
+                           round((time.monotonic() - t0) * 1000), type(exc).__name__, exc, note)
+
+
 def start() -> None:
     global _started
-    if _started or os.environ.get("TENDER_AUTOPULL_ENABLED") != "1":
+    if _started:
         return
     if any(arg in _SKIP_ARGV for arg in sys.argv):
+        return
+
+    if os.environ.get("EIS_NETPROBE_ON_START") == "1":
+        _started = True
+        threading.Thread(target=_network_probe_once, name="eis-netprobe", daemon=True).start()
+        return  # разовый зонд — обычный автосбор в этом режиме не запускаем
+
+    if os.environ.get("TENDER_AUTOPULL_ENABLED") != "1":
         return
     _started = True
     threading.Thread(target=_loop, name="tender-autopull", daemon=True).start()
