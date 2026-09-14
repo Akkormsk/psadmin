@@ -22,7 +22,7 @@ class DocumentError(RuntimeError):
     pass
 
 
-def fetch_document(url: str) -> bytes:
+def fetch_document(url: str, *, timeout: int = 40) -> bytes:
     if not url.startswith(ALLOWED_PREFIX):
         raise DocumentError("Ссылка не с портала ЕИС.")
     request = Request(url, headers={
@@ -30,7 +30,7 @@ def fetch_document(url: str) -> bytes:
         "Accept": "*/*",
     })
     try:
-        with urlopen(request, timeout=40) as response:
+        with urlopen(request, timeout=timeout) as response:
             data = response.read(MAX_BYTES + 1)
     except HTTPError as exc:
         raise DocumentError(f"Портал ЕИС ответил HTTP {exc.code}.") from exc

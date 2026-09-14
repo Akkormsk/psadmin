@@ -247,17 +247,129 @@ class DocumentPreviewTests(TestCase):
 
     def test_view_reports_fetch_error(self):
         from .documents import DocumentError
+        from .eis_docs import EisDocsError
         User = get_user_model()
         self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
         tender = FoundTender.objects.create(
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("ЕИС недоступен")):
+        with mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("ЕИС недоступен")), \
+             mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("токен не задан")):
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
-        self.assertEqual(resp.json()["error"], "ЕИС недоступен")
+        self.assertIn("ЕИС недоступен", resp.json()["error"])
+        self.assertIn("токен не задан", resp.json()["error"])
         from .models import DocumentPreview
         self.assertFalse(DocumentPreview.objects.exists())  # сетевой сбой не кэшируется
+
+    def test_view_falls_back_to_eis_when_direct_link_fails(self):
+        from .documents import DocumentError
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="123", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("недоступен")) as direct, \
+             mock.patch("tender_selection.views.fetch_document_via_eis", return_value=self._docx_bytes()) as via_eis:
+            resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
+        direct.assert_called_once()
+        via_eis.assert_called_once_with("123", mock.ANY)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Описание объекта закупки", resp.json()["html"])
+        from .models import DocumentPreview
+        self.assertTrue(DocumentPreview.objects.exists())  # успешный резервный путь кэшируется
+
+    def test_view_uses_direct_link_without_touching_eis_when_it_works(self):
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.views.fetch_document", return_value=self._docx_bytes()), \
+             mock.patch("tender_selection.views.fetch_document_via_eis") as via_eis:
+            resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
+        via_eis.assert_not_called()
+        self.assertIn("Описание объекта закупки", resp.json()["html"])
+
+
+class EisDocsTests(TestCase):
+    """Официальный резервный канал ЕИС (getDocsIP) — без сети, всё замокано."""
+
+    def _zip_with(self, files: dict) -> bytes:
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name, data in files.items():
+                zf.writestr(name, data)
+        return buf.getvalue()
+
+    def test_fetch_archive_urls_requires_token(self):
+        from . import eis_docs
+        with mock.patch.dict("os.environ", {"EIS_TOKEN": ""}):
+            with self.assertRaises(eis_docs.EisDocsError):
+                eis_docs.fetch_archive_urls("123")
+
+    def test_fetch_archive_urls_parses_response(self):
+        from . import eis_docs
+        soap_response = (
+            "<soapenv:Envelope xmlns:soapenv='x'><soapenv:Body>"
+            "<ns2:getDocsByReestrNumberResponse><dataInfo>"
+            "<archiveUrl>https://int44.zakupki.gov.ru/archive/1.zip</archiveUrl>"
+            "</dataInfo></ns2:getDocsByReestrNumberResponse>"
+            "</soapenv:Body></soapenv:Envelope>"
+        )
+        with mock.patch.dict("os.environ", {"EIS_TOKEN": "tok"}), \
+             mock.patch.object(eis_docs, "_soap_call", return_value=soap_response):
+            urls = eis_docs.fetch_archive_urls("123")
+        self.assertEqual(urls, ["https://int44.zakupki.gov.ru/archive/1.zip"])
+
+    def test_fetch_archive_urls_raises_on_fault(self):
+        from . import eis_docs
+        fault = "<soapenv:Fault><faultstring>Неверный токен</faultstring></soapenv:Fault>"
+        with mock.patch.dict("os.environ", {"EIS_TOKEN": "tok"}), \
+             mock.patch.object(eis_docs, "_soap_call", return_value=fault):
+            with self.assertRaises(eis_docs.EisDocsError) as ctx:
+                eis_docs.fetch_archive_urls("123")
+        self.assertIn("Неверный токен", str(ctx.exception))
+
+    def test_find_file_matches_by_normalized_name(self):
+        from . import eis_docs
+        archive = self._zip_with({"docs/Описание объекта закупки.docx": b"content-a", "other.pdf": b"x"})
+        found = eis_docs.find_file(archive, "  Описание   объекта закупки.docx")
+        self.assertIsNotNone(found)
+        self.assertEqual(found[0], b"content-a")
+
+    def test_find_file_looks_inside_nested_zip(self):
+        from . import eis_docs
+        inner = self._zip_with({"target.pdf": b"inner-bytes"})
+        outer = self._zip_with({"bundle.zip": inner})
+        found = eis_docs.find_file(outer, "target.pdf")
+        self.assertEqual(found[0], b"inner-bytes")
+
+    def test_find_file_returns_none_when_absent(self):
+        from . import eis_docs
+        archive = self._zip_with({"other.pdf": b"x"})
+        self.assertIsNone(eis_docs.find_file(archive, "missing.docx"))
+
+    def test_fetch_document_via_eis_tries_next_archive_on_failure(self):
+        from . import eis_docs
+        with mock.patch.object(eis_docs, "fetch_archive_urls", return_value=["u1", "u2"]), \
+             mock.patch.object(eis_docs, "download_archive", side_effect=[
+                 eis_docs.EisDocsError("первый архив недоступен"),
+                 self._zip_with({"file.docx": b"ok"}),
+             ]):
+            data = eis_docs.fetch_document_via_eis("123", "file.docx")
+        self.assertEqual(data, b"ok")
+
+    def test_fetch_document_via_eis_raises_when_not_found_anywhere(self):
+        from . import eis_docs
+        with mock.patch.object(eis_docs, "fetch_archive_urls", return_value=["u1"]), \
+             mock.patch.object(eis_docs, "download_archive", return_value=self._zip_with({"other.pdf": b"x"})):
+            with self.assertRaises(eis_docs.EisDocsError):
+                eis_docs.fetch_document_via_eis("123", "missing.docx")
 
 
 class PriceStatsCollectorTests(TestCase):
