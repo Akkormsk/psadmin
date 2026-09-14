@@ -369,14 +369,21 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(TenderEstimate.objects.count(), 1)
 
-    def test_tender_page_autosaves_without_a_save_button(self):
+    def test_new_tender_page_shows_a_visible_save_button(self):
         estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Список")
         self.client.force_login(self.user)
         content = self.client.get(reverse("tender_home")).content.decode()
         self.assertIn('id="tender-autosave-status"', content)
-        self.assertNotIn('<button class="button-success">Сохранить</button>', content)
+        self.assertIn('id="save-tender"', content)
+        self.assertNotIn('id="save-tender" hidden', content)  # not saved yet — button stays visible
         self.assertIn(reverse("tender_estimate_duplicate", args=[estimate.pk]), content)
         self.assertIn("/tenders/save/", content)  # createUrl for a brand-new просчёт
+
+    def test_saved_tender_page_hides_the_save_button(self):
+        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Список")
+        self.client.force_login(self.user)
+        content = self.client.get(reverse("tender_estimate", args=[estimate.pk])).content.decode()
+        self.assertIn('id="save-tender" hidden', content)  # already saved — autosave takes over
 
     def test_saved_estimate_list_shows_status_selector_without_draft_exclamation(self):
         TenderEstimate.objects.create(

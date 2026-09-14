@@ -4,7 +4,7 @@
 <div class="wrap app-home"><div class="container tender-page">
 <a class="back-link" href="{% url 'index' %}">← На главную</a><h1>Расчет тендеров</h1>
 <form method="post" id="tender-form" class="content-stack">{% csrf_token %}<input type="hidden" name="lines_json" id="tender-lines-json"><input type="hidden" name="document_analysis_json" id="tender-document-analysis-json">
-<section class="panel"><div class="panel-header"><h2 class="panel-title">Просчёт тендера</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span><button type="button" class="button-secondary" id="new-tender">Новый просчёт</button></div></div>
+<section class="panel"><div class="panel-header"><h2 class="panel-title">Просчёт тендера</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span><button type="button" class="button-secondary" id="new-tender">Новый просчёт</button><button type="button" class="button-success" id="save-tender"{% if estimate %} hidden{% endif %}>Сохранить</button></div></div>
 <div class="tender-meta">
 <label>Номер тендера<input required maxlength="100" name="tender_number" value="{{ form_state.tender_number }}" placeholder="Например, 03731000123"></label>
 <label class="tender-meta__name">Название / комментарий<input required maxlength="300" name="name" value="{{ form_state.name }}" placeholder="Короткое название просчёта"></label>
@@ -168,26 +168,28 @@ holder.querySelectorAll('[data-drop-ranking]').forEach(button=>button.onclick=()
 holder.querySelectorAll('[data-drop-lesson]').forEach(button=>button.onclick=async()=>{if(!confirm('Удалить этот урок? Он перестанет применяться ко всем позициям (восстановить можно в админке).'))return;status.textContent='Удаляю урок и пересчитываю…';const data=new FormData();data.append('payload',JSON.stringify({lesson_id:button.dataset.dropLesson}));try{const r=await fetch('{% url "tender_drop_lesson" %}',{method:'POST',headers:{'X-CSRFToken':csrf},body:data});if(!r.ok)throw new Error((await r.json()).error||'Не удалось удалить урок.')}catch(e){status.textContent=e.message;return}runRevise({feedback:'',refresh:true,scope:'catalog'})});holder.querySelectorAll('[data-feedback-apply]').forEach(button=>button.onclick=()=>{const form=button.closest('[data-feedback-scope]'),scope=form.dataset.feedbackScope,input=form.querySelector('[data-feedback-input]'),statusEl=form.querySelector('[data-feedback-status]'),feedback=input.value.trim();if(!feedback){statusEl.textContent='Напишите, что изменить.';return}statusEl.textContent='Перестраиваю расчёт…';runRevise({feedback,scope},statusEl)});body._tzRecalc=()=>runRevise({feedback:'',scope:'requirements'});const finalize=body.querySelector('[data-finalize-training]');if(finalize)finalize.onclick=async()=>{finalize.disabled=true;status.textContent='Сохраняю уроки и принимаю расчёт…';const data=new FormData();data.append('payload',JSON.stringify({session_id:hypothesis.session_id,line}));try{const response=await fetch('{% url "tender_confirm_production_type" %}',{method:'POST',headers:{'X-CSRFToken':csrf},body:data}),result=await response.json();if(!response.ok)throw new Error(result.error||'Не удалось принять расчёт.');const totals=hypothesis.totals||{},steps=hypothesis.route?.steps||[],isTurnkey=hypothesis.route?.is_turnkey===true||(steps.length===1&&/под ключ/i.test(steps[0]));if(n(totals.material_unit)||n(totals.application_unit)||n(totals.logistics_unit)){line.material_unit=isTurnkey?String(roundMoney(n(totals.material_unit)+n(totals.application_unit))):totals.material_unit||line.material_unit||'0';line.application_unit=isTurnkey?'0':totals.application_unit||line.application_unit||'0';line.logistics_unit=totals.logistics_unit||line.logistics_unit||'0'}document.getElementById('tender-requirements-overlay').classList.remove('is-open');render()}catch(error){status.textContent=error.message;finalize.disabled=false}};};
 document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pdf';document.getElementById('tender-ai-technical-file').accept='.xlsx,.xls,.doc,.docx,.pdf';
 
-/* Autosave: every change to the просчёт — a line field, a parameter, an
-   applied AI catalog pick, a ТЗ toggle — is written back on its own,
-   debounced. There is no "Сохранить" button. A brand-new просчёт is not
-   created until it has a named line with a quantity. */
+/* Save: "Сохранить" creates the просчёт explicitly (HTML5 required on
+   number/name gates it, same as any other submit button), so a half-typed
+   draft never persists on its own. Once that first save has happened — by
+   click, or because this page already is a saved просчёт — every further
+   change (a line field, a parameter, an applied AI catalog pick, a ТЗ
+   toggle) autosaves on its own, debounced, and the button stays hidden. */
 (function(){
   const form=document.getElementById('tender-form');
   const linesInput=document.getElementById('tender-lines-json');
   const analysisInput=document.getElementById('tender-document-analysis-json');
   const statusEl=document.getElementById('tender-autosave-status');
+  const saveBtn=document.getElementById('save-tender');
   const csrf=form.querySelector('[name="csrfmiddlewaretoken"]').value;
   const createUrl='{% url "tender_estimate_create" %}';
   let pk={{ estimate.pk|default:'null' }};
+  let autosaveEnabled=!!pk;
   let timer=null,inFlight=false,again=false,ready=false;
   function setStatus(text,kind){ if(!statusEl)return; statusEl.textContent=text; statusEl.className='autosave-status'+(kind?' autosave-status--'+kind:''); }
-  function meaningful(){ return pk || lines.some(line=>String(line.name||'').trim() && n(line.quantity)>0); }
   function schedule(){
-    if(!ready)return;
+    if(!ready||!autosaveEnabled)return;
     clearTimeout(timer);
     if(!form.checkValidity()){ setStatus('Заполните номер и название',''); return; }
-    if(!meaningful()){ setStatus(''); return; }
     setStatus('Изменено…');
     timer=setTimeout(save,1200);
   }
@@ -204,16 +206,22 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
       if(!res.ok) throw new Error(out.error||'Не удалось сохранить.');
       if(out.pk&&!pk){ pk=out.pk; history.replaceState(null,'',out.url); }
       if(Array.isArray(out.line_ids))out.line_ids.forEach((id,index)=>{if(lines[index])lines[index].id=id});
+      autosaveEnabled=true;
+      if(saveBtn) saveBtn.hidden=true;
       setStatus((out.incomplete?'Черновик сохранён ':'Сохранено ')+out.saved_at,'ok');
     }catch(err){ setStatus(err.message||'Ошибка сохранения','error'); }
     finally{ inFlight=false; if(again) save(); }
   }
+  if(saveBtn) saveBtn.onclick=()=>{
+    if(!form.checkValidity()){ form.reportValidity(); return; }
+    save();
+  };
   form.addEventListener('input',schedule);
   form.addEventListener('change',schedule);
   const baseRender=render;
   render=function(){ baseRender(); schedule(); };
   window.addEventListener('beforeunload',()=>{
-    if(timer&&meaningful()&&navigator.sendBeacon){
+    if(autosaveEnabled&&timer&&navigator.sendBeacon){
       linesInput.value=JSON.stringify(lines);
       analysisInput.value=JSON.stringify(documentAnalysis);
       const data=new FormData(form); data.append('csrfmiddlewaretoken',csrf);
