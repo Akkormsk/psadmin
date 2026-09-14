@@ -218,6 +218,53 @@ class DocumentPreviewTests(TestCase):
         self.assertIn("Кружка", r["html"])
         self.assertIn("<table", r["html"])
 
+    def test_extract_docx_table_with_merged_cells(self):
+        from docx import Document
+        import io
+
+        from .documents import extract_preview
+
+        d = Document()
+        t = d.add_table(rows=3, cols=3)
+        t.cell(0, 0).merge(t.cell(0, 2))
+        t.cell(0, 0).text = "Спецификация"
+        t.cell(1, 0).text, t.cell(1, 1).text, t.cell(1, 2).text = "Наименование", "Кол-во", "Цена"
+        t.cell(1, 0).merge(t.cell(2, 0))
+        t.cell(1, 0).text = "Кружка"
+        t.cell(2, 1).text, t.cell(2, 2).text = "100", "250"
+        buf = io.BytesIO()
+        d.save(buf)
+
+        r = extract_preview(buf.getvalue(), "Смета.docx")
+        self.assertEqual(r["kind"], "docx")
+        self.assertIn('colspan="3"', r["html"])  # заголовок на всю ширину
+        self.assertIn("Спецификация", r["html"])
+        self.assertIn("Кружка", r["html"])
+
+    def test_extract_xlsx_with_merged_cells(self):
+        from openpyxl import Workbook
+        import io
+
+        from .documents import extract_preview
+
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"] = "Смета"
+        ws.merge_cells("A1:C1")
+        ws.append(["Наименование", "Кол-во", "Цена"])
+        ws["A3"] = "Кружка"
+        ws.merge_cells("A3:A4")
+        ws["B3"], ws["C3"] = 60, 250
+        ws["B4"], ws["C4"] = 40, 250
+        buf = io.BytesIO()
+        wb.save(buf)
+
+        r = extract_preview(buf.getvalue(), "Смета.xlsx")
+        self.assertEqual(r["kind"], "xlsx")
+        self.assertIn('colspan="3"', r["html"])  # заголовок на всю ширину
+        self.assertIn('rowspan="2"', r["html"])  # «Кружка» на две строки
+        self.assertIn("Смета", r["html"])
+
     def test_extract_rejects_unknown(self):
         from .documents import extract_preview
         r = extract_preview(b"random bytes", "notes.txt")
