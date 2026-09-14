@@ -110,7 +110,7 @@ def cascade_lab(request):
     if not _cascade_lab_allowed(request):
         return HttpResponse(status=403)
     from .cascade_lab import STEP_DEFINITIONS
-    from .gateway_budget import available_models
+    from .gateway_budget import model_catalog
 
     selected_line = None
     try:
@@ -129,8 +129,10 @@ def cascade_lab(request):
         ],
         "active_config": CascadeConfigVersion.objects.filter(is_active=True).first(),
         # Список моделей не зашит в код — тянется у самого шлюза (кэш 6
-        # часов), поэтому здесь ровно то, что реально можно выбрать.
-        "model_options": available_models(),
+        # часов), поэтому здесь ровно то, что реально можно выбрать. Название,
+        # тариф и контекст — из MODEL_LABELS/RATES_RUB_PER_M (шлюз цену по API
+        # не отдаёт) плюс max_output_tokens, когда шлюз его прислал сам.
+        "model_options": model_catalog(),
     })
 
 
