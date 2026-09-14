@@ -293,6 +293,34 @@ class DocumentPreviewTests(TestCase):
         direct.assert_not_called()
         self.assertIn("Описание объекта закупки", resp.json()["html"])
 
+    def test_eis_diag_reports_probe_results(self):
+        import socket as socket_mod
+
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("a", "a@e.ru", "p"))
+
+        def fake_connect(addr, timeout=None):
+            host = addr[0]
+            if "gosplan" in host:
+                return mock.Mock(close=lambda: None)
+            raise TimeoutError("timed out")
+
+        with mock.patch.object(socket_mod, "create_connection", side_effect=fake_connect), \
+             mock.patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            resp = self.client.get(reverse("tender_selection:eis_diag"))
+        self.assertEqual(resp.status_code, 200)
+        results = resp.json()["results"]
+        self.assertEqual(len(results), 4)
+        by_probe = {r["probe"]: r for r in results}
+        self.assertTrue(any("gosplan" in k and v["ok"] for k, v in by_probe.items()))
+        self.assertTrue(any("zakupki" in k and not v["ok"] for k, v in by_probe.items()))
+
+    def test_eis_diag_requires_superuser(self):
+        User = get_user_model()
+        self.client.force_login(User.objects.create_user("u", "u@e.ru", "p"))
+        resp = self.client.get(reverse("tender_selection:eis_diag"))
+        self.assertEqual(resp.status_code, 403)
+
 
 class EisDocsTests(TestCase):
     """Официальный резервный канал ЕИС (getDocsIP) — без сети, всё замокано."""

@@ -183,6 +183,53 @@ def doc_preview(request, pk, idx):
 
 
 @superuser_required
+def eis_diag(request):
+    """Разовая диагностика: реально ли прод-сервер видит сеть ЕИС на уровне TCP/HTTPS,
+    или заблокирован весь домен zakupki.gov.ru (а не только конкретная ссылка/метод).
+    Ничего не сохраняет, только сетевые зонды с прод-машины."""
+    import socket
+    import time
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request as _Req
+    from urllib.request import urlopen as _urlopen
+
+    results = []
+
+    def probe_tcp(label, host, port=443, timeout=8):
+        t0 = time.monotonic()
+        try:
+            conn = socket.create_connection((host, port), timeout=timeout)
+            conn.close()
+            results.append({"probe": label, "ok": True, "ms": round((time.monotonic() - t0) * 1000)})
+        except Exception as exc:
+            results.append({"probe": label, "ok": False, "ms": round((time.monotonic() - t0) * 1000),
+                             "error": f"{type(exc).__name__}: {exc}"})
+
+    def probe_http(label, url, timeout=10):
+        t0 = time.monotonic()
+        try:
+            req = _Req(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with _urlopen(req, timeout=timeout) as resp:
+                results.append({"probe": label, "ok": True, "ms": round((time.monotonic() - t0) * 1000),
+                                 "status": resp.status})
+        except HTTPError as exc:
+            # HTTP-ошибка — значит соединение и TLS прошли, портал ответил (это НЕ таймаут)
+            results.append({"probe": label, "ok": True, "ms": round((time.monotonic() - t0) * 1000),
+                             "status": exc.code, "note": "сервер ответил (пусть и ошибкой) — сеть не блокирует"})
+        except (URLError, TimeoutError, ConnectionError, OSError) as exc:
+            results.append({"probe": label, "ok": False, "ms": round((time.monotonic() - t0) * 1000),
+                             "error": f"{type(exc).__name__}: {exc}"})
+
+    # контроль: то, что точно работает (автосбор дёргает это же каждые 30 мин)
+    probe_tcp("TCP v2test.gosplan.info (контроль, точно работает)", "v2test.gosplan.info")
+    probe_tcp("TCP zakupki.gov.ru", "zakupki.gov.ru")
+    probe_tcp("TCP int44.zakupki.gov.ru", "int44.zakupki.gov.ru")
+    probe_http("GET https://zakupki.gov.ru/ (главная, не файл)", "https://zakupki.gov.ru/")
+
+    return JsonResponse({"results": results})
+
+
+@superuser_required
 def filter_settings(request):
     settings = FilterSettings.load()
     if request.method == "POST":
