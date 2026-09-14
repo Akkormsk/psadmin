@@ -336,42 +336,29 @@
       }).then(function (r) { return r.json(); });
     }
 
+    function viaServer() {
+      return fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
+        .then(function (r) { return r.json(); });
+    }
+
     document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         currentIdx = btn.dataset.docPreview;
-        var docUrl = btn.dataset.docUrl;
-        var docName = btn.dataset.docName || "Документ";
-        title.textContent = docName;
+        title.textContent = btn.dataset.docName || "Документ";
+        body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
+        fallback.hidden = true;
         uploadInput.value = "";
         uploadStatus.textContent = "";
         modal.classList.add("is-open");
 
-        if (!docUrl) {
-          body.innerHTML = '<p class="ts-sub">Ссылка на файл недоступна.</p>';
-          fallback.hidden = true;
-          return;
-        }
-
-        // ЕИС не отдаёт CORS-заголовки — прочитать байты через fetch() из браузера нельзя
-        // (проверено), а сервер до zakupki.gov.ru вообще не достучится. Поэтому сразу:
-        // 1) запускаем настоящее скачивание именно этого файла (обычная навигация, не
-        //    fetch — она и так работает), 2) сразу открываем диалог выбора файла — юзеру
-        //    остаётся только выбрать только что скачанный файл (первый/самый свежий).
-        var a = document.createElement("a");
-        a.href = docUrl;
-        a.download = docName;
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-
-        var p = document.createElement("p");
-        p.className = "ts-sub";
-        p.textContent = "«" + docName + "» скачивается — выберите его в открывшемся диалоге (обычно первый/самый свежий файл).";
-        body.innerHTML = "";
-        body.appendChild(p);
-        fallback.hidden = false;
-        uploadInput.click();
+        // сеть с сервера до ЕИС теперь есть — сервер качает и разбирает сам, без
+        // скачивания в браузере пользователя. Ручная загрузка — только на крайний случай.
+        viaServer()
+          .then(showResult)
+          .catch(function () {
+            body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
+            fallback.hidden = false;
+          });
       });
     });
 
