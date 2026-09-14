@@ -11,7 +11,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .documents import DocumentError, extract_preview, fetch_document
+from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
+from .eis_docs import EisDocsError, fetch_document_via_eis
 from .filtering import match_title, parse_terms
 from .models import DocumentPreview, FilterSettings, FoundTender, Organization, PullRun
 from .notification import parse_clarifications, parse_complaints, parse_notification
@@ -160,10 +161,17 @@ def doc_preview(request, pk, idx):
         return JsonResponse({"name": name, "kind": cached.kind, "html": cached.html, "error": cached.error})
 
     try:
-        data = fetch_document(url)
-    except DocumentError as exc:
-        # сетевые сбои не кэшируем — на проде повтор может пройти
-        return JsonResponse({"name": name, "kind": "", "html": "", "error": str(exc)})
+        # публичная ссылка ЕИС стала стабильно не отвечать (проверено на проде) — основной
+        # путь теперь официальный канал по токену; публичная ссылка остаётся подстраховкой
+        # на случай, если у ЕИС-токена кончится лимит или сервис ляжет
+        data = fetch_document_via_eis(tender.purchase_number, name)
+    except EisDocsError as eis_exc:
+        try:
+            data = fetch_document(url, timeout=15)
+        except DocumentError as direct_exc:
+            # сетевые сбои не кэшируем — на проде повтор может пройти
+            return JsonResponse({"name": name, "kind": "", "html": "",
+                                 "error": f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}"})
 
     result = extract_preview(data, name)
     DocumentPreview.objects.update_or_create(url=url, defaults={
@@ -172,6 +180,101 @@ def doc_preview(request, pk, idx):
     })
     return JsonResponse({"name": name, "kind": result.get("kind", ""),
                          "html": result.get("html", ""), "error": result.get("error", "")})
+
+
+@superuser_required
+@require_POST
+def doc_upload(request, pk, idx):
+    """Ручной запасной путь: сервер не может сам скачать файл с ЕИС (весь домен
+    zakupki.gov.ru не открывается с прод-IP — подтверждено диагностикой), а в браузере
+    у пользователя открывается и скачивается нормально. Он скачивает файл сам и
+    загружает сюда — дальше тот же разбор (extract_preview), что и при автоскачивании."""
+    tender = get_object_or_404(FoundTender, pk=pk)
+    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    docs = (card or {}).get("documents", [])
+    if not 0 <= idx < len(docs):
+        return JsonResponse({"error": "Документ не найден."}, status=404)
+    doc = docs[idx]
+    url, name = doc.get("url", ""), doc.get("name", "")
+
+    uploaded = request.FILES.get("file")
+    if not uploaded:
+        return JsonResponse({"name": name, "kind": "", "html": "", "error": "Файл не выбран."})
+    if uploaded.size > MAX_BYTES:
+        return JsonResponse({"name": name, "kind": "", "html": "", "error": "Файл слишком большой для предпросмотра."})
+
+    result = extract_preview(uploaded.read(), name)
+    DocumentPreview.objects.update_or_create(url=url, defaults={
+        "filename": name, "kind": result.get("kind", ""),
+        "html": result.get("html", ""), "error": result.get("error", ""),
+    })
+    return JsonResponse({"name": name, "kind": result.get("kind", ""),
+                         "html": result.get("html", ""), "error": result.get("error", "")})
+
+
+@superuser_required
+def eis_diag(request):
+    """Разовая диагностика: реально ли прод-сервер видит сеть ЕИС на уровне TCP/HTTPS,
+    или заблокирован весь домен zakupki.gov.ru (а не только конкретная ссылка/метод).
+    Ничего не сохраняет, только сетевые зонды с прод-машины."""
+    import socket
+    import time
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request as _Req
+    from urllib.request import urlopen as _urlopen
+
+    results = []
+
+    def probe_tcp(label, host, port=443, timeout=8):
+        t0 = time.monotonic()
+        try:
+            conn = socket.create_connection((host, port), timeout=timeout)
+            conn.close()
+            results.append({"probe": label, "ok": True, "ms": round((time.monotonic() - t0) * 1000)})
+        except Exception as exc:
+            results.append({"probe": label, "ok": False, "ms": round((time.monotonic() - t0) * 1000),
+                             "error": f"{type(exc).__name__}: {exc}"})
+
+    def probe_http(label, url, timeout=10):
+        t0 = time.monotonic()
+        try:
+            req = _Req(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with _urlopen(req, timeout=timeout) as resp:
+                results.append({"probe": label, "ok": True, "ms": round((time.monotonic() - t0) * 1000),
+                                 "status": resp.status})
+        except HTTPError as exc:
+            # HTTP-ошибка — значит соединение и TLS прошли, портал ответил (это НЕ таймаут)
+            results.append({"probe": label, "ok": True, "ms": round((time.monotonic() - t0) * 1000),
+                             "status": exc.code, "note": "сервер ответил (пусть и ошибкой) — сеть не блокирует"})
+        except (URLError, TimeoutError, ConnectionError, OSError) as exc:
+            results.append({"probe": label, "ok": False, "ms": round((time.monotonic() - t0) * 1000),
+                             "error": f"{type(exc).__name__}: {exc}"})
+
+    # свой внешний IP — чтобы проверить снаружи (по базам geo/ASN), где он реально числится,
+    # независимо от того, что написано в личном кабинете Timeweb
+    my_ip = None
+    try:
+        req = _Req("https://api.ipify.org?format=json")
+        with _urlopen(req, timeout=8) as resp:
+            import json as _json
+            my_ip = _json.loads(resp.read().decode("utf-8")).get("ip")
+        results.append({"probe": "свой внешний IP", "ok": True, "ms": 0, "note": my_ip})
+    except Exception as exc:
+        results.append({"probe": "свой внешний IP", "ok": False, "ms": 0, "error": f"{type(exc).__name__}: {exc}"})
+
+    # контроль: то, что точно работает (автосбор дёргает это же каждые 30 мин)
+    probe_tcp("TCP v2test.gosplan.info (контроль, точно работает)", "v2test.gosplan.info")
+    probe_tcp("TCP zakupki.gov.ru", "zakupki.gov.ru")
+    probe_tcp("TCP int44.zakupki.gov.ru", "int44.zakupki.gov.ru")
+    probe_http("GET https://zakupki.gov.ru/ (главная, не файл)", "https://zakupki.gov.ru/")
+
+    # масштаб блокировки: только ЕИС или весь рунет с этого сервера?
+    probe_tcp("TCP www.gosuslugi.ru (другой gov.ru)", "www.gosuslugi.ru")
+    probe_tcp("TCP www.nalog.gov.ru (другой gov.ru)", "www.nalog.gov.ru")
+    probe_tcp("TCP www.cbr.ru (ЦБ РФ, не gov.ru)", "www.cbr.ru")
+    probe_tcp("TCP ya.ru (обычный рунет, контроль)", "ya.ru")
+
+    return JsonResponse({"results": results, "my_ip": my_ip})
 
 
 @superuser_required
