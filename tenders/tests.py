@@ -84,7 +84,7 @@ class TenderTests(TestCase):
         self.assertContains(response, "questionControl.onclick=()=>openRequirements(index)")
         self.assertNotContains(response, "if(shouldAutoCalculate)build.click()")
         self.assertContains(response, "if(autoStartProductSearch&&!activeProduction)build.click()")
-        self.assertContains(response, "Запустить подбор товара")
+        self.assertContains(response, "Сделать расчёт")
 
     def test_calculation_shows_linked_tender_card_without_repeating_products(self):
         from tender_selection.models import FoundTender
