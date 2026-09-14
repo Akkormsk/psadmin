@@ -336,11 +336,6 @@
       }).then(function (r) { return r.json(); });
     }
 
-    function viaServer() {
-      return fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
-        .then(function (r) { return r.json(); });
-    }
-
     document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         currentIdx = btn.dataset.docPreview;
@@ -362,11 +357,11 @@
           .then(function (blob) { return uploadBlob(blob, docName); })
           .then(showResult)
           .catch(function () {
-            // 2) браузер не смог (например, ЕИС не отдаёт CORS-заголовки) — пробуем через сервер
-            viaServer().then(showResult).catch(function () {
-              body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
-              fallback.hidden = false;
-            });
+            // 2) браузер не смог (например, ЕИС не отдаёт CORS-заголовки) — сервер сам всё
+            // равно не достучится (сеть с прод-IP до zakupki.gov.ru не открывается вовсе),
+            // ждать его смысла нет — сразу просим файл руками
+            body.innerHTML = '<p class="ts-sub">Браузер не смог скачать файл напрямую. Скачайте по ссылке выше и загрузите его сюда.</p>';
+            fallback.hidden = false;
           });
       });
     });
