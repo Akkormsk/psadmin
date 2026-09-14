@@ -250,6 +250,56 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     return payload
 
 
+def retry_pending_documents(*, limit: int = 5, recent: int = 50) -> tuple[int, int]:
+    """Фоновая попытка докачать документы извещений, ещё не попавшие в кэш предпросмотра.
+
+    Сеть с прод-сервера до zakupki.gov.ru нестабильна (похоже на плавающую блокировку
+    ТСПУ — то отвечает, то нет), поэтому вместо однократной попытки по клику пробуем
+    периодически, тихо, небольшими порциями. Каждый успех сразу доступен в карточке
+    (клик «Просмотр» видит уже готовый кэш) — без этого фон бесполезен.
+
+    Возвращает (сколько документов пробовали, сколько удалось). Смотрим только среди
+    недавно выгруженных тендеров 44-ФЗ — старые уже не актуальны.
+    """
+    from .documents import DocumentError, extract_preview, fetch_document
+    from .eis_docs import EisDocsError, fetch_document_via_eis
+    from .models import DocumentPreview
+    from .notification import parse_notification
+
+    attempted = 0
+    succeeded = 0
+    tenders = (
+        FoundTender.objects.filter(law="fz44")
+        .exclude(notification_raw={})
+        .order_by("-last_pulled_at")[:recent]
+    )
+    for tender in tenders:
+        if attempted >= limit:
+            break
+        card = parse_notification(tender.notification_raw)
+        for doc in card.get("documents", []):
+            if attempted >= limit:
+                break
+            url, name = doc.get("url", ""), doc.get("name", "")
+            if not url or DocumentPreview.objects.filter(url=url).exists():
+                continue
+            attempted += 1
+            try:
+                data = fetch_document_via_eis(tender.purchase_number, name)
+            except EisDocsError:
+                try:
+                    data = fetch_document(url, timeout=15)
+                except DocumentError:
+                    continue  # сетевой сбой — не кэшируем, попробуем в следующий тик
+            result = extract_preview(data, name)
+            DocumentPreview.objects.update_or_create(url=url, defaults={
+                "filename": name, "kind": result.get("kind", ""),
+                "html": result.get("html", ""), "error": result.get("error", ""),
+            })
+            succeeded += 1
+    return attempted, succeeded
+
+
 _EXTRAS_TTL = timedelta(hours=6)
 _EXTRAS_ACTIVE_WINDOW = timedelta(days=45)  # после закрытия приёма новые разъяснения/жалобы ещё возможны
 

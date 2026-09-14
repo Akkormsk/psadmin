@@ -442,6 +442,81 @@ class EisDocsTests(TestCase):
                 eis_docs.fetch_document_via_eis("123", "missing.docx")
 
 
+class RetryPendingDocumentsTests(TestCase):
+    """Фоновые повторы скачивания — сеть до ЕИС нестабильна (плавающая блокировка),
+    поэтому периодически подбираем то, что не скачалось раньше."""
+
+    def _docx_bytes(self):
+        import io
+        from docx import Document
+        d = Document()
+        d.add_paragraph("текст")
+        buf = io.BytesIO()
+        d.save(buf)
+        return buf.getvalue()
+
+    def test_skips_already_cached_documents(self):
+        from .models import DocumentPreview
+        from .services import retry_pending_documents
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
+        )
+        DocumentPreview.objects.create(
+            url="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=A",
+            filename="cached", kind="docx", html="<p>уже есть</p>",
+        )
+        with mock.patch("tender_selection.eis_docs.fetch_document_via_eis") as via_eis:
+            attempted, succeeded = retry_pending_documents()
+        via_eis.assert_not_called()
+        self.assertEqual((attempted, succeeded), (0, 0))
+
+    def test_fetches_and_caches_uncached_document_via_eis(self):
+        from .models import DocumentPreview
+        from .services import retry_pending_documents
+
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.eis_docs.fetch_document_via_eis", return_value=self._docx_bytes()) as via_eis:
+            attempted, succeeded = retry_pending_documents()
+        via_eis.assert_called_once_with("1", mock.ANY)
+        self.assertEqual((attempted, succeeded), (1, 1))
+        self.assertTrue(DocumentPreview.objects.filter(
+            url="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=A",
+        ).exists())
+
+    def test_falls_back_to_direct_link_and_does_not_cache_on_total_failure(self):
+        from .documents import DocumentError
+        from .eis_docs import EisDocsError
+        from .models import DocumentPreview
+        from .services import retry_pending_documents
+
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.eis_docs.fetch_document_via_eis", side_effect=EisDocsError("нет сети")), \
+             mock.patch("tender_selection.documents.fetch_document", side_effect=DocumentError("нет сети")):
+            attempted, succeeded = retry_pending_documents()
+        self.assertEqual((attempted, succeeded), (1, 0))
+        self.assertFalse(DocumentPreview.objects.exists())
+
+    def test_respects_limit(self):
+        from .services import retry_pending_documents
+
+        for i in range(3):
+            FoundTender.objects.create(
+                purchase_number=str(i), object_info="x", title="T", law="fz44",
+                last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
+            )
+        with mock.patch("tender_selection.eis_docs.fetch_document_via_eis", return_value=self._docx_bytes()):
+            attempted, succeeded = retry_pending_documents(limit=1)
+        self.assertEqual((attempted, succeeded), (1, 1))
+
+
 class PriceStatsCollectorTests(TestCase):
     CONTRACT = {
         "purchase_number": "0111",

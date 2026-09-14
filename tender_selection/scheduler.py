@@ -49,6 +49,16 @@ def _run_once(tick: int) -> None:
                            srun.contracts_seen, srun.created_count, srun.filled_count, srun.ok)
         except Exception:
             logger.exception("autopull: collect_price_stats failed")
+
+    close_old_connections()
+    try:
+        from .services import retry_pending_documents
+        attempted, succeeded = retry_pending_documents()
+        if attempted:
+            logger.warning("autopull: docs — %d/%d скачано (сеть до ЕИС нестабильна, остальное в следующий раз)",
+                           succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_documents failed")
     close_old_connections()
 
 
