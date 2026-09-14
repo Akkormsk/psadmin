@@ -12,6 +12,7 @@ urlpatterns = [
     path("catalog/sync/", views.catalog_sync, name="tender_catalog_sync"),
     path("catalog/gifts/import-test/", views.gifts_import_test, name="gifts_import_test"),
     path("catalog/gifts/raw-sample/", views.gifts_raw_sample, name="gifts_raw_sample"),
+    path("catalog/oasis/import-test/", views.oasis_import_test, name="oasis_import_test"),
     path("import/preview/", views.import_preview, name="tender_import_preview"),
     path("import/ai/", views.ai_import_preview, name="tender_ai_import_preview"),
     path("documents/inspect/", views.document_inspect, name="tender_document_inspect"),

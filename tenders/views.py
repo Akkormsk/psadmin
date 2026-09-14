@@ -384,6 +384,44 @@ def gifts_import_test(request):
 
 
 @require_GET
+def oasis_import_test(request):
+    """Ручной запуск полной синхронизации Oasis, по образцу gifts_import_test
+    (?full=1) выше — но ВСЕГДА через отдельный процесс ОС, никогда инлайн:
+    у Oasis, в отличие от Gifts, нет бюджетного лимитированного режима,
+    полный синк — это единственный режим и ~37 тыс. товаров (~11 мин
+    локально). Запускать его в процессе, который обслуживает сайт, нельзя —
+    см. docstring tenders/scheduler.py."""
+    expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
+    supplied = request.headers.get("Authorization", "")
+    if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
+        return HttpResponse(status=403)
+    if request.GET.get("status") == "1":
+        run = CatalogSyncRun.objects.filter(supplier__code="oasis").first()
+        if run is None:
+            return JsonResponse({"status": "not_started"})
+        return JsonResponse({
+            "status": run.status, "received": run.received_count, "created": run.created_count,
+            "updated": run.updated_count, "deactivated": run.deactivated_count, "error": run.error,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        })
+    recent_running = CatalogSyncRun.objects.filter(
+        supplier__code="oasis", status="running", started_at__gte=timezone.now() - timedelta(minutes=30),
+    ).exists()
+    if recent_running:
+        return JsonResponse({"status": "already_running"}, status=409)
+    manage_path = Path(__file__).resolve().parent.parent / "manage.py"
+    subprocess.Popen(
+        [sys.executable, str(manage_path), "sync_oasis_catalog"],
+        cwd=str(manage_path.parent),
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return JsonResponse({"status": "started"}, status=202)
+
+
+@require_GET
 def gifts_raw_sample(request):
     expected = os.getenv("KNOWLEDGE_SYNC_TOKEN", "")
     supplied = request.headers.get("Authorization", "")
