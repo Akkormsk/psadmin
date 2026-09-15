@@ -18,3 +18,4 @@ psadmin-local-export-catalog.json
 
 .claude/
 default_*.sqlite3
+var/

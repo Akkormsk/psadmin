@@ -199,7 +199,6 @@ def _lab_step_settings(request, current=None):
         "step_2_model": ("2", "model", agents),
         "step_2_cache": ("2", "cache", {"yes", "no"}),
         "step_3_sources": ("3", "sources", {"all", "oasis", "gifts"}),
-        "step_3_semantic": ("3", "semantic", {"yes", "no"}),
         "step_4_model": ("4", "model", agents),
         "step_4_intensity": ("4", "intensity", {"off", "cautious", "strict"}),
         "step_4_cache": ("4", "cache", {"yes", "no"}),
