@@ -96,9 +96,14 @@ def tender_list(request):
         tender.on_estimate = tender.status == FoundTender.PUSHED and tender.pushed_estimate_id
         tender.has_complaint = bool(tender.complaints_raw)
         # 223-ФЗ не имеет разобранного извещения по конструкции источника — это не
-        # ошибка. У 44-ФЗ пустой notification_raw значит запрос ещё не удался: без
-        # него нет ни перечня товаров, ни списка документов (оба берутся из него).
-        tender.notification_missing = tender.law == "fz44" and not tender.notification_raw
+        # ошибка. У 44-ФЗ пустой notification_raw значит запрос ещё не удался — но
+        # только если попытка вообще была (notification_checked_at): свежевыгруженный
+        # тендер, который ещё никто не открывал и фон (retry_pending_notifications)
+        # до него не добрался, — это не сбой, а «ещё не проверяли», значок не должен
+        # гореть на буквально каждой новой карточке.
+        tender.notification_missing = (
+            tender.law == "fz44" and not tender.notification_raw and tender.notification_checked_at is not None
+        )
 
     counts = dict(FoundTender.objects.exclude(status=FoundTender.DISMISSED).values_list("law").annotate(n=Count("law")))
     return render(request, "tender_selection/list.html", {

@@ -738,6 +738,100 @@ class RetryPendingDocumentsTests(TestCase):
         self.assertEqual((attempted, succeeded), (1, 1))
 
 
+class NotificationForTests(TestCase):
+    """notification_for() должен помечать попытку (notification_checked_at) даже при
+    сбое — иначе бейдж «⚠ нет данных» в списке не отличить от «ещё не проверяли»."""
+
+    def test_success_sets_raw_and_checked_at(self):
+        from .services import notification_for
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.gosplan.fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            payload = notification_for(tender)
+        tender.refresh_from_db()
+        self.assertEqual(payload, NOTIFICATION_FIXTURE)
+        self.assertTrue(tender.notification_raw)
+        self.assertIsNotNone(tender.notification_checked_at)
+
+    def test_failure_still_sets_checked_at(self):
+        from . import gosplan
+        from .services import notification_for
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.gosplan.fetch_notification", side_effect=gosplan.GosplanError("нет сети")):
+            payload = notification_for(tender)
+        tender.refresh_from_db()
+        self.assertIsNone(payload)
+        self.assertFalse(tender.notification_raw)
+        self.assertIsNotNone(tender.notification_checked_at)  # попытка была — это и есть реальный сбой
+
+
+class RetryPendingNotificationsTests(TestCase):
+    """Фоновая догрузка извещений для свежих тендеров — без неё бейдж «нет данных»
+    в списке горел бы на каждом только что выгруженном тендере (см. views.py)."""
+
+    def test_fetches_never_checked_tenders(self):
+        from .services import retry_pending_notifications
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(),
+        )  # notification_checked_at пуст — ни разу не пробовали
+        with mock.patch("tender_selection.gosplan.fetch_notification", return_value=NOTIFICATION_FIXTURE) as fetch:
+            attempted, succeeded = retry_pending_notifications()
+        fetch.assert_called_once_with("1")
+        self.assertEqual((attempted, succeeded), (1, 1))
+        tender.refresh_from_db()
+        self.assertTrue(tender.notification_raw)
+
+    def test_skips_already_checked_tenders(self):
+        from .services import retry_pending_notifications
+
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            notification_checked_at=timezone.now(), last_pulled_at=timezone.now(),
+        )  # уже проверяли (успешно или нет) — фон это трогать не должен
+        with mock.patch("tender_selection.gosplan.fetch_notification") as fetch:
+            attempted, succeeded = retry_pending_notifications()
+        fetch.assert_not_called()
+        self.assertEqual((attempted, succeeded), (0, 0))
+
+    def test_respects_limit(self):
+        from .services import retry_pending_notifications
+
+        for i in range(3):
+            FoundTender.objects.create(
+                purchase_number=str(i), object_info="x", title="T", law="fz44",
+                last_pulled_at=timezone.now(),
+            )
+        with mock.patch("tender_selection.gosplan.fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            attempted, succeeded = retry_pending_notifications(limit=1)
+        self.assertEqual((attempted, succeeded), (1, 1))
+
+    def test_fz223_never_attempted(self):
+        """У 223-ФЗ нет извещения по конструкции источника — фон не должен даже
+        пытаться (notification_for сам вернёт None по law, но раз мы отбираем по
+        checked_at, 223-ФЗ тендер так и останется checked_at=None навсегда — это
+        нормально: у него просто никогда не будет notification_missing=True, см.
+        views.py, где условие уже требует law == 'fz44')."""
+        from .services import retry_pending_notifications
+
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz223",
+            last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.gosplan.fetch_notification") as fetch:
+            attempted, succeeded = retry_pending_notifications()
+        fetch.assert_not_called()
+        self.assertEqual((attempted, succeeded), (0, 0))
+
+
 class PriceStatsCollectorTests(TestCase):
     CONTRACT = {
         "purchase_number": "0111",
@@ -1489,13 +1583,26 @@ class AccessControlTests(TestCase):
     def test_missing_notification_shows_warning_badge(self):
         FoundTender.objects.create(
             purchase_number="1", object_info="x", title="Кружка", law="fz44",
-            last_pulled_at=timezone.now(),
-        )  # notification_raw пуст по умолчанию — извещение ещё не загружено
+            notification_checked_at=timezone.now(), last_pulled_at=timezone.now(),
+        )  # notification_raw пуст, но попытка БЫЛА (checked_at стоит) — реальный сбой
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("tender_selection:list"))
         # class="ts-flag--data" встречается только у самого <span> — не путать с
         # правилом .ts-flag--data в <style> того же шаблона.
         self.assertContains(resp, "ts-flag ts-flag--data")
+
+    def test_never_checked_notification_has_no_warning_badge(self):
+        """Свежевыгруженный тендер, извещение для которого ещё никогда не запрашивали
+        (notification_checked_at пуст) — это не сбой API, а «ещё не проверяли», значок
+        не должен гореть просто потому, что карточку никто не открывал (регрессия:
+        раньше бейдж стоял абсолютно на всех новых тендерах)."""
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="Кружка", law="fz44",
+            last_pulled_at=timezone.now(),
+        )  # notification_raw и notification_checked_at пусты по умолчанию
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list"))
+        self.assertNotContains(resp, "ts-flag ts-flag--data")
 
     def test_loaded_notification_hides_warning_badge(self):
         FoundTender.objects.create(

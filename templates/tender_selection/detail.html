@@ -310,8 +310,24 @@
     var uploadStatus = document.getElementById("ts-doc-upload-status");
     var csrfToken = document.querySelector("#ts-csrf-form [name=csrfmiddlewaretoken]").value;
     var currentIdx = null;
+    var loadingTimer = null;
+
+    // Сервер сначала пробует ЕИС SOAP (до 20с), потом прямую ссылку (до 15с) — итого
+    // до ~35с тишины при обоих сбоях. Без промежуточного сообщения это выглядит как
+    // зависание, а не как реальная работа сети.
+    function startLoadingHint() {
+      clearTimeout(loadingTimer);
+      loadingTimer = setTimeout(function () {
+        body.innerHTML = '<p class="ts-doc-loading">Портал ЕИС долго отвечает, пробую резервный способ…</p>';
+      }, 8000);
+    }
+    function stopLoadingHint() {
+      clearTimeout(loadingTimer);
+      loadingTimer = null;
+    }
 
     function close() {
+      stopLoadingHint();
       modal.classList.remove("is-open");
       fallback.hidden = true;
       uploadInput.value = "";
@@ -328,10 +344,11 @@
       var url = zipEntryUrlTpl.replace("999999", currentIdx)
         .replace("ZZZPATHZZZ", path.split("/").map(encodeURIComponent).join("/"));
       fetch(url).then(function (r) { return r.json(); }).then(showResult)
-        .catch(function () { body.innerHTML = '<p class="ts-sub">Не удалось открыть файл из архива.</p>'; });
+        .catch(function () { stopLoadingHint(); body.innerHTML = '<p class="ts-sub">Не удалось открыть файл из архива.</p>'; });
     }
 
     function showResult(data) {
+      stopLoadingHint();
       title.textContent = data.name || "Документ";
       if (data.error) {
         body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
@@ -380,12 +397,14 @@
         uploadInput.value = "";
         uploadStatus.textContent = "";
         modal.classList.add("is-open");
+        startLoadingHint();
 
         // сеть с сервера до ЕИС теперь есть — сервер качает и разбирает сам, без
         // скачивания в браузере пользователя. Ручная загрузка — только на крайний случай.
         viaServer()
           .then(showResult)
           .catch(function () {
+            stopLoadingHint();
             body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
             fallback.hidden = false;
           });
