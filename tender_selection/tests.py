@@ -465,11 +465,13 @@ class DocumentPreviewTests(TestCase):
         resp = self.client.post(reverse("tender_selection:doc_upload", args=[tender.pk, 0]))
         self.assertIn("Файл не выбран", resp.json()["error"])
 
-    def test_doc_upload_requires_superuser(self):
+    def test_doc_upload_requires_superuser_or_tender_owner(self):
+        # 404, не 403 — доступ теперь per-tender (см. TenderViewerAccessTests), а
+        # тендера pk=1 в этой изолированной БД теста вообще нет.
         User = get_user_model()
         self.client.force_login(User.objects.create_user("u", "u@e.ru", "p"))
         resp = self.client.post(reverse("tender_selection:doc_upload", args=[1, 0]))
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
 
     def test_doc_upload_rejects_get(self):
         User = get_user_model()
@@ -1630,3 +1632,86 @@ class AccessControlTests(TestCase):
         self.client.post(reverse("tender_selection:dismiss", args=[tender.pk]))
         tender.refresh_from_db()
         self.assertEqual(tender.status, FoundTender.DISMISSED)
+
+
+class TenderViewerAccessTests(TestCase):
+    """Менеджер (не суперюзер) может открыть карточку СВОЕГО тендера — того, что
+    стало его просчётом — по ссылке «Открыть карточку →» со страницы просчёта, но
+    не листать каталог подбора (tender_list остаётся суперюзер-only, см.
+    AccessControlTests.test_regular_user_forbidden)."""
+
+    def setUp(self):
+        from tenders.models import TenderEstimate
+
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("admin", "a@e.ru", "pw")
+        self.manager = User.objects.create_user("mgr", "m@e.ru", "pw")
+        self.other_manager = User.objects.create_user("other", "o@e.ru", "pw")
+        self.estimate = TenderEstimate.objects.create(
+            owner=self.manager, tender_number="1", name="Просчёт менеджера",
+        )
+        self.tender = FoundTender.objects.create(
+            purchase_number="1", law="fz44", object_info="x", title="Сувенирка",
+            status=FoundTender.PUSHED, pushed_estimate_id=self.estimate.pk,
+            last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
+        )
+
+    def test_owner_can_open_own_tender_detail(self):
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_owner_sees_link_back_to_estimate_not_catalog(self):
+        # Не просто "содержит /tender-selection/" — этот префикс встречается и в
+        # других ссылках на той же странице (просмотр/скачивание документов).
+        # Проверяем сам текст ссылки-навигации наверху карточки.
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertContains(resp, f'href="{reverse("tender_estimate", args=[self.estimate.pk])}" class="back-link">← назад к просчёту')
+        self.assertNotContains(resp, "к списку")
+
+    def test_superuser_still_sees_link_to_catalog(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertContains(resp, f'href="{reverse("tender_selection:list")}" class="back-link">← к списку')
+
+    def test_other_manager_cannot_open_someone_elses_tender(self):
+        self.client.force_login(self.other_manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_manager_cannot_open_not_yet_pushed_tender(self):
+        fresh = FoundTender.objects.create(
+            purchase_number="2", law="fz44", object_info="x", title="Ещё не в расчёте",
+            last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[fresh.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_manager_still_forbidden_from_catalog_list(self):
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:list"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manager_still_forbidden_from_admin_actions(self):
+        self.client.force_login(self.manager)
+        resp = self.client.post(reverse("tender_selection:dismiss", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.post(reverse("tender_selection:review", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_owner_can_preview_own_tender_documents(self):
+        from .documents import DocumentError
+        from .eis_docs import EisDocsError
+
+        self.client.force_login(self.manager)
+        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("нет сети")), \
+             mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("нет сети")):
+            resp = self.client.get(reverse("tender_selection:doc_preview", args=[self.tender.pk, 0]))
+        self.assertEqual(resp.status_code, 200)  # прошёл контроль доступа, дошёл до бизнес-логики
+
+    def test_other_manager_cannot_preview_documents(self):
+        self.client.force_login(self.other_manager)
+        resp = self.client.get(reverse("tender_selection:doc_preview", args=[self.tender.pk, 0]))
+        self.assertEqual(resp.status_code, 404)

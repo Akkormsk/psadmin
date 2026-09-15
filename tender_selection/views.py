@@ -6,7 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -41,6 +41,35 @@ def superuser_required(view):
         if not request.user.is_superuser:
             raise PermissionDenied
         return view(request, *args, **kwargs)
+
+    return login_required(wrapped)
+
+
+def _tender_viewable_by(user, tender):
+    """Суперюзер видит любой тендер. Менеджер — только тот, что стал ЕГО просчётом
+    (та же проверка владения, что и у самого просчёта — см. _estimate_for_user в
+    tenders/views.py): попасть можно по ссылке «Открыть карточку →» со страницы
+    своего просчёта, а не подбором номера в адресной строке и не через каталог."""
+    if user.is_superuser:
+        return True
+    if tender.status != FoundTender.PUSHED or not tender.pushed_estimate_id:
+        return False
+    from tenders.models import TenderEstimate
+
+    return TenderEstimate.objects.filter(pk=tender.pushed_estimate_id, owner=user).exists()
+
+
+def tender_viewer_required(view):
+    """Как superuser_required, но также пускает владельца просчёта, в который попал
+    именно этот тендер (см. _tender_viewable_by) — карточка тендера и его документы
+    доступны менеджеру со своего просчёта, каталог подбора (tender_list и все
+    остальные view) по-прежнему только суперюзеру."""
+    @wraps(view)
+    def wrapped(request, pk, *args, **kwargs):
+        tender = get_object_or_404(FoundTender, pk=pk)
+        if not _tender_viewable_by(request.user, tender):
+            raise Http404
+        return view(request, pk, *args, **kwargs)
 
     return login_required(wrapped)
 
@@ -123,7 +152,7 @@ def tender_list(request):
     })
 
 
-@superuser_required
+@tender_viewer_required
 def tender_detail(request, pk):
     tender = get_object_or_404(FoundTender, pk=pk)
     payload = notification_for(tender, force=request.GET.get("refresh") == "1")
@@ -183,7 +212,7 @@ def _result_json(name, result):
                          "zip_entries": result.get("zip_entries", [])})
 
 
-@superuser_required
+@tender_viewer_required
 def doc_preview(request, pk, idx):
     tender = get_object_or_404(FoundTender, pk=pk)
     doc, err = _doc_by_idx(tender, idx)
@@ -209,7 +238,7 @@ def doc_preview(request, pk, idx):
     return _result_json(name, result)
 
 
-@superuser_required
+@tender_viewer_required
 @require_POST
 def doc_upload(request, pk, idx):
     """Ручной запасной путь: если у сервера вдруг снова не будет сети до ЕИС —
@@ -235,7 +264,7 @@ def doc_upload(request, pk, idx):
     return _result_json(name, result)
 
 
-@superuser_required
+@tender_viewer_required
 def doc_zip_entry(request, pk, idx, entry):
     """Провал внутрь многофайлового архива: качаем документ заново (файл-то один
     и тот же — кэш предпросмотра держит только итог разбора КОНКРЕТНОГО вложенного

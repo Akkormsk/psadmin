@@ -5,7 +5,11 @@
 
 {% block content %}
 <div class="container ts-detail">
+  {% if request.user.is_superuser %}
   <a href="{% url 'tender_selection:list' %}" class="back-link">← к списку</a>
+  {% elif pushed_estimate_id %}
+  <a href="{% url 'tender_estimate' pushed_estimate_id %}" class="back-link">← назад к просчёту</a>
+  {% endif %}
   <h1>Подбор тендеров</h1>
 
   <section class="panel">
