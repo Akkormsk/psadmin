@@ -432,4 +432,9 @@
   };
   syncProductFields();
   selectStep(1);
+  // Открыли лабораторию — форма должна показывать то, что реально сейчас в
+  // поиске, а не захардкоженные дефолты полей.
+  if (root.dataset.activeConfigSettings) {
+    try { applySettings(JSON.parse(root.dataset.activeConfigSettings)); } catch (_) {}
+  }
 })();

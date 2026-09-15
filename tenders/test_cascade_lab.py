@@ -40,6 +40,21 @@ class CascadeLabViewTests(TestCase):
         self.assertNotContains(response, "Последние прогоны")
         self.assertNotContains(response, "Сохранить как тест")
 
+    def test_active_config_settings_prefill_the_lab_form(self):
+        CascadeConfigVersion.objects.create(
+            name="В поиске", created_by=self.admin, is_active=True,
+            settings={"steps": {"6": {"first_batch": 42}}},
+        )
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("cascade_lab"))
+        self.assertContains(response, "data-active-config-settings=")
+        self.assertContains(response, "&quot;first_batch&quot;: 42")
+
+    def test_no_active_config_leaves_prefill_empty(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("cascade_lab"))
+        self.assertContains(response, 'data-active-config-settings=""')
+
     def test_lab_is_available_only_to_superuser(self):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(reverse("cascade_lab")).status_code, 403)

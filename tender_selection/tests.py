@@ -1383,6 +1383,35 @@ class AccessControlTests(TestCase):
         resp = self.client.get(reverse("tender_selection:list"))
         self.assertContains(resp, "saved-estimate__status-form is-not_interesting")
 
+    def test_missing_notification_shows_warning_badge(self):
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="Кружка", law="fz44",
+            last_pulled_at=timezone.now(),
+        )  # notification_raw пуст по умолчанию — извещение ещё не загружено
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list"))
+        # class="ts-flag--data" встречается только у самого <span> — не путать с
+        # правилом .ts-flag--data в <style> того же шаблона.
+        self.assertContains(resp, "ts-flag ts-flag--data")
+
+    def test_loaded_notification_hides_warning_badge(self):
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="Кружка", law="fz44",
+            notification_raw={"source": {}}, last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list"))
+        self.assertNotContains(resp, "ts-flag ts-flag--data")
+
+    def test_fz223_without_notification_has_no_warning_badge(self):
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="Кружка", law="fz223",
+            last_pulled_at=timezone.now(),
+        )  # у 223-ФЗ нет разобранного извещения по конструкции — это не ошибка
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list"))
+        self.assertNotContains(resp, "ts-flag ts-flag--data")
+
     def test_dismiss_hides_row(self):
         tender = FoundTender.objects.create(
             purchase_number="1", object_info="x", last_pulled_at=timezone.now()

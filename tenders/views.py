@@ -119,6 +119,7 @@ def cascade_lab(request):
         selected_line_id = 0
     if selected_line_id:
         selected_line = TenderLine.objects.select_related("estimate").filter(pk=selected_line_id).first()
+    active_config = CascadeConfigVersion.objects.filter(is_active=True).first()
     return render(request, "tenders/cascade_lab.html", {
         "steps": STEP_DEFINITIONS,
         "lines": TenderLine.objects.select_related("estimate").order_by("-estimate__updated_at", "sort_order")[:250],
@@ -127,7 +128,10 @@ def cascade_lab(request):
             {"id": preset.pk, "name": preset.name, "settings_json": json.dumps(preset.settings, ensure_ascii=False)}
             for preset in CascadeLabPreset.objects.filter(created_by=request.user)[:100]
         ],
-        "active_config": CascadeConfigVersion.objects.filter(is_active=True).first(),
+        "active_config": active_config,
+        # Открыв лабораторию, должны видеть то, что реально сейчас в поиске —
+        # не захардкоженные дефолты формы. JS сразу применяет эти значения.
+        "active_config_settings_json": json.dumps(active_config.settings, ensure_ascii=False) if active_config else "",
         # Список моделей не зашит в код — тянется у самого шлюза (кэш 6
         # часов), поэтому здесь ровно то, что реально можно выбрать. Название,
         # тариф и контекст — из MODEL_LABELS/RATES_RUB_PER_M (шлюз цену по API
