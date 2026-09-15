@@ -482,6 +482,109 @@ class DocumentPreviewTests(TestCase):
         self.assertEqual(resp.status_code, 405)
 
 
+def _build_minimal_doc(word_document_stream: bytes) -> bytes:
+    """Собирает МИНИМАЛЬНЫЙ валидный OLE/CFB-контейнер с одним потоком
+    "WordDocument" — без Word/LibreOffice под рукой это единственный способ
+    честно проверить разбор .doc на настоящей структуре контейнера (round-trip
+    проверен через olefile при разработке). Внутренний формат FIB Word не
+    эмулируем — экстрактор его не разбирает, только сканирует сырые байты потока."""
+    import struct
+
+    SECTOR = 512
+    ENDOFCHAIN, FREESECT, FATSECT, NOSTREAM = 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFD, 0xFFFFFFFF
+
+    def name_field(name):
+        raw = (name + "\0").encode("utf-16-le")
+        return raw + b"\0" * (64 - len(raw))
+
+    size = max(4096, ((len(word_document_stream) + SECTOR - 1) // SECTOR) * SECTOR)
+    stream = word_document_stream + b"\0" * (size - len(word_document_stream))
+    n_stream_sectors = size // SECTOR
+    fat_idx, dir_idx, first_stream = 0, 1, 2
+    total = 2 + n_stream_sectors
+
+    fat = [FREESECT] * 128
+    fat[fat_idx], fat[dir_idx] = FATSECT, ENDOFCHAIN
+    for i in range(n_stream_sectors):
+        sec = first_stream + i
+        fat[sec] = (sec + 1) if i < n_stream_sectors - 1 else ENDOFCHAIN
+    fat_bytes = b"".join(struct.pack("<I", v) for v in fat)
+
+    def dir_entry(name, obj_type, child, start_sector, stream_size):
+        raw_name = (name + "\0").encode("utf-16-le") if name else b""
+        return (
+            name_field(name) + struct.pack("<H", len(raw_name)) + struct.pack("<B", obj_type) +
+            struct.pack("<B", 1) + struct.pack("<I", NOSTREAM) + struct.pack("<I", NOSTREAM) +
+            struct.pack("<I", child) + b"\0" * 16 + struct.pack("<I", 0) + struct.pack("<Q", 0) +
+            struct.pack("<Q", 0) + struct.pack("<I", start_sector) + struct.pack("<Q", stream_size)
+        )
+
+    directory = (
+        dir_entry("Root Entry", 5, 1, ENDOFCHAIN, 0) +
+        dir_entry("WordDocument", 2, NOSTREAM, first_stream, len(stream)) +
+        dir_entry("", 0, NOSTREAM, 0, 0) + dir_entry("", 0, NOSTREAM, 0, 0)
+    )
+
+    difat = [fat_idx] + [FREESECT] * 108
+    header = (
+        bytes.fromhex("d0cf11e0a1b11ae1") + b"\0" * 16 +
+        struct.pack("<H", 0x003E) + struct.pack("<H", 0x0003) + struct.pack("<H", 0xFFFE) +
+        struct.pack("<H", 9) + struct.pack("<H", 6) + b"\0" * 6 +
+        struct.pack("<I", 0) + struct.pack("<I", 1) + struct.pack("<I", dir_idx) +
+        struct.pack("<I", 0) + struct.pack("<I", 0x1000) + struct.pack("<I", ENDOFCHAIN) +
+        struct.pack("<I", 0) + struct.pack("<I", ENDOFCHAIN) + struct.pack("<I", 0) +
+        b"".join(struct.pack("<I", v) for v in difat)
+    )
+
+    body = bytearray(b"\0" * (total * SECTOR))
+    body[fat_idx * SECTOR:(fat_idx + 1) * SECTOR] = fat_bytes
+    body[dir_idx * SECTOR:(dir_idx + 1) * SECTOR] = directory
+    body[first_stream * SECTOR:(first_stream + n_stream_sectors) * SECTOR] = stream
+    return header + bytes(body)
+
+
+class LegacyDocTests(TestCase):
+    """Старый бинарный .doc (OLE) — без Word/LibreOffice, но на настоящей структуре
+    контейнера (см. _build_minimal_doc). Оба возможных варианта хранения текста
+    в WordDocument, плюс отказоустойчивость на мусоре."""
+
+    def test_extracts_utf16_text(self):
+        from .documents import extract_preview
+
+        text = "Спецификация поставки\rКружка сувенирная — 100 шт.\r"
+        data = _build_minimal_doc(text.encode("utf-16-le"))
+        r = extract_preview(data, "Извещение.doc")
+        self.assertEqual(r["kind"], "doc")
+        self.assertIn("Спецификация поставки", r["html"])
+        self.assertIn("Кружка сувенирная", r["html"])
+
+    def test_extracts_cp1251_text(self):
+        """Word 97 часто сохранял русский текст однобайтовым CP1251, а не UTF-16 —
+        экстрактор обязан опознать и этот вариант, не только Unicode."""
+        from .documents import extract_preview
+
+        text = "Техническое задание\rПоставка канцелярских товаров\r"
+        data = _build_minimal_doc(text.encode("cp1251"))
+        r = extract_preview(data, "ТЗ.doc")
+        self.assertEqual(r["kind"], "doc")
+        self.assertIn("Техническое задание", r["html"])
+        self.assertIn("Поставка канцелярских товаров", r["html"])
+
+    def test_non_ole_garbage_is_soft_error_not_crash(self):
+        from .documents import extract_preview
+
+        r = extract_preview(b"just some random short bytes", "fake.doc")
+        self.assertEqual(r["kind"], "doc")
+        self.assertIn("error", r)
+
+    def test_empty_stream_reports_no_text_instead_of_crashing(self):
+        from .documents import extract_preview
+
+        r = extract_preview(_build_minimal_doc(b""), "empty.doc")
+        self.assertEqual(r["kind"], "doc")
+        self.assertIn("нет извлекаемого текста", r["html"])
+
+
 class EisDocsTests(TestCase):
     """Официальный резервный канал ЕИС (getDocsIP) — без сети, всё замокано."""
 

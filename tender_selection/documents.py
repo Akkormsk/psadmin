@@ -1,6 +1,7 @@
 """Предпросмотр документов извещения: качаем файл с zakupki.gov.ru у себя на сервере
 и вытаскиваем текст/таблицы. Требует, чтобы сервер доставал zakupki.gov.ru (прод, РФ).
-Разбор .docx/.xlsx учитывает объединённые ячейки (colspan/rowspan).
+Разбор .docx/.xlsx учитывает объединённые ячейки (colspan/rowspan). Старый .doc —
+приближённое извлечение текста (см. _doc_html), без структуры таблиц.
 """
 from __future__ import annotations
 
@@ -223,6 +224,91 @@ def _pdf_html(data: bytes) -> str:
     return "\n".join(parts) or "<p class='ts-sub'>В PDF нет извлекаемого текста (возможно, скан).</p>"
 
 
+_DOC_LETTER_RE = re.compile(r"[A-Za-zА-Яа-яЁё]")
+_DOC_BREAK_ANSI = frozenset({0x00, 0x07, 0x0B, 0x0C, 0x0D}) | frozenset(range(0x00, 0x20))
+
+
+def _doc_runs_utf16(raw: bytes) -> list[str]:
+    """Печатаемые прогоны, если текст в потоке хранится как UTF-16LE (Unicode-режим
+    Word) — разбиваем по границам абзаца/строки/страницы и по непечатаемым кодам."""
+    paragraphs, current = [], []
+    limit = len(raw) - (len(raw) % 2)
+    for i in range(0, limit, 2):
+        code = raw[i] | (raw[i + 1] << 8)
+        if code in (0x0D, 0x07, 0x0B, 0x0C):
+            if current:
+                paragraphs.append("".join(current))
+                current = []
+        elif (0x20 <= code < 0xD800 or 0xE000 <= code <= 0xFFFD) and code != 0xFEFF:
+            current.append(chr(code))
+        elif current:
+            paragraphs.append("".join(current))
+            current = []
+    if current:
+        paragraphs.append("".join(current))
+    return paragraphs
+
+
+def _doc_runs_ansi(raw: bytes) -> list[str]:
+    """То же самое, но на случай, если текст хранится как однобайтовый CP1251
+    (частый случай для старых русскоязычных .doc — Word 97 сжимал такой текст
+    в один байт на символ вместо двух)."""
+    paragraphs, current = [], []
+    for byte in raw:
+        if byte in _DOC_BREAK_ANSI or byte == 0x7F:
+            if current:
+                paragraphs.append(bytes(current).decode("cp1251", errors="replace"))
+                current = []
+        else:
+            current.append(byte)
+    if current:
+        paragraphs.append(bytes(current).decode("cp1251", errors="replace"))
+    return paragraphs
+
+
+def _clean_doc_paragraphs(paragraphs: list[str]) -> list[str]:
+    cleaned = []
+    for p in paragraphs:
+        p = p.strip()
+        if len(_DOC_LETTER_RE.findall(p)) >= 2:
+            cleaned.append(p)
+    return cleaned
+
+
+def _doc_html(data: bytes) -> str:
+    """Старый бинарный .doc (OLE/CFB, Word 97-2003). Полный разбор формата (FIB и
+    таблица кусков, [MS-DOC]) не делаем — без реальных файлов для проверки риск
+    незаметно исказить текст слишком велик. Вместо этого достаём поток WordDocument
+    и вытаскиваем печатаемые прогоны текста — сразу в двух возможных кодировках
+    (Word хранит текст либо как UTF-16LE, либо как однобайтовый CP1251 — заранее
+    не известно, какая из них использована, потому что это решает таблица кусков,
+    которую мы не разбираем), и берём тот вариант, в котором больше похожих на
+    текст букв. НЕ восстанавливает структуру таблиц и абзацев и может подхватить
+    служебный мусор (стили, поля) — честно помечаем результат как приближённый,
+    вместо жёсткого отказа «предпросмотр недоступен»."""
+    import olefile
+
+    # data= (не позиционный filename=) — иначе olefile трактует bytes короче 1536
+    # байт как ПУТЬ к файлу на диске, а не как содержимое (задокументированная,
+    # но опасная неоднозначность API olefile.isOleFile).
+    if not olefile.isOleFile(data=data):
+        raise DocumentError("Не удалось распознать .doc: это не файл Word 97-2003 (OLE).")
+    with olefile.OleFileIO(io.BytesIO(data)) as ole:
+        if not ole.exists("WordDocument"):
+            raise DocumentError("В файле нет потока WordDocument — это не Word 97-2003 .doc.")
+        raw = ole.openstream("WordDocument").read()
+
+    candidates = [_clean_doc_paragraphs(_doc_runs_utf16(raw)), _clean_doc_paragraphs(_doc_runs_ansi(raw))]
+    paragraphs = max(candidates, key=lambda ps: sum(len(_DOC_LETTER_RE.findall(p)) for p in ps))
+    if not paragraphs:
+        return "<p class='ts-sub'>В .doc нет извлекаемого текста (возможно, сложное форматирование или скан).</p>"
+    html = "".join(f"<p>{escape(p)}</p>" for p in paragraphs[:MAX_PARAGRAPHS])
+    if len(paragraphs) > MAX_PARAGRAPHS:
+        html += "<p>…</p>"
+    html += "<p class='ts-sub'>Старый формат .doc: текст извлечён приближённо (без таблиц), возможны искажения.</p>"
+    return html
+
+
 def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
     """Достаём один файл из архива по имени (провал внутрь многофайлового zip)."""
     try:
@@ -263,7 +349,7 @@ def extract_preview(data: bytes, filename: str) -> dict:
         if ext == "pdf" or data[:4] == b"%PDF":
             return {"kind": "pdf", "html": _pdf_html(data)}
         if ext == "doc":
-            return {"kind": "doc", "error": "Старый формат .doc — предпросмотр недоступен, скачайте файл."}
+            return {"kind": "doc", "html": _doc_html(data)}
     except Exception as exc:  # noqa: BLE001 — любой сбой парсинга -> мягкая ошибка
         return {"kind": ext or "?", "error": f"Не удалось разобрать файл: {exc}"}
     return {"kind": ext or "?", "error": "Формат не поддерживается для предпросмотра."}
