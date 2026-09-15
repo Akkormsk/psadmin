@@ -1,6 +1,7 @@
 """Эквивалентность индекса исходному поиску, включая редкие формы слов."""
 
 from django.test import SimpleTestCase
+from unittest.mock import patch
 
 from .catalog import (
     _aggregate_color_variants,
@@ -38,6 +39,20 @@ class NameIndexTests(SimpleTestCase):
 
 
 class IndexedSearchTests(TestCase):
+    def test_old_semantic_setting_cannot_call_embeddings(self):
+        from .cascade import Cascade
+
+        product = _product("Кружка", external_id="P", supplier_code="oasis")
+        original = {"3": {"sources": "oasis", "semantic": "yes"}}
+        cascade = Cascade({"name": "Кружка"}, step_settings=original)
+        cascade.item = "кружка"
+        with patch("tenders.services._embedding_vectors", side_effect=AssertionError("Embeddings forbidden")) as embeddings:
+            result = cascade.step_3_search_by_name(["кружка"])
+        self.assertEqual([item.pk for item in result], [product.pk])
+        embeddings.assert_not_called()
+        self.assertEqual(cascade.step_settings["3"], {"sources": "oasis"})
+        self.assertEqual(original["3"]["semantic"], "yes")
+
     def test_normalized_family_reaches_name_filter_as_one_parent_with_children(self):
         first = _product("Флешка 16 ГБ", external_id="F16")
         second = _product("Флешка 32 ГБ", external_id="F32")

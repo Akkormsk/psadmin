@@ -29,6 +29,7 @@ from openpyxl import load_workbook
 from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
+from .cascade_settings import text_search_settings
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, recognize_tender_items, refresh_training_example_embedding
 
@@ -125,13 +126,13 @@ def cascade_lab(request):
         "lines": TenderLine.objects.select_related("estimate").order_by("-estimate__updated_at", "sort_order")[:250],
         "selected_line": selected_line,
         "lab_presets": [
-            {"id": preset.pk, "name": preset.name, "settings_json": json.dumps(preset.settings, ensure_ascii=False)}
+            {"id": preset.pk, "name": preset.name, "settings_json": json.dumps(text_search_settings(preset.settings), ensure_ascii=False)}
             for preset in CascadeLabPreset.objects.filter(created_by=request.user)[:100]
         ],
         "active_config": active_config,
         # Открыв лабораторию, должны видеть то, что реально сейчас в поиске —
         # не захардкоженные дефолты формы. JS сразу применяет эти значения.
-        "active_config_settings_json": json.dumps(active_config.settings, ensure_ascii=False) if active_config else "",
+        "active_config_settings_json": json.dumps(text_search_settings(active_config.settings), ensure_ascii=False) if active_config else "",
         # Список моделей не зашит в код — тянется у самого шлюза (кэш 6
         # часов), поэтому здесь ровно то, что реально можно выбрать. Название,
         # тариф и контекст — из MODEL_LABELS/RATES_RUB_PER_M (шлюз цену по API
@@ -226,7 +227,7 @@ def _lab_request_payload(request):
         line = _lab_json(request.POST.get("line_json"), {})
     else:
         line = _lab_line_from_fields(request)
-    settings = _lab_json(request.POST.get("settings"), {"steps": {}})
+    settings = text_search_settings(_lab_json(request.POST.get("settings"), {"steps": {}}))
     if "settings" not in request.POST:
         settings["steps"] = _lab_step_settings(request, settings.get("steps"))
         settings.update({
@@ -270,7 +271,7 @@ def cascade_lab_preset_save(request):
         return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
     try:
         name = str(request.POST.get("name") or "").strip()[:200]
-        settings = _lab_json(request.POST.get("settings"), {})
+        settings = text_search_settings(_lab_json(request.POST.get("settings"), {}))
         if not name:
             raise ValueError("Введите название набора настроек.")
         preset, created = CascadeLabPreset.objects.update_or_create(
@@ -288,7 +289,7 @@ def cascade_lab_activate(request):
         return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
     try:
         name = str(request.POST.get("name") or "Текущие настройки").strip()[:200]
-        settings = _lab_json(request.POST.get("settings"), {})
+        settings = text_search_settings(_lab_json(request.POST.get("settings"), {}))
         with transaction.atomic():
             CascadeConfigVersion.objects.filter(is_active=True).update(is_active=False)
             version = CascadeConfigVersion.objects.create(

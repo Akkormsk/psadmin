@@ -101,6 +101,29 @@ class CascadeLabViewTests(TestCase):
         active = CascadeConfigVersion.objects.get(is_active=True)
         self.assertEqual(active.name, "Проверено на флешках")
 
+    def test_activation_removes_obsolete_step3_parameters_and_preserves_history(self):
+        original = {"steps": {"3": {"sources": "gifts", "semantic": "yes"}, "6": {"ceiling": 32}}, "top": 10}
+        previous = CascadeConfigVersion.objects.create(
+            name="Старая", created_by=self.admin, is_active=True, settings=original,
+        )
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("cascade_lab_activate"), {"settings": json.dumps(original)})
+        self.assertEqual(response.status_code, 200)
+        active = CascadeConfigVersion.objects.get(is_active=True)
+        self.assertEqual(active.settings["steps"]["3"], {"sources": "gifts"})
+        self.assertEqual(active.settings["steps"]["6"], {"ceiling": 32})
+        previous.refresh_from_db()
+        self.assertFalse(previous.is_active)
+        self.assertEqual(previous.settings, original)
+
+    def test_saved_preset_drops_obsolete_step3_parameters(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("cascade_lab_preset_save"), {
+            "name": "Текстовый", "settings": json.dumps({"steps": {"3": {"sources": "all", "semantic": "yes"}}}),
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CascadeLabPreset.objects.get().settings["steps"]["3"], {"sources": "all"})
+
     @patch("tenders.cascade._ai_json")
     @patch("tenders.cascade_lab.preflight")
     def test_projected_cost_limit_stops_before_next_step(self, _preflight, gateway):

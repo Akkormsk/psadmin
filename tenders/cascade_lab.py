@@ -8,6 +8,7 @@ from dataclasses import asdict
 from decimal import Decimal
 
 from .cascade import Cascade, Criterion
+from .cascade_settings import text_search_settings
 from .gateway_budget import preflight, spend_rub
 from .models import CatalogProduct
 
@@ -171,6 +172,7 @@ def execute_cascade_steps(*, line, settings, from_step=1, stop_after=8, snapshot
                           cascade_state=None, expectations=None, prior_total_seconds=None,
                           prior_total_cost_rub=None):
     """Выполняет выбранный диапазон без сохранения прогонов в базе."""
+    settings = text_search_settings(settings)
     preflight()
     from_step = max(1, min(8, int(from_step)))
     stop_after = max(from_step, min(8, int(stop_after)))

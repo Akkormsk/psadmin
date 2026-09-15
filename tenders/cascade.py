@@ -46,6 +46,7 @@ from .catalog import (
     _variant_size,
 )
 from .models import CascadeCache, CatalogProduct, CatalogSupplier
+from .cascade_settings import text_search_settings
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +295,7 @@ class Cascade:
         self.client = client
         self.progress = progress
         self.top = top
-        self.step_settings = step_settings if isinstance(step_settings, dict) else {}
+        self.step_settings = text_search_settings({"steps": step_settings if isinstance(step_settings, dict) else {}})["steps"]
         self.max_cost_rub = max(0, float(max_cost_rub or 0))
 
         try:
