@@ -5,7 +5,8 @@
 <div class="wrap app-home"><main class="container cascade-lab" id="cascade-lab"
       data-execute-url="{% url 'cascade_lab_execute' %}"
       data-preset-url="{% url 'cascade_lab_preset_save' %}"
-      data-activate-url="{% url 'cascade_lab_activate' %}">
+      data-activate-url="{% url 'cascade_lab_activate' %}"
+      data-active-config-settings="{{ active_config_settings_json|escape }}">
   <header class="cascade-lab__header">
     <div><a class="back-link" href="{% url 'tender_home' %}">← К тендерам</a><h1>Лаборатория каскада</h1>
       <p>Восемь изолированных шагов, снимки данных и повтор с выбранного места.</p></div>
