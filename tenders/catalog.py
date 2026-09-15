@@ -1341,7 +1341,18 @@ def _semantic_candidates(query_text, *, supplier_codes=None, top_k=40):
     «линейка»/«Liner»), поэтому каждый кандидат обязан разделить с запросом
     хотя бы один корень слова — та же проверка, что уже отбирает
     лексический пул (`_query_stems`/`_meaningful_tokens`), просто по-новому
-    применённая к более широкому списку кандидатов."""
+    применённая к более широкому списку кандидатов.
+
+    Жёстко выключено, если TIMEWEB_EMBEDDINGS_ENABLED не установлен в 1 — эмбеддинги
+    только на локальной машине, никогда не в проде (см. docs/assistant_protocol.md).
+    Настройка лаборатории `step_3.semantic=yes` живёт в общей БД (CascadeConfigVersion)
+    и включает этот шаг сразу для ВСЕХ прогонов, включая обычный автоматический подбор
+    на бою — 15.09.2026 это положило CPU прода в 100% (в памяти процесса держится вся
+    матрица эмбеддингов каталога, тот же риск, что уронил синк Oasis 14.09.2026)."""
+    from .services import _embeddings_enabled
+
+    if not _embeddings_enabled():
+        return []
     query_text = _text(query_text, 300)
     if not query_text:
         return []

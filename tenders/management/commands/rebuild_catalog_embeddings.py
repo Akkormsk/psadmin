@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from tenders.catalog import rebuild_catalog_embeddings
-from tenders.services import TenderAIError
+from tenders.services import TenderAIError, _embeddings_enabled
 
 
 class Command(BaseCommand):
@@ -12,6 +12,8 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=None, help="Сколько товаров обработать за этот запуск")
 
     def handle(self, *args, **options):
+        if not _embeddings_enabled():
+            raise CommandError("Установите TIMEWEB_EMBEDDINGS_ENABLED=1 (эмбеддинги — только на локальной машине).")
         try:
             result = rebuild_catalog_embeddings(options.get("supplier"), limit=options.get("limit"))
         except TenderAIError as exc:
