@@ -59,6 +59,22 @@ def _docx_vmerge(tc) -> str | None:
     return vm.get(qn("w:val")) or "continue"
 
 
+def _docx_gridspan(tc) -> int:
+    """Сколько столбцов сетки занимает ячейка (w:gridSpan), 1 если не задано."""
+    from docx.oxml.ns import qn
+
+    tc_pr = tc.find(qn("w:tcPr"))
+    if tc_pr is None:
+        return 1
+    gs = tc_pr.find(qn("w:gridSpan"))
+    if gs is None:
+        return 1
+    try:
+        return int(gs.get(qn("w:val")) or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
 def _docx_cell_text(tc) -> str:
     from docx.oxml.ns import qn
 
@@ -71,35 +87,53 @@ def _docx_cell_text(tc) -> str:
 
 
 def _docx_table_html(table) -> str:
-    """Учитывает объединение ячеек (colspan через повтор ячейки в row.cells,
-    rowspan через w:vMerge) — без этого объединённые ячейки в ЕИС-документах
-    (частые в спецификациях/сметах) превращаются в «съехавшую» таблицу."""
-    grid = [[c._tc for c in row.cells] for row in table.rows]
-    n_rows = len(grid)
+    """Учитывает объединение ячеек (colspan через w:gridSpan, rowspan через w:vMerge).
+
+    Важно: работаем с СЫРЫМ XML (w:tr/w:tc) каждой строки, а не через table.rows[i].cells —
+    python-docx для вертикально объединённых ячеек «схлопывает» row.cells так, что ячейка
+    строки-продолжения возвращается как ТОТ ЖЕ объект, что и ячейка-«шапка» (с vMerge=restart),
+    а не её собственный tc с vMerge=continue. Из-за этого проверка на continue никогда не
+    срабатывала и объединённые по вертикали ячейки (частые в спецификациях/сметах ЕИС)
+    дублировались на каждой строке вместо rowspan — таблица «съезжала».
+    """
+    from docx.oxml.ns import qn
+
+    trs = table._tbl.findall(qn("w:tr"))
+    rows_tcs = [tr.findall(qn("w:tc")) for tr in trs]
+    n_rows = len(rows_tcs)
+
+    # Столбец начала каждой ячейки в её строке (с учётом gridSpan предыдущих ячеек той же строки).
+    col_of = []
+    for tcs in rows_tcs:
+        cols, c = [], 0
+        for tc in tcs:
+            cols.append(c)
+            c += _docx_gridspan(tc)
+        col_of.append(cols)
+
+    def tc_at(r2: int, col_idx: int):
+        for tc, c0 in zip(rows_tcs[r2], col_of[r2]):
+            if c0 <= col_idx < c0 + _docx_gridspan(tc):
+                return tc
+        return None
+
     rows_html = []
-    for r, tcs in enumerate(grid):
+    for r, tcs in enumerate(rows_tcs):
         cells_html = []
-        c, n_cols = 0, len(tcs)
-        while c < n_cols:
-            tc = tcs[c]
-            colspan = 1
-            while c + colspan < n_cols and tcs[c + colspan] is tc:
-                colspan += 1
-            vmerge = _docx_vmerge(tc)
-            if vmerge == "continue":
-                c += colspan
+        for tc, col_idx in zip(tcs, col_of[r]):
+            if _docx_vmerge(tc) == "continue":
                 continue
+            colspan = _docx_gridspan(tc)
             rowspan = 1
-            if vmerge == "restart":
+            if _docx_vmerge(tc) == "restart":
                 for r2 in range(r + 1, n_rows):
-                    below = grid[r2]
-                    if c < len(below) and _docx_vmerge(below[c]) == "continue":
+                    below = tc_at(r2, col_idx)
+                    if below is not None and _docx_vmerge(below) == "continue":
                         rowspan += 1
                     else:
                         break
             attrs = (f' colspan="{colspan}"' if colspan > 1 else "") + (f' rowspan="{rowspan}"' if rowspan > 1 else "")
             cells_html.append(f"<td{attrs}>{_docx_cell_text(tc)}</td>")
-            c += colspan
         if cells_html:
             rows_html.append("<tr>" + "".join(cells_html) + "</tr>")
     return f'<table class="ts-doc-table">{"".join(rows_html)}</table>' if rows_html else ""

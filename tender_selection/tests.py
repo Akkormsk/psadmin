@@ -238,8 +238,17 @@ class DocumentPreviewTests(TestCase):
         r = extract_preview(buf.getvalue(), "Смета.docx")
         self.assertEqual(r["kind"], "docx")
         self.assertIn('colspan="3"', r["html"])  # заголовок на всю ширину
+        self.assertIn('rowspan="2"', r["html"])  # "Кружка" на две строки
         self.assertIn("Спецификация", r["html"])
-        self.assertIn("Кружка", r["html"])
+        # "Кружка" — объединённая по вертикали ячейка, должна попасть в HTML РОВНО один раз
+        # (регрессия: python-docx схлопывает row.cells для vMerge-продолжений в тот же
+        # объект, что и ячейка-шапка, из-за чего текст дублировался на каждой строке).
+        self.assertEqual(r["html"].count("Кружка"), 1)
+        # строка-продолжение объединения (третья строка таблицы, "100"/"250") должна
+        # содержать только 2 <td>, а не 3 — если бы rowspan не сработал, тут была бы
+        # лишняя ячейка с "Кружка".
+        continuation_row = r["html"].split("<tr>")[3]
+        self.assertEqual(continuation_row.count("<td"), 2)
 
     def test_extract_xlsx_with_merged_cells(self):
         from openpyxl import Workbook
