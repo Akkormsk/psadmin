@@ -45,9 +45,69 @@ def _ext(filename: str) -> str:
     return (re.sub(r"\.zip$", "", (filename or "").lower())).rsplit(".", 1)[-1]
 
 
+def _docx_vmerge(tc) -> str | None:
+    """None / 'restart' / 'continue' — вертикальное объединение ячейки таблицы."""
+    from docx.oxml.ns import qn
+
+    tc_pr = tc.find(qn("w:tcPr"))
+    if tc_pr is None:
+        return None
+    vm = tc_pr.find(qn("w:vMerge"))
+    if vm is None:
+        return None
+    return vm.get(qn("w:val")) or "continue"
+
+
+def _docx_cell_text(tc) -> str:
+    from docx.oxml.ns import qn
+
+    paras = []
+    for p in tc.findall(qn("w:p")):
+        text = "".join(node.text or "" for node in p.iter(qn("w:t"))).strip()
+        if text:
+            paras.append(escape(text))
+    return "<br>".join(paras)
+
+
+def _docx_table_html(table) -> str:
+    """Учитывает объединение ячеек (colspan через повтор ячейки в row.cells,
+    rowspan через w:vMerge) — без этого объединённые ячейки в ЕИС-документах
+    (частые в спецификациях/сметах) превращаются в «съехавшую» таблицу."""
+    grid = [[c._tc for c in row.cells] for row in table.rows]
+    n_rows = len(grid)
+    rows_html = []
+    for r, tcs in enumerate(grid):
+        cells_html = []
+        c, n_cols = 0, len(tcs)
+        while c < n_cols:
+            tc = tcs[c]
+            colspan = 1
+            while c + colspan < n_cols and tcs[c + colspan] is tc:
+                colspan += 1
+            vmerge = _docx_vmerge(tc)
+            if vmerge == "continue":
+                c += colspan
+                continue
+            rowspan = 1
+            if vmerge == "restart":
+                for r2 in range(r + 1, n_rows):
+                    below = grid[r2]
+                    if c < len(below) and _docx_vmerge(below[c]) == "continue":
+                        rowspan += 1
+                    else:
+                        break
+            attrs = (f' colspan="{colspan}"' if colspan > 1 else "") + (f' rowspan="{rowspan}"' if rowspan > 1 else "")
+            cells_html.append(f"<td{attrs}>{_docx_cell_text(tc)}</td>")
+            c += colspan
+        if cells_html:
+            rows_html.append("<tr>" + "".join(cells_html) + "</tr>")
+    return f'<table class="ts-doc-table">{"".join(rows_html)}</table>' if rows_html else ""
+
+
 def _docx_html(data: bytes) -> str:
     from docx import Document
     from docx.oxml.ns import qn
+    from docx.table import Table
 
     doc = Document(io.BytesIO(data))
     out, count = [], 0
@@ -61,36 +121,54 @@ def _docx_html(data: bytes) -> str:
                 out.append(f"<p>{escape(text)}</p>")
                 count += 1
         elif child.tag == qn("w:tbl"):
-            rows = []
-            for tr in child.iter(qn("w:tr")):
-                cells = []
-                for tc in tr.iter(qn("w:tc")):
-                    cell_text = "".join(node.text or "" for node in tc.iter(qn("w:t"))).strip()
-                    cells.append(f"<td>{escape(cell_text)}</td>")
-                if cells:
-                    rows.append("<tr>" + "".join(cells) + "</tr>")
+            html = _docx_table_html(Table(child, doc))
+            if html:
+                out.append(html)
                 count += 1
-            if rows:
-                out.append('<table class="ts-doc-table">' + "".join(rows) + "</table>")
     return "\n".join(out) or "<p class='ts-sub'>Документ без текста.</p>"
 
 
 def _xlsx_html(data: bytes) -> str:
     from openpyxl import load_workbook
 
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    # read_only не отдаёт merged_cells вообще — без него объединённые ячейки (частые
+    # в сметах/спецификациях ЕИС) превращаются в «съехавшую» таблицу. Файлы уже
+    # ограничены по размеру (MAX_BYTES), поэтому обычная загрузка не проблема.
+    wb = load_workbook(io.BytesIO(data), data_only=True)
     out = []
     for sheet in wb.worksheets:
         out.append(f"<h4>{escape(sheet.title)}</h4>")
-        rows = []
-        for i, row in enumerate(sheet.iter_rows(values_only=True)):
-            if i >= MAX_ROWS:
-                rows.append(f"<tr><td>… ещё строки</td></tr>")
+        span_at = {}  # (row, col) -> (rowspan, colspan) для левой верхней ячейки объединения
+        skip = set()  # (row, col) остальных ячеек объединения — не выводим повторно
+        for mc in sheet.merged_cells.ranges:
+            span_at[(mc.min_row, mc.min_col)] = (mc.max_row - mc.min_row + 1, mc.max_col - mc.min_col + 1)
+            for rr in range(mc.min_row, mc.max_row + 1):
+                for cc in range(mc.min_col, mc.max_col + 1):
+                    if (rr, cc) != (mc.min_row, mc.min_col):
+                        skip.add((rr, cc))
+
+        rows, row_count = [], 0
+        for row in sheet.iter_rows():
+            if row_count >= MAX_ROWS:
+                rows.append("<tr><td>… ещё строки</td></tr>")
                 break
-            values = ["" if v is None else str(v) for v in row]
-            if not any(values):
-                continue
-            rows.append("<tr>" + "".join(f"<td>{escape(v)}</td>" for v in values) + "</tr>")
+            cells, any_value = [], False
+            for cell in row:
+                pos = (cell.row, cell.column)
+                if pos in skip:
+                    continue
+                if cell.value is not None:
+                    any_value = True
+                span = span_at.get(pos)
+                attrs = ""
+                if span:
+                    rs, cs = span
+                    attrs = (f' rowspan="{rs}"' if rs > 1 else "") + (f' colspan="{cs}"' if cs > 1 else "")
+                text = "" if cell.value is None else str(cell.value)
+                cells.append(f"<td{attrs}>{escape(text)}</td>")
+            if any_value:
+                rows.append("<tr>" + "".join(cells) + "</tr>")
+                row_count += 1
         out.append('<table class="ts-doc-table">' + "".join(rows) + "</table>" if rows else "<p class='ts-sub'>Лист пуст.</p>")
     wb.close()
     return "\n".join(out)
