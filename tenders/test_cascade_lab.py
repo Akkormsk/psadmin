@@ -90,6 +90,17 @@ class CascadeLabViewTests(TestCase):
         self.assertEqual(execute.call_args.kwargs["prior_total_seconds"], 4.25)
         self.assertEqual(execute.call_args.kwargs["prior_total_cost_rub"], 1.75)
 
+    @patch("tenders.views.execute_cascade_steps", side_effect=TimeoutError("Достигнут лимит времени прогона"))
+    def test_execute_reports_time_limit(self, _execute):
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("cascade_lab_execute"), {
+            "line_id": self.line.pk,
+            "settings": json.dumps({"steps": {}, "max_seconds": 10}),
+        })
+
+        self.assertEqual(response.status_code, 408)
+        self.assertIn("лимит времени", response.json()["error"])
+
     def test_activate_settings_creates_global_active_version(self):
         self.client.force_login(self.admin)
         response = self.client.post(reverse("cascade_lab_activate"), {
