@@ -1669,11 +1669,20 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
   .summary-row--standard { background:var(--tint-positive); }
   .tender-meta { grid-template-columns:1fr; }
   .tender-meta__name { grid-column:auto; }
-  .tender-lines { overflow-x:auto; padding-bottom:5px; scroll-snap-type:x proximity; }
-  .tender-line { min-width:1050px; padding:10px; scroll-snap-align:start; }
+  .tender-lines { overflow-x:visible; padding-bottom:0; }
+  .tender-line { min-width:0; padding:12px; }
   .tender-line__remove { opacity:1; pointer-events:auto; }
   .tender-line__extra { width:min(430px,70%); }
-  .tender-line__columns { grid-template-columns:1fr 1fr; }
+  .tender-line__columns { grid-template-columns:1fr; gap:10px; }
+  .tender-compact-grid--price, .tender-compact-grid--cost { grid-template-columns:1fr; }
+  /* Десктопная сетка расставляет поля по ячейкам явно через nth-child —
+     на мобильном экране их всех сводим в один столбец, поле за полем. */
+  .tender-compact-grid--price > *, .tender-compact-grid--cost > * { grid-column:1 !important; grid-row:auto !important; }
+  .tender-compact-grid input { min-height:34px; font-size:13px; }
+  .tender-compact-grid > span { min-height:34px; }
+  .tender-table-totals { grid-template-columns:1fr; }
+  .tender-table-totals__half { flex-direction:column; }
+  .tender-table-totals span { min-width:0; }
   .tender-section + .tender-section { margin-top:0; }
   .tender-price-inputs { grid-template-columns:1.5fr .52fr .72fr; gap:6px; }
   .tender-cost-inputs, .tender-metrics { grid-template-columns:repeat(3,1fr); gap:5px; }
