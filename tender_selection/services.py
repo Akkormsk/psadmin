@@ -234,6 +234,12 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     try:
         payload = gosplan.fetch_notification(tender.purchase_number)
     except gosplan.GosplanError:
+        # Помечаем попытку даже на неудаче — иначе «нет данных» в списке (см.
+        # notification_missing в views.py) не отличить от «карточку ещё никто не
+        # открывал»: тендер только что выгружен и извещение для него попросту
+        # никогда не запрашивалось, это не сбой API.
+        tender.notification_checked_at = timezone.now()
+        tender.save(update_fields=["notification_checked_at"])
         return None
     tender.notification_raw = payload
     tender.notification_checked_at = timezone.now()
@@ -296,6 +302,29 @@ def retry_pending_documents(*, limit: int = 5, recent: int = 50) -> tuple[int, i
                 "filename": name, "kind": result.get("kind", ""),
                 "html": result.get("html", ""), "error": result.get("error", ""),
             })
+            succeeded += 1
+    return attempted, succeeded
+
+
+def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[int, int]:
+    """Фоновая догрузка извещений для свежих 44-ФЗ тендеров, у которых ещё не было ни
+    одной попытки. Без этого шага notification_for() вызывается только по клику
+    «Открыть тендер» — новый тендер после выгрузки так и остаётся без извещения (товары,
+    документы) неопределённо долго, а бейдж «⚠ нет данных» в списке (notification_missing,
+    views.py) видит это как «попытка была и провалилась», хотя попытки не было вовсе.
+    Идёт мелкими порциями по тому же паттерну, что retry_pending_documents.
+
+    Возвращает (сколько тендеров пробовали, сколько удалось)."""
+    attempted = succeeded = 0
+    tenders = (
+        FoundTender.objects.filter(law="fz44", notification_checked_at__isnull=True)
+        .order_by("-last_pulled_at")[:recent]
+    )
+    for tender in tenders:
+        if attempted >= limit:
+            break
+        attempted += 1
+        if notification_for(tender):
             succeeded += 1
     return attempted, succeeded
 

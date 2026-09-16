@@ -52,6 +52,15 @@ def _run_once(tick: int) -> None:
 
     close_old_connections()
     try:
+        from .services import retry_pending_notifications
+        attempted, succeeded = retry_pending_notifications()
+        if attempted:
+            logger.warning("autopull: notifications — %d/%d загружено", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_notifications failed")
+
+    close_old_connections()
+    try:
         from .services import retry_pending_documents
         attempted, succeeded = retry_pending_documents()
         if attempted:

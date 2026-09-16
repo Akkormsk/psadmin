@@ -465,11 +465,13 @@ class DocumentPreviewTests(TestCase):
         resp = self.client.post(reverse("tender_selection:doc_upload", args=[tender.pk, 0]))
         self.assertIn("Файл не выбран", resp.json()["error"])
 
-    def test_doc_upload_requires_superuser(self):
+    def test_doc_upload_requires_superuser_or_tender_owner(self):
+        # 404, не 403 — доступ теперь per-tender (см. TenderViewerAccessTests), а
+        # тендера pk=1 в этой изолированной БД теста вообще нет.
         User = get_user_model()
         self.client.force_login(User.objects.create_user("u", "u@e.ru", "p"))
         resp = self.client.post(reverse("tender_selection:doc_upload", args=[1, 0]))
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
 
     def test_doc_upload_rejects_get(self):
         User = get_user_model()
@@ -736,6 +738,100 @@ class RetryPendingDocumentsTests(TestCase):
         with mock.patch("tender_selection.eis_docs.fetch_document_via_eis", return_value=self._docx_bytes()):
             attempted, succeeded = retry_pending_documents(limit=1)
         self.assertEqual((attempted, succeeded), (1, 1))
+
+
+class NotificationForTests(TestCase):
+    """notification_for() должен помечать попытку (notification_checked_at) даже при
+    сбое — иначе бейдж «⚠ нет данных» в списке не отличить от «ещё не проверяли»."""
+
+    def test_success_sets_raw_and_checked_at(self):
+        from .services import notification_for
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.gosplan.fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            payload = notification_for(tender)
+        tender.refresh_from_db()
+        self.assertEqual(payload, NOTIFICATION_FIXTURE)
+        self.assertTrue(tender.notification_raw)
+        self.assertIsNotNone(tender.notification_checked_at)
+
+    def test_failure_still_sets_checked_at(self):
+        from . import gosplan
+        from .services import notification_for
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.gosplan.fetch_notification", side_effect=gosplan.GosplanError("нет сети")):
+            payload = notification_for(tender)
+        tender.refresh_from_db()
+        self.assertIsNone(payload)
+        self.assertFalse(tender.notification_raw)
+        self.assertIsNotNone(tender.notification_checked_at)  # попытка была — это и есть реальный сбой
+
+
+class RetryPendingNotificationsTests(TestCase):
+    """Фоновая догрузка извещений для свежих тендеров — без неё бейдж «нет данных»
+    в списке горел бы на каждом только что выгруженном тендере (см. views.py)."""
+
+    def test_fetches_never_checked_tenders(self):
+        from .services import retry_pending_notifications
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            last_pulled_at=timezone.now(),
+        )  # notification_checked_at пуст — ни разу не пробовали
+        with mock.patch("tender_selection.gosplan.fetch_notification", return_value=NOTIFICATION_FIXTURE) as fetch:
+            attempted, succeeded = retry_pending_notifications()
+        fetch.assert_called_once_with("1")
+        self.assertEqual((attempted, succeeded), (1, 1))
+        tender.refresh_from_db()
+        self.assertTrue(tender.notification_raw)
+
+    def test_skips_already_checked_tenders(self):
+        from .services import retry_pending_notifications
+
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            notification_checked_at=timezone.now(), last_pulled_at=timezone.now(),
+        )  # уже проверяли (успешно или нет) — фон это трогать не должен
+        with mock.patch("tender_selection.gosplan.fetch_notification") as fetch:
+            attempted, succeeded = retry_pending_notifications()
+        fetch.assert_not_called()
+        self.assertEqual((attempted, succeeded), (0, 0))
+
+    def test_respects_limit(self):
+        from .services import retry_pending_notifications
+
+        for i in range(3):
+            FoundTender.objects.create(
+                purchase_number=str(i), object_info="x", title="T", law="fz44",
+                last_pulled_at=timezone.now(),
+            )
+        with mock.patch("tender_selection.gosplan.fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            attempted, succeeded = retry_pending_notifications(limit=1)
+        self.assertEqual((attempted, succeeded), (1, 1))
+
+    def test_fz223_never_attempted(self):
+        """У 223-ФЗ нет извещения по конструкции источника — фон не должен даже
+        пытаться (notification_for сам вернёт None по law, но раз мы отбираем по
+        checked_at, 223-ФЗ тендер так и останется checked_at=None навсегда — это
+        нормально: у него просто никогда не будет notification_missing=True, см.
+        views.py, где условие уже требует law == 'fz44')."""
+        from .services import retry_pending_notifications
+
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz223",
+            last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.gosplan.fetch_notification") as fetch:
+            attempted, succeeded = retry_pending_notifications()
+        fetch.assert_not_called()
+        self.assertEqual((attempted, succeeded), (0, 0))
 
 
 class PriceStatsCollectorTests(TestCase):
@@ -1489,13 +1585,26 @@ class AccessControlTests(TestCase):
     def test_missing_notification_shows_warning_badge(self):
         FoundTender.objects.create(
             purchase_number="1", object_info="x", title="Кружка", law="fz44",
-            last_pulled_at=timezone.now(),
-        )  # notification_raw пуст по умолчанию — извещение ещё не загружено
+            notification_checked_at=timezone.now(), last_pulled_at=timezone.now(),
+        )  # notification_raw пуст, но попытка БЫЛА (checked_at стоит) — реальный сбой
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("tender_selection:list"))
         # class="ts-flag--data" встречается только у самого <span> — не путать с
         # правилом .ts-flag--data в <style> того же шаблона.
         self.assertContains(resp, "ts-flag ts-flag--data")
+
+    def test_never_checked_notification_has_no_warning_badge(self):
+        """Свежевыгруженный тендер, извещение для которого ещё никогда не запрашивали
+        (notification_checked_at пуст) — это не сбой API, а «ещё не проверяли», значок
+        не должен гореть просто потому, что карточку никто не открывал (регрессия:
+        раньше бейдж стоял абсолютно на всех новых тендерах)."""
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="Кружка", law="fz44",
+            last_pulled_at=timezone.now(),
+        )  # notification_raw и notification_checked_at пусты по умолчанию
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list"))
+        self.assertNotContains(resp, "ts-flag ts-flag--data")
 
     def test_loaded_notification_hides_warning_badge(self):
         FoundTender.objects.create(
@@ -1523,3 +1632,86 @@ class AccessControlTests(TestCase):
         self.client.post(reverse("tender_selection:dismiss", args=[tender.pk]))
         tender.refresh_from_db()
         self.assertEqual(tender.status, FoundTender.DISMISSED)
+
+
+class TenderViewerAccessTests(TestCase):
+    """Менеджер (не суперюзер) может открыть карточку СВОЕГО тендера — того, что
+    стало его просчётом — по ссылке «Открыть карточку →» со страницы просчёта, но
+    не листать каталог подбора (tender_list остаётся суперюзер-only, см.
+    AccessControlTests.test_regular_user_forbidden)."""
+
+    def setUp(self):
+        from tenders.models import TenderEstimate
+
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("admin", "a@e.ru", "pw")
+        self.manager = User.objects.create_user("mgr", "m@e.ru", "pw")
+        self.other_manager = User.objects.create_user("other", "o@e.ru", "pw")
+        self.estimate = TenderEstimate.objects.create(
+            owner=self.manager, tender_number="1", name="Просчёт менеджера",
+        )
+        self.tender = FoundTender.objects.create(
+            purchase_number="1", law="fz44", object_info="x", title="Сувенирка",
+            status=FoundTender.PUSHED, pushed_estimate_id=self.estimate.pk,
+            last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
+        )
+
+    def test_owner_can_open_own_tender_detail(self):
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_owner_sees_link_back_to_estimate_not_catalog(self):
+        # Не просто "содержит /tender-selection/" — этот префикс встречается и в
+        # других ссылках на той же странице (просмотр/скачивание документов).
+        # Проверяем сам текст ссылки-навигации наверху карточки.
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertContains(resp, f'href="{reverse("tender_estimate", args=[self.estimate.pk])}" class="back-link">← назад к просчёту')
+        self.assertNotContains(resp, "к списку")
+
+    def test_superuser_still_sees_link_to_catalog(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertContains(resp, f'href="{reverse("tender_selection:list")}" class="back-link">← к списку')
+
+    def test_other_manager_cannot_open_someone_elses_tender(self):
+        self.client.force_login(self.other_manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_manager_cannot_open_not_yet_pushed_tender(self):
+        fresh = FoundTender.objects.create(
+            purchase_number="2", law="fz44", object_info="x", title="Ещё не в расчёте",
+            last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:detail", args=[fresh.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_manager_still_forbidden_from_catalog_list(self):
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse("tender_selection:list"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manager_still_forbidden_from_admin_actions(self):
+        self.client.force_login(self.manager)
+        resp = self.client.post(reverse("tender_selection:dismiss", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.post(reverse("tender_selection:review", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_owner_can_preview_own_tender_documents(self):
+        from .documents import DocumentError
+        from .eis_docs import EisDocsError
+
+        self.client.force_login(self.manager)
+        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("нет сети")), \
+             mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("нет сети")):
+            resp = self.client.get(reverse("tender_selection:doc_preview", args=[self.tender.pk, 0]))
+        self.assertEqual(resp.status_code, 200)  # прошёл контроль доступа, дошёл до бизнес-логики
+
+    def test_other_manager_cannot_preview_documents(self):
+        self.client.force_login(self.other_manager)
+        resp = self.client.get(reverse("tender_selection:doc_preview", args=[self.tender.pk, 0]))
+        self.assertEqual(resp.status_code, 404)
