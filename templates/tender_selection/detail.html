@@ -110,6 +110,19 @@
     {% endif %}
   </section>
 
+  {% if not is_fz223 and card %}
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">Оценка рисков</h2></div>
+    <div id="ts-risk-block" data-risk-url="{% url 'tender_selection:risk_status' tender.pk %}">
+      {% if risk_needs_fetch %}
+      <p class="ts-doc-loading" data-risk-loading>Читаю документы закупки и оцениваю риски…</p>
+      {% else %}
+      {% include "tender_selection/_risk_block.html" %}
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
   {% if price_stats %}
   <section class="panel panel--separated">
     <div class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках</h2></div>
@@ -281,7 +294,11 @@
   .ts-stats-details summary { cursor: pointer; font-size: 13px; color: #4c5fd5; }
   .ts-stats-table { font-size: 12px; margin-top: 10px; }
   .ts-stats-table td { vertical-align: top; }
-  @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } }
+  .ts-risk-table { font-size: 13px; }
+  .ts-risk-table th { text-align: left; color: #8a929e; font-weight: 600; white-space: nowrap; padding-right: 16px; width: 190px; vertical-align: top; }
+  .ts-risk-table td { vertical-align: top; }
+  .ts-risk-narrative { margin: 14px 0 8px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+  @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } }
 </style>
 <script>
   document.querySelectorAll("[data-ts-review]").forEach(function (form) {
@@ -426,6 +443,28 @@
         })
         .catch(function () { uploadStatus.textContent = "Не удалось загрузить файл."; });
     });
+  })();
+
+  (function () {
+    var block = document.getElementById("ts-risk-block");
+    if (!block) return;
+    var baseUrl = block.dataset.riskUrl;
+
+    function render(url) {
+      block.innerHTML = '<p class="ts-doc-loading">Читаю документы закупки и оцениваю риски…</p>';
+      fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+        .then(function (r) { return r.json(); })
+        .then(function (data) { block.innerHTML = data.html; })
+        .catch(function () {
+          block.innerHTML = '<p class="ts-sub">Не удалось загрузить оценку рисков. <button type="button" class="ts-doc-link" data-risk-refresh>Попробовать ещё раз</button></p>';
+        });
+    }
+
+    block.addEventListener("click", function (e) {
+      if (e.target.closest("[data-risk-refresh]")) render(baseUrl + "?refresh=1");
+    });
+
+    if (block.querySelector("[data-risk-loading]")) render(baseUrl);
   })();
 </script>
 {% endblock %}

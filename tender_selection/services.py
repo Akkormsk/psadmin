@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 from django.utils import timezone
 
 from . import gosplan
+from .documents import DocumentError, fetch_document
+from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import FilterSettings, FoundTender, Organization, PullRun
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -221,6 +223,19 @@ def run_pull(
     return run
 
 
+def _fetch_doc_bytes(tender, url, name):
+    """Официальный канал ЕИС первым (сеть с сервера есть), прямая ссылка — подстраховка
+    на случай проблем с токеном/лимитом. Общее для просмотра, захода внутрь архива и
+    оценки рисков — каждый раз нужен весь файл заново, кэшируется только итог разбора."""
+    try:
+        return fetch_document_via_eis(tender.purchase_number, name)
+    except EisDocsError as eis_exc:
+        try:
+            return fetch_document(url, timeout=15)
+        except DocumentError as direct_exc:
+            raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
+
+
 def notification_for(tender, *, force: bool = False) -> dict | None:
     """Извещение по тендеру: из кэша, иначе один запрос к API. Возвращает сырой payload.
 
@@ -376,6 +391,62 @@ def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
         tender.extras_checked_at = now
         tender.save(update_fields=["clarifications_raw", "complaints_raw", "extras_checked_at"])
     return clar, comp
+
+
+def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
+    """Оценка рисков тендера по вложенным документам (см. risk_assessment.py):
+    срок исполнения, обеспечение, ст.96 44-ФЗ, штрафы, нацрежим, образцы + свободный текст.
+
+    Из кэша, иначе один запрос к ИИ-шлюзу (с одним внутренним повтором при неполном
+    ответе — см. risk_assessment.assess). Только 44-ФЗ и только если извещение уже
+    загружено (нужен список документов) — иначе сначала notification_for(tender).
+    Сбой не роняет карточку: отмечаем попытку и сохраняем причину в risk_error.
+    """
+    if tender.law != "fz44":
+        return None
+    if tender.risk_assessment and not force:
+        return tender.risk_assessment
+    if not tender.notification_raw:
+        return None
+
+    from .notification import parse_notification
+    from .risk_assessment import RiskAssessmentError, assess, build_context, select_documents
+
+    card = parse_notification(tender.notification_raw)
+    documents = select_documents(card.get("documents") or [])
+    if not documents:
+        tender.risk_checked_at = timezone.now()
+        tender.risk_error = "В извещении нет подходящих документов (проект контракта/ТЗ/описание)."
+        tender.save(update_fields=["risk_checked_at", "risk_error"])
+        return None
+
+    context, used_names = build_context(
+        tender, card, documents, fetch=lambda url, name: _fetch_doc_bytes(tender, url, name)
+    )
+    if not used_names:
+        # context не пуст даже без единого документа — туда всегда попадает сводка
+        # извещения (_card_summary), поэтому проверяем именно used_names. Иначе
+        # молча уходили в оценку по одним только данным извещения, платя за живой
+        # запрос и выдавая её неотличимо от настоящей оценки по документам.
+        tender.risk_checked_at = timezone.now()
+        tender.risk_error = "Не удалось скачать ни один документ для анализа."
+        tender.save(update_fields=["risk_checked_at", "risk_error"])
+        return None
+
+    try:
+        result = assess(context)
+    except RiskAssessmentError as exc:
+        tender.risk_checked_at = timezone.now()
+        tender.risk_error = str(exc)
+        tender.save(update_fields=["risk_checked_at", "risk_error"])
+        return None
+
+    tender.risk_assessment = result["data"]
+    tender.risk_assessment_docs = used_names
+    tender.risk_checked_at = timezone.now()
+    tender.risk_error = ""
+    tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
+    return tender.risk_assessment
 
 
 def push_to_estimate(tender, user):

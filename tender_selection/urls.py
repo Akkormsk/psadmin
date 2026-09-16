@@ -10,6 +10,7 @@ urlpatterns = [
     path("words/", views.save_words, name="save_words"),
     path("pull/", views.pull_now, name="pull"),
     path("<int:pk>/", views.tender_detail, name="detail"),
+    path("<int:pk>/risk/", views.risk_status, name="risk_status"),
     path("<int:pk>/doc/<int:idx>/", views.doc_preview, name="doc_preview"),
     path("<int:pk>/doc/<int:idx>/upload/", views.doc_upload, name="doc_upload"),
     path("<int:pk>/doc/<int:idx>/zip/<path:entry>/", views.doc_zip_entry, name="doc_zip_entry"),

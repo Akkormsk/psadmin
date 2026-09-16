@@ -33,7 +33,10 @@ class FoundTenderAdmin(admin.ModelAdmin):
     list_filter = ("law", "review", "status", "stage", "purchase_type")
     list_editable = ("review",)
     search_fields = ("purchase_number", "title", "object_info", "customer_inn")
-    readonly_fields = ("raw", "notification_raw", "clarifications_raw", "complaints_raw", "first_seen_at")
+    readonly_fields = (
+        "raw", "notification_raw", "clarifications_raw", "complaints_raw",
+        "risk_assessment", "risk_assessment_docs", "first_seen_at",
+    )
     date_hierarchy = "published_at"
 
 

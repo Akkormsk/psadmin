@@ -328,13 +328,13 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=self._docx_bytes()) as f:
+        with mock.patch("tender_selection.services.fetch_document_via_eis", return_value=self._docx_bytes()) as f:
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Описание объекта закупки", resp.json()["html"])
         f.assert_called_once()
         # second call served from cache — no fetch
-        with mock.patch("tender_selection.views.fetch_document_via_eis") as f2:
+        with mock.patch("tender_selection.services.fetch_document_via_eis") as f2:
             self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         f2.assert_not_called()
 
@@ -347,8 +347,8 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("токен не задан")), \
-             mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("ЕИС недоступен")):
+        with mock.patch("tender_selection.services.fetch_document_via_eis", side_effect=EisDocsError("токен не задан")), \
+             mock.patch("tender_selection.services.fetch_document", side_effect=DocumentError("ЕИС недоступен")):
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         self.assertIn("токен не задан", resp.json()["error"])
         self.assertIn("ЕИС недоступен", resp.json()["error"])
@@ -363,8 +363,8 @@ class DocumentPreviewTests(TestCase):
             purchase_number="123", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("лимит ЕИС исчерпан")) as via_eis, \
-             mock.patch("tender_selection.views.fetch_document", return_value=self._docx_bytes()) as direct:
+        with mock.patch("tender_selection.services.fetch_document_via_eis", side_effect=EisDocsError("лимит ЕИС исчерпан")) as via_eis, \
+             mock.patch("tender_selection.services.fetch_document", return_value=self._docx_bytes()) as direct:
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         via_eis.assert_called_once_with("123", mock.ANY)
         direct.assert_called_once()
@@ -380,8 +380,8 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=self._docx_bytes()), \
-             mock.patch("tender_selection.views.fetch_document") as direct:
+        with mock.patch("tender_selection.services.fetch_document_via_eis", return_value=self._docx_bytes()), \
+             mock.patch("tender_selection.services.fetch_document") as direct:
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[tender.pk, 0]))
         direct.assert_not_called()
         self.assertIn("Описание объекта закупки", resp.json()["html"])
@@ -394,7 +394,7 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=archive):
+        with mock.patch("tender_selection.services.fetch_document_via_eis", return_value=archive):
             resp = self.client.get(reverse("tender_selection:doc_zip_entry", args=[tender.pk, 0, "Пр1.docx"]))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Описание объекта закупки", resp.json()["html"])
@@ -407,7 +407,7 @@ class DocumentPreviewTests(TestCase):
             purchase_number="1", object_info="x", title="T", last_pulled_at=timezone.now(),
             notification_raw=NOTIFICATION_FIXTURE,
         )
-        with mock.patch("tender_selection.views.fetch_document_via_eis", return_value=archive):
+        with mock.patch("tender_selection.services.fetch_document_via_eis", return_value=archive):
             resp = self.client.get(reverse("tender_selection:doc_zip_entry", args=[tender.pk, 0, "absent.docx"]))
         self.assertIn("не найден", resp.json()["error"])
 
@@ -864,6 +864,246 @@ class RetryPendingNotificationsTests(TestCase):
             attempted, succeeded = retry_pending_notifications()
         fetch.assert_not_called()
         self.assertEqual((attempted, succeeded), (0, 0))
+
+
+class RiskAssessmentSelectDocumentsTests(TestCase):
+    def test_prioritizes_contract_over_description(self):
+        from .risk_assessment import select_documents
+
+        docs = [
+            {"name": "Описание объекта закупки.docx", "kind": "Описание объекта закупки", "url": "a"},
+            {"name": "Проект контракта.docx", "kind": "Проект контракта", "url": "b"},
+        ]
+        selected = select_documents(docs)
+        self.assertEqual([d["name"] for d in selected], ["Проект контракта.docx", "Описание объекта закупки.docx"])
+
+    def test_skips_images_and_price_justification(self):
+        from .risk_assessment import select_documents
+
+        docs = [
+            {"name": "Обоснование НМЦК.docx", "kind": "Обоснование начальной (максимальной) цены контракта", "url": "a"},
+            {"name": "Фото образца.jpg", "kind": "Изображение", "url": "b"},
+        ]
+        self.assertEqual(select_documents(docs), [])
+
+    def test_keeps_only_first_document_per_group(self):
+        from .risk_assessment import select_documents
+
+        docs = [
+            {"name": f"Проект контракта {i}.docx", "kind": "Проект контракта", "url": str(i)}
+            for i in range(4)
+        ]
+        selected = select_documents(docs)
+        self.assertEqual([d["name"] for d in selected], ["Проект контракта 0.docx"])
+
+    def test_technical_spec_counts_as_description_group(self):
+        from .risk_assessment import select_documents
+
+        docs = [
+            {"name": "Проект контракта.docx", "kind": "Проект контракта", "url": "a"},
+            {"name": "Техническое задание.docx", "kind": "Техническое задание", "url": "b"},
+        ]
+        selected = select_documents(docs)
+        self.assertEqual([d["name"] for d in selected], ["Проект контракта.docx", "Техническое задание.docx"])
+
+
+class RiskAssessmentJsonParsingTests(TestCase):
+    def test_strips_code_fence(self):
+        from .risk_assessment import _json_from_model
+
+        self.assertEqual(_json_from_model('```json\n{"a": 1}\n```'), {"a": 1})
+
+    def test_recovers_from_extra_data_after_json(self):
+        from .risk_assessment import _json_from_model
+
+        self.assertEqual(_json_from_model('{"a": 1} что-то лишнее после'), {"a": 1})
+
+    def test_raises_on_garbage(self):
+        from .risk_assessment import RiskAssessmentError, _json_from_model
+
+        with self.assertRaises(RiskAssessmentError):
+            _json_from_model("совсем не похоже на json")
+
+
+class RiskAssessmentRetryTests(TestCase):
+    """assess() должен повторить запрос, если модель вернула не все обязательные ключи —
+    живой тест 2026-09-16 показал, что так бывает даже без обрезания по max_tokens."""
+
+    def test_complete_response_no_retry(self):
+        from .risk_assessment import REQUIRED_KEYS, assess
+
+        full = {key: "x" for key in REQUIRED_KEYS}
+        with mock.patch("tender_selection.risk_assessment.call_gateway", return_value={"data": full, "usage": {}}) as call:
+            result = assess("контекст")
+        call.assert_called_once()
+        self.assertEqual(result["data"], full)
+
+    def test_incomplete_response_triggers_one_retry_and_keeps_better_result(self):
+        from .risk_assessment import REQUIRED_KEYS, assess
+
+        partial = {key: "x" for key in list(REQUIRED_KEYS)[:5]}
+        full = {key: "x" for key in REQUIRED_KEYS}
+        with mock.patch(
+            "tender_selection.risk_assessment.call_gateway",
+            side_effect=[{"data": partial, "usage": {}}, {"data": full, "usage": {}}],
+        ) as call:
+            result = assess("контекст")
+        self.assertEqual(call.call_count, 2)
+        self.assertEqual(result["data"], full)
+
+
+class RiskAssessmentForTests(TestCase):
+    """risk_assessment_for() — тот же паттерн кэширования/пометки попытки, что и
+    у notification_for()/extras_for() (см. NotificationForTests, ExtrasForTests)."""
+
+    def _tender(self, **kw):
+        defaults = dict(purchase_number="1", object_info="x", title="T", law="fz44", last_pulled_at=timezone.now())
+        defaults.update(kw)
+        return FoundTender.objects.create(**defaults)
+
+    def test_fz223_skipped(self):
+        from .services import risk_assessment_for
+
+        tender = self._tender(law="fz223")
+        self.assertIsNone(risk_assessment_for(tender))
+
+    def test_without_notification_returns_none(self):
+        from .services import risk_assessment_for
+
+        tender = self._tender()
+        self.assertIsNone(risk_assessment_for(tender))
+
+    def test_cache_is_used_without_recomputing(self):
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw=NOTIFICATION_FIXTURE, risk_assessment={"legal_risks": "уже оценено"})
+        with mock.patch("tender_selection.risk_assessment.assess") as assess:
+            result = risk_assessment_for(tender)
+        assess.assert_not_called()
+        self.assertEqual(result, {"legal_risks": "уже оценено"})
+
+    def test_success_saves_result_and_used_documents(self):
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw=NOTIFICATION_FIXTURE)
+        fake_result = {"data": {"legal_risks": "норм"}, "usage": {}}
+        with mock.patch("tender_selection.services._fetch_doc_bytes", return_value=b"x"), \
+             mock.patch("tender_selection.documents.extract_preview", return_value={"html": "<p>текст</p>"}), \
+             mock.patch("tender_selection.risk_assessment.assess", return_value=fake_result) as assess:
+            result = risk_assessment_for(tender)
+        assess.assert_called_once()
+        self.assertEqual(result, {"legal_risks": "норм"})
+        tender.refresh_from_db()
+        self.assertEqual(tender.risk_assessment, {"legal_risks": "норм"})
+        self.assertEqual(tender.risk_assessment_docs, ["Описание объекта закупки.docx"])
+        self.assertIsNotNone(tender.risk_checked_at)
+        self.assertEqual(tender.risk_error, "")
+
+    def test_force_recomputes_even_if_cached(self):
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw=NOTIFICATION_FIXTURE, risk_assessment={"legal_risks": "старое"})
+        fake_result = {"data": {"legal_risks": "новое"}, "usage": {}}
+        with mock.patch("tender_selection.services._fetch_doc_bytes", return_value=b"x"), \
+             mock.patch("tender_selection.documents.extract_preview", return_value={"html": "<p>текст</p>"}), \
+             mock.patch("tender_selection.risk_assessment.assess", return_value=fake_result):
+            result = risk_assessment_for(tender, force=True)
+        self.assertEqual(result, {"legal_risks": "новое"})
+
+    def test_no_relevant_documents_records_error_without_calling_gateway(self):
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw={"doc_type": "epNotificationEF2020", "source": {}})
+        with mock.patch("tender_selection.risk_assessment.assess") as assess:
+            result = risk_assessment_for(tender)
+        assess.assert_not_called()
+        self.assertIsNone(result)
+        tender.refresh_from_db()
+        self.assertIn("документ", tender.risk_error)
+        self.assertIsNotNone(tender.risk_checked_at)
+
+    def test_all_documents_failing_to_download_does_not_call_gateway(self):
+        """Регрессия: build_context() всегда кладёт в context сводку извещения, даже
+        если ни один документ не скачался — раньше это маскировало полный сбой
+        загрузки и уходило в платный запрос по одной только сводке."""
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw=NOTIFICATION_FIXTURE)
+        with mock.patch("tender_selection.services._fetch_doc_bytes", side_effect=Exception("сеть недоступна")), \
+             mock.patch("tender_selection.risk_assessment.assess") as assess:
+            result = risk_assessment_for(tender)
+        assess.assert_not_called()
+        self.assertIsNone(result)
+        tender.refresh_from_db()
+        self.assertIn("скачать", tender.risk_error)
+
+    def test_gateway_failure_recorded_not_raised(self):
+        from .risk_assessment import RiskAssessmentError
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw=NOTIFICATION_FIXTURE)
+        with mock.patch("tender_selection.services._fetch_doc_bytes", return_value=b"x"), \
+             mock.patch("tender_selection.documents.extract_preview", return_value={"html": "<p>текст</p>"}), \
+             mock.patch("tender_selection.risk_assessment.assess", side_effect=RiskAssessmentError("нет ключа")):
+            result = risk_assessment_for(tender)
+        self.assertIsNone(result)
+        tender.refresh_from_db()
+        self.assertEqual(tender.risk_error, "нет ключа")
+        self.assertIsNotNone(tender.risk_checked_at)
+
+
+class RiskStatusViewTests(TestCase):
+    """Оценка рисков не должна блокировать открытие карточки (может идти десятки
+    секунд — сеть до ЕИС) — первый расчёт уходит в JS-подгружаемый блок risk_status."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("riskadmin", "risk@e.ru", "pw")
+        self.client.force_login(self.admin)
+        self.tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44",
+            notification_raw=NOTIFICATION_FIXTURE, last_pulled_at=timezone.now(),
+        )
+
+    def test_detail_page_shows_spinner_placeholder_without_calling_gateway(self):
+        # "data-risk-loading" встречается и как JS-селектор в инлайн-скрипте, поэтому
+        # SSR-состояние проверяем через context, а не грепом по HTML-тексту страницы.
+        with mock.patch("tender_selection.risk_assessment.assess") as assess:
+            resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        assess.assert_not_called()
+        self.assertTrue(resp.context["risk_needs_fetch"])
+        self.assertContains(resp, "data-risk-url")
+
+    def test_cached_result_renders_inline_without_spinner(self):
+        self.tender.risk_assessment = {"legal_risks": "уже оценено"}
+        self.tender.risk_checked_at = timezone.now()
+        self.tender.save(update_fields=["risk_assessment", "risk_checked_at"])
+        resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertFalse(resp.context["risk_needs_fetch"])
+        self.assertContains(resp, "уже оценено")
+
+    def test_endpoint_computes_and_returns_html(self):
+        fake_result = {"data": {"legal_risks": "норм"}, "usage": {}}
+        with mock.patch("tender_selection.services._fetch_doc_bytes", return_value=b"x"), \
+             mock.patch("tender_selection.documents.extract_preview", return_value={"html": "<p>текст</p>"}), \
+             mock.patch("tender_selection.risk_assessment.assess", return_value=fake_result):
+            resp = self.client.get(reverse("tender_selection:risk_status", args=[self.tender.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("норм", resp.json()["html"])
+        self.tender.refresh_from_db()
+        self.assertEqual(self.tender.risk_assessment, {"legal_risks": "норм"})
+
+    def test_endpoint_respects_refresh_param(self):
+        self.tender.risk_assessment = {"legal_risks": "старое"}
+        self.tender.risk_checked_at = timezone.now()
+        self.tender.save(update_fields=["risk_assessment", "risk_checked_at"])
+        fake_result = {"data": {"legal_risks": "новое"}, "usage": {}}
+        with mock.patch("tender_selection.services._fetch_doc_bytes", return_value=b"x"), \
+             mock.patch("tender_selection.documents.extract_preview", return_value={"html": "<p>текст</p>"}), \
+             mock.patch("tender_selection.risk_assessment.assess", return_value=fake_result) as assess:
+            resp = self.client.get(reverse("tender_selection:risk_status", args=[self.tender.pk]) + "?refresh=1")
+        assess.assert_called_once()
+        self.assertIn("новое", resp.json()["html"])
 
 
 class PriceStatsCollectorTests(TestCase):
@@ -1557,6 +1797,61 @@ class DetailViewTests(TestCase):
         self.assertContains(resp, "Не удалось загрузить извещение")
 
 
+class OpenedAtTests(TestCase):
+    """«Непрочитанные» тендеры выделяются в списке жирным (is-unread) — открытие
+    карточки должно проставлять opened_at один раз и не трогать его повторно."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("openadmin", "open@e.ru", "pw")
+        self.client.force_login(self.admin)
+        for name in ("fetch_clarifications", "fetch_complaints"):
+            patcher = mock.patch.object(gosplan, name, return_value=[])
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_first_open_sets_opened_at(self):
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44", last_pulled_at=timezone.now(),
+        )
+        self.assertIsNone(tender.opened_at)
+        with mock.patch.object(gosplan, "fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            self.client.get(reverse("tender_selection:detail", args=[tender.pk]))
+        tender.refresh_from_db()
+        self.assertIsNotNone(tender.opened_at)
+
+    def test_second_open_does_not_change_opened_at(self):
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="T", law="fz44", last_pulled_at=timezone.now(),
+        )
+        with mock.patch.object(gosplan, "fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            self.client.get(reverse("tender_selection:detail", args=[tender.pk]))
+        tender.refresh_from_db()
+        first = tender.opened_at
+        with mock.patch.object(gosplan, "fetch_notification", return_value=NOTIFICATION_FIXTURE):
+            self.client.get(reverse("tender_selection:detail", args=[tender.pk]))
+        tender.refresh_from_db()
+        self.assertEqual(tender.opened_at, first)
+
+    def test_list_marks_unopened_tender_unread(self):
+        # плюс/минус-слова (см. миграции 0013/0014) по умолчанию скрывают тендеры
+        # с не подходящим по смыслу названием — ?all=1 показывает все, как и сама
+        # ссылка «Показать все» в шаблоне.
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="ТендерОдинЕщёНеОткрыт", last_pulled_at=timezone.now(),
+        )
+        FoundTender.objects.create(
+            purchase_number="2", object_info="x", title="ТендерДваУжеОткрыт", opened_at=timezone.now(),
+            last_pulled_at=timezone.now(),
+        )
+        resp = self.client.get(reverse("tender_selection:list") + "?all=1")
+        content = resp.content.decode()
+        unread_pos = content.index("ТендерОдинЕщёНеОткрыт")
+        read_pos = content.index("ТендерДваУжеОткрыт")
+        self.assertIn("is-unread", content[max(0, unread_pos - 400):unread_pos])
+        self.assertNotIn("is-unread", content[max(0, read_pos - 400):read_pos])
+
+
 class AccessControlTests(TestCase):
     def setUp(self):
         User = get_user_model()
@@ -1738,8 +2033,8 @@ class TenderViewerAccessTests(TestCase):
         from .eis_docs import EisDocsError
 
         self.client.force_login(self.manager)
-        with mock.patch("tender_selection.views.fetch_document_via_eis", side_effect=EisDocsError("нет сети")), \
-             mock.patch("tender_selection.views.fetch_document", side_effect=DocumentError("нет сети")):
+        with mock.patch("tender_selection.services.fetch_document_via_eis", side_effect=EisDocsError("нет сети")), \
+             mock.patch("tender_selection.services.fetch_document", side_effect=DocumentError("нет сети")):
             resp = self.client.get(reverse("tender_selection:doc_preview", args=[self.tender.pk, 0]))
         self.assertEqual(resp.status_code, 200)  # прошёл контроль доступа, дошёл до бизнес-логики
 
