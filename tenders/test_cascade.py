@@ -130,13 +130,11 @@ class CascadeStep1Tests(TestCase):
         self.assertEqual(gw2.calls["step1"], 0)
 
     def test_shifted_n_labels_do_not_misalign_criteria_when_counts_match(self):
-        """Регрессия к реальному сбою: модель сама теряет счёт на длинных
-        списках и проставляет "n" со сдвигом на одну позицию, хотя сами
-        критерии в ответе идут в правильном порядке (замечено дважды на
-        реальных прогонах). Раньше код доверял именно "n" — требование
-        одной строки подставлялось к соседней, шаг 5 сравнивал не с тем.
-        Когда количество критериев совпадает со строками один в один, код
-        обязан довериться ПОРЯДКУ ответа, а не сбившейся метке."""
+        """Основной формат ответа — объект с ключом-номером строки (см. ниже),
+        но если модель всё равно вернёт старый формат — массив с полем "n" —
+        код обязан остаться хотя бы настолько же надёжным, каким был раньше:
+        при точном совпадении длины доверять порядку ответа, а не сбившейся
+        метке "n" (модель теряет счёт на длинных списках)."""
         rows = [
             {"label": "Цвет", "value": "синий"},
             {"label": "Материал", "value": "хлопок"},
@@ -152,9 +150,9 @@ class CascadeStep1Tests(TestCase):
         self.assertEqual([c.value for c in result.tz], ["синий", "хлопок", "M"])
 
     def test_mismatched_criteria_count_still_uses_n_as_the_fallback(self):
-        """Когда критериев меньше, чем строк ТЗ (модель что-то пропустила
-        или объединила), порядковое сопоставление уже не гарантированно
-        верно — используем "n" как единственную зацепку, как и раньше."""
+        """Легаси-путь (массив): когда критериев меньше, чем строк ТЗ,
+        порядковое сопоставление не гарантированно верно — используем "n"
+        как единственную зацепку, как и раньше."""
         rows = [
             {"label": "Цвет", "value": "синий"},
             {"label": "Материал", "value": "хлопок"},
@@ -198,6 +196,60 @@ class CascadeStep1Tests(TestCase):
         ])
         result = _run(gw, _line(rows=rows))
         self.assertNotIn("step1_count_mismatch", result.diagnostics)
+
+    def test_dict_keyed_response_matches_by_explicit_row_number(self):
+        """Основной формат ответа теперь — объект {"номер строки": разбор},
+        а не массив с порядком/полем "n". Ключ порядка появления в JSON-объекте
+        (в отличие от массива) ничего не значит — код обязан искать именно
+        по строковому ключу "1","2","3", а не по тому, в каком порядке модель
+        решила их перечислить."""
+        rows = [
+            {"label": "Цвет", "value": "синий"},
+            {"label": "Материал", "value": "хлопок"},
+            {"label": "Размер", "value": "M"},
+        ]
+        gw = _Gateway(criteria={
+            "3": {"concept": "размер", "operator": "in", "value": "M", "keep": True, "options": ["M"]},
+            "1": {"concept": "цвет изделия", "operator": "=", "value": "синий", "keep": True},
+            "2": {"concept": "материал", "operator": "=", "value": "хлопок", "keep": True},
+        })
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual([c.concept for c in result.tz], ["цвет изделия", "материал", "размер"])
+        self.assertEqual([c.value for c in result.tz], ["синий", "хлопок", "M"])
+        self.assertNotIn("step1_count_mismatch", result.diagnostics)
+
+    def test_dict_keyed_response_survives_the_real_gemini_scrambling_bug(self):
+        """Регрессия к реальному сбою на живых прогонах (кэш 14.09.2026,
+        gemini-3.1-flash-lite): при равном количестве строк и записей модель
+        всё же вернула запись №2 с разбором содержимого строки №5 (перепутала
+        местами, хотя формально ответила по порядку и без пропусков) — из-за
+        этого «Метод нанесения символики» в матрице показывал требование
+        «250-300» (плотность ткани). С массивом+порядком это было
+        неустранимо: сама модель ошиблась в позиции. С объектом по номеру
+        строки такая ошибка физически невозможна на уровне сопоставления —
+        даже если содержание под ключом неверно, оно попадёт ИМЕННО в
+        критерий с этим номером, а не соседний."""
+        rows = [
+            {"label": "Метод нанесения символики", "value": "прямая компьютерная вышивка"},
+            {"label": "Плотность ткани", "value": "250-300"},
+        ]
+        gw = _Gateway(criteria={
+            "1": {"concept": "Метод нанесения символики", "operator": "=", "value": "прямая компьютерная вышивка", "keep": True},
+            "2": {"concept": "Плотность ткани основы", "operator": "=", "value": "250-300", "unit": "г/м2", "keep": True},
+        })
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(result.tz[0].label, "Метод нанесения символики")
+        self.assertEqual(result.tz[0].value, "прямая компьютерная вышивка")
+        self.assertEqual(result.tz[1].label, "Плотность ткани")
+        self.assertEqual(result.tz[1].value, "250-300")
+
+    def test_dict_response_missing_a_key_is_recorded_in_diagnostics(self):
+        rows = [{"label": "Цвет", "value": "синий"}, {"label": "Материал", "value": "хлопок"}]
+        gw = _Gateway(criteria={"1": {"concept": "цвет изделия", "operator": "=", "value": "синий", "keep": True}})
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(result.diagnostics.get("step1_count_mismatch"), {"rows": 2, "criteria": 1})
+        self.assertEqual(result.tz[1].label, "Материал")
+        self.assertEqual(result.tz[1].concept, "Материал")
 
     def test_marking_row_is_unchecked_by_the_model(self):
         rows = [{"label": "Маркировка", "value": "Честный Знак"}]
