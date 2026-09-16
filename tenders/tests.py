@@ -1626,6 +1626,57 @@ class TenderTests(TestCase):
 
         self.assertEqual(result[0]["colors"], ["фиолетовый"])
 
+    def test_gifts_parser_maps_non_color_filters_into_attributes(self):
+        """Регрессия: раньше attributes у Gifts был всегда [] — код читал
+        только тип 21 (цвет) из общего справочника фильтров gifts.ru и
+        отбрасывал остальные 55 типов (материал, плотность, объём и т.д.),
+        хотя реальные товары на них ссылаются. Шаг 5 без этого не мог
+        закрыть кодом ни один числовой критерий для Gifts, даже когда у
+        товара реально есть точное значение в фиде поставщика."""
+        product_xml = StringIO(
+            """<doct><product product_id="t1"><code>T-1</code><name>Ткань костюмная</name>
+            <filters><filter><filtertypeid>93</filtertypeid><filterid>5001</filterid></filter>
+            <filter><filtertypeid>21</filtertypeid><filterid>77</filterid></filter></filters>
+            </product></doct>"""
+        )
+        filters_xml = StringIO(
+            """<root><filtertypes>
+            <filtertype><filtertypeid>93</filtertypeid><filtertypename>Плотность</filtertypename>
+            <filters><filter><filterid>5001</filterid><filtername>150 г/м²</filtername></filter></filters></filtertype>
+            <filtertype><filtertypeid>21</filtertypeid><filtertypename>Цвет</filtertypename>
+            <filters><filter><filterid>77</filterid><filtername>фиолетовый</filtername></filter></filters></filtertype>
+            </filtertypes></root>"""
+        )
+
+        result = parse_gifts_catalog(product_xml, StringIO("<doct/>"), filters_xml=filters_xml)
+
+        self.assertEqual(result[0]["attributes"], [{"name": "Плотность", "value": "150 г/м²"}])
+        self.assertEqual(result[0]["colors"], ["фиолетовый"])  # цвет по-прежнему не дублируется в attributes
+
+    def test_gifts_parser_disambiguates_same_filterid_reused_by_a_different_type(self):
+        """Оборотная сторона составного ключа (тип, id): filterid=77 значит
+        «фиолетовый» под типом «Цвет» и «зелёный» под типом «Цвет упаковки» —
+        товар, ссылающийся на 77 под ВТОРЫМ типом, не должен получить
+        значение первого."""
+        product_xml = StringIO(
+            """<doct><product product_id="v2"><code>V-2</code><name>Жилет Kama, в зелёной упаковке</name>
+            <filters><filter><filtertypeid>99</filtertypeid><filterid>77</filterid></filter></filters>
+            </product></doct>"""
+        )
+        filters_xml = StringIO(
+            """<root><filtertypes>
+            <filtertype><filtertypeid>21</filtertypeid><filtertypename>Цвет</filtertypename>
+            <filters><filter><filterid>77</filterid><filtername>фиолетовый</filtername></filter></filters></filtertype>
+            <filtertype><filtertypeid>99</filtertypeid><filtertypename>Цвет упаковки</filtertypename>
+            <filters><filter><filterid>77</filterid><filtername>зелёный</filtername></filter></filters></filtertype>
+            </filtertypes></root>"""
+        )
+
+        result = parse_gifts_catalog(product_xml, StringIO("<doct/>"), filters_xml=filters_xml)
+
+        self.assertEqual(result[0]["colors"], [])  # тип 99 — не цвет, в colors не попадает
+        self.assertEqual(result[0]["attributes"], [{"name": "Цвет упаковки", "value": "зелёный"}])
+
     def test_gifts_parser_finds_image_url_in_unknown_nested_xml_node(self):
         product_xml = StringIO("""<doct><product product_id=\"x\"><code>X</code><name>Товар</name><media><preview data-url=\"//files.gifts.ru/reviewer/webp/x.webp\"/></media></product></doct>""")
         result = parse_gifts_catalog(product_xml, StringIO("<doct/>"))

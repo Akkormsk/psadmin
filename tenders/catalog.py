@@ -195,7 +195,22 @@ def _gifts_name_colors(name):
     return result
 
 
-def _gifts_filter_colors(filters_xml):
+_GIFTS_COLOR_FILTER_TYPE = "21"
+
+
+def _gifts_filters_index(filters_xml):
+    """{(filtertypeid, filterid): (filtertypename, filtername)} для КАЖДОГО
+    типа фильтра в фиде, не только цвета (было раньше, см. _gifts_colors
+    ниже) — у gifts.ru фильтры это общий механизм характеристик товара
+    (материал, плотность, объём, ёмкость АКБ и т.д., 56 типов на момент
+    проверки 16.09.2026), а не что-то специфичное для цвета. Цвет
+    обрабатывается отдельно (см. sync_gifts_catalog) — здесь просто общий
+    справочник «тип+id фильтра → как называется тип и значение».
+
+    Ключ составной (тип, id), не просто id — один и тот же filterid по
+    факту переиспользуется под разными типами с разным значением (см.
+    test_gifts_parser_reads_color_from_filters_catalog: filterid=77 —
+    «фиолетовый» в типе «Цвет», но «зелёный» в типе «Цвет упаковки»)."""
     result = {}
     if filters_xml is None:
         return result
@@ -203,16 +218,14 @@ def _gifts_filter_colors(filters_xml):
         if filtertype.tag.rsplit("}", 1)[-1].lower() != "filtertype":
             continue
         filtertype_id = _gifts_text(filtertype, "filtertypeid")
-        if filtertype_id != "21":
-            filtertype.clear()
-            continue
+        filtertype_name = _gifts_text(filtertype, "filtertypename")
         for value in filtertype.iter():
             if value.tag.rsplit("}", 1)[-1].lower() != "filter":
                 continue
             filter_id = _gifts_text(value, "filterid")
             filter_name = _gifts_text(value, "filtername")
             if filter_id and filter_name:
-                result[filter_id] = filter_name
+                result[(filtertype_id, filter_id)] = (filtertype_name, filter_name)
         filtertype.clear()
     return result
 
@@ -277,7 +290,7 @@ def parse_gifts_catalog(
     include_categories=False,
 ):
     category = _normalized(category) if category else ""
-    filter_colors = _gifts_filter_colors(filters_xml)
+    filters_index = _gifts_filters_index(filters_xml)
     categories, product_categories = _gifts_tree_index(tree_xml)
     category_names = {value["external_id"]: value["path"] for value in categories}
     allowed_product_ids = {
@@ -315,12 +328,33 @@ def parse_gifts_catalog(
         brand = _gifts_text(product, "brand")
         description = _gifts_text(product, "content")
         colors = _gifts_colors(product)
-        product_filters = _gifts_descendants(product, "filter")
-        for product_filter in product_filters:
+        # Каждый <filter> товара — это характеристика из общего справочника
+        # filters.xml (56 типов на момент проверки: материал, плотность,
+        # объём, ёмкость АКБ, размер и т.д. — не только цвет). Цвет уходит
+        # в отдельное поле colors (так исторически устроена проверка цвета
+        # в шаге 5), всё остальное — в attributes тем же общим механизмом,
+        # что уже работает для Oasis: ни одна характеристика не зашита
+        # заранее по имени, шаг 5 сам решает по пересечению слов с ТЗ.
+        attributes = []
+        seen_attributes = set()
+        for product_filter in _gifts_descendants(product, "filter"):
             filter_type = _gifts_text(product_filter, "filtertypeid")
             filter_id = _gifts_text(product_filter, "filterid")
-            if filter_type == "21" and filter_id in filter_colors and filter_colors[filter_id] not in colors:
-                colors.append(filter_colors[filter_id])
+            entry = filters_index.get((filter_type, filter_id))
+            if not entry:
+                continue
+            type_name, filter_name = entry
+            if filter_type == _GIFTS_COLOR_FILTER_TYPE:
+                if filter_name not in colors:
+                    colors.append(filter_name)
+                continue
+            if not (type_name and filter_name):
+                continue
+            pair = (type_name, filter_name)
+            if pair in seen_attributes:
+                continue
+            seen_attributes.add(pair)
+            attributes.append({"name": type_name, "value": filter_name})
         name_colors = _gifts_name_colors(name)
         image_src = _gifts_image_src(product)
         image_url = _gifts_image_url(image_src)
@@ -335,7 +369,7 @@ def parse_gifts_catalog(
         result.append({
             "external_id": _text(str(product_id), 100), "article": article, "name": name, "full_name": name,
             "description": description, "category_ids": product_category_ids[:50], "category_names": product_category_names[:50],
-            "brand": brand, "size": size, "materials": [material] if material else [], "colors": colors, "attributes": [],
+            "brand": brand, "size": size, "materials": [material] if material else [], "colors": colors, "attributes": attributes,
             "branding": [], "package": [], "price": price, "discount_price": dealer_price, "total_stock": stock_free,
             "stock_moscow": stock_free, "stock_remote": 0, "stock_transit": _integer(stock.get("inwayfree")) if stock is not None else 0,
             "is_on_order": _gifts_text(product, "ondemand").lower() == "true", "delivery_days": _integer(_gifts_text(product, "days")) or None,
