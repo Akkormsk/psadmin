@@ -16,17 +16,27 @@ from __future__ import annotations
 
 import datetime
 import io
+import logging
 import os
 import re
+import time
 import uuid
 import zipfile
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+logger = logging.getLogger(__name__)
+
 SOAP_URL = "https://int44.zakupki.gov.ru/eis-integration/services/getDocsIP"
 REQUEST_TIMEOUT = 20
 ARCHIVE_TIMEOUT = 90
 MAX_ARCHIVE_BYTES = 60 * 1024 * 1024
+# Предохранитель: сам по себе перебор архивов в fetch_document_via_eis ничем не
+# ограничен по ОБЩЕМУ времени — а один ARCHIVE_TIMEOUT=90с на архив, при 7+ архивах
+# подряд, легко перевешивает gunicorn --timeout 600 на единственном sync-воркере,
+# кладя сайт целиком для ВСЕХ пользователей на десятки минут (см. серию
+# WORKER TIMEOUT → SIGKILL 14-15.09.2026). С большим запасом ниже 600с.
+ARCHIVE_LOOP_BUDGET_SECONDS = 120
 
 _ENVELOPE = """<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -151,14 +161,35 @@ def find_file(archive_data: bytes, filename: str) -> tuple[bytes, str] | None:
 
 def fetch_document_via_eis(reestr_number: str, filename: str) -> bytes:
     """Достаём конкретный файл извещения через официальный канал ЕИС, когда публичная
-    ссылка не отвечает. Пробует все вернувшиеся архивы, пока не найдёт файл."""
+    ссылка не отвечает. Пробует архивы по очереди, пока не найдёт файл — но не дольше
+    ARCHIVE_LOOP_BUDGET_SECONDS суммарно (предохранитель от WORKER TIMEOUT, см. её
+    комментарий)."""
+    started = time.monotonic()
+    urls = fetch_archive_urls(reestr_number)
+    if len(urls) > 1:
+        logger.warning("eis_docs: %d архивов у %s (%s) — редкий случай, следим", len(urls), reestr_number, filename)
+
     last_error: EisDocsError | None = None
-    for url in fetch_archive_urls(reestr_number):
+    for i, url in enumerate(urls):
+        elapsed = time.monotonic() - started
+        if elapsed > ARCHIVE_LOOP_BUDGET_SECONDS:
+            logger.warning(
+                "eis_docs: предохранитель сработал — %.0fс, дошёл до архива %d/%d для %s, дальше не иду",
+                elapsed, i + 1, len(urls), reestr_number,
+            )
+            raise EisDocsError(
+                f"ЕИС отвечает слишком долго ({len(urls)} архивов) — прервано по внутреннему таймауту."
+            )
+        attempt_started = time.monotonic()
         try:
             archive = download_archive(url)
         except EisDocsError as exc:
+            logger.warning("eis_docs: архив %d/%d — сбой за %.1fс: %s", i + 1, len(urls), time.monotonic() - attempt_started, exc)
             last_error = exc
             continue
+        attempt_elapsed = time.monotonic() - attempt_started
+        if attempt_elapsed > 20:
+            logger.warning("eis_docs: архив %d/%d скачался, но за %.1fс — медленно", i + 1, len(urls), attempt_elapsed)
         found = find_file(archive, filename)
         if found:
             return found[0]

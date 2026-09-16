@@ -664,6 +664,38 @@ class EisDocsTests(TestCase):
             with self.assertRaises(eis_docs.EisDocsError):
                 eis_docs.fetch_document_via_eis("123", "missing.docx")
 
+    def test_archive_loop_budget_stops_before_trying_every_archive(self):
+        """Предохранитель от WORKER TIMEOUT (см. ARCHIVE_LOOP_BUDGET_SECONDS): если
+        перебор архивов не укладывается в бюджет, дальнейшие архивы не трогаем — иначе
+        при 7+ архивах по 90с каждый легко перевешиваем gunicorn --timeout 600 на
+        единственном sync-воркере (см. серию WORKER TIMEOUT 14-15.09.2026)."""
+        from . import eis_docs
+        import time as time_module
+
+        def slow_fail(url):
+            time_module.sleep(0.05)
+            raise eis_docs.EisDocsError("не вышло")
+
+        with mock.patch.object(eis_docs, "ARCHIVE_LOOP_BUDGET_SECONDS", 0.08), \
+             mock.patch.object(eis_docs, "fetch_archive_urls", return_value=["u1", "u2", "u3", "u4", "u5"]), \
+             mock.patch.object(eis_docs, "download_archive", side_effect=slow_fail) as dl:
+            with self.assertRaises(eis_docs.EisDocsError) as ctx:
+                eis_docs.fetch_document_via_eis("123", "file.docx")
+        self.assertLess(dl.call_count, 5)  # не дошёл до всех архивов
+        self.assertIn("долго", str(ctx.exception))
+
+    def test_archive_loop_within_budget_still_tries_all_archives(self):
+        """Регрессия: обычный (быстрый) перебор нескольких архивов не должен пострадать
+        от нового предохранителя — бюджет с большим запасом на реальные случаи."""
+        from . import eis_docs
+        with mock.patch.object(eis_docs, "fetch_archive_urls", return_value=["u1", "u2"]), \
+             mock.patch.object(eis_docs, "download_archive", side_effect=[
+                 eis_docs.EisDocsError("первый архив недоступен"),
+                 self._zip_with({"file.docx": b"ok"}),
+             ]):
+            data = eis_docs.fetch_document_via_eis("123", "file.docx")
+        self.assertEqual(data, b"ok")
+
 
 class RetryPendingDocumentsTests(TestCase):
     """Фоновые повторы скачивания — сеть до ЕИС нестабильна (плавающая блокировка),
