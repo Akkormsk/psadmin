@@ -172,6 +172,33 @@ class CascadeStep1Tests(TestCase):
         self.assertEqual(result.tz[1].label, "Материал")
         self.assertEqual(result.tz[1].concept, "Материал")
 
+    def test_count_mismatch_is_recorded_in_diagnostics_for_visibility(self):
+        """Реальный сбой был вызван тем, что модель схлопывала «дублирующиеся
+        по смыслу» строки в одну запись — счёт критериев переставал совпадать
+        со строками ТЗ, и код уходил в менее надёжный резерв по "n". Промпт
+        теперь запрещает объединение, но если модель всё равно его нарушит —
+        это должно быть видно в diagnostics, а не тихо давать съехавшую матрицу."""
+        rows = [
+            {"label": "Цвет", "value": "синий"},
+            {"label": "Материал", "value": "хлопок"},
+            {"label": "Размер", "value": "M"},
+        ]
+        gw = _Gateway(criteria=[
+            {"n": 1, "concept": "цвет изделия", "operator": "=", "value": "синий", "keep": True},
+            {"n": 3, "concept": "размер", "operator": "in", "value": "M", "keep": True, "options": ["M"]},
+        ])
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(result.diagnostics.get("step1_count_mismatch"), {"rows": 3, "criteria": 2})
+
+    def test_no_mismatch_diagnostic_when_counts_match(self):
+        rows = [{"label": "Цвет", "value": "синий"}, {"label": "Материал", "value": "хлопок"}]
+        gw = _Gateway(criteria=[
+            {"n": 1, "concept": "цвет изделия", "operator": "=", "value": "синий", "keep": True},
+            {"n": 2, "concept": "материал", "operator": "=", "value": "хлопок", "keep": True},
+        ])
+        result = _run(gw, _line(rows=rows))
+        self.assertNotIn("step1_count_mismatch", result.diagnostics)
+
     def test_marking_row_is_unchecked_by_the_model(self):
         rows = [{"label": "Маркировка", "value": "Честный Знак"}]
         gw = _Gateway(criteria=[{"n": 1, "concept": "маркировка", "operator": "=",
