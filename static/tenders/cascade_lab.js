@@ -73,6 +73,7 @@
 
   function renderCriteria(target, rows) {
     appendSummary(target, `${rows.filter(row => row.checked !== false).length} учитываются · ${rows.length} всего`);
+    rows = [...rows].sort((a, b) => (b.importance ?? -1) - (a.importance ?? -1));
     appendTable(target, [
       {label: "Учитывать", value: row => row.checked === false ? "Нет" : "Да"},
       {label: "Параметр", value: row => row.concept || row.label},
