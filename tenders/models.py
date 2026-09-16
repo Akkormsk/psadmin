@@ -214,6 +214,28 @@ class TenderKnowledgeSource(models.Model):
         return f"{self.supplier_name + ' · ' if self.supplier_name else ''}{self.title}"
 
 
+class UnitAlias(models.Model):
+    """Один вариант написания физической единицы измерения → канонический
+    вид (см. tenders/cascade.py, _canonical_unit/_units_compatible). Ручное
+    сравнение единиц как текста ловит не все написания одной и той же
+    величины («г/м2» vs «г/м²»), а хардкод в коде требовал бы деплоя на
+    каждое новое написание — таблица растёт сама по мере встречающихся
+    случаев, без деплоя: новую строку добавляет администратор через админку
+    (или management-команда), а код подхватывает её сразу же (кэш в памяти
+    сбрасывается по сигналу при любом изменении таблицы, см. cascade.py)."""
+    spelling = models.CharField("Написание", max_length=40, unique=True)
+    canonical = models.CharField("Каноническая единица", max_length=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["canonical", "spelling"]
+        verbose_name = "Единица измерения — написание"
+        verbose_name_plural = "Единицы измерения — написания"
+
+    def __str__(self):
+        return f"{self.spelling} → {self.canonical}"
+
+
 class CatalogSupplier(models.Model):
     code = models.SlugField("Код", max_length=50, unique=True)
     name = models.CharField("Поставщик", max_length=200)

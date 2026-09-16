@@ -12,7 +12,7 @@ from django.test import TestCase as DjangoTestCase
 
 from .cascade import Cascade
 from .models import (
-    CascadeCache, CatalogProduct, CatalogSupplier, Lesson, RequirementSkipRule,
+    CascadeCache, CatalogProduct, CatalogSupplier, Lesson, RequirementSkipRule, UnitAlias,
 )
 
 
@@ -433,6 +433,22 @@ class CascadeGenericNumericAttributeTests(TestCase):
         self.assertEqual(card["mismatch_count"], 0)
         self.assertEqual(card["match_count"], 1)
 
+    def test_card_fully_resolved_by_step5_never_reaches_the_agent(self):
+        """Регрессия: _prefill_card заполняет клетки в обход _apply_cell'ом
+        напрямую, но раньше matrix_status оставался "pending" (выставлен
+        _init_unknown ДО префилла) — шаг 6 всё равно звал агента на уже
+        решённую кодом карточку. step_5_hard_gates_and_collapse обязан
+        пересчитать статус СРАЗУ после _prefill_card, а не только внутри
+        step_6_agent_matrix."""
+        _product("Бумага офисная", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "150 г/м²"}])
+        gw = _Gateway(queries=["бумага"], criteria=self._criterion(), grid=[])
+        result = _run(gw, _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix_status"], "complete")
+        self.assertEqual(card["fit"], "exact")
+        self.assertEqual(gw.calls["step6"], 0)
+
     def test_below_the_bound_is_a_mismatch_by_code(self):
         _product("Бумага тонкая", external_id="P1",
                  attributes=[{"name": "Плотность", "value": "80 г/м²"}])
@@ -467,6 +483,31 @@ class CascadeGenericNumericAttributeTests(TestCase):
         result = _run(gw, _line(name="Лампа", rows=[{"label": "Яркость", "value": "не менее 500 Кд"}]))
         self.assertEqual(result.candidates[0]["matrix"][0]["source"], "agent")
 
+    def test_area_density_is_not_confused_with_volume_density(self):
+        """Регрессия: _norm_label вырезал верхние индексы ²/³ как «непонятные»
+        символы — «г/м²» (площадная плотность ткани) и «г/м³» (объёмная
+        плотность, другая физическая величина) превращались в одну и ту же
+        строку «г м» и код принимал их за одну и ту же единицу."""
+        _product("Ткань костюмная", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "150 г/м³"}])
+        gw = _Gateway(queries=["ткань"], criteria=self._criterion(unit="г/м²", value="140 г/м²"),
+                       grid=[{"id": "P1", "cells": {"1": "m"}}])
+        result = _run(gw, _line(name="Ткань", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        # г/м² (нужно) и г/м³ (в карточке) — разные величины, код не решает
+        self.assertEqual(result.candidates[0]["matrix"][0]["source"], "agent")
+
+    def test_area_density_recognizes_digit_and_superscript_spelling(self):
+        """Оборотная сторона того же словаря: «г/м2» (цифра) и «г/м²» (значок)
+        — одна и та же единица, написанная по-разному. Раньше сравнивались
+        как текст после общей нормализации и не совпадали."""
+        _product("Ткань костюмная", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "150 г/м2"}])
+        gw = _Gateway(queries=["ткань"], criteria=self._criterion(unit="г/м²", value="140 г/м²"), grid=[])
+        result = _run(gw, _line(name="Ткань", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)
+
     def test_material_maps_to_is_resolved_by_code(self):
         _product("Кружка", external_id="P1", materials=["керамика"])
         gw = _Gateway(queries=["кружка"], criteria=[
@@ -499,6 +540,21 @@ class CascadeGenericNumericAttributeTests(TestCase):
         card = result.candidates[0]
         self.assertEqual(card["matrix"][0]["source"], "code")
         self.assertEqual(card["mismatch_count"], 1)  # только M из целого ряда — не хватает
+
+    def test_new_unit_spelling_added_to_the_growing_dictionary_works_immediately(self):
+        """Словарь единиц не зашит намертво в код — новую строку добавляет
+        администратор (через админку) в UnitAlias, без деплоя. Проверяем,
+        что код подхватывает её сразу же (кэш сбрасывается сигналом при
+        сохранении, см. cascade.py _reset_unit_alias_cache), а не только
+        после перезапуска процесса."""
+        UnitAlias.objects.create(spelling="гдм", canonical="г/м²")
+        _product("Ткань костюмная", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "150 гдм"}])
+        gw = _Gateway(queries=["ткань"], criteria=self._criterion(unit="г/м²", value="140 г/м²"), grid=[])
+        result = _run(gw, _line(name="Ткань", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)
 
 
 class CascadeDiscoveryTests(TestCase):

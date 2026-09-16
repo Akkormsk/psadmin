@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, UnitAlias
 
 
 class TenderLineInline(admin.TabularInline):
@@ -15,6 +15,13 @@ class TenderEstimateAdmin(admin.ModelAdmin):
     search_fields = ("tender_number", "name", "owner__first_name", "owner__last_name")
     autocomplete_fields = ("owner",)
     inlines = (TenderLineInline,)
+
+
+@admin.register(UnitAlias)
+class UnitAliasAdmin(admin.ModelAdmin):
+    list_display = ("spelling", "canonical", "created_at")
+    search_fields = ("spelling", "canonical")
+    ordering = ("canonical", "spelling")
 
 
 @admin.register(TenderSettings)

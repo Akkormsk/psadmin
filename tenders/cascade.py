@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
+from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 
 from .catalog import (
@@ -45,7 +46,7 @@ from .catalog import (
     _text_search_pool,
     _variant_size,
 )
-from .models import CascadeCache, CatalogProduct, CatalogSupplier
+from .models import CascadeCache, CatalogProduct, CatalogSupplier, UnitAlias
 from .cascade_settings import text_search_settings
 
 logger = logging.getLogger(__name__)
@@ -167,12 +168,18 @@ def _volume_ml(text: str):
 
 
 _NUMBER_RE = _re.compile(r"-?\d+(?:[.,]\d+)?")
-_UNIT_TAIL_RE = _re.compile(r"[a-zа-я²³%/]+", _re.I)
+# Цифры нужны в хвосте единицы измерения («г/м2», «m3»), не только буквы и
+# верхние индексы («г/м²») — раньше без них «г/м2» обрезался до «г/м» ещё на
+# этапе извлечения, и словарь единиц (_UNIT_ALIASES) не мог его распознать.
+_UNIT_TAIL_RE = _re.compile(r"[a-zа-я0-9²³%/]+", _re.I)
 
 
 def _numeric_from_text(text: str):
     """Первое число в строке + короткий текстовый хвост как единица измерения
-    (без перевода — единица берётся как есть, сравнивается текстом)."""
+    (без перевода — единица берётся как есть, сравнивается через
+    _units_compatible). Хвост возвращается «сырым» (только приведён к
+    нижнему регистру) — верхние индексы ²/³ и разделитель «/» должны
+    дожить до сравнения единиц, _norm_label их бы вырезал раньше времени."""
     match = _NUMBER_RE.search(_cell(text))
     if not match:
         return None, ""
@@ -181,13 +188,80 @@ def _numeric_from_text(text: str):
         return None, ""
     tail = _cell(text)[match.end():match.end() + 12]
     unit_match = _UNIT_TAIL_RE.search(tail)
-    return number, _norm_label(unit_match.group(0)) if unit_match else ""
+    return number, unit_match.group(0).lower().strip() if unit_match else ""
+
+
+# Единицы измерения, реально встречающиеся в каталоге. Один физический
+# смысл — один канонический ключ; варианты написания (кириллица/латиница,
+# «²»/«2», с пробелом/слитно) сводятся к нему заранее, до сравнения. Это
+# СИД по умолчанию — работает даже без единой строки в базе (свежая
+# установка, тесты); таблица UnitAlias (админка, см. tenders/admin.py)
+# добавляет новые написания поверх этого без деплоя кода, см.
+# _unit_aliases() ниже. Единица не из объединённого словаря сравнивается
+# как раньше — обычным текстом через _norm_label, без попытки угадать.
+#
+# Плотность площади (г/м²) и плотность объёма (г/м³) — РАЗНЫЕ величины,
+# нарочно разные ключи: раньше _norm_label вырезал «²»/«³» как «непонятные»
+# символы, и обе схлопывались в одну и ту же строку «г м» — критерий про
+# площадную плотность ткани мог совпасть с атрибутом про объёмную
+# плотность совершенно другого физического смысла.
+_UNIT_ALIAS_SEED = {
+    "г/м2": "г/м²", "г/м²": "г/м²", "гм2": "г/м²", "гм²": "г/м²", "г м2": "г/м²", "г м²": "г/м²",
+    "g/m2": "г/м²", "g/m²": "г/м²", "gsm": "г/м²",
+    "г/м3": "г/м³", "г/м³": "г/м³", "гм3": "г/м³", "гм³": "г/м³", "г м3": "г/м³", "г м³": "г/м³",
+    "g/m3": "г/м³", "g/m³": "г/м³",
+    "мм": "мм", "mm": "мм",
+    "см": "см", "cm": "см",
+    "мг": "мг", "mg": "мг",
+    "кг": "кг", "kg": "кг",
+    "мл": "мл", "ml": "мл",
+    "лм": "лм", "lm": "лм",
+    "кд": "кд", "cd": "кд",
+}
+
+# Кэш объединённого словаря (сид + таблица) в памяти процесса — не тот же
+# класс риска, что смысловой индекс каталога (docs, §10 п.7): здесь десятки
+# коротких строк на весь каталог, а не сотни МБ на 71 тыс. товаров, и кэш
+# сбрасывается сразу при изменении таблицы (сигнал ниже), а не по времени и
+# не растёт сам по себе — тот же паттерн, что уже используется в
+# gateway_budget (баланс/список моделей шлюза).
+_unit_alias_cache: dict = {"value": None}
+
+
+def _unit_aliases() -> dict:
+    if _unit_alias_cache["value"] is None:
+        merged = dict(_UNIT_ALIAS_SEED)
+        merged.update({row.spelling: row.canonical for row in UnitAlias.objects.all()})
+        _unit_alias_cache["value"] = merged
+    return _unit_alias_cache["value"]
+
+
+def _reset_unit_alias_cache(**kwargs) -> None:
+    _unit_alias_cache["value"] = None
+
+
+post_save.connect(_reset_unit_alias_cache, sender=UnitAlias, dispatch_uid="reset_unit_alias_cache_on_save")
+post_delete.connect(_reset_unit_alias_cache, sender=UnitAlias, dispatch_uid="reset_unit_alias_cache_on_delete")
+
+
+def _canonical_unit(unit: str) -> str:
+    """Единица к каноническому виду: сначала точный словарь известных
+    вариантов написания (сид + таблица UnitAlias, без потери «²»/«³»),
+    иначе — обычная текстовая нормализация как раньше (не пытаемся
+    угадывать то, чего нет в словаре)."""
+    raw = _cell(unit).strip().lower().replace(" ", "")
+    aliases = _unit_aliases()
+    if raw in aliases:
+        return aliases[raw]
+    return _norm_label(unit)
 
 
 def _units_compatible(required_unit: str, offered_unit: str) -> bool:
     """Пусто с любой стороны — считаем совместимым (не гадаем перевод единиц).
-    Обе заданы — должны совпасть текстом: перевода между единицами нет."""
-    a, b = _norm_label(required_unit), _norm_label(offered_unit)
+    Обе заданы — должны совпасть после приведения к каноническому виду:
+    перевода между РАЗНЫМИ единицами по-прежнему нет, только распознавание
+    разных написаний одной и той же (см. _UNIT_ALIASES)."""
+    a, b = _canonical_unit(required_unit), _canonical_unit(offered_unit)
     return not a or not b or a == b
 
 
@@ -763,6 +837,13 @@ class Cascade:
             self._init_unknown(card, rows)
             if prefill_on:
                 self._prefill_card(card, checked, rows, tolerance)
+                # _prefill_card заполняет клетки через _apply_cell напрямую —
+                # matrix_status/match_count и т.п., выставленные _init_unknown
+                # ДО префилла, иначе остаются как «ничего не проверено» даже
+                # если код только что закрыл все строки. Без этого пересчёта
+                # шаг 6 не видит, что карточка уже complete, и тратит вызов
+                # агента на то, что код уже полностью решил.
+                self._recompute_card_summary(card)
             cards.append(card)
         self.diagnostics["groups"] = len(cards)
         return cards
