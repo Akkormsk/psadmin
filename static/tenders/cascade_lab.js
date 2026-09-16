@@ -83,11 +83,27 @@
     ], rows);
   }
 
+  // Шаги 5 и 6 несут в каждой карточке свою матрицу (matrix) — строку на
+  // критерий ТЗ. Раньше вывод резался на два независимых раздела: сверху
+  // таблица «товар — оценка», снизу отдельная плоская простыня из строк
+  // сравнения всех товаров вперемешку — чтобы понять, из чего сложилась
+  // оценка конкретного товара, приходилось листать и сопоставлять руками.
+  // Теперь строка товара сама раскрывается по клику и показывает СВОЮ
+  // матрицу тут же, под собой — один список, не два.
+  const matrixColumns = [
+    {label: "Параметр ТЗ", value: "criterion"},
+    {label: "Требуется", value: "required"},
+    {label: "Результат", value: row => ({yes: "Да", no: "Нет", unknown: "НЗ", not_checked: "Не проверено"}[row.verdict] || row.verdict)},
+    {label: "Почему", value: "reason"},
+    {label: "Источник", value: row => ({code: "Код", cache: "Кэш", agent: "Агент", not_checked: "Не проверено"}[row.source] || row.source)},
+  ];
+
   function renderProducts(target, value, step, side) {
     const rows = value.preview || value;
     const total = value.count ?? rows.length;
     appendSummary(target, `Найдено: ${total}. Показано: ${rows.length}.`);
-    appendTable(target, [
+
+    const columns = [
       {label: "Товар", value: row => {
         const name = row.name || row.title || row.id;
         if (step !== 8 || side !== "output" || !row.url) return name;
@@ -108,21 +124,81 @@
         const unknown = row.unknown_count ?? row.unknown?.length;
         return [yes !== undefined ? `Да ${yes}` : "", no !== undefined ? `Нет ${no}` : "", unknown !== undefined ? `НЗ ${unknown}` : ""].filter(Boolean).join(" · ");
       }},
-    ], rows);
-    if (step === 6 && side === "output") {
-      const cells = rows.flatMap(row => (row.matrix || []).map(cell => ({product: row.name || row.id, ...cell})));
-      if (cells.length) {
-        appendSummary(target, "Подробная матрица по каждому требованию");
-        appendTable(target, [
-          {label: "Товар", value: "product"},
-          {label: "Параметр ТЗ", value: "criterion"},
-          {label: "Требуется", value: "required"},
-          {label: "Результат", value: row => ({yes: "Да", no: "Нет", unknown: "НЗ", not_checked: "Не проверено"}[row.verdict] || row.verdict)},
-          {label: "Почему", value: "reason"},
-          {label: "Источник", value: row => ({code: "Код", cache: "Кэш", agent: "Агент", not_checked: "Не проверено"}[row.source] || row.source)},
-        ], cells);
-      }
+    ];
+
+    const expandable = (step === 5 || step === 6) && side === "output" && rows.some(row => row.matrix?.length);
+    if (!expandable) {
+      appendTable(target, columns, rows);
+      return;
     }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "cascade-lab__table-wrap";
+    const table = document.createElement("table");
+    table.className = "cascade-lab__expandable-table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    const toggleTh = document.createElement("th");
+    toggleTh.className = "cascade-lab__expand-col";
+    headRow.append(toggleTh);
+    columns.forEach(column => {
+      const th = document.createElement("th");
+      th.textContent = column.label;
+      headRow.append(th);
+    });
+    head.append(headRow);
+    const body = document.createElement("tbody");
+
+    rows.forEach(row => {
+      const tr = document.createElement("tr");
+      tr.className = "cascade-lab__product-row";
+      const toggleTd = document.createElement("td");
+      toggleTd.className = "cascade-lab__expand-col";
+      const hasMatrix = Boolean(row.matrix?.length);
+      if (hasMatrix) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "cascade-lab__expand-toggle";
+        toggle.textContent = "▸";
+        toggle.setAttribute("aria-label", "Показать разбор оценки");
+        toggleTd.append(toggle);
+      }
+      tr.append(toggleTd);
+      columns.forEach(column => {
+        const td = document.createElement("td");
+        const cellValue = typeof column.value === "function" ? column.value(row) : row[column.value];
+        if (cellValue instanceof Node) td.append(cellValue);
+        else td.textContent = cellText(cellValue);
+        tr.append(td);
+      });
+      body.append(tr);
+
+      if (!hasMatrix) return;
+      const detailTr = document.createElement("tr");
+      detailTr.className = "cascade-lab__product-detail";
+      detailTr.hidden = true;
+      const detailTd = document.createElement("td");
+      detailTd.colSpan = columns.length + 1;
+      detailTr.append(detailTd);
+      body.append(detailTr);
+
+      let built = false;
+      tr.classList.add("cascade-lab__product-row--clickable");
+      tr.addEventListener("click", () => {
+        const opening = detailTr.hidden;
+        detailTr.hidden = !opening;
+        tr.classList.toggle("is-expanded", opening);
+        tr.querySelector(".cascade-lab__expand-toggle").textContent = opening ? "▾" : "▸";
+        if (opening && !built) {
+          built = true;
+          appendTable(detailTd, matrixColumns, row.matrix);
+        }
+      });
+    });
+
+    table.append(head, body);
+    wrapper.append(table);
+    target.append(wrapper);
   }
 
   function renderPhrases(target, rows, step, side) {

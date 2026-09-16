@@ -42,6 +42,7 @@ from .catalog import (
     _product_variants,
     _refresh_live_oasis_prices,
     _score_pool_relevance,
+    _SIZE_SUFFIX_RE,
     _text,
     _text_search_pool,
     _variant_size,
@@ -549,18 +550,35 @@ class Cascade:
     def _parse_step1(self, result, rows) -> dict:
         result = result if isinstance(result, dict) else {}
         raw_criteria = result.get("criteria") if isinstance(result.get("criteria"), list) else []
-        by_n = {}
-        for entry in raw_criteria:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                n = int(entry.get("n"))
-            except (TypeError, ValueError):
-                n = None
-            by_n[n] = entry
+        valid_entries = [entry for entry in raw_criteria if isinstance(entry, dict)]
+        if len(valid_entries) == len(rows):
+            # Модель вернула ровно по одному критерию на строку ТЗ — доверяем
+            # ПОРЯДКУ ответа, не полю "n". На реальных прогонах дважды
+            # замечен сдвиг: модель сама теряет счёт на длинных списках и
+            # проставляет "n" со сдвигом на одну позицию — при этом сами
+            # критерии в ответе идут в правильном порядке, съезжает только
+            # метка. Раньше код доверял именно метке (`by_n.get(i)`), из-за
+            # чего требование одной строки ТЗ подставлялось к СОСЕДНЕЙ —
+            # шаг 5 потом сравнивал совсем не с тем, что нужно, и матрица
+            # выходила почти пустой. Порядок эмиссии модель держит надёжнее,
+            # чем явную самонумерацию — когда количество совпало один в
+            # один, это самый безопасный сигнал.
+            ordered = valid_entries
+        else:
+            # Модель вернула не столько же критериев, сколько строк ТЗ
+            # (пропустила/объединила несколько) — порядковое сопоставление
+            # уже не гарантированно верно, тут "n" — единственная зацепка,
+            # хоть и менее надёжная.
+            by_n = {}
+            for entry in valid_entries:
+                try:
+                    n = int(entry.get("n"))
+                except (TypeError, ValueError):
+                    continue
+                by_n[n] = entry
+            ordered = [by_n.get(i, {}) for i in range(1, len(rows) + 1)]
         criteria = []
-        for i, row in enumerate(rows, 1):
-            entry = by_n.get(i, {})
+        for row, entry in zip(rows, ordered):
             # axis — свободный код оси, не закрытый список: модель сама решает,
             # чем отличаются варианты ЭТОГО товара, а не только капасити/объём/размер.
             axis = _norm_label(entry.get("axis"))[:24]
@@ -823,6 +841,14 @@ class Cascade:
         for product in survivors:
             groups.setdefault(product.family_key or product.group_id or product.external_id, []).append(product)
 
+        # Требование к размерному ряду — это ось с перечислимыми значениями
+        # (options), а не числовая (num_min/num_max — та про ёмкость/объём/
+        # прочие числа). Если такого критерия среди отмеченных нет, размер
+        # никто не спрашивал — показывать конкретный «размер S» как ответ
+        # вводит в заблуждение (это не выбранный вариант, а случайно первый
+        # по цене/совпадению слов среди всей группы).
+        size_required = any(c.options and c.num_min is None and c.num_max is None for c in checked)
+
         tolerance = Decimal(str(max(0, min(50, int(settings.get("tolerance_percent", 0)))))) / 100
         prefill_on = settings.get("numeric_prefill", "yes") != "no"
         cards = []
@@ -833,6 +859,11 @@ class Cascade:
                 key=lambda p: (getattr(p, "_name_hits", 0), -(p.effective_price or Decimal("Infinity"))),
             )
             card = self._serialize(face, skus)
+            if len(skus) > 1 and not size_required:
+                # Семья из нескольких размеров, но размер не был требованием —
+                # не выдаём конкретный размер представителя за ответ (тот же
+                # приём, что уже применяется при схлопывании по цвету на шаге 3).
+                card["name"] = _SIZE_SUFFIX_RE.sub("", card["name"]).rstrip(" ,")
             card["eligible_variant_ids"] = [product.external_id for product in fitting] if fitting else []
             self._init_unknown(card, rows)
             if prefill_on:

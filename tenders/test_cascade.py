@@ -129,6 +129,49 @@ class CascadeStep1Tests(TestCase):
         _run(gw2, _line(rows=rows))
         self.assertEqual(gw2.calls["step1"], 0)
 
+    def test_shifted_n_labels_do_not_misalign_criteria_when_counts_match(self):
+        """Регрессия к реальному сбою: модель сама теряет счёт на длинных
+        списках и проставляет "n" со сдвигом на одну позицию, хотя сами
+        критерии в ответе идут в правильном порядке (замечено дважды на
+        реальных прогонах). Раньше код доверял именно "n" — требование
+        одной строки подставлялось к соседней, шаг 5 сравнивал не с тем.
+        Когда количество критериев совпадает со строками один в один, код
+        обязан довериться ПОРЯДКУ ответа, а не сбившейся метке."""
+        rows = [
+            {"label": "Цвет", "value": "синий"},
+            {"label": "Материал", "value": "хлопок"},
+            {"label": "Размер", "value": "M"},
+        ]
+        gw = _Gateway(criteria=[
+            {"n": 1, "concept": "цвет изделия", "operator": "=", "value": "синий", "keep": True},
+            {"n": 3, "concept": "материал", "operator": "=", "value": "хлопок", "keep": True},  # n съехал
+            {"n": 4, "concept": "размер", "operator": "in", "value": "M", "keep": True, "options": ["M"]},  # и тут
+        ])
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual([c.concept for c in result.tz], ["цвет изделия", "материал", "размер"])
+        self.assertEqual([c.value for c in result.tz], ["синий", "хлопок", "M"])
+
+    def test_mismatched_criteria_count_still_uses_n_as_the_fallback(self):
+        """Когда критериев меньше, чем строк ТЗ (модель что-то пропустила
+        или объединила), порядковое сопоставление уже не гарантированно
+        верно — используем "n" как единственную зацепку, как и раньше."""
+        rows = [
+            {"label": "Цвет", "value": "синий"},
+            {"label": "Материал", "value": "хлопок"},
+            {"label": "Размер", "value": "M"},
+        ]
+        gw = _Gateway(criteria=[
+            {"n": 1, "concept": "цвет изделия", "operator": "=", "value": "синий", "keep": True},
+            {"n": 3, "concept": "размер", "operator": "in", "value": "M", "keep": True, "options": ["M"]},
+        ])
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(result.tz[0].concept, "цвет изделия")
+        self.assertEqual(result.tz[2].concept, "размер")
+        # строка 2 не нашлась в ответе по "n" (только 1 и 3) — фолбэк на
+        # исходную строку ТЗ, а не на случайно подвернувшийся чужой критерий
+        self.assertEqual(result.tz[1].label, "Материал")
+        self.assertEqual(result.tz[1].concept, "Материал")
+
     def test_marking_row_is_unchecked_by_the_model(self):
         rows = [{"label": "Маркировка", "value": "Честный Знак"}]
         gw = _Gateway(criteria=[{"n": 1, "concept": "маркировка", "operator": "=",
@@ -247,6 +290,32 @@ class CascadeCollapseTests(TestCase):
         self.assertIn("32", face["name"])
         sizes = {v.get("size") for v in face["variants"]}
         self.assertTrue({"16 ГБ", "64 ГБ"} & sizes or "64" in " ".join(sizes))
+
+    def test_representative_name_drops_size_when_size_was_never_required(self):
+        """Регрессия: если ТЗ не спрашивал размер (нет критерия-оси с
+        перечислимыми значениями), представитель семьи выбирается
+        произвольно (по цене/совпадению слов) — показывать его конкретный
+        размер как «ответ» вводит в заблуждение, это не выбор, а случайность."""
+        for size, eid, price in [("S", "P1", "100"), ("M", "P2", "150"), ("L", "P3", "200")]:
+            _product(f"Рубашка поло, размер {size}", external_id=eid, group_id="G1", size=size, price=price)
+        gw = _Gateway(queries=["рубашка поло"], criteria=[], grid=[])
+        result = _run(gw, _line(name="Рубашка поло", rows=[]))
+        self.assertEqual(len(result.candidates), 1)
+        self.assertNotIn("размер", result.candidates[0]["name"].lower())
+
+    def test_representative_name_keeps_size_when_size_was_actually_required(self):
+        """Оборотная сторона: размер — реальное требование ТЗ (перечислимая
+        ось) — специфика оправдана, так же как ёмкость флешки, суффикс не
+        трогаем."""
+        for size, eid, price in [("S", "P1", "100"), ("M", "P2", "150"), ("L", "P3", "200")]:
+            _product(f"Рубашка поло, размер {size}", external_id=eid, group_id="G1", size=size, price=price)
+        gw = _Gateway(queries=["рубашка поло"], criteria=[
+            {"n": 1, "concept": "размер", "operator": "in", "value": "M", "keep": True,
+             "options": ["M"], "axis_mode": "choose_one"},
+        ], grid=[])
+        result = _run(gw, _line(name="Рубашка поло", rows=[{"label": "Размер", "value": "M"}]))
+        self.assertEqual(len(result.candidates), 1)
+        self.assertIn("размер", result.candidates[0]["name"].lower())
 
     def test_agent_brief_lists_the_variants(self):
         for cap, eid in [("16", "F16"), ("32", "F32")]:
