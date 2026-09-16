@@ -488,7 +488,13 @@ class Cascade:
         settings = self.step_settings.get("1", {})
         model = _selected_model(settings.get("model"), _STRONG_MODEL)
         use_cache = settings.get("cache", "yes") != "no"
-        criteria_cache_key = f"criteria-v2|{self._tz_hash}|{model}"
+        # Версия в ключе кэша — не косметика: 16.09.2026 два прогонных фикса
+        # подряд казались «без изменений», хотя код реально менялся — старая
+        # запись под тем же tz_hash+моделью отдавалась вечно, ни разу не
+        # вызывая модель заново. Любая правка промпта/разбора шага 1 ОБЯЗАНА
+        # поднимать эту версию, иначе результат невозможно будет проверить
+        # без ручной чистки CascadeCache.
+        criteria_cache_key = f"criteria-v3|{self._tz_hash}|{model}"
         cached = _cache_get("criteria", criteria_cache_key) if use_cache else None
         if cached:
             self._load_step1(cached, rows)
