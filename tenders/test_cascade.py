@@ -252,25 +252,28 @@ class CascadeStep1Tests(TestCase):
         self.assertEqual(result.tz[1].concept, "Материал")
 
     def test_marking_row_is_unchecked_by_the_model(self):
+        """Низкая важность (не выше порога) — теперь единственный сигнал
+        "не проверять", отдельного keep больше нет (см. коммит про приоритет
+        для каталога, а не для бизнеса)."""
         rows = [{"label": "Маркировка", "value": "Честный Знак"}]
         gw = _Gateway(criteria=[{"n": 1, "concept": "маркировка", "operator": "=",
-                                 "value": "Честный Знак", "keep": False}])
+                                 "value": "Честный Знак", "importance": 10}])
         result = _run(gw, _line(rows=rows))
         self.assertFalse(result.tz[0].checked)
         self.assertEqual([r for r in result.requirement_selection if r["selected"]], [])
 
-    def test_saved_skip_rule_overrides_model_keep(self):
+    def test_saved_skip_rule_overrides_model_importance(self):
         RequirementSkipRule.objects.create(label="Гарантия", label_normalized="гарантия")
         rows = [{"label": "Гарантия", "value": "12 месяцев"}]
         gw = _Gateway(criteria=[{"n": 1, "concept": "гарантия", "operator": "=",
-                                 "value": "12 месяцев", "keep": True}])
+                                 "value": "12 месяцев", "importance": 90}])
         result = _run(gw, _line(rows=rows), skip_labels={"гарантия"})
         self.assertFalse(result.tz[0].checked)
 
     def test_client_selected_flag_wins_over_model(self):
         rows = [{"label": "Упаковка", "value": "блистер", "selected": True}]
         gw = _Gateway(criteria=[{"n": 1, "concept": "упаковка", "operator": "=",
-                                 "value": "блистер", "keep": False}])
+                                 "value": "блистер", "importance": 10}])
         result = _run(gw, _line(rows=rows))
         self.assertTrue(result.tz[0].checked)
 

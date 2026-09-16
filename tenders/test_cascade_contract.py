@@ -45,9 +45,9 @@ class CascadeContractTests(SimpleTestCase):
             {"label": "Материал", "value": "металл"},
         ]
         payload = {"criteria": [
-            {"label": "Цвет", "raw_value": "синий", "concept": "цвет", "value": "синий", "keep": True, "importance": 20},
-            {"label": "Совместимость", "raw_value": "USB-C", "concept": "совместимость", "value": "USB-C", "keep": True, "importance": 100},
-            {"label": "Материал", "raw_value": "металл", "concept": "материал", "value": "металл", "keep": True, "importance": 70},
+            {"label": "Цвет", "raw_value": "синий", "concept": "цвет", "value": "синий", "importance": 30},
+            {"label": "Совместимость", "raw_value": "USB-C", "concept": "совместимость", "value": "USB-C", "importance": 100},
+            {"label": "Материал", "raw_value": "металл", "concept": "материал", "value": "металл", "importance": 70},
         ]}
 
         cascade._load_step1(payload, rows)
