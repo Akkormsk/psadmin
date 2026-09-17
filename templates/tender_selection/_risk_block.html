@@ -1,0 +1,24 @@
+{% if risk %}
+<div class="table-wrapper"><table class="table ts-risk-table">
+  <tbody>
+    <tr><th>Срок исполнения</th><td>
+      {% if risk.execution_deadline.date %}<strong>{{ risk.execution_deadline.date }}</strong> — {% endif %}{{ risk.execution_deadline.assessment|default:"нет данных" }}
+    </td></tr>
+    <tr><th>Обеспечение заявки</th><td>{{ risk.application_security|default:"нет данных" }}</td></tr>
+    <tr><th>Обеспечение контракта</th><td>{{ risk.contract_security|default:"нет данных" }}</td></tr>
+    <tr><th>Освобождение по ст. 96 44-ФЗ</th><td>{{ risk.security_exemption|default:"нет данных" }}</td></tr>
+    <tr><th>Пени и штрафы</th><td>{{ risk.penalties|default:"нет данных" }}</td></tr>
+    <tr><th>Национальный режим</th><td>{{ risk.national_regime|default:"нет данных" }}</td></tr>
+    <tr><th>Требования к образцам</th><td>{{ risk.sample_requirements|default:"нет данных" }}</td></tr>
+  </tbody>
+</table></div>
+{% if risk.legal_risks %}<p class="ts-risk-narrative">{{ risk.legal_risks }}</p>{% endif %}
+<p class="ts-sub">
+  Автоматическая оценка ИИ по документам закупки{% if risk_docs %}: {{ risk_docs|join:", " }}{% endif %}.
+  Не заменяет проверку контракта юристом. <button type="button" class="ts-doc-link" data-risk-refresh>Обновить оценку</button>
+</p>
+{% elif risk_error %}
+<p class="ts-warn">Не удалось оценить риски: {{ risk_error }} <button type="button" class="ts-doc-link" data-risk-refresh>Попробовать ещё раз</button></p>
+{% else %}
+<p class="settings-description">В извещении нет документов, по которым можно оценить риски (проект контракта, ТЗ, описание объекта).</p>
+{% endif %}

@@ -8,18 +8,18 @@ from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry, fetch_document
-from .eis_docs import EisDocsError, fetch_document_via_eis
+from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
 from .filtering import match_title, parse_terms
 from .models import DocumentPreview, FilterSettings, FoundTender, Organization, PullRun
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
-    CATEGORY_GROUPS, effective_laws, effective_okpd2, enrich_one_org,
-    extras_for, notification_for, push_to_estimate, run_pull,
+    CATEGORY_GROUPS, _fetch_doc_bytes, effective_laws, effective_okpd2, enrich_one_org,
+    extras_for, notification_for, push_to_estimate, risk_assessment_for, run_pull,
 )
 from .stats import price_stats_for
 
@@ -155,6 +155,9 @@ def tender_list(request):
 @tender_viewer_required
 def tender_detail(request, pk):
     tender = get_object_or_404(FoundTender, pk=pk)
+    if tender.opened_at is None:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
+        tender.opened_at = timezone.now()
+        tender.save(update_fields=["opened_at"])
     payload = notification_for(tender, force=request.GET.get("refresh") == "1")
     card = parse_notification(payload) if payload else None
     estimate_id = tender.pushed_estimate_id if tender.status == FoundTender.PUSHED else None
@@ -170,6 +173,12 @@ def tender_detail(request, pk):
         for row in stats["examples"]:
             row.region_label = region_name(row.region) if row.region else ""
 
+    # Оценка рисков читает документы закупки — может занимать до ~30-40с (сеть до ЕИС).
+    # Чтобы это не блокировало открытие карточки, первый расчёт уходит в фон (см.
+    # risk_status ниже, дергается JS-ом со спиннером). Уже посчитанное (успех или
+    # ошибка — risk_checked_at не пуст) отдаём сразу, без лишнего похода в шлюз.
+    risk_needs_fetch = card is not None and tender.risk_checked_at is None
+
     return render(request, "tender_selection/detail.html", {
         "tender": tender,
         "card": card,
@@ -181,7 +190,24 @@ def tender_detail(request, pk):
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
+        "risk_needs_fetch": risk_needs_fetch,
+        "risk": None if risk_needs_fetch else (tender.risk_assessment or None),
+        "risk_error": "" if risk_needs_fetch else tender.risk_error,
+        "risk_docs": [] if risk_needs_fetch else tender.risk_assessment_docs,
     })
+
+
+@tender_viewer_required
+def risk_status(request, pk):
+    """AJAX-эндпоинт для блока «Оценка рисков» на карточке — считает (или берёт из
+    кэша) и отдаёт готовый HTML-фрагмент. Чтение документов и запрос к ИИ-шлюзу могут
+    занять десятки секунд, поэтому вызывается из JS отдельно от рендера страницы."""
+    tender = get_object_or_404(FoundTender, pk=pk)
+    risk = risk_assessment_for(tender, force=request.GET.get("refresh") == "1")
+    html = render_to_string("tender_selection/_risk_block.html", {
+        "risk": risk, "risk_error": tender.risk_error, "risk_docs": tender.risk_assessment_docs,
+    }, request=request)
+    return JsonResponse({"html": html})
 
 
 def _doc_by_idx(tender, idx):
@@ -193,17 +219,6 @@ def _doc_by_idx(tender, idx):
     return docs[idx], None
 
 
-def _fetch_doc_bytes(tender, url, name):
-    """Официальный канал ЕИС первым (сеть с сервера теперь есть), прямая ссылка —
-    подстраховка на случай проблем с токеном/лимитом. Общее для просмотра и захода
-    внутрь архива — оба раза нужен весь файл заново, кэшируем только итог разбора."""
-    try:
-        return fetch_document_via_eis(tender.purchase_number, name)
-    except EisDocsError as eis_exc:
-        try:
-            return fetch_document(url, timeout=15)
-        except DocumentError as direct_exc:
-            raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
 
 
 def _result_json(name, result):

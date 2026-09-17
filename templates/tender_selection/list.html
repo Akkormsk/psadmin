@@ -59,10 +59,10 @@
     </details>
 
     {% for tender in page_obj.object_list %}
-    <div class="saved-estimate ts-tender{% if tender.filtered_out %} is-dim{% endif %}{% if tender.on_estimate %} is-onestimate{% endif %}">
+    <div class="saved-estimate ts-tender{% if tender.filtered_out %} is-dim{% endif %}{% if tender.on_estimate %} is-onestimate{% endif %}{% if not tender.opened_at %} is-unread{% endif %}">
       <a class="saved-estimate__main" href="{% url 'tender_selection:detail' tender.pk %}">
         <span>
-          <strong>{{ tender.title|default:tender.object_info }}</strong>
+          <span class="ts-tender__title">{{ tender.title|default:tender.object_info }}</span>
           <small class="ts-tender__meta">
             <span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span>
             {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠&nbsp;нет данных</span>{% endif %}
@@ -134,6 +134,8 @@
   .ts-hits { color: #2e7d32; }
   .ts-tender.is-dim { opacity: .45; }
   .ts-tender.is-onestimate { background: var(--tint-info); }
+  .ts-tender__title { font-weight: 400; color: var(--ink-2); }
+  .ts-tender.is-unread .ts-tender__title { font-weight: 700; color: var(--ink); }
   .ts-tender .tender-saved-totals small { white-space: nowrap; }
   .ts-soon-label { color: #b8434e !important; font-weight: 600; }
   .ts-onestimate-pill { flex: 0 0 auto; align-self: center; padding: 6px 12px; border-radius: 999px;
