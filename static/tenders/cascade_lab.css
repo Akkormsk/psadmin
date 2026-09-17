@@ -293,6 +293,7 @@
 .cascade-lab__data-summary.is-ok { background: var(--tint-positive); color: var(--positive-ink); }
 .cascade-lab__data-summary.is-warning { background: var(--tint-negative); color: var(--negative-ink); }
 .cascade-lab__table-wrap { overflow: auto; }
+.cascade-lab__row--excluded { opacity: 0.45; }
 .cascade-lab__readable table {
   width: 100%;
   border-collapse: collapse;

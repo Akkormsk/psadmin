@@ -32,7 +32,7 @@
     target.append(summary);
   }
 
-  function appendTable(target, columns, rows) {
+  function appendTable(target, columns, rows, rowClassName) {
     const wrapper = document.createElement("div");
     wrapper.className = "cascade-lab__table-wrap";
     const table = document.createElement("table");
@@ -47,6 +47,10 @@
     const body = document.createElement("tbody");
     rows.forEach(row => {
       const tr = document.createElement("tr");
+      if (rowClassName) {
+        const extra = rowClassName(row);
+        if (extra) tr.className = extra;
+      }
       columns.forEach(column => {
         const td = document.createElement("td");
         const value = typeof column.value === "function" ? column.value(row) : row[column.value];
@@ -80,7 +84,7 @@
       {label: "Значение", value: row => [row.value, row.unit].filter(Boolean).join(" ")},
       {label: "Важность", value: row => row.importance ?? "—"},
       {label: "Почему", value: "importance_reason"},
-    ], rows);
+    ], rows, row => row.checked === false ? "cascade-lab__row--excluded" : "");
   }
 
   // Шаги 5 и 6 несут в каждой карточке свою матрицу (matrix) — строку на

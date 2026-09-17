@@ -269,6 +269,21 @@ class CascadeStep1Tests(TestCase):
                                  "value": "12 месяцев", "importance": 90}])
         result = _run(gw, _line(rows=rows), skip_labels={"гарантия"})
         self.assertFalse(result.tz[0].checked)
+        self.assertEqual(result.tz[0].importance, 0)
+
+    def test_manually_unchecked_row_shows_zero_importance_not_the_models_own_score(self):
+        """В таблице лаборатории строки сортируются по важности — если вручную
+        снятая галочка сохраняет высокую важность модели, в отсортированном
+        списке она выглядит так, будто её всё ещё пытаются проверять. Ручное
+        решение человека — тот же по смыслу сигнал, что и важность, просто
+        выставленный не моделью; должен сразу занулять importance, а не
+        оставлять его "как посчитала модель"."""
+        rows = [{"label": "Цвет", "value": "синий", "selected": False}]
+        gw = _Gateway(criteria=[{"n": 1, "concept": "цвет изделия", "operator": "=",
+                                 "value": "синий", "importance": 90}])
+        result = _run(gw, _line(rows=rows))
+        self.assertFalse(result.tz[0].checked)
+        self.assertEqual(result.tz[0].importance, 0)
 
     def test_client_selected_flag_wins_over_model(self):
         rows = [{"label": "Упаковка", "value": "блистер", "selected": True}]

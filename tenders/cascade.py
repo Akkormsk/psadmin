@@ -640,11 +640,19 @@ class Cascade:
         for entry in payload.get("criteria") if isinstance(payload.get("criteria"), list) else []:
             label_n = _norm_label(entry.get("label"))
             importance = max(0, min(100, int(entry.get("importance") or 50)))
-            # приоритет: явная галочка клиента > сохранённое правило "вне подбора" > важность
+            importance_reason = _cell(entry.get("importance_reason"))[:160]
+            # приоритет: явная галочка клиента > сохранённое правило "вне подбора" > важность.
+            # Обе ручные причины исключения — тот же сигнал, что и важность, просто
+            # выставленный человеком, а не моделью: 0, а не «как посчитала модель»,
+            # иначе в таблице, отсортированной по важности, вручную снятый пункт
+            # выглядит так, будто его всё ещё пытаются проверять.
             if label_n in explicit and explicit[label_n] is not None:
                 checked = bool(explicit[label_n])
+                if not checked:
+                    importance, importance_reason = 0, "Снято вручную в ТЗ"
             elif label_n in self.skip_labels:
                 checked = False
+                importance, importance_reason = 0, "Исключено правилом (вне подбора для всех тендеров)"
             else:
                 checked = importance > _MIN_CHECK_IMPORTANCE
             self.tz.append(Criterion(
@@ -661,7 +669,7 @@ class Cascade:
                 options=[_cell(v) for v in (entry.get("options") or []) if _cell(v)],
                 axis_mode="fulfill_set" if entry.get("axis_mode") == "fulfill_set" else "choose_one",
                 importance=importance,
-                importance_reason=_cell(entry.get("importance_reason"))[:160],
+                importance_reason=importance_reason,
                 maps_to=entry.get("maps_to") if entry.get("maps_to") in {"color", "material"} else "",
             ))
         limit = max(0, min(100, int(self.step_settings.get("1", {}).get("max_active_requirements", 0) or 0)))
