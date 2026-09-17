@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -16,7 +17,10 @@ from django.utils import timezone
 from . import gosplan
 from .documents import DocumentError, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
+from .filtering import match_title, parse_terms
 from .models import FilterSettings, FoundTender, Organization, PullRun
+
+logger = logging.getLogger(__name__)
 
 MSK = ZoneInfo("Europe/Moscow")
 UTC = ZoneInfo("UTC")
@@ -142,6 +146,15 @@ def build_params(*, days: int, stage: int | None, min_price, regions=None, law: 
     return params
 
 
+def _risk_eligible(tender, settings, include, exclude) -> bool:
+    return (
+        tender.law == "fz44"
+        and (not settings.min_price or tender.max_price is None or tender.max_price >= settings.min_price)
+        and (tender.collecting_finished_at is None or tender.collecting_finished_at >= timezone.now())
+        and match_title(tender.title or tender.object_info, include, exclude)[0]
+    )
+
+
 def run_pull(
     *,
     days: int | None = None,
@@ -181,6 +194,9 @@ def run_pull(
         stats["records"] += got
 
     created = updated = 0
+    new_for_risk = []
+    include = parse_terms(settings.include_words)
+    exclude = parse_terms(settings.exclude_words)
     seen: set[str] = set()
     bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law) for law in laws}
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
@@ -200,13 +216,15 @@ def run_pull(
                 if not number or (law, number) in seen:
                     continue
                 seen.add((law, number))
-                _, is_created = FoundTender.objects.update_or_create(
+                tender, is_created = FoundTender.objects.update_or_create(
                     law=law,
                     purchase_number=number,
                     defaults=_record_to_fields(record, run.started_at, law),
                 )
                 created += int(is_created)
                 updated += int(not is_created)
+                if is_created and _risk_eligible(tender, settings, include, exclude):
+                    new_for_risk.append(tender)
         run.ok = True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
@@ -219,6 +237,13 @@ def run_pull(
     run.updated_count = updated
     run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
     run.save()
+
+    for tender in new_for_risk:
+        try:
+            if notification_for(tender):
+                risk_assessment_for(tender)
+        except Exception:
+            logger.exception("Risk assessment failed for tender %s", tender.purchase_number)
 
     return run
 
@@ -341,6 +366,34 @@ def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[
         attempted += 1
         if notification_for(tender):
             succeeded += 1
+    return attempted, succeeded
+
+
+def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
+    """Повторить оценку свежих подходящих тендеров, если извещение было недоступно."""
+    settings = FilterSettings.load()
+    include = parse_terms(settings.include_words)
+    exclude = parse_terms(settings.exclude_words)
+    now = timezone.now()
+    attempted = succeeded = 0
+    tenders = FoundTender.objects.filter(
+        law="fz44", risk_checked_at__isnull=True,
+        first_seen_at__gte=now - timedelta(days=2),
+    ).order_by("first_seen_at")[:300]
+    for tender in tenders:
+        if attempted >= limit:
+            break
+        if tender.risk_assessment or not _risk_eligible(tender, settings, include, exclude):
+            continue
+        if (not tender.notification_raw and tender.notification_checked_at and
+                tender.notification_checked_at > now - timedelta(minutes=30)):
+            continue
+        attempted += 1
+        try:
+            if notification_for(tender, force=bool(tender.notification_checked_at and not tender.notification_raw)):
+                succeeded += bool(risk_assessment_for(tender))
+        except Exception:
+            logger.exception("Risk assessment retry failed for tender %s", tender.purchase_number)
     return attempted, succeeded
 
 

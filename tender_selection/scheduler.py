@@ -61,6 +61,16 @@ def _run_once(tick: int) -> None:
 
     close_old_connections()
     try:
+        from .services import retry_pending_risks
+
+        attempted, succeeded = retry_pending_risks()
+        if attempted:
+            logger.warning("autopull: risks — %d/%d evaluated", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_risks failed")
+
+    close_old_connections()
+    try:
         from .services import retry_pending_documents
         attempted, succeeded = retry_pending_documents()
         if attempted:

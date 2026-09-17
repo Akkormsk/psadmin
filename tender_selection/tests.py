@@ -77,6 +77,75 @@ class RunPullTests(TestCase):
         self.assertFalse(run.ok)
         self.assertIn("429", run.error)
 
+    def test_new_matching_tender_gets_risk_assessment_once(self):
+        settings = FilterSettings.load()
+        settings.include_words = "сувенир"
+        settings.save(update_fields=["include_words"])
+        record = {**self.RECORD, "collecting_finished_at": None}
+        with mock.patch.object(gosplan, "iter_purchases", side_effect=[iter([record]), iter([record])]), \
+             mock.patch("tender_selection.services.notification_for", return_value={"source": {}}) as notification, \
+             mock.patch("tender_selection.services.risk_assessment_for") as assess:
+            run_pull(days=3, max_requests=1, classifiers=["32.99"])
+            run_pull(days=3, max_requests=1, classifiers=["32.99"])
+        self.assertEqual(notification.call_count, 1)
+        self.assertEqual(assess.call_count, 1)
+        self.assertEqual(assess.call_args.args[0].purchase_number, record["purchase_number"])
+
+    def test_new_tender_outside_saved_filters_skips_risk_assessment(self):
+        settings = FilterSettings.load()
+        settings.include_words = "полиграфия"
+        settings.save(update_fields=["include_words"])
+        with mock.patch.object(gosplan, "iter_purchases", return_value=iter([self.RECORD])), \
+             mock.patch("tender_selection.services.notification_for") as notification, \
+             mock.patch("tender_selection.services.risk_assessment_for") as assess:
+            run_pull(days=3, max_requests=1)
+        notification.assert_not_called()
+        assess.assert_not_called()
+
+    def test_low_price_expired_and_excluded_tenders_skip_risk_assessment(self):
+        settings = FilterSettings.load()
+        settings.include_words = "сувенир"
+        settings.exclude_words = "пластик"
+        settings.save(update_fields=["include_words", "exclude_words"])
+        records = [
+            {**self.RECORD, "purchase_number": "1", "max_price": "100000", "collecting_finished_at": None},
+            {**self.RECORD, "purchase_number": "2", "collecting_finished_at": "2020-01-01T00:00:00"},
+            {**self.RECORD, "purchase_number": "3", "object_info": "Сувениры из пластика", "collecting_finished_at": None},
+        ]
+        with mock.patch.object(gosplan, "iter_purchases", return_value=iter(records)), \
+             mock.patch("tender_selection.services.notification_for") as notification, \
+             mock.patch("tender_selection.services.risk_assessment_for") as assess:
+            run = run_pull(days=3, max_requests=1, classifiers=["32.99"])
+        self.assertEqual(run.created_count, 3)
+        notification.assert_not_called()
+        assess.assert_not_called()
+
+
+class RetryPendingRisksTests(TestCase):
+    def test_retries_recent_matching_tender_after_notification_failure(self):
+        from datetime import timedelta
+
+        from .services import retry_pending_risks
+
+        settings = FilterSettings.load()
+        settings.include_words = "сувенир"
+        settings.save(update_fields=["include_words"])
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="Сувенирная продукция", law="fz44",
+            max_price=400000, last_pulled_at=timezone.now(),
+            notification_checked_at=timezone.now() - timedelta(hours=1),
+        )
+        FoundTender.objects.create(
+            purchase_number="2", object_info="Медикаменты", law="fz44",
+            max_price=400000, last_pulled_at=timezone.now(),
+        )
+        with mock.patch("tender_selection.services.notification_for", return_value=NOTIFICATION_FIXTURE) as notification, \
+             mock.patch("tender_selection.services.risk_assessment_for", return_value={"legal_risks": "ok"}) as assess:
+            attempted, succeeded = retry_pending_risks()
+        self.assertEqual((attempted, succeeded), (1, 1))
+        notification.assert_called_once_with(tender, force=True)
+        assess.assert_called_once_with(tender)
+
 
 class MultiSourceTests(TestCase):
     def test_fz223_record_shape(self):

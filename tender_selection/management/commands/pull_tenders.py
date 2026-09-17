@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from tender_selection.services import enrich_organizations, run_pull
+from tender_selection.services import enrich_organizations, retry_pending_risks, run_pull
 from tender_selection.stats import collect_price_stats
 
 _MSK = ZoneInfo("Europe/Moscow")
@@ -45,6 +45,10 @@ class Command(BaseCommand):
                     self.stdout.write(f"           имён заказчиков добрано: {saved}")
             except Exception as exc:  # noqa: BLE001
                 self.stderr.write(f"           enrich: {exc}")
+        if options["loop"]:
+            attempted, succeeded = retry_pending_risks()
+            if attempted:
+                self.stdout.write(f"           оценка рисков: {succeeded}/{attempted}")
         return run
 
     def _maybe_stats(self, options, iteration):
