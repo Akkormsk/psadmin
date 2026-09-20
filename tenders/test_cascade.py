@@ -4,6 +4,7 @@
 названия), шаг 4 (фильтр названий), шаг 6 (матрица агента)."""
 
 import json
+import time
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -342,6 +343,14 @@ class CascadeSearchTests(TestCase):
 
 
 class CascadeHardGateTests(TestCase):
+    def test_step_5_honours_existing_deadline(self):
+        product = _product("Кружка", external_id="C1")
+        cascade = Cascade(_line(name="Кружка"))
+        cascade.deadline = time.perf_counter() - 1
+
+        with self.assertRaises(TimeoutError):
+            cascade.step_5_hard_gates_and_collapse([product])
+
     def _colour_line(self):
         return _line(rows=[{"label": "Цвет", "value": "синий"}])
 
@@ -588,6 +597,24 @@ class CascadeGenericNumericAttributeTests(TestCase):
                 "unit": "г/м²", "num_min": 140, "keep": True}
         base.update(overrides)
         return [base]
+
+    def test_repeated_numeric_checks_reuse_attribute_parsing(self):
+        from . import cascade as cascade_module
+
+        attributes = [{"name": "Плотность", "value": "150 г/м²"}]
+        cascade_module._attribute_name_tokens.cache_clear()
+        cascade_module._attribute_number.cache_clear()
+        with (
+            patch("tenders.cascade._meaningful_tokens", wraps=cascade_module._meaningful_tokens) as tokens,
+            patch("tenders.cascade._numeric_from_text", wraps=cascade_module._numeric_from_text) as numbers,
+        ):
+            for _ in range(5):
+                self.assertEqual(
+                    cascade_module._attribute_numeric_value(attributes, {"плотность"}, "г/м²"),
+                    (Decimal("150"), "Плотность"),
+                )
+        self.assertEqual(tokens.call_count, 1)
+        self.assertEqual(numbers.call_count, 1)
 
     def test_matching_attribute_name_is_resolved_by_code(self):
         _product("Бумага офисная", external_id="P1",

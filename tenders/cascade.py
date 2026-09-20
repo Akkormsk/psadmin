@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from urllib.parse import urlparse
 
 from django.db.models.signals import post_delete, post_save
@@ -273,6 +274,16 @@ def _units_compatible(required_unit: str, offered_unit: str) -> bool:
     return not a or not b or a == b
 
 
+@lru_cache(maxsize=4096)
+def _attribute_name_tokens(name: str) -> frozenset:
+    return frozenset(_meaningful_tokens(name))
+
+
+@lru_cache(maxsize=8192)
+def _attribute_number(value: str):
+    return _numeric_from_text(value)
+
+
 def _attribute_numeric_value(attributes, concept_tokens: set, required_unit: str, *, discovered_name: str = ""):
     """Число, отвечающее на критерий, среди характеристик карточки/товара —
     без гадания единиц измерения и без домысливания одного случайного
@@ -290,9 +301,9 @@ def _attribute_numeric_value(attributes, concept_tokens: set, required_unit: str
         if not name:
             continue
         hinted = bool(discovered_name) and _norm_label(name) == _norm_label(discovered_name)
-        if not hinted and not (concept_tokens & _meaningful_tokens(name)):
+        if not hinted and not (concept_tokens & _attribute_name_tokens(name)):
             continue
-        number, unit = _numeric_from_text(attribute.get("value"))
+        number, unit = _attribute_number(_cell(attribute.get("value")))
         if number is None or not _units_compatible(required_unit, unit):
             continue
         matches.append((number, name, hinted))
@@ -849,12 +860,16 @@ class Cascade:
         colour = next((c for c in checked if c.maps_to == "color"), None)
         survivors = []
         expanded = []
-        for representative in pool:
+        for index, representative in enumerate(pool):
+            if self.deadline and index % 64 == 0:
+                self._remaining_timeout(0)
             variants = getattr(representative, "_variant_products", None) or [representative]
             for product in variants:
                 product._relevance = getattr(representative, "_relevance", getattr(product, "_relevance", 1))
                 expanded.append(product)
-        for product in expanded:
+        for index, product in enumerate(expanded):
+            if self.deadline and index % 64 == 0:
+                self._remaining_timeout(0)
             if settings.get("color_filter", "family") != "off" and colour and self._colour_conflict(product, colour.value):
                 continue
             transit = max(0, int(getattr(product, "stock_transit", 0) or 0))
@@ -884,7 +899,9 @@ class Cascade:
         tolerance = Decimal(str(max(0, min(50, int(settings.get("tolerance_percent", 0)))))) / 100
         prefill_on = settings.get("numeric_prefill", "yes") != "no"
         cards = []
-        for skus in groups.values():
+        for index, skus in enumerate(groups.values()):
+            if self.deadline and index % 64 == 0:
+                self._remaining_timeout(0)
             fitting = self._variants_fitting_axes(skus, axis_criteria, tolerance)
             face = max(
                 fitting or skus,

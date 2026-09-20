@@ -260,6 +260,8 @@ def cascade_lab_execute(request):
             prior_total_cost_rub=float(request.POST["prior_total_cost_rub"]) if request.POST.get("prior_total_cost_rub") else None,
         )
         return JsonResponse(result, json_dumps_params={"ensure_ascii": False})
+    except TimeoutError as exc:
+        return JsonResponse({"error": str(exc)}, status=408)
     except (ValueError, TypeError, json.JSONDecodeError, TenderLine.DoesNotExist) as exc:
         return JsonResponse({"error": str(exc) or "Проверьте входные данные."}, status=400)
 
