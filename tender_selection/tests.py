@@ -77,7 +77,10 @@ class RunPullTests(TestCase):
         self.assertFalse(run.ok)
         self.assertIn("429", run.error)
 
-    def test_new_matching_tender_gets_risk_assessment_once(self):
+    def test_pull_never_triggers_risk_assessment_automatically(self):
+        """Оценка рисков — платный запрос к ИИ-шлюзу за документами закупки, поэтому
+        запускается только явной кнопкой на карточке (см. views.risk_status), а не
+        сама по себе при каждой синхронизации новых тендеров."""
         settings = FilterSettings.load()
         settings.include_words = "сувенир"
         settings.save(update_fields=["include_words"])
@@ -87,9 +90,8 @@ class RunPullTests(TestCase):
              mock.patch("tender_selection.services.risk_assessment_for") as assess:
             run_pull(days=3, max_requests=1, classifiers=["32.99"])
             run_pull(days=3, max_requests=1, classifiers=["32.99"])
-        self.assertEqual(notification.call_count, 1)
-        self.assertEqual(assess.call_count, 1)
-        self.assertEqual(assess.call_args.args[0].purchase_number, record["purchase_number"])
+        notification.assert_not_called()
+        assess.assert_not_called()
 
     def test_new_tender_outside_saved_filters_skips_risk_assessment(self):
         settings = FilterSettings.load()

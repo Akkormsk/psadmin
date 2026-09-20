@@ -115,7 +115,8 @@
     <div class="panel-header"><h2 class="panel-title">Оценка рисков</h2></div>
     <div id="ts-risk-block" data-risk-url="{% url 'tender_selection:risk_status' tender.pk %}">
       {% if risk_needs_fetch %}
-      <p class="ts-doc-loading" data-risk-loading>Читаю документы закупки и оцениваю риски…</p>
+      <p class="ts-sub">Оценка риска запускается по кнопке — читает документы закупки и делает запрос к ИИ.
+      <button type="button" class="ts-doc-link" data-risk-start>Оценить риски</button></p>
       {% else %}
       {% include "tender_selection/_risk_block.html" %}
       {% endif %}
@@ -462,9 +463,8 @@
 
     block.addEventListener("click", function (e) {
       if (e.target.closest("[data-risk-refresh]")) render(baseUrl + "?refresh=1");
+      else if (e.target.closest("[data-risk-start]")) render(baseUrl);
     });
-
-    if (block.querySelector("[data-risk-loading]")) render(baseUrl);
   })();
 </script>
 {% endblock %}

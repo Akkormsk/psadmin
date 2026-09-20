@@ -194,9 +194,6 @@ def run_pull(
         stats["records"] += got
 
     created = updated = 0
-    new_for_risk = []
-    include = parse_terms(settings.include_words)
-    exclude = parse_terms(settings.exclude_words)
     seen: set[str] = set()
     bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law) for law in laws}
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
@@ -223,8 +220,6 @@ def run_pull(
                 )
                 created += int(is_created)
                 updated += int(not is_created)
-                if is_created and _risk_eligible(tender, settings, include, exclude):
-                    new_for_risk.append(tender)
         run.ok = True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
@@ -237,13 +232,6 @@ def run_pull(
     run.updated_count = updated
     run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
     run.save()
-
-    for tender in new_for_risk:
-        try:
-            if notification_for(tender):
-                risk_assessment_for(tender)
-        except Exception:
-            logger.exception("Risk assessment failed for tender %s", tender.purchase_number)
 
     return run
 
