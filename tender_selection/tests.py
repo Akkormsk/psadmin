@@ -2125,14 +2125,27 @@ class AccessControlTests(TestCase):
         tender.refresh_from_db()
         self.assertEqual(tender.review, FoundTender.UNREVIEWED)
 
-    def test_review_dot_class_in_list(self):
+    def test_reviewed_tender_shows_push_button_in_list(self):
+        """Любое значение review, кроме unreviewed (в т.ч. старое legacy
+        not_interesting), теперь просто значит «уже проверен» — вперёд
+        предлагается «В расчёт», а не отдельный дропдаун интересно/не
+        интересно, который убрали."""
         FoundTender.objects.create(
             purchase_number="1", object_info="x", title="Кружка", review=FoundTender.NOT_INTERESTING,
             last_pulled_at=timezone.now(),
         )
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("tender_selection:list") + "?view=list")
-        self.assertContains(resp, "saved-estimate__status-form is-not_interesting")
+        self.assertContains(resp, "В расчёт")
+        self.assertNotContains(resp, "На оценку рисков")
+
+    def test_unreviewed_tender_shows_forward_to_review_button_in_list(self):
+        FoundTender.objects.create(
+            purchase_number="2", object_info="x", title="Блокнот", last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
+        self.assertContains(resp, "На оценку рисков")
 
     def test_missing_notification_shows_warning_badge(self):
         FoundTender.objects.create(

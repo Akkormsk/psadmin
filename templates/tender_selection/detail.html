@@ -27,15 +27,20 @@
         {% if pushed_estimate_id %}
         <a class="ts-onestimate-pill" href="{% url 'tender_estimate' pushed_estimate_id %}">На расчёте — открыть просчёт →</a>
         {% else %}
-        <form class="saved-estimate__status-form is-{{ tender.review }}" data-ts-review data-review="{{ tender.review }}" method="post" action="{% url 'tender_selection:review' tender.pk %}">
-          {% csrf_token %}
-          <select data-customized="true" class="saved-estimate__status" name="review" aria-label="Статус тендера">
-            {% for value, label in tender.REVIEW_CHOICES %}<option value="{{ value }}" {% if tender.review == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-          </select>
+        {% if tender.review == "unreviewed" %}
+        <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
+          {% csrf_token %}<input type="hidden" name="review" value="interesting">
+          <button type="submit" class="button-success">На оценку рисков</button>
         </form>
+        {% else %}
         <form method="post" action="{% url 'tender_selection:push' tender.pk %}">
           {% csrf_token %}
-          <button type="submit" class="button-success">В расчёт тендеров</button>
+          <button type="submit" class="button-success">В расчёт</button>
+        </form>
+        {% endif %}
+        <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="button-secondary">Скрыть</button>
         </form>
         {% endif %}
       </div>
@@ -244,7 +249,6 @@
   .ts-detail__head { min-width: 0; flex: 1 1 auto; }
   .ts-detail__head .panel-title { font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
   .ts-detail__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 0 auto; }
-  .ts-detail__actions .saved-estimate__status-form { flex: 0 0 auto; }
   .ts-detail .panel-title .ts-law { vertical-align: middle; margin-right: 4px; }
   .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; background: #eef1f4; color: #6b7280; }
   .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
@@ -298,27 +302,6 @@
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } }
 </style>
 <script>
-  document.querySelectorAll("[data-ts-review]").forEach(function (form) {
-    var select = form.querySelector("select");
-    form.addEventListener("submit", function (e) { e.preventDefault(); });
-    select.addEventListener("change", function () {
-      var prev = form.dataset.review, next = select.value;
-      var body = new FormData(form);
-      form.classList.remove("is-" + prev, "is-error");
-      form.classList.add("is-" + next, "is-saving");
-      select.disabled = true;
-      fetch(form.action, { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body })
-        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-        .then(function (data) { form.dataset.review = data.review; })
-        .catch(function () {
-          select.value = prev;
-          form.classList.remove("is-" + next);
-          form.classList.add("is-" + prev, "is-error");
-        })
-        .finally(function () { select.disabled = false; form.classList.remove("is-saving"); });
-    });
-  });
-
   (function () {
     var modal = document.getElementById("ts-doc-modal");
     var title = document.getElementById("ts-doc-title");
