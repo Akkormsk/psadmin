@@ -79,17 +79,28 @@ def tender_viewer_required(view):
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
-    Статус справа — не ручной выбор (было review-дропдаун интересно/не
-    интересно), а то, что реально посчитано действием «Оценить»: риск уже
-    оценивается автоматически при синхронизации (risk_checked_at/risk_error),
-    прогноз снижения по истории торгов — следующий бэклог-пункт, добавится
-    сюда же вторым результатом того же действия."""
+    Одна зелёная кнопка «вперёд на стадию» на каждой карточке, подпись и
+    действие зависят от текущей стадии (не отдельная кнопка на каждый
+    вариант): на «Входящих» — «На оценку рисков» (правит review), на
+    «Проверке» — «В расчёт» (пуш в TenderEstimate). Белая «Скрыть» —
+    архивирование, всегда одна и та же, вариантов «не интересно» отдельно
+    от архива больше нет.
+
+    Статус справа — не ручной выбор, а то, что реально посчитано действием
+    «Оценить»: риск оценивается автоматически при синхронизации
+    (risk_checked_at/risk_error), прогноз снижения по истории торгов —
+    следующий бэклог-пункт, добавится сюда же вторым результатом того же
+    действия."""
     if tender.risk_error:
         risk_state, status_label, status_key = "error", "Ошибка оценки", "error"
     elif tender.risk_checked_at:
         risk_state, status_label, status_key = "ok", "Оценена", "assessed"
     else:
         risk_state, status_label, status_key = "pending", "Не оценена", "new"
+    if tender.review == FoundTender.UNREVIEWED:
+        forward_label, forward_url = "На оценку рисков", reverse("tender_selection:review", args=[tender.pk])
+    else:
+        forward_label, forward_url = "В расчёт", reverse("tender_selection:push", args=[tender.pk])
     return {
         "kind": "found",
         "pk": tender.pk,
@@ -102,7 +113,10 @@ def _found_tender_card(tender):
         "status_key": status_key,
         "badges": [{"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]}],
         "detail_url": reverse("tender_selection:detail", args=[tender.pk]),
-        "push_url": reverse("tender_selection:push", args=[tender.pk]),
+        "forward_label": forward_label,
+        "forward_url": forward_url,
+        "forward_is_review": tender.review == FoundTender.UNREVIEWED,
+        "dismiss_url": reverse("tender_selection:dismiss", args=[tender.pk]),
     }
 
 
@@ -160,19 +174,28 @@ def kanban(request):
     чтение FoundTender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
     источника: перенос из подбора или ручной импорт) в одном списке карточек."""
     dirs = _kanban_column_dirs(request)
+    settings = FilterSettings.load()
 
     def _order(dir_key, *fields):
         return tuple(f if dirs[dir_key] == "asc" else f"-{f}" for f in fields)
 
+    def _visible(base_qs, dir_key, *order_fields):
+        qs = base_qs.order_by(*_order(dir_key, *order_fields))
+        rows, _hidden, _expired = _visible_found_tenders(
+            qs, min_price=settings.min_price,
+            include_words=settings.include_words, exclude_words=settings.exclude_words,
+        )
+        return rows
+
     incoming = [
         _found_tender_card(t) for t in
-        FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED)
-        .order_by(*_order("incoming", "published_at", "first_seen_at"))
+        _visible(FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED),
+                  "incoming", "published_at", "first_seen_at")
     ]
     review = [
         _found_tender_card(t) for t in
-        FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED)
-        .order_by(*_order("review", "published_at", "first_seen_at"))
+        _visible(FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED),
+                  "review", "published_at", "first_seen_at")
     ]
 
     from tenders.models import TenderEstimate
@@ -202,7 +225,32 @@ def kanban(request):
         column["dir"] = dirs[column["key"]]
         column["toggle_qs"] = _kanban_toggle_qs(dirs, column["key"])
     archived_count = FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
-    return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count})
+    return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count, "settings": settings})
+
+
+def _visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False):
+    """Общие правила «что скрыто» у найденных тендеров — минимальная цена,
+    истёкший срок подачи, плюс/минус-слова. Одна функция для канбана и
+    плоского списка, чтобы они не расходились в том, что показывают."""
+    now = timezone.now()
+    if min_price:
+        queryset = queryset.filter(Q(max_price__gte=min_price) | Q(max_price__isnull=True))
+    expired = 0
+    if not show_all:
+        expired = queryset.filter(collecting_finished_at__lt=now).count()
+        queryset = queryset.filter(Q(collecting_finished_at__gte=now) | Q(collecting_finished_at__isnull=True))
+    include = parse_terms(include_words)
+    exclude = parse_terms(exclude_words)
+    rows, hidden = [], 0
+    for tender in queryset:
+        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
+        if passes or show_all:
+            tender.match_hits = hits
+            tender.filtered_out = not passes
+            rows.append(tender)
+        else:
+            hidden += 1
+    return rows, hidden, expired
 
 
 _ESTIMATE_STAGE_STATUSES = {
@@ -256,23 +304,11 @@ def tender_list(request):
     queryset = FoundTender.objects.exclude(status=FoundTender.DISMISSED)
     if law_filter != "all":
         queryset = queryset.filter(law=law_filter)
-    if settings.min_price:
-        queryset = queryset.filter(Q(max_price__gte=settings.min_price) | Q(max_price__isnull=True))
-    expired = 0
-    if not show_all:
-        expired = queryset.filter(collecting_finished_at__lt=now).count()
-        queryset = queryset.filter(Q(collecting_finished_at__gte=now) | Q(collecting_finished_at__isnull=True))
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
 
-    rows, hidden = [], 0
-    for tender in queryset:
-        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
-        if passes or show_all:
-            tender.match_hits = hits
-            tender.filtered_out = not passes
-            rows.append(tender)
-        else:
-            hidden += 1
+    rows, hidden, expired = _visible_found_tenders(
+        queryset, min_price=settings.min_price, include_words=inc_value, exclude_words=exc_value, show_all=show_all,
+    )
 
     page = Paginator(rows, 100).get_page(request.GET.get("page"))
     orgs = {o.inn: o for o in Organization.objects.filter(

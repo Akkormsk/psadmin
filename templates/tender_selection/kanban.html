@@ -19,7 +19,7 @@
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}">
           {% csrf_token %}
-          <button type="submit" class="button-success">Обновить</button>
+          <button type="submit" class="button-success">Обновить · от&nbsp;{{ settings.min_price|rub }}, за&nbsp;{{ settings.window_days }}&nbsp;дн.</button>
         </form>
       </div>
     </div>
@@ -59,10 +59,17 @@
             </div>
             {% endif %}
             {% if card.kind == "found" %}
-              <form method="post" action="{{ card.push_url }}" class="kb-card__action">
-                {% csrf_token %}
-                <button type="submit" class="button-secondary">В расчёт</button>
-              </form>
+              <div class="kb-card__action kb-card__action--split">
+                <form method="post" action="{{ card.forward_url }}">
+                  {% csrf_token %}
+                  {% if card.forward_is_review %}<input type="hidden" name="review" value="interesting">{% endif %}
+                  <button type="submit" class="button-success">{{ card.forward_label }}</button>
+                </form>
+                <form method="post" action="{{ card.dismiss_url }}">
+                  {% csrf_token %}
+                  <button type="submit" class="button-secondary">Скрыть</button>
+                </form>
+              </div>
             {% endif %}
           </div>
           {% empty %}
@@ -104,7 +111,9 @@
   .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
   .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .kb-card__action .button-secondary { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
+  .kb-card__action .button-secondary, .kb-card__action .button-success { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
+  .kb-card__action--split { display: flex; gap: 6px; }
+  .kb-card__action--split form { flex: 1 1 0; min-width: 0; }
 
   .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }
   .kb-archive i { font-size: 18px; font-style: normal; }
