@@ -34,7 +34,10 @@
         <div class="kb-column__cards">
           {% for card in column.cards %}
           <div class="kb-card">
-            <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
+            <div class="kb-card__head">
+              <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
+              <span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>
+            </div>
             {% if card.kind == "found" %}
               <div class="kb-card__meta">
                 <span class="ts-law">{{ card.law_label }}</span>
@@ -44,21 +47,27 @@
                 <strong>{{ card.max_price|rub }}</strong>
                 {% if card.deadline %}<small>до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y" }}</small>{% endif %}
               </div>
-              <div class="kb-card__badges">
-                <span class="kb-badge kb-badge--{{ card.risk_state }}">
-                  {% if card.risk_state == "ok" %}риск: оценён{% elif card.risk_state == "error" %}риск: ошибка{% else %}риск: ожидает{% endif %}
-                </span>
-              </div>
+            {% else %}
+              <div class="kb-card__meta">№ {{ card.tender_number }}</div>
+            {% endif %}
+            {% if card.badges or card.needs_outcome %}
+            <div class="kb-card__badges">
+              {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
+              {% if card.needs_outcome %}
+              <form method="post" action="{{ card.outcome_url }}" class="kb-outcome">
+                {% csrf_token %}
+                <button type="submit" class="kb-badge kb-badge--pending kb-outcome__btn" title="Забрать факт торгов по номеру закупки">Внести итог ↻</button>
+                <button type="submit" name="status" value="won" class="kb-badge kb-badge--ok kb-outcome__btn">Выиграли</button>
+                <button type="submit" name="status" value="lost" class="kb-badge kb-badge--error kb-outcome__btn">Проиграли</button>
+              </form>
+              {% endif %}
+            </div>
+            {% endif %}
+            {% if card.kind == "found" %}
               <form method="post" action="{{ card.push_url }}" class="kb-card__action">
                 {% csrf_token %}
                 <button type="submit" class="button-secondary">В расчёт</button>
               </form>
-            {% else %}
-              <div class="kb-card__meta">№ {{ card.tender_number }}</div>
-              <div class="kb-card__badges">
-                <span class="kb-badge kb-badge--status-{{ card.status }}">{{ card.status_label }}</span>
-                {% if card.roi %}<span class="kb-badge kb-badge--ok">ROI {{ card.roi }}%</span>{% endif %}
-              </div>
             {% endif %}
           </div>
           {% empty %}
@@ -90,20 +99,32 @@
   .kb-column__empty { margin: 0; padding: 12px 0; color: var(--ink-3); font-size: 13px; }
 
   .kb-card { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-card); }
-  .kb-card__title { font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+  .kb-card__head { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+  .kb-card__title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
   .kb-card__title:hover { text-decoration: underline; }
+  /* Статус стадии — крупнее и справа: это «где мы сейчас», отдельно от
+     бейджей результатов ниже, которые копятся и не заменяют друг друга. */
+  .kb-card__status { flex: 0 0 auto; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; background: var(--tint-neutral); color: var(--ink-2); }
+  .kb-card__status--new { background: var(--tint-neutral); color: var(--ink-2); }
+  .kb-card__status--assessed { background: var(--tint-positive); color: var(--positive-ink); }
+  .kb-card__status--error { background: var(--tint-negative); color: var(--negative-ink); }
+  .kb-card__status--draft { background: var(--tint-cool); color: var(--ink-2); }
+  .kb-card__status--pending { background: var(--tint-warning); color: var(--warning-ink); }
+  .kb-card__status--won { background: var(--tint-positive); color: var(--positive-ink); }
+  .kb-card__status--lost, .kb-card__status--not_participated { background: var(--tint-negative); color: var(--negative-ink); }
   .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
   .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
-  .kb-card__badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .kb-badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; background: var(--tint-neutral); color: var(--ink-2); }
   .kb-badge--ok { background: var(--tint-positive); color: var(--positive-ink); }
   .kb-badge--pending { background: var(--tint-neutral); color: var(--ink-2); }
   .kb-badge--error { background: var(--tint-negative); color: var(--negative-ink); }
-  .kb-badge--status-draft { background: var(--tint-cool); color: var(--ink-2); }
-  .kb-badge--status-pending { background: var(--tint-warning); color: var(--warning-ink); }
-  .kb-badge--status-won { background: var(--tint-positive); color: var(--positive-ink); }
-  .kb-badge--status-lost, .kb-badge--status-not_participated { background: var(--tint-negative); color: var(--negative-ink); }
+  /* Ввод итога живёт в той же строке бейджей — не отдельный блок формы,
+     только на «Торгах» и только пока итог ещё не внесён (needs_outcome). */
+  .kb-outcome { display: contents; }
+  .kb-outcome__btn { border: 1px dashed var(--field-border); cursor: pointer; }
+  .kb-outcome__btn:hover { filter: brightness(0.97); }
   .kb-card__action .button-secondary { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
 
   .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }

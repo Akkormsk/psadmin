@@ -18,4 +18,5 @@ urlpatterns = [
     path("<int:pk>/review/", views.set_review, name="review"),
     path("<int:pk>/push/", views.push_estimate, name="push"),
     path("<int:pk>/dismiss/", views.dismiss, name="dismiss"),
+    path("estimate/<int:pk>/outcome/", views.enter_outcome, name="enter_outcome"),
 ]

@@ -19,8 +19,9 @@ from .models import DocumentPreview, FilterSettings, FoundTender, Organization, 
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
-    CATEGORY_GROUPS, _fetch_doc_bytes, effective_laws, effective_okpd2, enrich_one_org,
-    extras_for, notification_for, push_to_estimate, risk_assessment_for, run_pull,
+    CATEGORY_GROUPS, _fetch_doc_bytes, apply_tender_outcome, effective_laws, effective_okpd2,
+    enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
+    risk_assessment_for, run_pull,
 )
 from .stats import price_stats_for
 
@@ -76,13 +77,19 @@ def tender_viewer_required(view):
 
 
 def _found_tender_card(tender):
-    """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт."""
+    """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
+
+    Статус справа — не ручной выбор (было review-дропдаун интересно/не
+    интересно), а то, что реально посчитано действием «Оценить»: риск уже
+    оценивается автоматически при синхронизации (risk_checked_at/risk_error),
+    прогноз снижения по истории торгов — следующий бэклог-пункт, добавится
+    сюда же вторым результатом того же действия."""
     if tender.risk_error:
-        risk_state = "error"
+        risk_state, status_label, status_key = "error", "Ошибка оценки", "error"
     elif tender.risk_checked_at:
-        risk_state = "ok"
+        risk_state, status_label, status_key = "ok", "Оценена", "assessed"
     else:
-        risk_state = "pending"
+        risk_state, status_label, status_key = "pending", "Не оценена", "new"
     return {
         "kind": "found",
         "pk": tender.pk,
@@ -91,8 +98,9 @@ def _found_tender_card(tender):
         "purchase_number": tender.purchase_number,
         "max_price": tender.max_price,
         "deadline": tender.collecting_finished_at,
-        "risk_state": risk_state,
-        "review": tender.review,
+        "status_label": status_label,
+        "status_key": status_key,
+        "badges": [{"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]}],
         "detail_url": reverse("tender_selection:detail", args=[tender.pk]),
         "push_url": reverse("tender_selection:push", args=[tender.pk]),
     }
@@ -100,8 +108,21 @@ def _found_tender_card(tender):
 
 def _estimate_card(estimate):
     """Карточка «Расчёт»/«Торги»/«Результат» — просчёт, откуда бы он ни пришёл
-    (перенесён из подбора или создан вручную импортом в самих «Тендерах»)."""
+    (перенесён из подбора или создан вручную импортом в самих «Тендерах»).
+
+    Бейджи накапливаются по мере продвижения, не заменяют друг друга: ROI
+    появляется на «Расчёте» и остаётся видимым дальше; факт торгов появляется
+    только после «Внести итог» на «Торгах» и тоже остаётся на «Результате»."""
     summary = estimate.summary_snapshot or {}
+    badges = []
+    if summary.get("roi") is not None:
+        badges.append({"state": "ok", "text": f"ROI {summary['roi']}%"})
+    if estimate.outcome_checked_at:
+        source_label = "авто" if estimate.outcome_source == estimate.OUTCOME_AUTO else "вручную"
+        if estimate.actual_reduction_percent is not None:
+            badges.append({"state": "ok", "text": f"факт: снижение {estimate.actual_reduction_percent}% ({source_label})"})
+        else:
+            badges.append({"state": "pending", "text": f"итог внесён ({source_label})"})
     return {
         "kind": "estimate",
         "pk": estimate.pk,
@@ -109,8 +130,14 @@ def _estimate_card(estimate):
         "tender_number": estimate.tender_number,
         "status": estimate.status,
         "status_label": estimate.get_status_display(),
-        "roi": summary.get("roi"),
+        "status_key": estimate.status,
+        "badges": badges,
+        # Только «Торги» и только пока итог ещё не внесён — до этой стадии
+        # ввод итога не нужен (аукциона ещё не было), после неё уже не нужен
+        # (итог уже есть в бейджах выше).
+        "needs_outcome": estimate.status == estimate.PENDING and not estimate.outcome_checked_at,
         "detail_url": reverse("tender_estimate", args=[estimate.pk]),
+        "outcome_url": reverse("tender_selection:enter_outcome", args=[estimate.pk]),
     }
 
 
@@ -506,6 +533,39 @@ def push_estimate(request, pk):
         return redirect("tender_selection:detail", pk=pk)
     messages.success(request, "Просчёт создан. Позиции подставлены из извещения.")
     return redirect("tender_estimate", pk=estimate_id)
+
+
+@superuser_required
+@require_POST
+def enter_outcome(request, pk):
+    """Обязательный шаг канбана для карточек «Торги» — забрать факт торгов
+    (автоматически через ГосПлан) или подтвердить его вручную, если по номеру
+    закупки контракт ещё не найден или свой ИНН не настроен (COMPANY_INN)."""
+    from tenders.models import TenderEstimate
+
+    estimate = get_object_or_404(TenderEstimate, pk=pk)
+    manual_status = request.POST.get("status")
+
+    if manual_status in (TenderEstimate.WON, TenderEstimate.LOST, TenderEstimate.NOT_PARTICIPATED):
+        apply_tender_outcome(estimate, status=manual_status, source=TenderEstimate.OUTCOME_MANUAL)
+        messages.success(request, f"Итог внесён вручную: {estimate.get_status_display()}.")
+    else:
+        outcome = fetch_tender_outcome(estimate)
+        if not outcome.get("found"):
+            messages.warning(request, "Контракт по этому номеру закупки в реестре пока не найден — попробуйте позже или внесите итог вручную.")
+        elif outcome.get("auto_status"):
+            apply_tender_outcome(
+                estimate, status=outcome["auto_status"], price=outcome.get("price"),
+                reduction_percent=outcome.get("reduction_percent"), source=TenderEstimate.OUTCOME_AUTO,
+            )
+            messages.success(request, f"Итог найден автоматически: {estimate.get_status_display()}.")
+        else:
+            estimate.actual_price = outcome.get("price")
+            estimate.actual_reduction_percent = outcome.get("reduction_percent")
+            estimate.outcome_checked_at = timezone.now()
+            estimate.save(update_fields=["actual_price", "actual_reduction_percent", "outcome_checked_at"])
+            messages.info(request, "Цена контракта найдена, но выиграли мы или нет — решите сами кнопками ниже (свой ИНН не настроен).")
+    return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
 
 @superuser_required

@@ -438,6 +438,14 @@ class TenderEstimate(models.Model):
     name = models.CharField("Название / комментарий", max_length=300)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
     result_notes = models.TextField("Результат торгов", blank=True)
+
+    OUTCOME_AUTO = "auto"
+    OUTCOME_MANUAL = "manual"
+    OUTCOME_SOURCE_CHOICES = ((OUTCOME_AUTO, "Автоматически"), (OUTCOME_MANUAL, "Вручную"))
+    actual_price = models.DecimalField("Фактическая цена контракта", max_digits=16, decimal_places=2, null=True, blank=True)
+    actual_reduction_percent = models.DecimalField("Фактическое снижение, %", max_digits=5, decimal_places=2, null=True, blank=True)
+    outcome_checked_at = models.DateTimeField("Итог внесён", null=True, blank=True)
+    outcome_source = models.CharField("Источник итога", max_length=8, choices=OUTCOME_SOURCE_CHOICES, blank=True)
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))

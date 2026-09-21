@@ -14,11 +14,13 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
+import os
+
 from . import gosplan
 from .documents import DocumentError, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .filtering import match_title, parse_terms
-from .models import FilterSettings, FoundTender, Organization, PullRun
+from .models import ContractStat, FilterSettings, FoundTender, Organization, PullRun
 
 logger = logging.getLogger(__name__)
 
@@ -638,3 +640,64 @@ def enrich_organizations(limit: int = 20) -> int:
         Organization.objects.update_or_create(inn=inn, defaults=_org_fields(source, law))
         saved += 1
     return saved
+
+
+def fetch_tender_outcome(estimate) -> dict:
+    """Забрать факт торгов по номеру закупки через реестр контрактов ГосПлан.
+
+    Не решает само, выиграли мы или нет — это по умолчанию неизвестно без
+    настроенного COMPANY_INN (свой ИНН нигде в проекте раньше не хранился).
+    Если задан — сравнивает с суплаерами найденного контракта и возвращает
+    auto_status; если нет — возвращает найденную цену/снижение, а решение
+    «выиграли/проиграли» остаётся за администратором (см. enter_outcome).
+    """
+    from tenders.models import TenderEstimate
+
+    try:
+        rows = gosplan.fetch_contracts({"purchase_number": estimate.tender_number, "limit": 5})
+    except gosplan.GosplanError:
+        return {"found": False}
+    if not rows:
+        return {"found": False}
+    row = rows[0]
+    price = row.get("price")
+    result: dict = {"found": True, "price": price, "suppliers": [str(s) for s in (row.get("suppliers") or [])]}
+
+    nmck_total = (estimate.summary_snapshot or {}).get("nmck_total")
+    if price is not None and nmck_total:
+        try:
+            reduction = (Decimal(str(nmck_total)) - Decimal(str(price))) / Decimal(str(nmck_total)) * 100
+            result["reduction_percent"] = reduction.quantize(Decimal("0.01"))
+        except (InvalidOperation, ZeroDivisionError):
+            pass
+
+    company_inn = os.getenv("COMPANY_INN", "").strip()
+    if company_inn and price is not None:
+        result["auto_status"] = TenderEstimate.WON if company_inn in result["suppliers"] else TenderEstimate.LOST
+    return result
+
+
+def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None, source) -> None:
+    """Записать факт торгов на просчёт; при победе — отметить в ContractStat.is_ours,
+    чтобы своя история наконец начала накапливаться (поле раньше нигде не писалось)."""
+    from tenders.models import TenderEstimate
+
+    estimate.status = status
+    if price is not None:
+        estimate.actual_price = price
+    if reduction_percent is not None:
+        estimate.actual_reduction_percent = reduction_percent
+    estimate.outcome_checked_at = timezone.now()
+    estimate.outcome_source = source
+    estimate.save(update_fields=[
+        "status", "actual_price", "actual_reduction_percent", "outcome_checked_at", "outcome_source",
+    ])
+
+    if status == TenderEstimate.WON:
+        ContractStat.objects.update_or_create(
+            law="fz44", purchase_number=estimate.tender_number,
+            defaults={
+                "final_price": price, "discount_pct": reduction_percent,
+                "is_ours": True, "contract_date": timezone.now().date(),
+            },
+        )
