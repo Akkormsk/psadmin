@@ -132,12 +132,10 @@ def _estimate_card(estimate):
         "status_label": estimate.get_status_display(),
         "status_key": estimate.status,
         "badges": badges,
-        # Только «Торги» и только пока итог ещё не внесён — до этой стадии
-        # ввод итога не нужен (аукциона ещё не было), после неё уже не нужен
-        # (итог уже есть в бейджах выше).
-        "needs_outcome": estimate.status == estimate.PENDING and not estimate.outcome_checked_at,
+        # Внесение итога живёт на странице самого тендера (tenders/home.html,
+        # рядом с прогнозом снижения), не на карточке канбана — здесь только
+        # уже накопленный результат в badges выше.
         "detail_url": reverse("tender_estimate", args=[estimate.pk]),
-        "outcome_url": reverse("tender_selection:enter_outcome", args=[estimate.pk]),
     }
 
 

@@ -1074,6 +1074,16 @@ h1 {
 .tender-result-note textarea { width:100%; min-height:72px; box-sizing:border-box; resize:vertical; padding:10px 12px; border:1px solid var(--field-border); border-radius:9px; background:var(--surface); color:var(--ink); font:inherit; font-weight:400; }
 .tender-result-note textarea:focus { border-color:var(--field-border); outline:0; box-shadow:0 0 0 3px var(--accent-ring); }
 .tender-result-note small { color:var(--ink-3); font-size:11px; font-weight:400; }
+/* Итог торгов — отдельная секция страницы тендера (своя, вне #tender-form:
+   вложенный <form> внутри другой формы невалиден и ломает сабмит), не на
+   карточке канбана — та только показывает уже накопленный результат бейджем. */
+.tender-outcome__facts { display:flex; flex-wrap:wrap; gap:16px; }
+.tender-outcome__facts span { display:grid; gap:3px; }
+.tender-outcome__facts small { color:var(--ink-3); font-size:11px; }
+.tender-outcome__facts strong { font-size:15px; }
+.tender-outcome__actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+.tender-outcome__won { border-color:var(--border-positive); background:var(--tint-positive); color:var(--positive-ink); }
+.tender-outcome__lost { border-color:var(--border-negative); background:var(--tint-negative); color:var(--negative-ink); }
 .tender-source-card { display:grid; gap:10px; margin-top:14px; padding:13px 16px; border:1px solid var(--border); border-radius:11px; background:var(--tint-cool); }
 .tender-source-card header { display:flex; align-items:start; justify-content:space-between; gap:18px; }
 .tender-source-card header > div { display:grid; gap:3px; min-width:0; }

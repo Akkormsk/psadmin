@@ -50,17 +50,9 @@
             {% else %}
               <div class="kb-card__meta">№ {{ card.tender_number }}</div>
             {% endif %}
-            {% if card.badges or card.needs_outcome %}
+            {% if card.badges %}
             <div class="kb-card__badges">
               {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
-              {% if card.needs_outcome %}
-              <form method="post" action="{{ card.outcome_url }}" class="kb-outcome">
-                {% csrf_token %}
-                <button type="submit" class="kb-badge kb-badge--pending kb-outcome__btn" title="Забрать факт торгов по номеру закупки">Внести итог ↻</button>
-                <button type="submit" name="status" value="won" class="kb-badge kb-badge--ok kb-outcome__btn">Выиграли</button>
-                <button type="submit" name="status" value="lost" class="kb-badge kb-badge--error kb-outcome__btn">Проиграли</button>
-              </form>
-              {% endif %}
             </div>
             {% endif %}
             {% if card.kind == "found" %}
@@ -120,11 +112,6 @@
   .kb-badge--ok { background: var(--tint-positive); color: var(--positive-ink); }
   .kb-badge--pending { background: var(--tint-neutral); color: var(--ink-2); }
   .kb-badge--error { background: var(--tint-negative); color: var(--negative-ink); }
-  /* Ввод итога живёт в той же строке бейджей — не отдельный блок формы,
-     только на «Торгах» и только пока итог ещё не внесён (needs_outcome). */
-  .kb-outcome { display: contents; }
-  .kb-outcome__btn { border: 1px dashed var(--field-border); cursor: pointer; }
-  .kb-outcome__btn:hover { filter: brightness(0.97); }
   .kb-card__action .button-secondary { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
 
   .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }
