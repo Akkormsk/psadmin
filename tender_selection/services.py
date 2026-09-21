@@ -363,7 +363,14 @@ def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[
 
 
 def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
-    """Повторить оценку свежих подходящих тендеров, если извещение было недоступно."""
+    """Досчитать риск для тендеров, уже отправленных «На оценку рисков»
+    (review != unreviewed), но ещё не оценённых — как раз это и есть
+    автозапуск на стадии «Проверка». Раньше здесь же было ограничение
+    «тендер найден не позже 2 дней назад» (для другой задачи — досчитать
+    после сбоя загрузки извещения) — оно тихо исключало любой тендер,
+    который кто-то review'нул позже второго дня, а по-настоящему бывает
+    почти всегда. Само по себе review != unreviewed уже достаточно редкий
+    и осознанный фильтр — возрастное ограничение было лишним."""
     settings = FilterSettings.load()
     include = parse_terms(settings.include_words)
     exclude = parse_terms(settings.exclude_words)
@@ -371,8 +378,7 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     attempted = succeeded = 0
     tenders = FoundTender.objects.filter(
         law="fz44", risk_checked_at__isnull=True,
-        first_seen_at__gte=now - timedelta(days=2),
-    ).order_by("first_seen_at")[:300]
+    ).exclude(review=FoundTender.UNREVIEWED).order_by("first_seen_at")[:300]
     for tender in tenders:
         if attempted >= limit:
             break

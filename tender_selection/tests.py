@@ -166,6 +166,25 @@ class RetryPendingRisksTests(TestCase):
         self.assertEqual((attempted, succeeded), (0, 0))
         assess.assert_not_called()
 
+    def test_picks_up_old_tender_reviewed_long_after_it_was_found(self):
+        """Регрессия: раньше был фильтр «найден не позже 2 дней назад», унаследованный
+        от другой задачи (досчитать после сбоя загрузки) — он тихо резал ЛЮБОЙ
+        тендер, который review'нули позже второго дня, а так бывает почти всегда."""
+        from datetime import timedelta
+
+        from .services import retry_pending_risks
+
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="Сувенирная продукция", law="fz44",
+            max_price=400000, last_pulled_at=timezone.now(), review=FoundTender.INTERESTING,
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        FoundTender.objects.filter(pk=tender.pk).update(first_seen_at=timezone.now() - timedelta(days=30))
+        with mock.patch("tender_selection.services.risk_assessment_for", return_value={"legal_risks": "ok"}) as assess:
+            attempted, succeeded = retry_pending_risks()
+        self.assertEqual((attempted, succeeded), (1, 1))
+        assess.assert_called_once()
+
 
 class MultiSourceTests(TestCase):
     def test_fz223_record_shape(self):
