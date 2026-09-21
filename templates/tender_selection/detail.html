@@ -27,21 +27,21 @@
         {% if pushed_estimate_id %}
         <a class="ts-onestimate-pill" href="{% url 'tender_estimate' pushed_estimate_id %}">На расчёте — открыть просчёт →</a>
         {% else %}
-        {% if tender.review == "unreviewed" %}
-        <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
-          {% csrf_token %}<input type="hidden" name="review" value="interesting">
-          <button type="submit" class="button-success">На оценку рисков</button>
-        </form>
-        {% else %}
-        <form method="post" action="{% url 'tender_selection:push' tender.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="button-success">В расчёт</button>
-        </form>
-        {% endif %}
         <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
           {% csrf_token %}
           <button type="submit" class="button-secondary">Скрыть</button>
         </form>
+        {% if tender.review == "unreviewed" %}
+        <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
+          {% csrf_token %}<input type="hidden" name="review" value="interesting">
+          <button type="submit" class="button-success">На оценку рисков →</button>
+        </form>
+        {% else %}
+        <form method="post" action="{% url 'tender_selection:push' tender.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="button-success">В расчёт →</button>
+        </form>
+        {% endif %}
         {% endif %}
       </div>
     </div>

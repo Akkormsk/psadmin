@@ -1186,20 +1186,36 @@ class RiskAssessmentForTests(TestCase):
         self.assertIn("документ", tender.risk_error)
         self.assertIsNotNone(tender.risk_checked_at)
 
-    def test_all_documents_failing_to_download_does_not_call_gateway(self):
-        """Регрессия: build_context() всегда кладёт в context сводку извещения, даже
-        если ни один документ не скачался — раньше это маскировало полный сбой
-        загрузки и уходило в платный запрос по одной только сводке."""
+    def test_all_documents_failing_falls_back_to_card_only_assessment(self):
+        """Аварийный режим: если ни один документ не скачался (типично — локальная
+        сеть не видит ЕИС), делаем оценку по одной сводке извещения из
+        build_context(), явно помечая её degraded — чтобы не путать с полноценной
+        оценкой по документам, а не молча пропускать запрос совсем."""
+        from .services import risk_assessment_for
+
+        tender = self._tender(notification_raw=NOTIFICATION_FIXTURE)
+        fake_result = {"data": {"legal_risks": "по извещению"}, "usage": {}}
+        with mock.patch("tender_selection.services._fetch_doc_bytes", side_effect=Exception("сеть недоступна")), \
+             mock.patch("tender_selection.risk_assessment.assess", return_value=fake_result) as assess:
+            result = risk_assessment_for(tender)
+        assess.assert_called_once()
+        self.assertEqual(result["legal_risks"], "по извещению")
+        self.assertTrue(result["degraded"])
+        tender.refresh_from_db()
+        self.assertEqual(tender.risk_assessment_docs, [])
+        self.assertEqual(tender.risk_error, "")
+
+    def test_all_documents_failing_and_fallback_gateway_call_also_fails(self):
+        from .risk_assessment import RiskAssessmentError
         from .services import risk_assessment_for
 
         tender = self._tender(notification_raw=NOTIFICATION_FIXTURE)
         with mock.patch("tender_selection.services._fetch_doc_bytes", side_effect=Exception("сеть недоступна")), \
-             mock.patch("tender_selection.risk_assessment.assess") as assess:
+             mock.patch("tender_selection.risk_assessment.assess", side_effect=RiskAssessmentError("нет ключа")):
             result = risk_assessment_for(tender)
-        assess.assert_not_called()
         self.assertIsNone(result)
         tender.refresh_from_db()
-        self.assertIn("скачать", tender.risk_error)
+        self.assertIn("нет ключа", tender.risk_error)
 
     def test_gateway_failure_recorded_not_raised(self):
         from .risk_assessment import RiskAssessmentError
@@ -2125,27 +2141,22 @@ class AccessControlTests(TestCase):
         tender.refresh_from_db()
         self.assertEqual(tender.review, FoundTender.UNREVIEWED)
 
-    def test_reviewed_tender_shows_push_button_in_list(self):
-        """Любое значение review, кроме unreviewed (в т.ч. старое legacy
-        not_interesting), теперь просто значит «уже проверен» — вперёд
-        предлагается «В расчёт», а не отдельный дропдаун интересно/не
-        интересно, который убрали."""
+    def test_list_row_has_no_forward_button_only_hide(self):
+        """Решение «вперёд» (На оценку рисков / В расчёт) принимается только на
+        странице самого тендера — рано жать кнопку из списка, не открыв, что
+        внутри. В списке остаётся только «×» скрыть, независимо от review."""
         FoundTender.objects.create(
             purchase_number="1", object_info="x", title="Кружка", review=FoundTender.NOT_INTERESTING,
             last_pulled_at=timezone.now(),
         )
-        self.client.force_login(self.admin)
-        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
-        self.assertContains(resp, "В расчёт")
-        self.assertNotContains(resp, "На оценку рисков")
-
-    def test_unreviewed_tender_shows_forward_to_review_button_in_list(self):
         FoundTender.objects.create(
             purchase_number="2", object_info="x", title="Блокнот", last_pulled_at=timezone.now(),
         )
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("tender_selection:list") + "?view=list")
-        self.assertContains(resp, "На оценку рисков")
+        self.assertNotContains(resp, "На оценку рисков")
+        self.assertNotContains(resp, "В расчёт")
+        self.assertContains(resp, 'title="Скрыть тендер"')
 
     def test_missing_notification_shows_warning_badge(self):
         FoundTender.objects.create(

@@ -79,28 +79,23 @@ def tender_viewer_required(view):
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
-    Одна зелёная кнопка «вперёд на стадию» на каждой карточке, подпись и
-    действие зависят от текущей стадии (не отдельная кнопка на каждый
-    вариант): на «Входящих» — «На оценку рисков» (правит review), на
-    «Проверке» — «В расчёт» (пуш в TenderEstimate). Белая «Скрыть» —
-    архивирование, всегда одна и та же, вариантов «не интересно» отдельно
-    от архива больше нет.
+    Решение «вперёд» (На оценку рисков / В расчёт) принимается только внутри
+    самого тендера, не с карточки — рано жать кнопку, не открыв, что внутри.
+    На карточке остаётся лишь маленький «×» скрыть (по ховеру).
 
-    Статус справа — не ручной выбор, а то, что реально посчитано действием
-    «Оценить»: риск оценивается автоматически при синхронизации
-    (risk_checked_at/risk_error), прогноз снижения по истории торгов —
-    следующий бэклог-пункт, добавится сюда же вторым результатом того же
-    действия."""
+    Оценка риска не показывается, пока тендер не прошёл «Входящие» — на
+    этой стадии её ещё не считали (расчёт запускается при открытии карточки
+    на стадии «Проверка»), нечего показывать раньше времени."""
+    reviewed = tender.review != FoundTender.UNREVIEWED
     if tender.risk_error:
         risk_state, status_label, status_key = "error", "Ошибка оценки", "error"
     elif tender.risk_checked_at:
         risk_state, status_label, status_key = "ok", "Оценена", "assessed"
     else:
         risk_state, status_label, status_key = "pending", "Не оценена", "new"
-    if tender.review == FoundTender.UNREVIEWED:
-        forward_label, forward_url = "На оценку рисков", reverse("tender_selection:review", args=[tender.pk])
-    else:
-        forward_label, forward_url = "В расчёт", reverse("tender_selection:push", args=[tender.pk])
+    badges = []
+    if reviewed:
+        badges.append({"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]})
     return {
         "kind": "found",
         "pk": tender.pk,
@@ -109,13 +104,10 @@ def _found_tender_card(tender):
         "purchase_number": tender.purchase_number,
         "max_price": tender.max_price,
         "deadline": tender.collecting_finished_at,
-        "status_label": status_label,
+        "status_label": status_label if reviewed else "",
         "status_key": status_key,
-        "badges": [{"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]}],
+        "badges": badges,
         "detail_url": reverse("tender_selection:detail", args=[tender.pk]),
-        "forward_label": forward_label,
-        "forward_url": forward_url,
-        "forward_is_review": tender.review == FoundTender.UNREVIEWED,
         "dismiss_url": reverse("tender_selection:dismiss", args=[tender.pk]),
     }
 
@@ -179,8 +171,16 @@ def kanban(request):
     def _order(dir_key, *fields):
         return tuple(f if dirs[dir_key] == "asc" else f"-{f}" for f in fields)
 
-    def _visible(base_qs, dir_key, *order_fields):
-        qs = base_qs.order_by(*_order(dir_key, *order_fields))
+    # Тот же порядок, что и по умолчанию в плоском списке (SORTS[DEFAULT_SORT] —
+    # ближайший срок подачи сверху) — одно и то же выражение в обоих режимах,
+    # чтобы «Входящие»/«Проверка» не расходились со списком последовательностью.
+    def _found_order(dir_key):
+        if dirs[dir_key] == "asc":
+            return (F("collecting_finished_at").desc(nulls_last=True), F("first_seen_at").asc())
+        return (SORTS[DEFAULT_SORT], F("first_seen_at").desc())
+
+    def _visible(base_qs, dir_key):
+        qs = base_qs.order_by(*_found_order(dir_key))
         rows, _hidden, _expired = _visible_found_tenders(
             qs, min_price=settings.min_price,
             include_words=settings.include_words, exclude_words=settings.exclude_words,
@@ -189,13 +189,11 @@ def kanban(request):
 
     incoming = [
         _found_tender_card(t) for t in
-        _visible(FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED),
-                  "incoming", "published_at", "first_seen_at")
+        _visible(FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED), "incoming")
     ]
     review = [
         _found_tender_card(t) for t in
-        _visible(FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED),
-                  "review", "published_at", "first_seen_at")
+        _visible(FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED), "review")
     ]
 
     from tenders.models import TenderEstimate

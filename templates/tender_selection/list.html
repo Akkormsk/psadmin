@@ -94,17 +94,6 @@
       {% if tender.on_estimate %}
       <a class="ts-onestimate-pill" href="{% url 'tender_estimate' tender.pushed_estimate_id %}" title="Открыть просчёт">На расчёте →</a>
       {% else %}
-      {% if tender.review == "unreviewed" %}
-      <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
-        {% csrf_token %}<input type="hidden" name="review" value="interesting">
-        <button type="submit" class="button-success ts-forward-btn">На оценку рисков</button>
-      </form>
-      {% else %}
-      <form method="post" action="{% url 'tender_selection:push' tender.pk %}">
-        {% csrf_token %}
-        <button type="submit" class="button-success ts-forward-btn">В расчёт</button>
-      </form>
-      {% endif %}
       <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
         {% csrf_token %}
         <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
@@ -198,7 +187,6 @@
   .ts-wf-form textarea { font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid #e1e5ea; border-radius: 8px; resize: vertical; }
   .ts-wf-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .ts-wf-actions .button-secondary, .ts-wf-actions .button-success { font-size: 13px; padding: 6px 14px; }
-  .ts-forward-btn { min-height: 34px; padding: 7px 14px; font-size: 12px; white-space: nowrap; }
   .ts-warn { color: #b26a00; }
   .ts-lastrun { margin-top: 16px; font-size: 12px; }
   .ts-pager { display: flex; gap: 12px; align-items: center; margin-top: 14px; font-size: 13px; }

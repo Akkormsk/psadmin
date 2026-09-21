@@ -37,9 +37,15 @@
         <div class="kb-column__cards">
           {% for card in column.cards %}
           <div class="kb-card">
+            {% if card.kind == "found" %}
+            <form method="post" action="{{ card.dismiss_url }}" class="kb-card__dismiss">
+              {% csrf_token %}
+              <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
+            </form>
+            {% endif %}
             <div class="kb-card__head">
               <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
-              <span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>
+              {% if card.status_label %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
             </div>
             {% if card.kind == "found" %}
               <div class="kb-card__meta">
@@ -57,19 +63,6 @@
             <div class="kb-card__badges">
               {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
             </div>
-            {% endif %}
-            {% if card.kind == "found" %}
-              <div class="kb-card__action kb-card__action--split">
-                <form method="post" action="{{ card.forward_url }}">
-                  {% csrf_token %}
-                  {% if card.forward_is_review %}<input type="hidden" name="review" value="interesting">{% endif %}
-                  <button type="submit" class="button-success">{{ card.forward_label }}</button>
-                </form>
-                <form method="post" action="{{ card.dismiss_url }}">
-                  {% csrf_token %}
-                  <button type="submit" class="button-secondary">Скрыть</button>
-                </form>
-              </div>
             {% endif %}
           </div>
           {% empty %}
@@ -103,7 +96,9 @@
   .kb-column__cards { display: grid; gap: 10px; }
   .kb-column__empty { margin: 0; padding: 12px 0; color: var(--ink-3); font-size: 13px; }
 
-  .kb-card { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-card); }
+  .kb-card { position: relative; display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-card); }
+  .kb-card__dismiss { position: absolute; top: 6px; right: 6px; }
+  .kb-card:hover .hover-action, .kb-card:focus-within .hover-action { opacity: 1; pointer-events: auto; }
   .kb-card__head { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
   .kb-card__title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
   .kb-card__title:hover { text-decoration: underline; }
@@ -111,9 +106,6 @@
   .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
   .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .kb-card__action .button-secondary, .kb-card__action .button-success { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
-  .kb-card__action--split { display: flex; gap: 6px; }
-  .kb-card__action--split form { flex: 1 1 0; min-width: 0; }
 
   .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }
   .kb-archive i { font-size: 18px; font-style: normal; }

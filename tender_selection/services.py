@@ -467,14 +467,26 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         tender, card, documents, fetch=lambda url, name: _fetch_doc_bytes(tender, url, name)
     )
     if not used_names:
-        # context не пуст даже без единого документа — туда всегда попадает сводка
-        # извещения (_card_summary), поэтому проверяем именно used_names. Иначе
-        # молча уходили в оценку по одним только данным извещения, платя за живой
-        # запрос и выдавая её неотличимо от настоящей оценки по документам.
+        # Документы не прочитались (типично — локальная сеть не видит ЕИС, только
+        # прод) — аварийный режим: контекст всё равно не пуст (build_context кладёт
+        # туда сводку извещения всегда), поэтому пробуем оценку по одним только
+        # структурным данным извещения, явно помечая её как менее надёжную —
+        # не подменяем молча настоящую оценку по документам.
+        try:
+            result = assess(context)
+        except RiskAssessmentError as exc:
+            tender.risk_checked_at = timezone.now()
+            tender.risk_error = f"Документы недоступны, аварийная оценка тоже не удалась: {exc}"
+            tender.save(update_fields=["risk_checked_at", "risk_error"])
+            return None
+        data = dict(result["data"])
+        data["degraded"] = True
+        tender.risk_assessment = data
+        tender.risk_assessment_docs = []
         tender.risk_checked_at = timezone.now()
-        tender.risk_error = "Не удалось скачать ни один документ для анализа."
-        tender.save(update_fields=["risk_checked_at", "risk_error"])
-        return None
+        tender.risk_error = ""
+        tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
+        return tender.risk_assessment
 
     try:
         result = assess(context)
