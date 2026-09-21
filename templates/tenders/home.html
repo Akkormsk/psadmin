@@ -21,6 +21,32 @@
 </form>
 
 {% if estimate %}
+<div class="tender-outcome__actions">
+  <form method="post" action="{% url 'tender_estimate_duplicate' estimate.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="button-secondary">Копировать просчёт</button>
+  </form>
+  <form method="post" action="{% url 'tender_estimate_delete' estimate.pk %}" onsubmit="return confirm('Удалить просчёт тендера № {{ estimate.tender_number|escapejs }}?');">
+    {% csrf_token %}
+    <button type="submit" class="button-secondary">Удалить просчёт</button>
+  </form>
+</div>
+{% if estimate.status == "draft" %}
+<section class="panel panel--separated">
+  <div class="panel-header"><h2 class="panel-title">Дальше</h2></div>
+  <p class="settings-description">Себестоимость посчитана — отправляем на торги, или архивируем сразу, если невыгодно.</p>
+  <div class="tender-outcome__actions">
+    <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
+      {% csrf_token %}<input type="hidden" name="status" value="pending">
+      <button type="submit" class="button-success">Отправить на торги</button>
+    </form>
+    <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
+      {% csrf_token %}<input type="hidden" name="status" value="not_participated">
+      <button type="submit" class="button-secondary">Архивировать — невыгодно</button>
+    </form>
+  </div>
+</section>
+{% else %}
 <section class="panel panel--separated">
   <div class="panel-header"><h2 class="panel-title">Итог торгов</h2>{% if estimate.outcome_checked_at %}<small class="ts-count">внесён {% if estimate.outcome_source == "auto" %}автоматически{% else %}вручную{% endif %}, {{ estimate.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}</small>{% endif %}</div>
   {% if estimate.outcome_checked_at %}
@@ -37,19 +63,22 @@
       <button type="submit" name="status" value="won" class="button-secondary tender-outcome__won">Выиграли</button>
       <button type="submit" name="status" value="lost" class="button-secondary tender-outcome__lost">Проиграли</button>
     </form>
+  {% elif estimate.status == "not_participated" %}
+    <p class="settings-description">Архивировано как невыгодное — на торги не отправляли.</p>
   {% else %}
-    <p class="settings-description">Появится, когда просчёт перейдёт в стадию «В ожидании» (поданы торги).</p>
+    <p class="settings-description">Итог для этого статуса не вносится.</p>
   {% endif %}
 </section>
+{% endif %}
 
 {% if is_superuser %}
 <section class="panel panel--separated">
-  <div class="panel-header"><h2 class="panel-title">Вердикт</h2></div>
+  <div class="panel-header"><h2 class="panel-title">Оценка</h2></div>
   {% if not verdict_requested %}
     <p class="settings-description">Только для админа. Смотрит на уже посчитанный ROI (при текущем снижении цены) и — если тендер пришёл из подбора — на оценку юридических рисков.</p>
-    <a href="?verdict=1" class="button-secondary">Проверить вердикт</a>
+    <a href="?verdict=1" class="button-secondary">Проверить оценку</a>
   {% elif not verdict %}
-    <p class="settings-description">Себестоимость ещё не посчитана до конца (черновик) — вердикт станет доступен, когда расчёт будет завершён.</p>
+    <p class="settings-description">Себестоимость ещё не посчитана до конца (черновик) — оценка станет доступна, когда расчёт будет завершён.</p>
   {% else %}
     <div class="tender-outcome__facts">
       <span><small>ROI</small><strong>{{ verdict.roi }}% — {{ verdict.roi_label }}</strong></span>
@@ -61,7 +90,7 @@
     {% else %}
       <p class="settings-description">Оценка юридических рисков недоступна — тендер создан вручную или риск ещё не проверен.</p>
     {% endif %}
-    <a href="?verdict=1" class="button-secondary">Обновить вердикт</a>
+    <a href="?verdict=1" class="button-secondary">Обновить оценку</a>
   {% endif %}
 </section>
 {% endif %}
@@ -73,7 +102,6 @@
 
 <div class="tender-requirements-overlay" id="tender-requirements-overlay"><aside class="tender-requirements-drawer"><div class="modal-header"><div><h2 id="tender-requirements-title"></h2></div><button type="button" class="modal-close" id="tender-requirements-close">×</button></div><div id="tender-requirements-body"></div></aside></div>
 
-<section class="panel panel--separated"><div class="panel-header"><h2 class="panel-title">Сохранённые просчёты</h2></div>{% for saved in estimates %}<div class="saved-estimate tender-saved-estimate"><a class="saved-estimate__main" href="{% url 'tender_estimate' saved.pk %}"><span><strong>№ {{ saved.tender_number }} — {{ saved.name }}</strong><small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=saved.owner %}<span>{{ saved.owner.get_full_name|default:saved.owner.username }} · {{ saved.updated_at|date:"d.m.Y H:i" }}</span></small></span><span class="tender-saved-totals"><strong>{{ saved.summary_snapshot.net_profit|floatformat:2|intcomma }} ₽</strong><small>ROI {{ saved.summary_snapshot.roi|floatformat:2 }}%</small></span></a><form class="saved-estimate__status-form is-{{ saved.status }}" data-estimate-status-form data-estimate-id="{{ saved.pk }}" data-status="{{ saved.status }}" method="post" action="{% url 'tender_estimate_status' saved.pk %}">{% csrf_token %}<select data-customized="true" class="saved-estimate__status" name="status" aria-label="Статус просчёта № {{ saved.tender_number }}">{% for value, label in saved.STATUS_CHOICES %}<option value="{{ value }}" {% if saved.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></form><span class="hover-actions"><form method="post" action="{% url 'tender_estimate_duplicate' saved.pk %}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать просчёт" aria-label="Копировать просчёт">⧉</button></form><form method="post" action="{% url 'tender_estimate_delete' saved.pk %}" onsubmit="return confirm('Удалить просчёт тендера № {{ saved.tender_number|escapejs }}?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить просчёт" aria-label="Удалить просчёт">×</button></form></span></div>{% empty %}<p class="settings-description">Сохранённых просчётов пока нет.</p>{% endfor %}</section>
 </div></div>
 <script>
 (function(){
@@ -277,36 +305,6 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
   });
   setTimeout(()=>{ ready=true; },0);
 })();
-})();
-</script>
-<script>
-(function(){
-document.querySelectorAll('[data-estimate-status-form]').forEach(form=>{
-const select=form.querySelector('select');
-form.addEventListener('submit',event=>event.preventDefault());
-select.addEventListener('change',async()=>{
-const previous=form.dataset.status,status=select.value;
-const data=new FormData(form);
-form.classList.remove(`is-${previous}`,'is-error');
-form.classList.add(`is-${status}`,'is-saving');
-select.disabled=true;
-try{
-const response=await fetch(form.action,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'},body:data});
-if(!response.ok)throw new Error();
-const result=await response.json();
-form.dataset.status=result.status;
-const resultNote=document.querySelector('[data-tender-result]');
-if(resultNote&&resultNote.dataset.estimateId===form.dataset.estimateId)resultNote.hidden=false;
-}catch(error){
-select.value=previous;
-form.classList.remove(`is-${status}`);
-form.classList.add(`is-${previous}`,'is-error');
-}finally{
-select.disabled=false;
-form.classList.remove('is-saving');
-}
-});
-});
 })();
 </script>
 {% endblock %}

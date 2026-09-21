@@ -1165,7 +1165,6 @@ def home(request, pk=None):
     elif estimate:
         initial_lines = [{"id": line.pk, "name": line.name, "quantity": str(line.quantity), "nmck_unit": str(line.nmck_unit), "material_unit": str(line.material_unit), "application_unit": str(line.application_unit), "logistics_unit": str(line.logistics_unit), "product_url": line.product_url, "comment": line.comment, "requirements": line.requirements} for line in estimate.lines.all()]
     initial_analysis = posted_analysis if posted_analysis is not None else (estimate.document_analysis if estimate else {})
-    estimates = TenderEstimate.objects.all() if request.user.is_superuser else TenderEstimate.objects.filter(owner=request.user)
     users = get_user_model().objects.filter(is_active=True).order_by("last_name", "first_name", "username") if request.user.is_superuser else None
     knowledge_sources = []
     if request.user.is_superuser:
@@ -1186,7 +1185,7 @@ def home(request, pk=None):
         from .services import verdict_for
         verdict = verdict_for(estimate, source_tender)
 
-    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "verdict": verdict, "verdict_requested": verdict_requested})
+    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "verdict": verdict, "verdict_requested": verdict_requested})
 
 
 @login_required
@@ -1263,4 +1262,4 @@ def update_estimate_status(request, pk):
             "label": estimate.get_status_display(),
             "requires_result": status in {TenderEstimate.LOST, TenderEstimate.WON},
         })
-    return redirect("tender_home")
+    return redirect("tender_estimate", pk=estimate.pk)

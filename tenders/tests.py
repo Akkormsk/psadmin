@@ -370,13 +370,12 @@ class TenderTests(TestCase):
         self.assertEqual(TenderEstimate.objects.count(), 1)
 
     def test_new_tender_page_shows_a_visible_save_button(self):
-        estimate = TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Список")
+        TenderEstimate.objects.create(owner=self.user, tender_number="42", name="Список")
         self.client.force_login(self.user)
         content = self.client.get(reverse("tender_home")).content.decode()
         self.assertIn('id="tender-autosave-status"', content)
         self.assertIn('id="save-tender"', content)
         self.assertNotIn('id="save-tender" hidden', content)  # not saved yet — button stays visible
-        self.assertIn(reverse("tender_estimate_duplicate", args=[estimate.pk]), content)
         self.assertIn("/tenders/save/", content)  # createUrl for a brand-new просчёт
 
     def test_saved_tender_page_hides_the_save_button(self):
@@ -385,35 +384,23 @@ class TenderTests(TestCase):
         content = self.client.get(reverse("tender_estimate", args=[estimate.pk])).content.decode()
         self.assertIn('id="save-tender" hidden', content)  # already saved — autosave takes over
 
-    def test_saved_estimate_list_shows_status_selector_without_draft_exclamation(self):
-        TenderEstimate.objects.create(
-            owner=self.user,
-            tender_number="123",
-            name="Тест",
+    def test_draft_estimate_shows_forward_and_archive_buttons_instead_of_selector(self):
+        """Статус-дропдаун из отдельного списка «Сохранённые просчёты» убран
+        (сам список тоже) — на черновике вместо него 2 понятные кнопки внизу
+        страницы расчёта: отправить на торги или архивировать как невыгодное."""
+        estimate = TenderEstimate.objects.create(
+            owner=self.user, tender_number="123", name="Тест",
             summary_snapshot={"is_incomplete": True, "net_profit": "1000", "roi": "10"},
         )
         self.client.force_login(self.user)
 
-        response = self.client.get(reverse("tender_home"))
+        response = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
 
-        self.assertContains(response, 'class="saved-estimate__status-form is-draft"')
-        self.assertContains(response, 'data-estimate-status-form')
-        self.assertNotContains(response, 'onchange="this.form.submit()"')
-        self.assertContains(response, 'const data=new FormData(form);')
-        self.assertContains(response, 'body:data')
-        self.assertContains(response, '<option value="draft" selected>Черновик</option>', html=True)
-        self.assertContains(response, '<option value="pending">В ожидании</option>', html=True)
-        self.assertContains(response, '<option value="not_participated">Не участвовали</option>', html=True)
-        self.assertContains(response, '<option value="lost">Проигран</option>', html=True)
-        self.assertContains(response, '<option value="won">Выигран</option>', html=True)
-        self.assertNotContains(response, 'class="saved-estimate__draft"')
-
-    def test_status_selector_stays_a_compact_pill_on_narrow_screens(self):
-        # On a wrapped row the status control must not stretch to the row's
-        # full width or full height — it stays its natural pill size.
-        styles = (Path(__file__).resolve().parents[1] / "static" / "core" / "index.css").read_text(encoding="utf-8")
-        self.assertNotIn(".saved-estimate__status-form { flex:1 1 180px; }", styles)
-        self.assertIn(".saved-estimate__status-form { flex:0 0 auto; align-self:flex-start;", styles)
+        self.assertContains(response, "Отправить на торги")
+        self.assertContains(response, "Архивировать")
+        self.assertNotContains(response, "Итог торгов")
+        self.assertNotContains(response, "data-estimate-status-form")
+        self.assertNotContains(response, "Сохранённые просчёты")
 
     def test_user_can_change_own_estimate_status(self):
         estimate = TenderEstimate.objects.create(owner=self.user, tender_number="123", name="Тест")
@@ -517,8 +504,7 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.lines.get().name, "Ручка")
         reopened = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
         self.assertContains(reopened, "Ручка")
-        self.assertContains(reopened, 'class="saved-estimate__status-form is-draft"')
-        self.assertNotContains(reopened, 'class="saved-estimate__draft"')
+        self.assertContains(reopened, "Отправить на торги")
 
     def test_partially_filled_line_values_are_preserved_in_draft(self):
         partial = {"name": "", "quantity": "50", "nmck_unit": "", "material_unit": "12.50", "application_unit": "", "logistics_unit": "", "product_url": "", "comment": "Уточнить товар", "requirements": {}}
