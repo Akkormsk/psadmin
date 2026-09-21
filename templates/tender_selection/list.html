@@ -24,6 +24,15 @@
       </div>
     </div>
 
+    <span class="ts-lawtabs ts-stagetabs">
+      <button type="button" class="{% if not stage %}is-active{% endif %}" onclick="tsGo('stage','')">Новые</button>
+      <button type="button" class="{% if stage == 'calculation' %}is-active{% endif %}" onclick="tsGo('stage','calculation')">Расчёт</button>
+      <button type="button" class="{% if stage == 'bidding' %}is-active{% endif %}" onclick="tsGo('stage','bidding')">Торги</button>
+      <button type="button" class="{% if stage == 'result' %}is-active{% endif %}" onclick="tsGo('stage','result')">Результат</button>
+      <button type="button" class="{% if stage == 'all' %}is-active{% endif %}" onclick="tsGo('stage','all')">Все стадии</button>
+    </span>
+
+    {% if not stage or stage == "all" %}
     <div class="ts-controls">
       <label class="ts-sort">Сортировать
         <select onchange="tsGo('sort', this.value)">
@@ -115,6 +124,25 @@
       {{ last_run.records_received }} записей, {{ last_run.created_count }} новых, за {{ last_run.duration_seconds }} с{% if not last_run.ok %} · <span class="ts-warn">{{ last_run.error }}</span>{% endif %}.
     </p>
     {% endif %}
+    {% endif %}
+
+    {% if stage %}
+    <div class="ts-estimates">
+      {% for card in estimate_cards %}
+      <div class="saved-estimate ts-estimate-row">
+        <a class="saved-estimate__main" href="{{ card.detail_url }}">
+          <span><strong>№ {{ card.tender_number }} — {{ card.title }}</strong></span>
+          <span class="ts-estimate-badges">
+            {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
+          </span>
+        </a>
+        <span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>
+      </div>
+      {% empty %}
+      <p class="settings-description">Пусто на этой стадии.</p>
+      {% endfor %}
+    </div>
+    {% endif %}
   </section>
 </div>
 
@@ -137,6 +165,10 @@
   .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--field-bg); color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--field-border); }
   .ts-lawtabs button:first-child { border-left: 0; }
   .ts-lawtabs button.is-active { background: #4c5fd5; color: #fff; font-weight: 700; }
+  .ts-stagetabs { margin-bottom: 10px; }
+  .ts-estimates { display: grid; gap: 0; }
+  .ts-estimate-row { display: flex; align-items: center; gap: 12px; }
+  .ts-estimate-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
   .ts-controls__note { color: #6b7280; }
   .ts-tender__meta { color: #6b7280 !important; overflow-wrap: anywhere; }
   .ts-hits { color: #2e7d32; }
@@ -172,6 +204,16 @@
   .ts-overlay__box small { color: var(--ink-2); }
   .ts-spinner { width: 34px; height: 34px; margin: 0 auto 14px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: ts-spin .8s linear infinite; }
   @keyframes ts-spin { to { transform: rotate(360deg); } }
+  @media (max-width: 768px) {
+    /* Пять вкладок стадии не помещаются в одну строку на телефоне (в отличие
+       от короткого .ts-lawtabs с двумя короткими) — переносим в свободный
+       поток отдельных чипов, не даём вылезать за контейнер вбок. Сколько
+       вкладок попадёт в один визуальный ряд — заранее не известно, поэтому
+       у каждой своя полная рамка, а не общая с разделителями между ними. */
+    .ts-stagetabs { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; border: 0; }
+    .ts-stagetabs button { flex: 0 1 auto; border: 1px solid var(--field-border); border-radius: 8px; }
+    .ts-estimate-row { flex-wrap: wrap; }
+  }
 </style>
 <script>
   function tsGo(key, val) {

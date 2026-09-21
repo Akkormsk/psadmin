@@ -1084,6 +1084,21 @@ h1 {
 .tender-outcome__actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
 .tender-outcome__won { border-color:var(--border-positive); background:var(--tint-positive); color:var(--positive-ink); }
 .tender-outcome__lost { border-color:var(--border-negative); background:var(--tint-negative); color:var(--negative-ink); }
+/* Стадийный статус и накапливаемые бейджи-результаты — общие между канбаном
+   (kanban.html) и плоским списком, стадии «Расчёт/Торги/Результат»
+   (list.html): один и тот же язык карточки в двух местах, не дублируем CSS. */
+.kb-card__status { display:inline-block; flex:0 0 auto; padding:4px 9px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; background:var(--tint-neutral); color:var(--ink-2); }
+.kb-card__status--new { background:var(--tint-neutral); color:var(--ink-2); }
+.kb-card__status--assessed { background:var(--tint-positive); color:var(--positive-ink); }
+.kb-card__status--error { background:var(--tint-negative); color:var(--negative-ink); }
+.kb-card__status--draft { background:var(--tint-cool); color:var(--ink-2); }
+.kb-card__status--pending { background:var(--tint-warning); color:var(--warning-ink); }
+.kb-card__status--won { background:var(--tint-positive); color:var(--positive-ink); }
+.kb-card__status--lost, .kb-card__status--not_participated { background:var(--tint-negative); color:var(--negative-ink); }
+.kb-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; background:var(--tint-neutral); color:var(--ink-2); }
+.kb-badge--ok { background:var(--tint-positive); color:var(--positive-ink); }
+.kb-badge--pending { background:var(--tint-neutral); color:var(--ink-2); }
+.kb-badge--error { background:var(--tint-negative); color:var(--negative-ink); }
 .tender-source-card { display:grid; gap:10px; margin-top:14px; padding:13px 16px; border:1px solid var(--border); border-radius:11px; background:var(--tint-cool); }
 .tender-source-card header { display:flex; align-items:start; justify-content:space-between; gap:18px; }
 .tender-source-card header > div { display:grid; gap:3px; min-width:0; }

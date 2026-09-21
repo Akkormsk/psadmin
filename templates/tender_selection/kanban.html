@@ -94,24 +94,10 @@
   .kb-card__head { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
   .kb-card__title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
   .kb-card__title:hover { text-decoration: underline; }
-  /* Статус стадии — крупнее и справа: это «где мы сейчас», отдельно от
-     бейджей результатов ниже, которые копятся и не заменяют друг друга. */
-  .kb-card__status { flex: 0 0 auto; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; background: var(--tint-neutral); color: var(--ink-2); }
-  .kb-card__status--new { background: var(--tint-neutral); color: var(--ink-2); }
-  .kb-card__status--assessed { background: var(--tint-positive); color: var(--positive-ink); }
-  .kb-card__status--error { background: var(--tint-negative); color: var(--negative-ink); }
-  .kb-card__status--draft { background: var(--tint-cool); color: var(--ink-2); }
-  .kb-card__status--pending { background: var(--tint-warning); color: var(--warning-ink); }
-  .kb-card__status--won { background: var(--tint-positive); color: var(--positive-ink); }
-  .kb-card__status--lost, .kb-card__status--not_participated { background: var(--tint-negative); color: var(--negative-ink); }
   .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
   .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
   .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .kb-badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; background: var(--tint-neutral); color: var(--ink-2); }
-  .kb-badge--ok { background: var(--tint-positive); color: var(--positive-ink); }
-  .kb-badge--pending { background: var(--tint-neutral); color: var(--ink-2); }
-  .kb-badge--error { background: var(--tint-negative); color: var(--negative-ink); }
   .kb-card__action .button-secondary { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
 
   .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }

@@ -171,10 +171,38 @@ def kanban(request):
     return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count})
 
 
+_ESTIMATE_STAGE_STATUSES = {
+    "calculation": ("draft",),
+    "bidding": ("pending",),
+    "result": ("not_participated", "lost", "won"),
+}
+
+
 @superuser_required
 def tender_list(request):
     if request.GET.get("view") != "list":
         return kanban(request)
+
+    stage = request.GET.get("stage") if request.GET.get("stage") in (*_ESTIMATE_STAGE_STATUSES, "all") else ""
+
+    # «Расчёт»/«Торги»/«Результат» — это уже не FoundTender, а TenderEstimate
+    # (см. kanban()) — не нужны ни сортировки, ни плюс/минус-слова ЕИС-триажа,
+    # только сам список. При stage="" (по умолчанию, «Новые») это не строится
+    # вовсе — быстрый путь остаётся быстрым.
+    estimate_cards = None
+    if stage:
+        from tenders.models import TenderEstimate
+
+        statuses = [s for statuses in (
+            _ESTIMATE_STAGE_STATUSES.values() if stage == "all" else (_ESTIMATE_STAGE_STATUSES[stage],)
+        ) for s in statuses]
+        estimate_cards = [
+            _estimate_card(estimate)
+            for estimate in TenderEstimate.objects.filter(status__in=statuses).order_by("-updated_at")
+        ]
+        if stage != "all":
+            return render(request, "tender_selection/list.html", {"stage": stage, "estimate_cards": estimate_cards})
+
     settings = FilterSettings.load()
     # плюс/минус-слова можно временно переопределить прямо на странице (?inc=/?exc=),
     # не трогая сохранённые настройки — для подбора формулировок
@@ -248,6 +276,8 @@ def tender_list(request):
         "inc_value": inc_value,
         "exc_value": exc_value,
         "words_overridden": words_overridden,
+        "stage": stage,
+        "estimate_cards": estimate_cards,
     })
 
 
