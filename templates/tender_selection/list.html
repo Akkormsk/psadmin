@@ -12,6 +12,10 @@
     <div class="panel-header">
       <h2 class="panel-title">Найденные тендеры <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
       <div class="panel-actions">
+        <span class="kb-viewtabs">
+          <a href="?">Канбан</a>
+          <a href="?view=list" class="is-active">Список</a>
+        </span>
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
           {% csrf_token %}
@@ -122,6 +126,10 @@
 </div>
 
 <style>
+  .kb-viewtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; margin-right: auto; }
+  .kb-viewtabs a { padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
+  .kb-viewtabs a:first-child { border-left: 0; }
+  .kb-viewtabs a.is-active { background: var(--accent); color: #fff; }
   .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
   .ts-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 4px; font-size: 13px; }
   .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }

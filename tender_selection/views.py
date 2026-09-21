@@ -9,6 +9,7 @@ from django.db.models import Count, F, Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
@@ -74,8 +75,81 @@ def tender_viewer_required(view):
     return login_required(wrapped)
 
 
+def _found_tender_card(tender):
+    """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт."""
+    if tender.risk_error:
+        risk_state = "error"
+    elif tender.risk_checked_at:
+        risk_state = "ok"
+    else:
+        risk_state = "pending"
+    return {
+        "kind": "found",
+        "pk": tender.pk,
+        "title": tender.title or tender.object_info,
+        "law_label": tender.get_law_display(),
+        "purchase_number": tender.purchase_number,
+        "max_price": tender.max_price,
+        "deadline": tender.collecting_finished_at,
+        "risk_state": risk_state,
+        "review": tender.review,
+        "detail_url": reverse("tender_selection:detail", args=[tender.pk]),
+        "push_url": reverse("tender_selection:push", args=[tender.pk]),
+    }
+
+
+def _estimate_card(estimate):
+    """Карточка «Расчёт»/«Торги»/«Результат» — просчёт, откуда бы он ни пришёл
+    (перенесён из подбора или создан вручную импортом в самих «Тендерах»)."""
+    summary = estimate.summary_snapshot or {}
+    return {
+        "kind": "estimate",
+        "pk": estimate.pk,
+        "title": estimate.name,
+        "tender_number": estimate.tender_number,
+        "status": estimate.status,
+        "status_label": estimate.get_status_display(),
+        "roi": summary.get("roi"),
+        "detail_url": reverse("tender_estimate", args=[estimate.pk]),
+    }
+
+
+def kanban(request):
+    """Единая доска жизненного цикла тендера — не новая сущность, а объединённое
+    чтение FoundTender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
+    источника: перенос из подбора или ручной импорт) в одном списке карточек."""
+    incoming, review = [], []
+    for tender in FoundTender.objects.filter(status=FoundTender.NEW).order_by("-published_at", "-first_seen_at"):
+        card = _found_tender_card(tender)
+        (review if tender.review != FoundTender.UNREVIEWED else incoming).append(card)
+
+    from tenders.models import TenderEstimate
+
+    calculation, bidding, result = [], [], []
+    for estimate in TenderEstimate.objects.all().order_by("-updated_at"):
+        card = _estimate_card(estimate)
+        if estimate.status == TenderEstimate.DRAFT:
+            calculation.append(card)
+        elif estimate.status == TenderEstimate.PENDING:
+            bidding.append(card)
+        else:
+            result.append(card)
+
+    columns = [
+        {"key": "incoming", "label": "Входящие", "cards": incoming},
+        {"key": "review", "label": "Проверка", "cards": review},
+        {"key": "calculation", "label": "Расчёт", "cards": calculation},
+        {"key": "bidding", "label": "Торги", "cards": bidding},
+        {"key": "result", "label": "Результат", "cards": result},
+    ]
+    archived_count = FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
+    return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count})
+
+
 @superuser_required
 def tender_list(request):
+    if request.GET.get("view") != "list":
+        return kanban(request)
     settings = FilterSettings.load()
     # плюс/минус-слова можно временно переопределить прямо на странице (?inc=/?exc=),
     # не трогая сохранённые настройки — для подбора формулировок

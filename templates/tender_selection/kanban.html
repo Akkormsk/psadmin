@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% load tz tender_selection_extras %}
+
+{% block title %}Подбор тендеров{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="/" class="back-link">← На главную</a>
+  <h1>Подбор тендеров</h1>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Жизненный цикл тендера</h2>
+      <div class="panel-actions">
+        <span class="kb-viewtabs">
+          <a href="?" class="is-active">Канбан</a>
+          <a href="?view=list">Список</a>
+        </span>
+        <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
+        <form method="post" action="{% url 'tender_selection:pull' %}">
+          {% csrf_token %}
+          <button type="submit" class="button-success">Обновить</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="kb-board">
+      {% for column in columns %}
+      <div class="kb-column">
+        <div class="kb-column__head">
+          <span>{{ column.label }}</span>
+          <small>{{ column.cards|length }}</small>
+        </div>
+        <div class="kb-column__cards">
+          {% for card in column.cards %}
+          <div class="kb-card">
+            <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
+            {% if card.kind == "found" %}
+              <div class="kb-card__meta">
+                <span class="ts-law">{{ card.law_label }}</span>
+                № {{ card.purchase_number }}
+              </div>
+              <div class="kb-card__row">
+                <strong>{{ card.max_price|rub }}</strong>
+                {% if card.deadline %}<small>до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y" }}</small>{% endif %}
+              </div>
+              <div class="kb-card__badges">
+                <span class="kb-badge kb-badge--{{ card.risk_state }}">
+                  {% if card.risk_state == "ok" %}риск: оценён{% elif card.risk_state == "error" %}риск: ошибка{% else %}риск: ожидает{% endif %}
+                </span>
+              </div>
+              <form method="post" action="{{ card.push_url }}" class="kb-card__action">
+                {% csrf_token %}
+                <button type="submit" class="button-secondary">В расчёт</button>
+              </form>
+            {% else %}
+              <div class="kb-card__meta">№ {{ card.tender_number }}</div>
+              <div class="kb-card__badges">
+                <span class="kb-badge kb-badge--status-{{ card.status }}">{{ card.status_label }}</span>
+                {% if card.roi %}<span class="kb-badge kb-badge--ok">ROI {{ card.roi }}%</span>{% endif %}
+              </div>
+            {% endif %}
+          </div>
+          {% empty %}
+          <p class="kb-column__empty">Пусто</p>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="kb-archive">
+        <i aria-hidden="true">🗄</i>
+        <span>Архив<br>{{ archived_count }}</span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<style>
+  .kb-viewtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; margin-right: auto; }
+  .kb-viewtabs a { padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
+  .kb-viewtabs a:first-child { border-left: 0; }
+  .kb-viewtabs a.is-active { background: var(--accent); color: #fff; }
+
+  .kb-board { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 10px; scroll-snap-type: x proximity; }
+  .kb-column { flex: 0 0 260px; scroll-snap-align: start; }
+  .kb-column__head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; font-weight: 600; }
+  .kb-column__head small { color: var(--ink-3); font-weight: 500; }
+  .kb-column__cards { display: grid; gap: 10px; }
+  .kb-column__empty { margin: 0; padding: 12px 0; color: var(--ink-3); font-size: 13px; }
+
+  .kb-card { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-card); }
+  .kb-card__title { font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+  .kb-card__title:hover { text-decoration: underline; }
+  .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
+  .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
+  .kb-card__badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  .kb-badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; background: var(--tint-neutral); color: var(--ink-2); }
+  .kb-badge--ok { background: var(--tint-positive); color: var(--positive-ink); }
+  .kb-badge--pending { background: var(--tint-neutral); color: var(--ink-2); }
+  .kb-badge--error { background: var(--tint-negative); color: var(--negative-ink); }
+  .kb-badge--status-draft { background: var(--tint-cool); color: var(--ink-2); }
+  .kb-badge--status-pending { background: var(--tint-warning); color: var(--warning-ink); }
+  .kb-badge--status-won { background: var(--tint-positive); color: var(--positive-ink); }
+  .kb-badge--status-lost, .kb-badge--status-not_participated { background: var(--tint-negative); color: var(--negative-ink); }
+  .kb-card__action .button-secondary { width: 100%; min-height: 32px; padding: 6px 10px; font-size: 12px; }
+
+  .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }
+  .kb-archive i { font-size: 18px; font-style: normal; }
+
+  @media (max-width: 768px) {
+    .kb-column { flex-basis: 82vw; }
+    .panel-header .kb-viewtabs { order: -1; width: 100%; margin: 0 0 12px; }
+  }
+</style>
+{% endblock %}
