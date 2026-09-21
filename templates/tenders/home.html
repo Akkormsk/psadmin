@@ -21,56 +21,6 @@
 </form>
 
 {% if estimate %}
-<div class="tender-outcome__actions">
-  <form method="post" action="{% url 'tender_estimate_duplicate' estimate.pk %}">
-    {% csrf_token %}
-    <button type="submit" class="button-secondary">Копировать просчёт</button>
-  </form>
-  <form method="post" action="{% url 'tender_estimate_delete' estimate.pk %}" onsubmit="return confirm('Удалить просчёт тендера № {{ estimate.tender_number|escapejs }}?');">
-    {% csrf_token %}
-    <button type="submit" class="button-secondary">Удалить просчёт</button>
-  </form>
-</div>
-{% if estimate.status == "draft" %}
-<section class="panel panel--separated">
-  <div class="panel-header"><h2 class="panel-title">Дальше</h2></div>
-  <p class="settings-description">Себестоимость посчитана — отправляем на торги, или архивируем сразу, если невыгодно.</p>
-  <div class="tender-outcome__actions">
-    <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
-      {% csrf_token %}<input type="hidden" name="status" value="pending">
-      <button type="submit" class="button-success">Отправить на торги</button>
-    </form>
-    <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
-      {% csrf_token %}<input type="hidden" name="status" value="not_participated">
-      <button type="submit" class="button-secondary">Архивировать — невыгодно</button>
-    </form>
-  </div>
-</section>
-{% else %}
-<section class="panel panel--separated">
-  <div class="panel-header"><h2 class="panel-title">Итог торгов</h2>{% if estimate.outcome_checked_at %}<small class="ts-count">внесён {% if estimate.outcome_source == "auto" %}автоматически{% else %}вручную{% endif %}, {{ estimate.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}</small>{% endif %}</div>
-  {% if estimate.outcome_checked_at %}
-    <div class="tender-outcome__facts">
-      <span><small>Прогноз снижения</small><strong>{{ estimate.reduction_percent }}%</strong></span>
-      {% if estimate.actual_reduction_percent is not None %}<span><small>Факт. снижение</small><strong>{{ estimate.actual_reduction_percent }}%</strong></span>{% endif %}
-      {% if estimate.actual_price %}<span><small>Факт. цена контракта</small><strong>{{ estimate.actual_price|floatformat:2|intcomma }} ₽</strong></span>{% endif %}
-    </div>
-  {% elif estimate.status == "pending" %}
-    <p class="settings-description">Торги ещё не завершены или итог пока не внесён — до этого момента вносить нечего.</p>
-    <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__actions">
-      {% csrf_token %}
-      <button type="submit" class="button-secondary">Забрать итог автоматически</button>
-      <button type="submit" name="status" value="won" class="button-secondary tender-outcome__won">Выиграли</button>
-      <button type="submit" name="status" value="lost" class="button-secondary tender-outcome__lost">Проиграли</button>
-    </form>
-  {% elif estimate.status == "not_participated" %}
-    <p class="settings-description">Архивировано как невыгодное — на торги не отправляли.</p>
-  {% else %}
-    <p class="settings-description">Итог для этого статуса не вносится.</p>
-  {% endif %}
-</section>
-{% endif %}
-
 {% if is_superuser %}
 <section class="panel panel--separated">
   <div class="panel-header"><h2 class="panel-title">Оценка</h2></div>
@@ -80,10 +30,10 @@
   {% elif not verdict %}
     <p class="settings-description">Себестоимость ещё не посчитана до конца (черновик) — оценка станет доступна, когда расчёт будет завершён.</p>
   {% else %}
-    <div class="tender-outcome__facts">
-      <span><small>ROI</small><strong>{{ verdict.roi }}% — {{ verdict.roi_label }}</strong></span>
-      <span><small>Чистая прибыль</small><strong>{{ verdict.net_profit|floatformat:2|intcomma }} ₽</strong></span>
-      <span><small>При снижении</small><strong>{{ verdict.reduction_percent }}%</strong></span>
+    <div class="tender-verdict__stats">
+      <div class="tender-verdict__stat tender-verdict__stat--{{ verdict.roi_state }}"><small>ROI</small><strong>{{ verdict.roi }}%</strong><span>{{ verdict.roi_label }}</span></div>
+      <div class="tender-verdict__stat"><small>Чистая прибыль</small><strong>{{ verdict.net_profit|floatformat:2|intcomma }} ₽</strong></div>
+      <div class="tender-verdict__stat"><small>При снижении</small><strong>{{ verdict.reduction_percent }}%</strong></div>
     </div>
     {% if verdict.risk_available %}
       <p class="settings-description"><strong>Юридические риски (из оценки риска):</strong> {{ verdict.legal_risks|default:"нет данных" }}</p>
@@ -94,6 +44,60 @@
   {% endif %}
 </section>
 {% endif %}
+
+{% if estimate.status == "draft" %}
+<div class="tender-outcome__actions tender-outcome__actions--end">
+  <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
+    {% csrf_token %}<input type="hidden" name="status" value="pending">
+    <button type="submit" class="button-success">Отправить на торги</button>
+  </form>
+  <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
+    {% csrf_token %}<input type="hidden" name="status" value="not_participated">
+    <button type="submit" class="button-secondary">Архивировать — невыгодно</button>
+  </form>
+</div>
+{% else %}
+<section class="panel panel--separated">
+  <div class="panel-header"><h2 class="panel-title">Результат</h2></div>
+  {% if estimate.outcome_checked_at %}
+    <p class="settings-description">
+      Итог получен {% if estimate.outcome_source == "auto" %}автоматически{% else %}вручную{% endif %}, {{ estimate.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}: статус «{{ estimate.get_status_display }}»{% if estimate.actual_price %}, цена контракта {{ estimate.actual_price|floatformat:2|intcomma }} ₽{% endif %}{% if estimate.actual_reduction_percent is not None %}, фактическое снижение {{ estimate.actual_reduction_percent }}% (прогноз был {{ estimate.reduction_percent }}%){% endif %}.
+    </p>
+  {% elif estimate.status == "pending" %}
+    <p class="settings-description">Итог пока не получен — торги ещё не завершены, или проверка не запускалась.</p>
+    <div class="tender-outcome__actions">
+      <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="button-secondary">Синхронизировать сейчас</button>
+      </form>
+      <details class="tender-outcome__manual">
+        <summary class="button-secondary">Внести вручную</summary>
+        <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__manual-options">
+          {% csrf_token %}
+          <button type="submit" name="status" value="won" class="button-secondary">Выиграли</button>
+          <button type="submit" name="status" value="lost" class="button-secondary">Проиграли</button>
+          <button type="submit" name="status" value="not_participated" class="button-secondary">Не участвовали</button>
+        </form>
+      </details>
+    </div>
+  {% elif estimate.status == "not_participated" %}
+    <p class="settings-description">Архивировано как невыгодное — на торги не отправляли.</p>
+  {% else %}
+    <p class="settings-description">Итог для этого статуса не вносится.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<div class="tender-outcome__actions">
+  <form method="post" action="{% url 'tender_estimate_duplicate' estimate.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="button-secondary">Копировать просчёт</button>
+  </form>
+  <form method="post" action="{% url 'tender_estimate_delete' estimate.pk %}" onsubmit="return confirm('Удалить просчёт тендера № {{ estimate.tender_number|escapejs }}?');">
+    {% csrf_token %}
+    <button type="submit" class="button-secondary">Удалить просчёт</button>
+  </form>
+</div>
 {% endif %}
 
 <div class="modal-overlay tender-import-modal" id="tender-import-modal"><div class="modal"><div class="modal-header"><h2>Импорт из Excel</h2><button type="button" class="modal-close" id="tender-import-close">×</button></div><div class="tender-import-upload"><input type="file" id="tender-import-file" accept=".xlsx"><p>Файл .xlsx до 10 МБ. Он используется только для импорта и не сохраняется.</p></div><p class="form-error" id="tender-import-error"></p><div id="tender-import-workspace" hidden><div class="tender-import-controls"><label>Лист<select data-customized="true" id="tender-import-sheet"></select></label><label>Строка заголовков<input type="number" min="1" id="tender-import-header"></label><label>Наименование<select data-customized="true" id="tender-import-name"></select></label><label>Количество<select data-customized="true" id="tender-import-quantity"></select></label><label>НМЦК<select data-customized="true" id="tender-import-nmck"></select></label><label>Значение НМЦК<select data-customized="true" id="tender-import-mode"><option value="unit">Цена за единицу</option><option value="total">Общая сумма</option></select></label><label>Строки с<input type="number" min="1" id="tender-import-start"></label><label>по<input type="number" min="1" id="tender-import-end"></label></div><div class="tender-import-table-wrap"><table class="tender-import-table"><thead><tr><th><input type="checkbox" id="tender-import-all" checked></th><th>Строка</th><th>Наименование</th><th>Количество</th><th>НМЦК / ед.</th><th>Сумма НМЦК</th></tr></thead><tbody id="tender-import-rows"></tbody></table></div><div class="tender-import-footer"><span id="tender-import-count"></span><button type="button" class="button-success" id="tender-import-add">Добавить позиции</button></div></div></div></div>

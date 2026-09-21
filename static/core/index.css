@@ -1077,13 +1077,24 @@ h1 {
 /* Итог торгов — отдельная секция страницы тендера (своя, вне #tender-form:
    вложенный <form> внутри другой формы невалиден и ломает сабмит), не на
    карточке канбана — та только показывает уже накопленный результат бейджем. */
-.tender-outcome__facts { display:flex; flex-wrap:wrap; gap:16px; }
-.tender-outcome__facts span { display:grid; gap:3px; }
-.tender-outcome__facts small { color:var(--ink-3); font-size:11px; }
-.tender-outcome__facts strong { font-size:15px; }
 .tender-outcome__actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
-.tender-outcome__won { border-color:var(--border-positive); background:var(--tint-positive); color:var(--positive-ink); }
-.tender-outcome__lost { border-color:var(--border-negative); background:var(--tint-negative); color:var(--negative-ink); }
+.tender-outcome__actions--end { justify-content:flex-end; margin-top:0; }
+.tender-outcome__manual summary { list-style:none; }
+.tender-outcome__manual summary::-webkit-details-marker { display:none; }
+.tender-outcome__manual-options { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+
+/* Оценка — сетка из 2-3 карточек, ROI подсвечен цветом по состоянию. */
+.tender-verdict__stats { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; }
+.tender-verdict__stat { display:grid; gap:3px; padding:10px 16px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+.tender-verdict__stat small { color:var(--ink-3); font-size:11px; }
+.tender-verdict__stat strong { font-size:18px; }
+.tender-verdict__stat span { font-size:12px; font-weight:600; }
+.tender-verdict__stat--positive { background:var(--tint-positive); border-color:var(--border-positive); }
+.tender-verdict__stat--positive strong, .tender-verdict__stat--positive span { color:var(--positive-ink); }
+.tender-verdict__stat--warning { background:var(--tint-warning); border-color:var(--border-warning); }
+.tender-verdict__stat--warning strong, .tender-verdict__stat--warning span { color:var(--warning-ink); }
+.tender-verdict__stat--negative { background:var(--tint-negative); border-color:var(--border-negative); }
+.tender-verdict__stat--negative strong, .tender-verdict__stat--negative span { color:var(--negative-ink); }
 /* Стадийный статус и накапливаемые бейджи-результаты — общие между канбаном
    (kanban.html) и плоским списком, стадии «Расчёт/Торги/Результат»
    (list.html): один и тот же язык карточки в двух местах, не дублируем CSS. */

@@ -3106,16 +3106,17 @@ def verdict_for(estimate, source_tender) -> dict | None:
         return None
 
     if roi >= _ROI_GOOD:
-        roi_label = "хороший"
+        roi_label, roi_state = "хороший", "positive"
     elif roi >= _ROI_THIN:
-        roi_label = "маржа тонкая"
+        roi_label, roi_state = "маржа тонкая", "warning"
     else:
-        roi_label = "не держится"
+        roi_label, roi_state = "не держится", "negative"
 
     risk = source_tender.risk_assessment if source_tender else None
     return {
         "roi": roi,
         "roi_label": roi_label,
+        "roi_state": roi_state,
         "net_profit": net_profit,
         "reduction_percent": estimate.reduction_percent,
         "legal_risks": (risk or {}).get("legal_risks"),
