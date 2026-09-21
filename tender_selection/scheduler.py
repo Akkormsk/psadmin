@@ -68,6 +68,15 @@ def _run_once(tick: int) -> None:
                            succeeded, attempted)
     except Exception:
         logger.exception("autopull: retry_pending_documents failed")
+
+    close_old_connections()
+    try:
+        from .services import retry_pending_outcomes
+        attempted, succeeded = retry_pending_outcomes()
+        if attempted:
+            logger.warning("autopull: outcomes — %d/%d просчётов в «Торги» проверено", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_outcomes failed")
     close_old_connections()
 
 

@@ -677,6 +677,44 @@ def fetch_tender_outcome(estimate) -> dict:
     return result
 
 
+def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
+    """Фоновая попытка забрать факт торгов для просчётов «В ожидании», у которых
+    итог ещё не внесён — тот же ГосПлан-запрос, что и ручная кнопка «Забрать итог
+    автоматически» на странице тендера, просто без захода туда. Сама решает
+    выиграли/проиграли только если настроен COMPANY_INN (см. fetch_tender_outcome) —
+    иначе оставляет цену/снижение как есть, а решение по-прежнему за администратором.
+    Идёт мелкими порциями по тому же паттерну, что retry_pending_documents/_risks."""
+    from tenders.models import TenderEstimate
+
+    attempted = succeeded = 0
+    estimates = TenderEstimate.objects.filter(
+        status=TenderEstimate.PENDING, outcome_checked_at__isnull=True,
+    ).order_by("updated_at")[:50]
+    for estimate in estimates:
+        if attempted >= limit:
+            break
+        attempted += 1
+        try:
+            outcome = fetch_tender_outcome(estimate)
+        except Exception:
+            logger.exception("Outcome retry failed for estimate %s", estimate.tender_number)
+            continue
+        if not outcome.get("found"):
+            continue
+        if outcome.get("auto_status"):
+            apply_tender_outcome(
+                estimate, status=outcome["auto_status"], price=outcome.get("price"),
+                reduction_percent=outcome.get("reduction_percent"), source=TenderEstimate.OUTCOME_AUTO,
+            )
+        else:
+            estimate.actual_price = outcome.get("price")
+            estimate.actual_reduction_percent = outcome.get("reduction_percent")
+            estimate.outcome_checked_at = timezone.now()
+            estimate.save(update_fields=["actual_price", "actual_reduction_percent", "outcome_checked_at"])
+        succeeded += 1
+    return attempted, succeeded
+
+
 def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None, source) -> None:
     """Записать факт торгов на просчёт; при победе — отметить в ContractStat.is_ours,
     чтобы своя история наконец начала накапливаться (поле раньше нигде не писалось)."""

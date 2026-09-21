@@ -178,10 +178,10 @@ class MultiSourceTests(TestCase):
         FilterSettings.objects.update_or_create(pk=1, defaults={"min_price": 0})
         FoundTender.objects.create(purchase_number="1", law="fz44", object_info="A", title="Кружка 44", last_pulled_at=timezone.now())
         FoundTender.objects.create(purchase_number="2", law="fz223", object_info="B", title="Кружка 223", last_pulled_at=timezone.now())
-        r44 = self.client.get(reverse("tender_selection:list") + "?law=fz44")
+        r44 = self.client.get(reverse("tender_selection:list") + "?view=list&law=fz44")
         self.assertContains(r44, "Кружка 44")
         self.assertNotContains(r44, "Кружка 223")
-        rboth = self.client.get(reverse("tender_selection:list"))
+        rboth = self.client.get(reverse("tender_selection:list") + "?view=list")
         self.assertContains(rboth, "Кружка 44")
         self.assertContains(rboth, "Кружка 223")
 
@@ -231,14 +231,31 @@ class PushToEstimateTests(TestCase):
         self.assertEqual(self.tender.pushed_estimate_id, est.pk)
         self.assertRedirects(resp, f"/tenders/{est.pk}/", fetch_redirect_response=False)
 
-    def test_pushed_tender_shows_pill_not_review(self):
+    def test_pushed_tender_moves_to_calculation_column_on_kanban(self):
+        """По умолчанию tender_selection:list — канбан: запушенный тендер
+        пропадает из Входящие/Проверка (FoundTender.status=PUSHED больше не
+        попадает в этот запрос) и появляется карточкой просчёта в «Расчёте»."""
         self.client.post(reverse("tender_selection:push", args=[self.tender.pk]))
-        list_resp = self.client.get(reverse("tender_selection:list"))
-        self.assertContains(list_resp, "ts-onestimate-pill")
-        self.assertContains(list_resp, "На расчёте")
+        from tenders.models import TenderEstimate
+
+        est = TenderEstimate.objects.get()
+        kanban_resp = self.client.get(reverse("tender_selection:list"))
+        # "1" (purchase_number) сам по себе слишком общая строка (встречается
+        # в разметке независимо от карточек) — проверяем заголовок тендера,
+        # которого не должно остаться среди карточек «Входящие»/«Проверка».
+        self.assertNotContains(kanban_resp, self.tender.title)
+        self.assertContains(kanban_resp, f"№ {est.tender_number}")
         detail_resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
         self.assertContains(detail_resp, "На расчёте — открыть просчёт")
         self.assertNotContains(detail_resp, 'name="review"')  # селектор статуса скрыт
+
+    def test_pushed_tender_still_shows_pill_in_flat_list_view(self):
+        """Старое поведение списка (?view=list) никуда не делось, просто больше
+        не значение по умолчанию — тумблер Канбан/Список должен продолжать работать."""
+        self.client.post(reverse("tender_selection:push", args=[self.tender.pk]))
+        list_resp = self.client.get(reverse("tender_selection:list") + "?view=list")
+        self.assertContains(list_resp, "ts-onestimate-pill")
+        self.assertContains(list_resp, "На расчёте")
 
     def test_second_push_opens_existing(self):
         self.client.post(reverse("tender_selection:push", args=[self.tender.pk]))
@@ -937,6 +954,82 @@ class RetryPendingNotificationsTests(TestCase):
         self.assertEqual((attempted, succeeded), (0, 0))
 
 
+class RetryPendingOutcomesTests(TestCase):
+    def setUp(self):
+        from tenders.models import TenderEstimate
+
+        User = get_user_model()
+        owner = User.objects.create_user("owner", "o@e.ru", "pw")
+        self.estimate = TenderEstimate.objects.create(
+            owner=owner, tender_number="0342300000126000995", name="Тест",
+            status=TenderEstimate.PENDING, summary_snapshot={"nmck_total": "515400"},
+        )
+
+    def test_skips_already_checked(self):
+        from .services import retry_pending_outcomes
+
+        self.estimate.outcome_checked_at = timezone.now()
+        self.estimate.save(update_fields=["outcome_checked_at"])
+        with mock.patch("tender_selection.gosplan.fetch_contracts") as fetch:
+            attempted, succeeded = retry_pending_outcomes()
+        fetch.assert_not_called()
+        self.assertEqual((attempted, succeeded), (0, 0))
+
+    def test_not_found_leaves_estimate_untouched(self):
+        from .services import retry_pending_outcomes
+
+        with mock.patch("tender_selection.gosplan.fetch_contracts", return_value=[]):
+            attempted, succeeded = retry_pending_outcomes()
+        self.assertEqual((attempted, succeeded), (1, 0))
+        self.estimate.refresh_from_db()
+        self.assertEqual(self.estimate.status, self.estimate.PENDING)
+        self.assertIsNone(self.estimate.outcome_checked_at)
+
+    def test_found_without_company_inn_records_price_but_not_status(self):
+        from .services import retry_pending_outcomes
+
+        row = {"price": 386550, "suppliers": ["526001302080"]}
+        with mock.patch("tender_selection.gosplan.fetch_contracts", return_value=[row]), \
+             mock.patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("COMPANY_INN", None)
+            attempted, succeeded = retry_pending_outcomes()
+        self.assertEqual((attempted, succeeded), (1, 1))
+        self.estimate.refresh_from_db()
+        self.assertEqual(self.estimate.status, self.estimate.PENDING)
+        self.assertEqual(str(self.estimate.actual_price), "386550.00")
+        self.assertIsNotNone(self.estimate.outcome_checked_at)
+
+    def test_found_with_matching_company_inn_marks_won(self):
+        from .services import retry_pending_outcomes
+
+        row = {"price": 386550, "suppliers": ["526001302080"]}
+        with mock.patch("tender_selection.gosplan.fetch_contracts", return_value=[row]), \
+             mock.patch.dict("os.environ", {"COMPANY_INN": "526001302080"}):
+            attempted, succeeded = retry_pending_outcomes()
+        self.assertEqual((attempted, succeeded), (1, 1))
+        self.estimate.refresh_from_db()
+        self.assertEqual(self.estimate.status, self.estimate.WON)
+        self.assertEqual(self.estimate.outcome_source, self.estimate.OUTCOME_AUTO)
+
+        from .models import ContractStat
+        self.assertTrue(ContractStat.objects.filter(purchase_number=self.estimate.tender_number, is_ours=True).exists())
+
+    def test_respects_limit(self):
+        from tenders.models import TenderEstimate
+
+        from .services import retry_pending_outcomes
+
+        for i in range(3):
+            TenderEstimate.objects.create(
+                owner=self.estimate.owner, tender_number=f"200000000000000000{i}",
+                name="Тест", status=TenderEstimate.PENDING,
+            )
+        with mock.patch("tender_selection.gosplan.fetch_contracts", return_value=[]):
+            attempted, succeeded = retry_pending_outcomes(limit=1)
+        self.assertEqual((attempted, succeeded), (1, 0))
+
+
 class RiskAssessmentSelectDocumentsTests(TestCase):
     def test_prioritizes_contract_over_description(self):
         from .risk_assessment import select_documents
@@ -1531,7 +1624,7 @@ class SettingsViewTests(TestCase):
         })
         s = FilterSettings.load()
         self.assertEqual(s.include_words, "сувенир")
-        resp = self.client.get(reverse("tender_selection:list"))
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
         self.assertContains(resp, "сувенирной")
         self.assertNotContains(resp, "щебня")
         self.assertContains(resp, "скрыто 1")
@@ -1541,7 +1634,7 @@ class SettingsViewTests(TestCase):
             purchase_number="1", object_info="x", title="Дорогая кружка", max_price=100000, last_pulled_at=timezone.now()
         )
         FilterSettings.objects.update_or_create(pk=1, defaults={"min_price": 300000})
-        resp = self.client.get(reverse("tender_selection:list"))
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
         self.assertNotContains(resp, "Дорогая кружка")
         self.assertContains(resp, "Ничего не подходит под фильтр")
 
@@ -1550,7 +1643,7 @@ class SettingsViewTests(TestCase):
         for t in ("Поставка сувениров", "Поставка бланков строгой отчётности", "Поставка щебня"):
             FoundTender.objects.create(purchase_number=t[:20], object_info=t, title=t, last_pulled_at=timezone.now())
         # override: only "бланк" passes now
-        resp = self.client.get(reverse("tender_selection:list") + "?inc=бланк")
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list&inc=бланк")
         self.assertContains(resp, "бланков")
         self.assertNotContains(resp, "сувениров")
         # saved settings untouched
@@ -1572,7 +1665,7 @@ class SettingsViewTests(TestCase):
         far = timezone.now() + datetime.timedelta(days=20)
         FoundTender.objects.create(purchase_number="near", object_info="A", title="A", collecting_finished_at=near, last_pulled_at=timezone.now())
         FoundTender.objects.create(purchase_number="far", object_info="B", title="B", collecting_finished_at=far, last_pulled_at=timezone.now())
-        resp = self.client.get(reverse("tender_selection:list") + "?sort=deadline&inc=&exc=")
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list&sort=deadline&inc=&exc=")
         body = resp.content.decode()
         self.assertLess(body.index("№ near"), body.index("№ far"))
 
@@ -1819,7 +1912,7 @@ class ClarificationComplaintViewTests(TestCase):
         with mock.patch.object(gosplan, "fetch_clarifications", return_value=[]), \
              mock.patch.object(gosplan, "fetch_complaints", return_value=COMPLAINT_FIXTURE):
             self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
-        resp = self.client.get(reverse("tender_selection:list"))
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
         self.assertContains(resp, "ts-flag")
 
 
@@ -1915,7 +2008,7 @@ class OpenedAtTests(TestCase):
             purchase_number="2", object_info="x", title="ТендерДваУжеОткрыт", opened_at=timezone.now(),
             last_pulled_at=timezone.now(),
         )
-        resp = self.client.get(reverse("tender_selection:list") + "?all=1")
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list&all=1")
         content = resp.content.decode()
         unread_pos = content.index("ТендерОдинЕщёНеОткрыт")
         read_pos = content.index("ТендерДваУжеОткрыт")
@@ -1977,7 +2070,7 @@ class AccessControlTests(TestCase):
             last_pulled_at=timezone.now(),
         )
         self.client.force_login(self.admin)
-        resp = self.client.get(reverse("tender_selection:list"))
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
         self.assertContains(resp, "saved-estimate__status-form is-not_interesting")
 
     def test_missing_notification_shows_warning_badge(self):
@@ -1986,7 +2079,7 @@ class AccessControlTests(TestCase):
             notification_checked_at=timezone.now(), last_pulled_at=timezone.now(),
         )  # notification_raw пуст, но попытка БЫЛА (checked_at стоит) — реальный сбой
         self.client.force_login(self.admin)
-        resp = self.client.get(reverse("tender_selection:list"))
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
         # class="ts-flag--data" встречается только у самого <span> — не путать с
         # правилом .ts-flag--data в <style> того же шаблона.
         self.assertContains(resp, "ts-flag ts-flag--data")
