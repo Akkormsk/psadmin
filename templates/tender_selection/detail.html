@@ -129,21 +129,18 @@
     <div class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках</h2></div>
     <p class="ts-stats-lead">
       Медианное снижение <strong>{{ price_stats.median }}%</strong>, разброс {{ price_stats.range_lo }}–{{ price_stats.range_hi }}%.
-      Выборка: {{ price_stats.count }}{% if price_stats.same_region %} (в этом регионе — {{ price_stats.same_region }}){% endif %}.
+      Выборка: {{ price_stats.count }} (своя история — {{ price_stats.own_count }}, открытая — {{ price_stats.market_count }}){% if price_stats.same_region %}, в этом регионе — {{ price_stats.same_region }}{% endif %}.
     </p>
-    {% if price_stats.customer_stats %}
-    <p class="ts-stats-lead">У этого заказчика в этой категории: {{ price_stats.customer_stats.count }}
-      закупк(и), снижение {{ price_stats.customer_stats.discounts|join:" / " }}% (медиана {{ price_stats.customer_stats.median }}%).</p>
-    {% endif %}
     <p class="ts-stats-suggest">При переносе в расчёт подставим снижение <strong>{{ price_stats.suggested_reduction }}%</strong>.</p>
 
     <details class="ts-stats-details">
       <summary>Закупки, на которых основано ({{ price_stats.examples|length }})</summary>
       <div class="table-wrapper"><table class="table ts-stats-table">
-        <thead><tr><th>Предмет</th><th>Регион</th><th>Начальная</th><th>Итог</th><th>Снижение</th><th>Дата</th></tr></thead>
+        <thead><tr><th>Источник</th><th>Предмет</th><th>Регион</th><th>Начальная</th><th>Итог</th><th>Снижение</th><th>Дата</th></tr></thead>
         <tbody>
           {% for row in price_stats.examples %}
           <tr>
+            <td class="ts-sub">{% if row.source == "own" %}своя{% else %}рынок{% endif %}</td>
             <td>{{ row.subject|default:"—"|truncatechars:70 }}</td>
             <td class="ts-sub">{{ row.region_label|default:"—" }}</td>
             <td class="ts-nowrap">{{ row.nmck|rub }}</td>
@@ -156,8 +153,7 @@
       </table></div>
     </details>
     <p class="ts-sub">
-      {% if price_stats.match_level == "strong" %}Отбор: по совпадению товарного кода, слов в названии и заказчика.
-      {% else %}Отбор: по товарной категории {{ price_stats.categories|join:", " }} и близости суммы (точных совпадений по товару мало).{% endif %}
+      Отбор: по совпадению слов в названии и товарных позициях — сначала свои прошлые тендеры, затем открытая история похожих закупок{% if price_stats.categories %} (категория {{ price_stats.categories|join:", " }}){% endif %}.
       Совместные и многолотовые закупки исключены.
     </p>
   </section>

@@ -300,7 +300,7 @@ def tender_detail(request, pk):
     stats = price_stats_for(tender, card)
     if stats:
         for row in stats["examples"]:
-            row.region_label = region_name(row.region) if row.region else ""
+            row["region_label"] = region_name(row["region"]) if row["region"] else ""
 
     # Оценка рисков читает документы закупки — может занимать до ~30-40с (сеть до ЕИС).
     # Чтобы это не блокировало открытие карточки, первый расчёт уходит в фон (см.

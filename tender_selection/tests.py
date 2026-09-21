@@ -1369,57 +1369,103 @@ class PriceStatsCollectorTests(TestCase):
 
 
 class PriceStatsCardTests(TestCase):
-    def _seed(self, discounts, *, cat="32.99", nmck="500000", region=77):
+    def _seed_market(self, discounts, *, cat="32.99", nmck="500000", region=77,
+                      subject="Поставка ежедневников"):
         import datetime
         from decimal import Decimal as D
         from tender_selection.models import ContractStat
         for i, d in enumerate(discounts):
             ContractStat.objects.create(
                 law="fz44", purchase_number=f"p{i}", contract_reg_num=f"r{i}",
-                category=cat, region=region, subject=f"Поставка партии {i}",
+                category=cat, region=region, subject=f"{subject} {i}",
                 nmck=D(nmck), final_price=D(nmck) * (100 - d) // 100,
                 discount_pct=D(d), nmck_checked=True, contract_date=datetime.date(2026, 9, 1),
             )
 
     def _tender(self, **kw):
         from decimal import Decimal as D
-        defaults = dict(purchase_number="X", law="fz44", object_info="x", title="T",
-                        okpd2=["32.99.11"], max_price=D("500000"), region=77,
-                        last_pulled_at=timezone.now())
+        defaults = dict(purchase_number="X", law="fz44", object_info="x",
+                        title="Поставка ежедневников с логотипом", okpd2=["32.99.11"],
+                        max_price=D("500000"), region=77, last_pulled_at=timezone.now())
         defaults.update(kw)
         return FoundTender.objects.create(**defaults)
 
+    def test_none_when_no_matching_words(self):
+        from tender_selection.stats import price_stats_for
+        self._seed_market((20, 30, 40), subject="Ремонт кровли гаража")
+        self.assertIsNone(price_stats_for(self._tender()))
+
     def test_none_when_too_few_samples(self):
         from tender_selection.stats import price_stats_for
-        self._seed((20, 30))
+        self._seed_market((20, 30))
         self.assertIsNone(price_stats_for(self._tender()))
 
     def test_none_for_fz223(self):
         from tender_selection.stats import price_stats_for
-        self._seed((10, 20, 30, 40, 50, 55))
+        self._seed_market((10, 20, 30, 40, 50, 55))
         self.assertIsNone(price_stats_for(self._tender(law="fz223")))
 
     def test_aggregates_median_range_examples(self):
         from tender_selection.stats import price_stats_for
-        self._seed((10, 20, 30, 40, 50, 55))
+        self._seed_market((10, 20, 30, 40, 50, 55))
         s = price_stats_for(self._tender())
         self.assertEqual(s["count"], 6)
+        self.assertEqual(s["own_count"], 0)
+        self.assertEqual(s["market_count"], 6)
         self.assertEqual(s["median"], 35)               # median(10,20,30,40,50,55)
         self.assertEqual(s["suggested_reduction"], 35)
         self.assertEqual(s["same_region"], 6)
-        self.assertEqual(s["categories"], ["32.99"])
         self.assertEqual(len(s["examples"]), 6)
 
     def test_suggested_reduction_clamped(self):
         from tender_selection.stats import price_stats_for
-        self._seed((70, 72, 75, 78, 80, 80))            # median 76.5 -> clamp to 60
+        self._seed_market((70, 72, 75, 78, 80, 80))      # median 76.5 -> clamp to 60
         self.assertEqual(price_stats_for(self._tender())["suggested_reduction"], 60)
+
+    def test_own_history_listed_before_market_and_preferred(self):
+        """Своя история — сначала, рынок — только чтобы добрать до целевого числа."""
+        from decimal import Decimal as D
+        from django.contrib.auth import get_user_model
+        from tender_selection.stats import price_stats_for
+        from tenders.models import TenderEstimate, TenderLine
+
+        self._seed_market((10, 20, 30, 40, 50))
+        owner = get_user_model().objects.create_user("owner1", "o1@e.ru", "p")
+        est = TenderEstimate.objects.create(
+            owner=owner, tender_number="OWN1", name="Расчёт по ежедневникам",
+            status=TenderEstimate.WON, actual_reduction_percent=D("22.00"),
+            outcome_checked_at=timezone.now(),
+        )
+        TenderLine.objects.create(estimate=est, name="Ежедневники с тиснением", quantity=1, nmck_unit=1)
+
+        s = price_stats_for(self._tender())
+        self.assertEqual(s["own_count"], 1)
+        self.assertEqual(s["market_count"], 5)
+        self.assertEqual(s["examples"][0]["source"], "own")
+        self.assertEqual(s["examples"][0]["discount_pct"], D("22.00"))
+
+    def test_region_tiebreak_when_word_overlap_ties(self):
+        from tender_selection.stats import price_stats_for, _TARGET_COUNT
+        import datetime
+        from decimal import Decimal as D
+        from tender_selection.models import ContractStat
+        for i in range(_TARGET_COUNT + 1):
+            ContractStat.objects.create(
+                law="fz44", purchase_number=f"tb{i}", contract_reg_num=f"tbr{i}", category="32.99",
+                region=77 if i < 3 else 999, subject="Поставка ежедневников",
+                nmck=D("500000"), final_price=D("400000"), discount_pct=D(10 + i),
+                nmck_checked=True, contract_date=datetime.date(2026, 9, 1),
+            )
+        s = price_stats_for(self._tender())
+        self.assertEqual(s["count"], _TARGET_COUNT)
+        same_region = [row for row in s["examples"] if row["region"] == 77]
+        self.assertEqual(len(same_region), 3)  # ни один "свой регион" не вытеснен при равном совпадении слов
 
     def test_detail_view_shows_section(self):
         from django.contrib.auth import get_user_model
         for name in ("fetch_clarifications", "fetch_complaints"):
             p = mock.patch.object(gosplan, name, return_value=[]); p.start(); self.addCleanup(p.stop)
-        self._seed((15, 25, 35, 45, 50, 55))
+        self._seed_market((15, 25, 35, 45, 50, 55))
         tender = self._tender()
         self.client.force_login(get_user_model().objects.create_superuser("a", "a@e.ru", "p"))
         with mock.patch.object(gosplan, "fetch_notification", side_effect=gosplan.GosplanError("x")):
@@ -1429,13 +1475,13 @@ class PriceStatsCardTests(TestCase):
 
 
 class PriceStatsRelevanceTests(TestCase):
-    def _row(self, i, discount, **kw):
+    def _row(self, i, discount, subject, **kw):
         import datetime
         from decimal import Decimal as D
         from tender_selection.models import ContractStat
         data = dict(
             law="fz44", purchase_number=f"p{i}", contract_reg_num=f"r{i}", category="32.99",
-            region=1, subject="", nmck=D("500000"), final_price=D("400000"),
+            region=1, subject=subject, nmck=D("500000"), final_price=D("400000"),
             discount_pct=D(discount), nmck_checked=True, contract_date=datetime.date(2026, 9, 1),
         )
         data.update(kw)
@@ -1451,36 +1497,50 @@ class PriceStatsRelevanceTests(TestCase):
         base.update(kw)
         return FoundTender.objects.create(**base)
 
-    def test_exact_code_plus_keyword_gives_strong_match(self):
+    def test_ignores_same_category_different_product(self):
         from tender_selection.stats import price_stats_for
         for i in range(5):
-            self._row(i, 30 + i, okpd2=["32.99.12.110"], subject="Поставка ежедневников")
-        for i in range(5, 15):  # шум: та же категория, другой товар
-            self._row(i, 4, subject="Поставка сувенирной продукции")
+            self._row(i, 30 + i, "Поставка ежедневников")
+        for i in range(5, 15):  # та же категория ОКПД2, но другой товар — не должно попасть в выборку
+            self._row(i, 4, "Поставка сувенирной продукции")
         s = price_stats_for(self._tender())
-        self.assertEqual(s["match_level"], "strong")
         self.assertEqual(s["count"], 5)
         self.assertEqual(s["median"], 32)
 
-    def test_falls_back_to_category_when_no_strong(self):
+    def test_none_when_category_matches_but_product_does_not(self):
         from tender_selection.stats import price_stats_for
         for i in range(8):
-            self._row(i, 20 + i, subject="Поставка сувенирной продукции")
-        s = price_stats_for(self._tender())
-        self.assertEqual(s["match_level"], "category")
-        self.assertEqual(s["count"], 8)
+            self._row(i, 20 + i, "Поставка сувенирной продукции")
+        self.assertIsNone(price_stats_for(self._tender()))
 
-    def test_customer_history_line(self):
+    def test_own_archive_matches_by_line_item_not_generic_estimate_name(self):
+        """Половина тендеров называется одинаково расплывчато ('поставка
+        полиграфии'), а наполнение разное — сравнение должно смотреть на
+        товарные позиции расчёта, а не только на его общее название."""
+        from decimal import Decimal as D
+        from django.contrib.auth import get_user_model
         from tender_selection.stats import price_stats_for
-        for i in range(6):
-            self._row(i, 40, subject="Поставка канцтоваров")
-        self._row(20, 20, customer_inn="7700000000")
-        self._row(21, 50, customer_inn="7700000000")
-        self._row(22, 35, customer_inn="7700000000")
+        from tenders.models import TenderEstimate, TenderLine
+
+        owner = get_user_model().objects.create_user("owner2", "o2@e.ru", "p")
+        matching = TenderEstimate.objects.create(
+            owner=owner, tender_number="OWN2", name="Поставка полиграфии",
+            status=TenderEstimate.WON, actual_reduction_percent=D("18.00"),
+            outcome_checked_at=timezone.now(),
+        )
+        TenderLine.objects.create(estimate=matching, name="Ежедневники с тиснением", quantity=1, nmck_unit=1)
+        unrelated = TenderEstimate.objects.create(
+            owner=owner, tender_number="OWN3", name="Поставка полиграфии",
+            status=TenderEstimate.LOST, actual_reduction_percent=D("5.00"),
+            outcome_checked_at=timezone.now(),
+        )
+        TenderLine.objects.create(estimate=unrelated, name="Пакеты бумажные", quantity=1, nmck_unit=1)
+        self._row(90, 25, "Поставка ежедневников")  # + пара рыночных, чтобы набрать минимум выборки
+        self._row(91, 27, "Поставка ежедневников")
+
         s = price_stats_for(self._tender())
-        self.assertIsNotNone(s["customer_stats"])
-        self.assertEqual(s["customer_stats"]["count"], 3)
-        self.assertEqual(s["customer_stats"]["median"], 35)
+        self.assertEqual(s["own_count"], 1)
+        self.assertEqual(s["examples"][0]["discount_pct"], D("18.00"))
 
     def test_keywords_ignore_boilerplate(self):
         from tender_selection.stats import _tender_keywords
@@ -1503,11 +1563,12 @@ class PushWithStatsTests(TestCase):
         for i, d in enumerate((20, 30, 30, 40, 45, 50)):  # median 35
             ContractStat.objects.create(
                 law="fz44", purchase_number=f"c{i}", contract_reg_num=f"cr{i}", category="32.99",
+                subject=f"Баннер {i}",  # тот же товар, что в позиции извещения (NOTIFICATION_FIXTURE)
                 nmck=D("500000"), final_price=D("300000"), discount_pct=D(d),
                 nmck_checked=True, contract_date=datetime.date(2026, 9, 1),
             )
         tender = FoundTender.objects.create(
-            purchase_number="Z", law="fz44", object_info="x", title="T", max_price=D("500000"),
+            purchase_number="Z", law="fz44", object_info="x", title="Баннер", max_price=D("500000"),
             last_pulled_at=timezone.now(), notification_raw=NOTIFICATION_FIXTURE,
         )
         est_id = push_to_estimate(tender, self.admin)
