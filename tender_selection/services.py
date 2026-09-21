@@ -151,6 +151,9 @@ def build_params(*, days: int, stage: int | None, min_price, regions=None, law: 
 def _risk_eligible(tender, settings, include, exclude) -> bool:
     return (
         tender.law == "fz44"
+        # риск не считаем, пока тендер не дошёл до «Проверки» — на «Входящих»
+        # ещё не решили, что он вообще стоит внимания
+        and tender.review != FoundTender.UNREVIEWED
         and (not settings.min_price or tender.max_price is None or tender.max_price >= settings.min_price)
         and (tender.collecting_finished_at is None or tender.collecting_finished_at >= timezone.now())
         and match_title(tender.title or tender.object_info, include, exclude)[0]

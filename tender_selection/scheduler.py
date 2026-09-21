@@ -77,6 +77,15 @@ def _run_once(tick: int) -> None:
             logger.warning("autopull: outcomes — %d/%d просчётов в «Торги» проверено", succeeded, attempted)
     except Exception:
         logger.exception("autopull: retry_pending_outcomes failed")
+
+    close_old_connections()
+    try:
+        from .services import retry_pending_risks
+        attempted, succeeded = retry_pending_risks()
+        if attempted:
+            logger.warning("autopull: риски — %d/%d тендеров на «Проверке» оценено", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_risks failed")
     close_old_connections()
 
 

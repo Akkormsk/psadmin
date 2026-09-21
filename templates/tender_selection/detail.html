@@ -115,7 +115,7 @@
     {% endif %}
   </section>
 
-  {% if not is_fz223 and card %}
+  {% if not is_fz223 and card and tender.review != "unreviewed" %}
   <section class="panel panel--separated">
     <div class="panel-header"><h2 class="panel-title">Оценка рисков</h2></div>
     <div id="ts-risk-block" data-risk-url="{% url 'tender_selection:risk_status' tender.pk %}">

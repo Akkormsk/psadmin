@@ -134,12 +134,12 @@ class RetryPendingRisksTests(TestCase):
         settings.save(update_fields=["include_words"])
         tender = FoundTender.objects.create(
             purchase_number="1", object_info="Сувенирная продукция", law="fz44",
-            max_price=400000, last_pulled_at=timezone.now(),
+            max_price=400000, last_pulled_at=timezone.now(), review=FoundTender.INTERESTING,
             notification_checked_at=timezone.now() - timedelta(hours=1),
         )
         FoundTender.objects.create(
             purchase_number="2", object_info="Медикаменты", law="fz44",
-            max_price=400000, last_pulled_at=timezone.now(),
+            max_price=400000, last_pulled_at=timezone.now(), review=FoundTender.INTERESTING,
         )
         with mock.patch("tender_selection.services.notification_for", return_value=NOTIFICATION_FIXTURE) as notification, \
              mock.patch("tender_selection.services.risk_assessment_for", return_value={"legal_risks": "ok"}) as assess:
@@ -147,6 +147,24 @@ class RetryPendingRisksTests(TestCase):
         self.assertEqual((attempted, succeeded), (1, 1))
         notification.assert_called_once_with(tender, force=True)
         assess.assert_called_once_with(tender)
+
+    def test_skips_unreviewed_tender(self):
+        """На «Входящих» (review не тронут) риск ещё не актуален — не считаем,
+        пока тендер не отправят «На оценку рисков»."""
+        from .services import retry_pending_risks
+
+        settings = FilterSettings.load()
+        settings.include_words = "сувенир"
+        settings.save(update_fields=["include_words"])
+        FoundTender.objects.create(
+            purchase_number="1", object_info="Сувенирная продукция", law="fz44",
+            max_price=400000, last_pulled_at=timezone.now(),
+            notification_raw=NOTIFICATION_FIXTURE,
+        )
+        with mock.patch("tender_selection.services.risk_assessment_for") as assess:
+            attempted, succeeded = retry_pending_risks()
+        self.assertEqual((attempted, succeeded), (0, 0))
+        assess.assert_not_called()
 
 
 class MultiSourceTests(TestCase):
@@ -1243,6 +1261,7 @@ class RiskStatusViewTests(TestCase):
         self.tender = FoundTender.objects.create(
             purchase_number="1", object_info="x", title="T", law="fz44",
             notification_raw=NOTIFICATION_FIXTURE, last_pulled_at=timezone.now(),
+            review=FoundTender.INTERESTING,
         )
 
     def test_detail_page_shows_spinner_placeholder_without_calling_gateway(self):
@@ -1482,7 +1501,7 @@ class PriceStatsCardTests(TestCase):
         for name in ("fetch_clarifications", "fetch_complaints"):
             p = mock.patch.object(gosplan, name, return_value=[]); p.start(); self.addCleanup(p.stop)
         self._seed_market((15, 25, 35, 45, 50, 55))
-        tender = self._tender()
+        tender = self._tender(review=FoundTender.INTERESTING)
         self.client.force_login(get_user_model().objects.create_superuser("a", "a@e.ru", "p"))
         with mock.patch.object(gosplan, "fetch_notification", side_effect=gosplan.GosplanError("x")):
             resp = self.client.get(reverse("tender_selection:detail", args=[tender.pk]))
