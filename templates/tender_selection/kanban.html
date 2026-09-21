@@ -13,12 +13,8 @@
       <h2 class="panel-title">Жизненный цикл тендера</h2>
       <div class="panel-actions">
         <span class="kb-viewtabs">
-          <a href="?{% if sort_dir == "asc" %}dir=asc{% endif %}" class="is-active">Канбан</a>
+          <a href="?" class="is-active">Канбан</a>
           <a href="?view=list">Список</a>
-        </span>
-        <span class="kb-viewtabs" title="Сортировка по дате">
-          <a href="?dir=desc" class="{% if sort_dir == 'desc' %}is-active{% endif %}">Новые ↓</a>
-          <a href="?dir=asc" class="{% if sort_dir == 'asc' %}is-active{% endif %}">Старые ↑</a>
         </span>
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}">
@@ -33,7 +29,10 @@
       <div class="kb-column">
         <div class="kb-column__head">
           <span>{{ column.label }}</span>
-          <small>{{ column.cards|length }}</small>
+          <span class="kb-column__meta">
+            <a class="kb-sortarrow" href="?{{ column.toggle_qs }}" title="Сменить порядок">{% if column.dir == "asc" %}↑{% else %}↓{% endif %}</a>
+            <small>{{ column.cards|length }}</small>
+          </span>
         </div>
         <div class="kb-column__cards">
           {% for card in column.cards %}
@@ -91,6 +90,9 @@
   .kb-column { flex: 0 0 260px; scroll-snap-align: start; }
   .kb-column__head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; font-weight: 600; }
   .kb-column__head small { color: var(--ink-3); font-weight: 500; }
+  .kb-column__meta { display: inline-flex; align-items: baseline; gap: 6px; }
+  .kb-sortarrow { color: var(--ink-3); text-decoration: none; font-weight: 700; padding: 0 2px; }
+  .kb-sortarrow:hover { color: var(--ink); }
   .kb-column__cards { display: grid; gap: 10px; }
   .kb-column__empty { margin: 0; padding: 12px 0; color: var(--ink-3); font-size: 13px; }
 

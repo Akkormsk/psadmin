@@ -139,31 +139,57 @@ def _estimate_card(estimate):
     }
 
 
+_KANBAN_COLUMN_KEYS = ("incoming", "review", "calculation", "bidding", "result")
+
+
+def _kanban_column_dirs(request):
+    """Направление сортировки каждого столбца канбана — независимо друг от
+    друга, из query-параметров ``dir_<key>``. По умолчанию — новые сверху."""
+    return {key: ("asc" if request.GET.get(f"dir_{key}") == "asc" else "desc") for key in _KANBAN_COLUMN_KEYS}
+
+
+def _kanban_toggle_qs(dirs, key):
+    """Ссылка-стрелка одного столбца: та же сортировка у остальных, у этого — наоборот."""
+    from urllib.parse import urlencode
+    flipped = dict(dirs, **{key: "asc" if dirs[key] == "desc" else "desc"})
+    return urlencode({f"dir_{k}": v for k, v in flipped.items() if v == "asc"})
+
+
 def kanban(request):
     """Единая доска жизненного цикла тендера — не новая сущность, а объединённое
     чтение FoundTender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
     источника: перенос из подбора или ручной импорт) в одном списке карточек."""
-    sort_dir = "asc" if request.GET.get("dir") == "asc" else "desc"
-    asc = sort_dir == "asc"
+    dirs = _kanban_column_dirs(request)
 
-    incoming, review = [], []
-    found_order = ("published_at", "first_seen_at") if asc else ("-published_at", "-first_seen_at")
-    for tender in FoundTender.objects.filter(status=FoundTender.NEW).order_by(*found_order):
-        card = _found_tender_card(tender)
-        (review if tender.review != FoundTender.UNREVIEWED else incoming).append(card)
+    def _order(dir_key, *fields):
+        return tuple(f if dirs[dir_key] == "asc" else f"-{f}" for f in fields)
+
+    incoming = [
+        _found_tender_card(t) for t in
+        FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED)
+        .order_by(*_order("incoming", "published_at", "first_seen_at"))
+    ]
+    review = [
+        _found_tender_card(t) for t in
+        FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED)
+        .order_by(*_order("review", "published_at", "first_seen_at"))
+    ]
 
     from tenders.models import TenderEstimate
 
-    calculation, bidding, result = [], [], []
-    estimate_order = "updated_at" if asc else "-updated_at"
-    for estimate in TenderEstimate.objects.all().order_by(estimate_order):
-        card = _estimate_card(estimate)
-        if estimate.status == TenderEstimate.DRAFT:
-            calculation.append(card)
-        elif estimate.status == TenderEstimate.PENDING:
-            bidding.append(card)
-        else:
-            result.append(card)
+    calculation = [
+        _estimate_card(e) for e in
+        TenderEstimate.objects.filter(status=TenderEstimate.DRAFT).order_by(*_order("calculation", "updated_at"))
+    ]
+    bidding = [
+        _estimate_card(e) for e in
+        TenderEstimate.objects.filter(status=TenderEstimate.PENDING).order_by(*_order("bidding", "updated_at"))
+    ]
+    result = [
+        _estimate_card(e) for e in
+        TenderEstimate.objects.exclude(status__in=(TenderEstimate.DRAFT, TenderEstimate.PENDING))
+        .order_by(*_order("result", "updated_at"))
+    ]
 
     columns = [
         {"key": "incoming", "label": "Входящие", "cards": incoming},
@@ -172,10 +198,11 @@ def kanban(request):
         {"key": "bidding", "label": "Торги", "cards": bidding},
         {"key": "result", "label": "Результат", "cards": result},
     ]
+    for column in columns:
+        column["dir"] = dirs[column["key"]]
+        column["toggle_qs"] = _kanban_toggle_qs(dirs, column["key"])
     archived_count = FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
-    return render(request, "tender_selection/kanban.html", {
-        "columns": columns, "archived_count": archived_count, "sort_dir": sort_dir,
-    })
+    return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count})
 
 
 _ESTIMATE_STAGE_STATUSES = {
