@@ -3080,3 +3080,44 @@ def calculate_tender(lines, reduction_percent, russia_delivery, vat_rate):
     roi = net_profit / all_expenses * Decimal("100") if all_expenses else Decimal("0")
     summary = {**{key: _money(value) for key, value in totals.items()}, "vat": _money(vat), "all_expenses": _money(all_expenses), "net_profit": _money(net_profit), "roi": roi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "coefficient": coefficient.quantize(Decimal("0.0001"))}
     return calculated_lines, summary
+
+
+# порог — простое деление ROI на 3 понятные корзины, не балльная система;
+# легко подвинуть, если по факту окажется слишком строго/мягко
+_ROI_GOOD = Decimal("15")
+_ROI_THIN = Decimal("5")
+
+
+def verdict_for(estimate, source_tender) -> dict | None:
+    """Вердикт «стоит ли участвовать» — только когда себестоимость реально
+    посчитана (не черновик). Ничего не считает заново: берёт уже готовый ROI
+    из summary_snapshot (при текущем reduction_percent — если это прогноз из
+    price_stats_for, то ROI уже «при прогнозируемом снижении») и — если тендер
+    пришёл из подбора и там есть оценка риска — её текст про юридические
+    риски. Решение по юридической части оставляем человеку: в тексте риска
+    нет структурированного «да/нет», только качественная оценка ИИ."""
+    snapshot = estimate.summary_snapshot or {}
+    if snapshot.get("is_incomplete", True):
+        return None
+    try:
+        roi = Decimal(str(snapshot["roi"]))
+        net_profit = Decimal(str(snapshot["net_profit"]))
+    except (KeyError, TypeError, InvalidOperation):
+        return None
+
+    if roi >= _ROI_GOOD:
+        roi_label = "хороший"
+    elif roi >= _ROI_THIN:
+        roi_label = "маржа тонкая"
+    else:
+        roi_label = "не держится"
+
+    risk = source_tender.risk_assessment if source_tender else None
+    return {
+        "roi": roi,
+        "roi_label": roi_label,
+        "net_profit": net_profit,
+        "reduction_percent": estimate.reduction_percent,
+        "legal_risks": (risk or {}).get("legal_risks"),
+        "risk_available": bool(risk),
+    }

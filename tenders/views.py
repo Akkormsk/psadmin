@@ -1179,7 +1179,14 @@ def home(request, pk=None):
         if source_tender:
             source_tender.org = Organization.objects.filter(inn=source_tender.customer_inn).first()
             source_tender.region_label = region_name(source_tender.region) if source_tender.region else ""
-    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users})
+
+    verdict = None
+    verdict_requested = request.GET.get("verdict") == "1"
+    if estimate and request.user.is_superuser and verdict_requested:
+        from .services import verdict_for
+        verdict = verdict_for(estimate, source_tender)
+
+    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "form_state": form_state, "estimates": estimates.select_related("owner", "owner__profile")[:30], "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "verdict": verdict, "verdict_requested": verdict_requested})
 
 
 @login_required
