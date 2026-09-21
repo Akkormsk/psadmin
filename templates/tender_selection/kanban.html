@@ -13,8 +13,12 @@
       <h2 class="panel-title">Жизненный цикл тендера</h2>
       <div class="panel-actions">
         <span class="kb-viewtabs">
-          <a href="?" class="is-active">Канбан</a>
+          <a href="?{% if sort_dir == "asc" %}dir=asc{% endif %}" class="is-active">Канбан</a>
           <a href="?view=list">Список</a>
+        </span>
+        <span class="kb-viewtabs" title="Сортировка по дате">
+          <a href="?dir=desc" class="{% if sort_dir == 'desc' %}is-active{% endif %}">Новые ↓</a>
+          <a href="?dir=asc" class="{% if sort_dir == 'asc' %}is-active{% endif %}">Старые ↑</a>
         </span>
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}">

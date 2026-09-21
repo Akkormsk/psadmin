@@ -143,15 +143,20 @@ def kanban(request):
     """Единая доска жизненного цикла тендера — не новая сущность, а объединённое
     чтение FoundTender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
     источника: перенос из подбора или ручной импорт) в одном списке карточек."""
+    sort_dir = "asc" if request.GET.get("dir") == "asc" else "desc"
+    asc = sort_dir == "asc"
+
     incoming, review = [], []
-    for tender in FoundTender.objects.filter(status=FoundTender.NEW).order_by("-published_at", "-first_seen_at"):
+    found_order = ("published_at", "first_seen_at") if asc else ("-published_at", "-first_seen_at")
+    for tender in FoundTender.objects.filter(status=FoundTender.NEW).order_by(*found_order):
         card = _found_tender_card(tender)
         (review if tender.review != FoundTender.UNREVIEWED else incoming).append(card)
 
     from tenders.models import TenderEstimate
 
     calculation, bidding, result = [], [], []
-    for estimate in TenderEstimate.objects.all().order_by("-updated_at"):
+    estimate_order = "updated_at" if asc else "-updated_at"
+    for estimate in TenderEstimate.objects.all().order_by(estimate_order):
         card = _estimate_card(estimate)
         if estimate.status == TenderEstimate.DRAFT:
             calculation.append(card)
@@ -168,7 +173,9 @@ def kanban(request):
         {"key": "result", "label": "Результат", "cards": result},
     ]
     archived_count = FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
-    return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count})
+    return render(request, "tender_selection/kanban.html", {
+        "columns": columns, "archived_count": archived_count, "sort_dir": sort_dir,
+    })
 
 
 _ESTIMATE_STAGE_STATUSES = {
