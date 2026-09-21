@@ -54,7 +54,7 @@
               </div>
               <div class="kb-card__row">
                 <strong>{{ card.max_price|rub }}</strong>
-                {% if card.deadline %}<small>до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y" }}</small>{% endif %}
+                {% if card.deadline %}<small class="kb-card__deadline{% if card.is_soon %} is-soon{% endif %}">{% if card.is_soon %}⏰ {% endif %}до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}</small>{% endif %}
               </div>
             {% else %}
               <div class="kb-card__meta">№ {{ card.tender_number }}</div>
@@ -105,6 +105,8 @@
   .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
   .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
+  .kb-card__deadline { font-size: 10px; }
+  .kb-card__deadline.is-soon { color: #b8434e !important; font-weight: 600; }
   .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
   .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }

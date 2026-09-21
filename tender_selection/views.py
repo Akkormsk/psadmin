@@ -96,6 +96,8 @@ def _found_tender_card(tender):
     badges = []
     if reviewed:
         badges.append({"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]})
+    now = timezone.now()
+    is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= now + timedelta(days=1))
     return {
         "kind": "found",
         "pk": tender.pk,
@@ -104,6 +106,7 @@ def _found_tender_card(tender):
         "purchase_number": tender.purchase_number,
         "max_price": tender.max_price,
         "deadline": tender.collecting_finished_at,
+        "is_soon": is_soon,
         "status_label": status_label if reviewed else "",
         "status_key": status_key,
         "badges": badges,
@@ -365,7 +368,10 @@ def tender_detail(request, pk):
 
     clar_raw, comp_raw = extras_for(tender, force=request.GET.get("refresh") == "1")
 
-    stats = price_stats_for(tender, card)
+    # Прогноз снижения и оценка риска не показываются на «Входящих» — рано,
+    # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
+    # начиная с «Проверки» (review != unreviewed).
+    stats = price_stats_for(tender, card) if tender.review != FoundTender.UNREVIEWED else None
     if stats:
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
