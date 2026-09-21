@@ -33,6 +33,30 @@ class FilterSettings(models.Model):
         return cls.objects.get_or_create(pk=1)[0]
 
 
+class Tender(models.Model):
+    """Один тендер по его настоящему номеру закупки — общий якорь. Найденный
+    тендер (документы, оценка риска) и расчёт (товары, себестоимость,
+    результат торгов) ссылаются на один и тот же Tender.id независимо от
+    канала, которым они попали в систему — это и есть единая сущность
+    тендера, без слияния самих таблиц FoundTender/TenderEstimate."""
+
+    LAW_CHOICES = (("fz44", "44-ФЗ"), ("fz223", "223-ФЗ"))
+
+    law = models.CharField("Закон", max_length=8, choices=LAW_CHOICES, default="fz44", db_index=True)
+    purchase_number = models.CharField("Номер закупки", max_length=40, db_index=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["law", "purchase_number"], name="uniq_tender_law_purchase_number"),
+        ]
+        verbose_name = "Тендер"
+        verbose_name_plural = "Тендеры"
+
+    def __str__(self):
+        return f"{self.get_law_display()} {self.purchase_number}"
+
+
 class FoundTender(models.Model):
     NEW = "new"
     DISMISSED = "dismissed"
@@ -80,7 +104,14 @@ class FoundTender(models.Model):
     risk_error = models.CharField("Ошибка оценки рисков", max_length=400, blank=True)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=NEW)
     review = models.CharField("Проверка", max_length=16, choices=REVIEW_CHOICES, default=UNREVIEWED)
-    pushed_estimate_id = models.PositiveIntegerField("ID просчёта", null=True, blank=True)
+    tender = models.OneToOneField(
+        Tender, on_delete=models.SET_NULL, null=True, blank=True, related_name="found_tender",
+        verbose_name="Тендер (общий якорь)",
+    )
+    pushed_estimate = models.OneToOneField(
+        "tenders.TenderEstimate", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="found_tender", verbose_name="Просчёт",
+    )
     opened_at = models.DateTimeField("Открыт пользователем (впервые)", null=True, blank=True)
     first_seen_at = models.DateTimeField("Впервые найден", auto_now_add=True)
     last_pulled_at = models.DateTimeField("Последняя выгрузка")

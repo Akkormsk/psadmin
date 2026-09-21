@@ -434,6 +434,10 @@ class TenderEstimate(models.Model):
     )
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
+    tender = models.ForeignKey(
+        "tender_selection.Tender", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="estimates", verbose_name="Тендер",
+    )
     tender_number = models.CharField("Номер тендера", max_length=100)
     name = models.CharField("Название / комментарий", max_length=300)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)

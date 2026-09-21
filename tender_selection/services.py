@@ -498,6 +498,7 @@ def push_to_estimate(tender, user):
 
     from tenders.models import TenderEstimate, TenderLine
 
+    from .models import Tender
     from .notification import parse_notification
     from .stats import price_stats_for
 
@@ -521,8 +522,11 @@ def push_to_estimate(tender, user):
             "categories": stats["categories"],
         }
 
+    tender_anchor, _ = Tender.objects.get_or_create(law=tender.law, purchase_number=tender.purchase_number)
+
     estimate = TenderEstimate.objects.create(
         owner=user,
+        tender=tender_anchor,
         tender_number=tender.purchase_number[:100],
         name=customer[:300],
         reduction_percent=reduction,
@@ -559,8 +563,9 @@ def push_to_estimate(tender, user):
     TenderLine.objects.bulk_create(lines)
 
     tender.status = FoundTender.PUSHED
-    tender.pushed_estimate_id = estimate.pk
-    tender.save(update_fields=["status", "pushed_estimate_id"])
+    tender.tender = tender_anchor
+    tender.pushed_estimate = estimate
+    tender.save(update_fields=["status", "tender", "pushed_estimate"])
     return estimate.pk
 
 
