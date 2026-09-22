@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load tz tender_selection_extras %}
+
+{% block title %}Архив тендеров{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'tender_selection:list' %}" class="back-link">← к канбану</a>
+  <h1>Архив</h1>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Скрытые карточки <small class="ts-count">старше месяца удаляются автоматически</small></h2>
+    </div>
+
+    <div class="kb-column__cards ts-archive-grid">
+      {% for card in found %}
+      <div class="kb-card">
+        <div class="kb-card__head">
+          <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
+        </div>
+        <div class="kb-card__meta">
+          <span class="ts-law">{{ card.law_label }}</span>
+          № {{ card.purchase_number }}
+        </div>
+      </div>
+      {% endfor %}
+      {% for card in estimates %}
+      <div class="kb-card">
+        <div class="kb-card__head">
+          <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
+          <span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>
+        </div>
+        <div class="kb-card__meta">№ {{ card.tender_number }}</div>
+        {% if card.badges %}
+        <div class="kb-card__badges">
+          {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% empty %}
+      {% endfor %}
+      {% if not found and not estimates %}
+      <p class="settings-description">Архив пуст.</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+
+<style>
+  .ts-archive-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+</style>
+{% endblock %}

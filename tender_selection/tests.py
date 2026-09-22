@@ -286,13 +286,12 @@ class PushToEstimateTests(TestCase):
         self.assertContains(detail_resp, "На расчёте — открыть просчёт")
         self.assertNotContains(detail_resp, 'name="review"')  # селектор статуса скрыт
 
-    def test_pushed_tender_still_shows_pill_in_flat_list_view(self):
-        """Старое поведение списка (?view=list) никуда не делось, просто больше
-        не значение по умолчанию — тумблер Канбан/Список должен продолжать работать."""
+    def test_pushed_tender_disappears_from_flat_list_view(self):
+        """«Входящие» (?view=list) — только review=unreviewed; запушенный тендер
+        (review=interesting) больше сюда не возвращается, живёт в канбане."""
         self.client.post(reverse("tender_selection:push", args=[self.tender.pk]))
         list_resp = self.client.get(reverse("tender_selection:list") + "?view=list")
-        self.assertContains(list_resp, "ts-onestimate-pill")
-        self.assertContains(list_resp, "На расчёте")
+        self.assertNotContains(list_resp, self.tender.title)
 
     def test_second_push_opens_existing(self):
         self.client.post(reverse("tender_selection:push", args=[self.tender.pk]))
@@ -797,15 +796,19 @@ class EisDocsTests(TestCase):
         from . import eis_docs
         import time as time_module
 
-        def slow_fail(url):
+        def slow_fail(url, **kwargs):
             time_module.sleep(0.05)
             raise eis_docs.EisDocsError("не вышло")
 
-        with mock.patch.object(eis_docs, "ARCHIVE_LOOP_BUDGET_SECONDS", 0.08), \
-             mock.patch.object(eis_docs, "fetch_archive_urls", return_value=["u1", "u2", "u3", "u4", "u5"]), \
+        # ARCHIVE_LOOP_BUDGET_SECONDS не патчится через mock.patch.object — это
+        # значение по умолчанию у именованного параметра loop_budget, оно
+        # связывается один раз при определении функции, а не при вызове;
+        # патч самого имени в модуле на уже готовую функцию не влияет.
+        # Передаём бюджет явным аргументом — то же самое, что реально тестируем.
+        with mock.patch.object(eis_docs, "fetch_archive_urls", return_value=["u1", "u2", "u3", "u4", "u5"]), \
              mock.patch.object(eis_docs, "download_archive", side_effect=slow_fail) as dl:
             with self.assertRaises(eis_docs.EisDocsError) as ctx:
-                eis_docs.fetch_document_via_eis("123", "file.docx")
+                eis_docs.fetch_document_via_eis("123", "file.docx", loop_budget=0.08)
         self.assertLess(dl.call_count, 5)  # не дошёл до всех архивов
         self.assertIn("долго", str(ctx.exception))
 
@@ -2148,13 +2151,17 @@ class AccessControlTests(TestCase):
         self.assertEqual(resp.status_code, 403)
 
     def test_superuser_sees_the_list(self):
+        """Канбан больше не показывает «Входящие» (own отдельный список) — свежий,
+        ещё не проверенный тендер виден там, не на доске."""
         FoundTender.objects.create(
             purchase_number="1", object_info="x", title="Кружки", last_pulled_at=timezone.now()
         )
         self.client.force_login(self.admin)
-        resp = self.client.get(reverse("tender_selection:list"))
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Кружки")
+        kanban_resp = self.client.get(reverse("tender_selection:list"))
+        self.assertEqual(kanban_resp.status_code, 200)
+        self.assertNotContains(kanban_resp, "Кружки")
+        list_resp = self.client.get(reverse("tender_selection:list") + "?view=list")
+        self.assertContains(list_resp, "Кружки")
 
     def test_set_review_ajax(self):
         tender = FoundTender.objects.create(
@@ -2210,25 +2217,28 @@ class AccessControlTests(TestCase):
         )
         self.client.force_login(self.admin)
         with mock.patch("tender_selection.views.start_risk_assessment_in_background") as start:
-            self.client.post(reverse("tender_selection:review", args=[tender.pk]), {"review": "not_interesting"})
+            self.client.post(reverse("tender_selection:review", args=[tender.pk]), {"review": "interesting"})
         start.assert_not_called()
 
-    def test_list_row_has_no_forward_button_only_hide(self):
-        """Решение «вперёд» (На оценку рисков / В расчёт) принимается только на
-        странице самого тендера — рано жать кнопку из списка, не открыв, что
-        внутри. В списке остаётся только «×» скрыть, независимо от review."""
+    def test_incoming_list_has_work_and_hide_buttons_no_status(self):
+        """«Входящие» — только review=unreviewed (см. tender_list); только 2
+        действия в строке — «В работу» и «×» скрыть, статусы не показываем."""
         FoundTender.objects.create(
-            purchase_number="1", object_info="x", title="Кружка", review=FoundTender.NOT_INTERESTING,
-            last_pulled_at=timezone.now(),
-        )
-        FoundTender.objects.create(
-            purchase_number="2", object_info="x", title="Блокнот", last_pulled_at=timezone.now(),
+            purchase_number="1", object_info="x", title="Кружка", last_pulled_at=timezone.now(),
         )
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("tender_selection:list") + "?view=list")
-        self.assertNotContains(resp, "На оценку рисков")
-        self.assertNotContains(resp, "В расчёт")
+        self.assertContains(resp, "В работу →")
         self.assertContains(resp, 'title="Скрыть тендер"')
+
+    def test_incoming_list_excludes_tenders_already_in_work(self):
+        FoundTender.objects.create(
+            purchase_number="1", object_info="x", title="Кружка", review=FoundTender.INTERESTING,
+            last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("tender_selection:list") + "?view=list")
+        self.assertNotContains(resp, "Кружка")
 
     def test_missing_notification_shows_warning_badge(self):
         FoundTender.objects.create(

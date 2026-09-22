@@ -455,6 +455,7 @@ class TenderEstimate(models.Model):
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
     summary_snapshot = models.JSONField(default=dict, blank=True)
     document_analysis = models.JSONField("Анализ документов", default=dict, blank=True)
+    archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

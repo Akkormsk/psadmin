@@ -34,7 +34,7 @@
         {% if tender.review == "unreviewed" %}
         <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
           {% csrf_token %}<input type="hidden" name="review" value="interesting">
-          <button type="submit" class="button-success">На оценку рисков →</button>
+          <button type="submit" class="button-success">В работу →</button>
         </form>
         {% else %}
         <form method="post" action="{% url 'tender_selection:push' tender.pk %}">

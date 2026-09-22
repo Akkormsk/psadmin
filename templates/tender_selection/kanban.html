@@ -37,12 +37,10 @@
         <div class="kb-column__cards">
           {% for card in column.cards %}
           <div class="kb-card">
-            {% if card.kind == "found" %}
-            <form method="post" action="{{ card.dismiss_url }}" class="kb-card__dismiss">
+            <form method="post" action="{{ card.dismiss_url }}" class="kb-card__dismiss"{% if card.warn_before_dismiss %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
               {% csrf_token %}
               <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
             </form>
-            {% endif %}
             <div class="kb-card__head">
               <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
               {% if card.status_label %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
@@ -72,10 +70,10 @@
       </div>
       {% endfor %}
 
-      <div class="kb-archive">
+      <a class="kb-archive" href="{% url 'tender_selection:archive' %}">
         <i aria-hidden="true">🗄</i>
         <span>Архив<br>{{ archived_count }}</span>
-      </div>
+      </a>
     </div>
   </section>
 </div>
@@ -109,7 +107,8 @@
   .kb-card__deadline.is-soon { color: #b8434e !important; font-weight: 600; }
   .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
-  .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; }
+  .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; text-decoration: none; }
+  .kb-archive:hover { color: var(--ink); }
   .kb-archive i { font-size: 18px; font-style: normal; }
 
   @media (max-width: 768px) {

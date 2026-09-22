@@ -69,11 +69,9 @@ class FoundTender(models.Model):
 
     UNREVIEWED = "unreviewed"
     INTERESTING = "interesting"
-    NOT_INTERESTING = "not_interesting"
     REVIEW_CHOICES = (
         (UNREVIEWED, "Не проверен"),
-        (INTERESTING, "Интересно"),
-        (NOT_INTERESTING, "Не интересно"),
+        (INTERESTING, "В работе"),
     )
 
     LAW_CHOICES = (("fz44", "44-ФЗ"), ("fz223", "223-ФЗ"))
@@ -115,6 +113,7 @@ class FoundTender(models.Model):
     opened_at = models.DateTimeField("Открыт пользователем (впервые)", null=True, blank=True)
     first_seen_at = models.DateTimeField("Впервые найден", auto_now_add=True)
     last_pulled_at = models.DateTimeField("Последняя выгрузка")
+    archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
 
     class Meta:
         ordering = ["-published_at", "-first_seen_at"]

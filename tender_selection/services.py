@@ -405,6 +405,35 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     return attempted, succeeded
 
 
+_EXPIRED_INCOMING_TTL = timedelta(days=7)
+_ARCHIVE_TTL = timedelta(days=30)
+
+
+def purge_stale() -> dict:
+    """Фоновая уборка «Входящих» и архива — навсегда удаляет:
+    - просроченные «Входящие» (срок подачи истёк более недели назад, тендер
+      так и не был переведён «в работу») — они больше никому не нужны;
+    - карточки старше месяца в архиве, с любой стадии (найденный тендер или
+      просчёт) — «Скрыть» не подразумевает хранить вечно."""
+    from tenders.models import TenderEstimate
+
+    now = timezone.now()
+    expired_incoming, _ = FoundTender.objects.filter(
+        status=FoundTender.NEW, review=FoundTender.UNREVIEWED,
+        collecting_finished_at__lt=now - _EXPIRED_INCOMING_TTL,
+    ).delete()
+    archived_found, _ = FoundTender.objects.filter(
+        status=FoundTender.DISMISSED, archived_at__lt=now - _ARCHIVE_TTL,
+    ).delete()
+    archived_estimates, _ = TenderEstimate.objects.filter(
+        archived_at__lt=now - _ARCHIVE_TTL,
+    ).delete()
+    return {
+        "expired_incoming": expired_incoming, "archived_found": archived_found,
+        "archived_estimates": archived_estimates,
+    }
+
+
 _EXTRAS_TTL = timedelta(hours=6)
 _EXTRAS_ACTIVE_WINDOW = timedelta(days=45)  # после закрытия приёма новые разъяснения/жалобы ещё возможны
 

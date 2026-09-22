@@ -89,6 +89,10 @@
 {% endif %}
 
 <div class="tender-outcome__actions">
+  <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}"{% if not estimate.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
+    {% csrf_token %}
+    <button type="submit" class="button-secondary">Скрыть</button>
+  </form>
   <form method="post" action="{% url 'tender_estimate_duplicate' estimate.pk %}">
     {% csrf_token %}
     <button type="submit" class="button-secondary">Копировать просчёт</button>

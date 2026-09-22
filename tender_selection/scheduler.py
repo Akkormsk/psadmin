@@ -86,6 +86,15 @@ def _run_once(tick: int) -> None:
             logger.warning("autopull: риски — %d/%d тендеров на «Проверке» оценено", succeeded, attempted)
     except Exception:
         logger.exception("autopull: retry_pending_risks failed")
+
+    close_old_connections()
+    try:
+        from .services import purge_stale
+        purged = purge_stale()
+        if any(purged.values()):
+            logger.warning("autopull: уборка — %s", purged)
+    except Exception:
+        logger.exception("autopull: purge_stale failed")
     close_old_connections()
 
 

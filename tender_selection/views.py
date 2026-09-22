@@ -145,10 +145,14 @@ def _estimate_card(estimate):
         # рядом с прогнозом снижения), не на карточке канбана — здесь только
         # уже накопленный результат в badges выше.
         "detail_url": reverse("tender_estimate", args=[estimate.pk]),
+        "dismiss_url": reverse("tender_selection:dismiss_estimate", args=[estimate.pk]),
+        # Архивировать «в тихую» просчёт, по которому ещё не внесён итог торгов, —
+        # частая случайная потеря данных; предупреждаем перед этим (см. kanban.html).
+        "warn_before_dismiss": not estimate.outcome_checked_at,
     }
 
 
-_KANBAN_COLUMN_KEYS = ("incoming", "review", "calculation", "bidding", "result")
+_KANBAN_COLUMN_KEYS = ("review", "calculation", "bidding", "result")
 
 
 def _kanban_column_dirs(request):
@@ -190,10 +194,8 @@ def kanban(request):
         )
         return rows
 
-    incoming = [
-        _found_tender_card(t) for t in
-        _visible(FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED), "incoming")
-    ]
+    # «Входящие» больше не колонка канбана — это отдельный список (tender_list);
+    # сюда тендер попадает только после «В работу» (review != unreviewed).
     review = [
         _found_tender_card(t) for t in
         _visible(FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED), "review")
@@ -201,23 +203,23 @@ def kanban(request):
 
     from tenders.models import TenderEstimate
 
+    live_estimates = TenderEstimate.objects.filter(archived_at__isnull=True)
     calculation = [
         _estimate_card(e) for e in
-        TenderEstimate.objects.filter(status=TenderEstimate.DRAFT).order_by(*_order("calculation", "updated_at"))
+        live_estimates.filter(status=TenderEstimate.DRAFT).order_by(*_order("calculation", "updated_at"))
     ]
     bidding = [
         _estimate_card(e) for e in
-        TenderEstimate.objects.filter(status=TenderEstimate.PENDING).order_by(*_order("bidding", "updated_at"))
+        live_estimates.filter(status=TenderEstimate.PENDING).order_by(*_order("bidding", "updated_at"))
     ]
     result = [
         _estimate_card(e) for e in
-        TenderEstimate.objects.exclude(status__in=(TenderEstimate.DRAFT, TenderEstimate.PENDING))
+        live_estimates.exclude(status__in=(TenderEstimate.DRAFT, TenderEstimate.PENDING))
         .order_by(*_order("result", "updated_at"))
     ]
 
     columns = [
-        {"key": "incoming", "label": "Входящие", "cards": incoming},
-        {"key": "review", "label": "Проверка", "cards": review},
+        {"key": "review", "label": "Оценка", "cards": review},
         {"key": "calculation", "label": "Расчёт", "cards": calculation},
         {"key": "bidding", "label": "Торги", "cards": bidding},
         {"key": "result", "label": "Результат", "cards": result},
@@ -225,7 +227,10 @@ def kanban(request):
     for column in columns:
         column["dir"] = dirs[column["key"]]
         column["toggle_qs"] = _kanban_toggle_qs(dirs, column["key"])
-    archived_count = FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
+    archived_count = (
+        FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
+        + TenderEstimate.objects.filter(archived_at__isnull=False).count()
+    )
     return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count, "settings": settings})
 
 
@@ -254,37 +259,14 @@ def _visible_found_tenders(queryset, *, min_price, include_words, exclude_words,
     return rows, hidden, expired
 
 
-_ESTIMATE_STAGE_STATUSES = {
-    "calculation": ("draft",),
-    "bidding": ("pending",),
-    "result": ("not_participated", "lost", "won"),
-}
-
-
 @superuser_required
 def tender_list(request):
+    """«Входящие» — только первичный отбор входящего потока: пока тендер не
+    переведён «В работу» (review=unreviewed). Жизненным циклом уже отобранных
+    занимается канбан (kanban()), не этот экран — сюда попавшие «в работу»
+    не возвращаются, и статус тут показывать нечего."""
     if request.GET.get("view") != "list":
         return kanban(request)
-
-    stage = request.GET.get("stage") if request.GET.get("stage") in (*_ESTIMATE_STAGE_STATUSES, "all") else ""
-
-    # «Расчёт»/«Торги»/«Результат» — это уже не FoundTender, а TenderEstimate
-    # (см. kanban()) — не нужны ни сортировки, ни плюс/минус-слова ЕИС-триажа,
-    # только сам список. При stage="" (по умолчанию, «Новые») это не строится
-    # вовсе — быстрый путь остаётся быстрым.
-    estimate_cards = None
-    if stage:
-        from tenders.models import TenderEstimate
-
-        statuses = [s for statuses in (
-            _ESTIMATE_STAGE_STATUSES.values() if stage == "all" else (_ESTIMATE_STAGE_STATUSES[stage],)
-        ) for s in statuses]
-        estimate_cards = [
-            _estimate_card(estimate)
-            for estimate in TenderEstimate.objects.filter(status__in=statuses).order_by("-updated_at")
-        ]
-        if stage != "all":
-            return render(request, "tender_selection/list.html", {"stage": stage, "estimate_cards": estimate_cards})
 
     settings = FilterSettings.load()
     # плюс/минус-слова можно временно переопределить прямо на странице (?inc=/?exc=),
@@ -302,7 +284,7 @@ def tender_list(request):
     now = timezone.now()
     soon_cutoff = now + timedelta(days=1)
 
-    queryset = FoundTender.objects.exclude(status=FoundTender.DISMISSED)
+    queryset = FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED)
     if law_filter != "all":
         queryset = queryset.filter(law=law_filter)
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
@@ -320,7 +302,6 @@ def tender_list(request):
         tender.region_label = region_name(tender.region) if tender.region else ""
         tender.law_label = LAW_LABELS.get(tender.law, tender.law)
         tender.is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= soon_cutoff)
-        tender.on_estimate = tender.status == FoundTender.PUSHED and tender.pushed_estimate_id
         tender.has_complaint = bool(tender.complaints_raw)
         # 223-ФЗ не имеет разобранного извещения по конструкции источника — это не
         # ошибка. У 44-ФЗ пустой notification_raw значит запрос ещё не удался — но
@@ -332,7 +313,10 @@ def tender_list(request):
             tender.law == "fz44" and not tender.notification_raw and tender.notification_checked_at is not None
         )
 
-    counts = dict(FoundTender.objects.exclude(status=FoundTender.DISMISSED).values_list("law").annotate(n=Count("law")))
+    counts = dict(
+        FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED)
+        .values_list("law").annotate(n=Count("law"))
+    )
     return render(request, "tender_selection/list.html", {
         "page_obj": page,
         "shown_count": len(rows),
@@ -347,8 +331,6 @@ def tender_list(request):
         "inc_value": inc_value,
         "exc_value": exc_value,
         "words_overridden": words_overridden,
-        "stage": stage,
-        "estimate_cards": estimate_cards,
     })
 
 
@@ -675,8 +657,42 @@ def enter_outcome(request, pk):
 def dismiss(request, pk):
     tender = get_object_or_404(FoundTender, pk=pk)
     tender.status = FoundTender.DISMISSED
-    tender.save(update_fields=["status"])
+    tender.archived_at = timezone.now()
+    tender.save(update_fields=["status", "archived_at"])
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+
+
+@superuser_required
+@require_POST
+def dismiss_estimate(request, pk):
+    """Архивировать просчёт с любой стадии («Расчёт»/«Торги»/«Результат») —
+    тот же единый архив, что и у «Входящих» (FoundTender.archived_at), просто
+    на другой модели: у просчёта нет своего статуса «скрыт»."""
+    from tenders.models import TenderEstimate
+
+    estimate = get_object_or_404(TenderEstimate, pk=pk)
+    estimate.archived_at = timezone.now()
+    estimate.save(update_fields=["archived_at"])
+    return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+
+
+@superuser_required
+def archive(request):
+    """Единый архив — сюда попадает всё скрытое, с любой стадии жизненного
+    цикла (найденный тендер до расчёта или уже созданный просчёт). Только
+    просмотр — восстановление не делаем, не просили; старше месяца чистит
+    фоновый демон (см. services.purge_archived)."""
+    from tenders.models import TenderEstimate
+
+    found = [
+        _found_tender_card(t) for t in
+        FoundTender.objects.filter(status=FoundTender.DISMISSED).order_by("-archived_at")
+    ]
+    estimates = [
+        _estimate_card(e) for e in
+        TenderEstimate.objects.filter(archived_at__isnull=False).order_by("-archived_at")
+    ]
+    return render(request, "tender_selection/archive.html", {"found": found, "estimates": estimates})
 
 
 @superuser_required
