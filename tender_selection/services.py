@@ -241,15 +241,24 @@ def run_pull(
     return run
 
 
-def _fetch_doc_bytes(tender, url, name):
+def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, direct_timeout=15):
     """Официальный канал ЕИС первым (сеть с сервера есть), прямая ссылка — подстраховка
     на случай проблем с токеном/лимитом. Общее для просмотра, захода внутрь архива и
-    оценки рисков — каждый раз нужен весь файл заново, кэшируется только итог разбора."""
+    оценки рисков — каждый раз нужен весь файл заново, кэшируется только итог разбора.
+
+    По умолчанию — обычные таймауты (интерактивный просмотр документа, где важнее
+    дождаться реального ответа). Автооценка риска зовёт с timeout/archive_timeout
+    покороче — там важнее быстро понять, что ЕИС недоступен, и уйти в аварийный режим."""
+    eis_kwargs = {}
+    if timeout is not None:
+        eis_kwargs["timeout"] = timeout
+    if archive_timeout is not None:
+        eis_kwargs["archive_timeout"] = archive_timeout
     try:
-        return fetch_document_via_eis(tender.purchase_number, name)
+        return fetch_document_via_eis(tender.purchase_number, name, **eis_kwargs)
     except EisDocsError as eis_exc:
         try:
-            return fetch_document(url, timeout=15)
+            return fetch_document(url, timeout=direct_timeout)
         except DocumentError as direct_exc:
             raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
 
@@ -472,8 +481,12 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         tender.save(update_fields=["risk_checked_at", "risk_error"])
         return None
 
+    # Короткий таймаут (5с на попытку — ЕИС либо отвечает сразу, либо не отвечает вовсе):
+    # автооценке важнее быстро понять, что документы недоступны, и уйти в аварийный
+    # режим, чем ждать десятки секунд по умолчанию (как в интерактивном просмотре).
     context, used_names = build_context(
-        tender, card, documents, fetch=lambda url, name: _fetch_doc_bytes(tender, url, name)
+        tender, card, documents,
+        fetch=lambda url, name: _fetch_doc_bytes(tender, url, name, timeout=5, archive_timeout=5, direct_timeout=5),
     )
     if not used_names:
         # Документы не прочитались (типично — локальная сеть не видит ЕИС, только
@@ -511,6 +524,37 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     tender.risk_error = ""
     tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
     return tender.risk_assessment
+
+
+def start_risk_assessment_in_background(tender_id: int) -> None:
+    """«Включить автооценку риска при переносе тендера в статус оценки» в буквальном
+    смысле: срабатывает СРАЗУ в момент перехода (вызывается из set_review), не через
+    фоновый тик по расписанию. Сам вызов может идти десятки секунд (сеть до ЕИС) —
+    поэтому в отдельном потоке, чтобы не задерживать ответ на клик «На оценку рисков».
+
+    Разовый поток, не персистентный пул: постоянный ThreadPoolExecutor (см. такой же
+    у ассистента маршрутов, tenders/views.py) переиспользует соединение с БД между
+    запусками — под Postgres это однажды привело к «the connection is closed» между
+    тестами. Здесь поток живёт ровно один вызов и закрывается вместе с соединением.
+
+    retry_pending_risks() в фоновом демоне остаётся как подстраховка (см. scheduler.py)
+    на случай, если этот разовый запуск не удался или процесс перезапустился до того,
+    как он успел закончить — не основной путь, а сеть безопасности."""
+    import threading
+
+    from django.db import close_old_connections
+
+    def _job():
+        close_old_connections()
+        try:
+            tender = FoundTender.objects.get(pk=tender_id)
+            risk_assessment_for(tender)
+        except Exception:
+            logger.exception("Фоновая оценка риска не удалась для тендера %s", tender_id)
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=_job, daemon=True).start()
 
 
 def push_to_estimate(tender, user):

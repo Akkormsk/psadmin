@@ -72,7 +72,7 @@ def token() -> str:
     return os.getenv("EIS_TOKEN", "").strip()
 
 
-def _soap_call(reestr_number: str) -> str:
+def _soap_call(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> str:
     if not token():
         raise EisDocsError("Не задан EIS_TOKEN.")
     body = _ENVELOPE.format(
@@ -85,7 +85,7 @@ def _soap_call(reestr_number: str) -> str:
         "Content-Type": "text/xml; charset=utf-8",
     })
     try:
-        with urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+        with urlopen(request, timeout=timeout) as response:
             return response.read().decode("utf-8", errors="replace")
     except HTTPError as exc:
         detail = ""
@@ -101,9 +101,9 @@ def _soap_call(reestr_number: str) -> str:
         raise EisDocsError("ЕИС недоступен (таймаут) при запросе документов.") from exc
 
 
-def fetch_archive_urls(reestr_number: str) -> list[str]:
+def fetch_archive_urls(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> list[str]:
     """Ссылки на архивы документов извещения. Обычно один, но может быть несколько пакетов."""
-    text = _soap_call(reestr_number)
+    text = _soap_call(reestr_number, timeout=timeout)
     fault = _FAULT_RE.search(text)
     if fault:
         raise EisDocsError(f"ЕИС отклонил запрос документов: {fault.group(1)}")
@@ -113,10 +113,10 @@ def fetch_archive_urls(reestr_number: str) -> list[str]:
     return urls
 
 
-def download_archive(url: str) -> bytes:
+def download_archive(url: str, *, timeout: float = ARCHIVE_TIMEOUT) -> bytes:
     request = Request(url, headers={"individualPerson_token": token()})
     try:
-        with urlopen(request, timeout=ARCHIVE_TIMEOUT) as response:
+        with urlopen(request, timeout=timeout) as response:
             data = response.read(MAX_ARCHIVE_BYTES + 1)
     except HTTPError as exc:
         raise EisDocsError(f"ЕИС ответил HTTP {exc.code} при скачивании архива.") from exc
@@ -159,20 +159,28 @@ def find_file(archive_data: bytes, filename: str) -> tuple[bytes, str] | None:
     return None
 
 
-def fetch_document_via_eis(reestr_number: str, filename: str) -> bytes:
+def fetch_document_via_eis(
+    reestr_number: str, filename: str, *,
+    timeout: float = REQUEST_TIMEOUT, archive_timeout: float = ARCHIVE_TIMEOUT,
+    loop_budget: float = ARCHIVE_LOOP_BUDGET_SECONDS,
+) -> bytes:
     """Достаём конкретный файл извещения через официальный канал ЕИС, когда публичная
     ссылка не отвечает. Пробует архивы по очереди, пока не найдёт файл — но не дольше
-    ARCHIVE_LOOP_BUDGET_SECONDS суммарно (предохранитель от WORKER TIMEOUT, см. её
-    комментарий)."""
+    loop_budget суммарно (предохранитель от WORKER TIMEOUT, см. её комментарий).
+
+    timeout/archive_timeout/loop_budget по умолчанию — обычные (для интерактивного
+    просмотра документа, где важнее дождаться реального ответа). Автооценка риска
+    зовёт с более короткими значениями — там важнее быстро понять, что ЕИС недоступен,
+    и уйти в аварийный режим, а не ждать десятки секунд впустую."""
     started = time.monotonic()
-    urls = fetch_archive_urls(reestr_number)
+    urls = fetch_archive_urls(reestr_number, timeout=timeout)
     if len(urls) > 1:
         logger.warning("eis_docs: %d архивов у %s (%s) — редкий случай, следим", len(urls), reestr_number, filename)
 
     last_error: EisDocsError | None = None
     for i, url in enumerate(urls):
         elapsed = time.monotonic() - started
-        if elapsed > ARCHIVE_LOOP_BUDGET_SECONDS:
+        if elapsed > loop_budget:
             logger.warning(
                 "eis_docs: предохранитель сработал — %.0fс, дошёл до архива %d/%d для %s, дальше не иду",
                 elapsed, i + 1, len(urls), reestr_number,
@@ -182,7 +190,7 @@ def fetch_document_via_eis(reestr_number: str, filename: str) -> bytes:
             )
         attempt_started = time.monotonic()
         try:
-            archive = download_archive(url)
+            archive = download_archive(url, timeout=archive_timeout)
         except EisDocsError as exc:
             logger.warning("eis_docs: архив %d/%d — сбой за %.1fс: %s", i + 1, len(urls), time.monotonic() - attempt_started, exc)
             last_error = exc

@@ -21,7 +21,7 @@ from .regions import REGION_NAMES, region_name
 from .services import (
     CATEGORY_GROUPS, _fetch_doc_bytes, apply_tender_outcome, effective_laws, effective_okpd2,
     enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
-    risk_assessment_for, run_pull,
+    risk_assessment_for, run_pull, start_risk_assessment_in_background,
 )
 from .stats import price_stats_for
 
@@ -685,8 +685,11 @@ def set_review(request, pk):
     tender = get_object_or_404(FoundTender, pk=pk)
     value = request.POST.get("review", "")
     if value in dict(FoundTender.REVIEW_CHOICES):
+        was_unreviewed = tender.review == FoundTender.UNREVIEWED
         tender.review = value
         tender.save(update_fields=["review"])
+        if was_unreviewed and value != FoundTender.UNREVIEWED and not tender.risk_checked_at:
+            start_risk_assessment_in_background(tender.pk)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"review": tender.review, "label": tender.get_review_display()})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")

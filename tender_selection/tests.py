@@ -2161,11 +2161,12 @@ class AccessControlTests(TestCase):
             purchase_number="1", object_info="x", last_pulled_at=timezone.now()
         )
         self.client.force_login(self.admin)
-        resp = self.client.post(
-            reverse("tender_selection:review", args=[tender.pk]),
-            {"review": "interesting"},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
+        with mock.patch("tender_selection.views.start_risk_assessment_in_background"):
+            resp = self.client.post(
+                reverse("tender_selection:review", args=[tender.pk]),
+                {"review": "interesting"},
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
         self.assertEqual(resp.json()["review"], "interesting")
         tender.refresh_from_db()
         self.assertEqual(tender.review, FoundTender.INTERESTING)
@@ -2178,6 +2179,39 @@ class AccessControlTests(TestCase):
         self.client.post(reverse("tender_selection:review", args=[tender.pk]), {"review": "bogus"})
         tender.refresh_from_db()
         self.assertEqual(tender.review, FoundTender.UNREVIEWED)
+
+    def test_set_review_starts_background_risk_assessment_on_transition(self):
+        """«Включить автооценку риска при переносе в статус оценки» — срабатывает
+        сразу на этом переходе (unreviewed → любое другое), не через фоновый тик."""
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", last_pulled_at=timezone.now()
+        )
+        self.client.force_login(self.admin)
+        with mock.patch("tender_selection.views.start_risk_assessment_in_background") as start:
+            self.client.post(reverse("tender_selection:review", args=[tender.pk]), {"review": "interesting"})
+        start.assert_called_once_with(tender.pk)
+
+    def test_set_review_skips_background_job_if_already_checked(self):
+        """Не перезапускаем (и не платим за ИИ второй раз), если риск уже посчитан —
+        например тендер вернули в «Входящие» и снова отправили на оценку."""
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", last_pulled_at=timezone.now(),
+            risk_checked_at=timezone.now(), risk_assessment={"legal_risks": "уже оценено"},
+        )
+        self.client.force_login(self.admin)
+        with mock.patch("tender_selection.views.start_risk_assessment_in_background") as start:
+            self.client.post(reverse("tender_selection:review", args=[tender.pk]), {"review": "interesting"})
+        start.assert_not_called()
+
+    def test_set_review_skips_background_job_if_already_reviewed(self):
+        tender = FoundTender.objects.create(
+            purchase_number="1", object_info="x", last_pulled_at=timezone.now(),
+            review=FoundTender.INTERESTING,
+        )
+        self.client.force_login(self.admin)
+        with mock.patch("tender_selection.views.start_risk_assessment_in_background") as start:
+            self.client.post(reverse("tender_selection:review", args=[tender.pk]), {"review": "not_interesting"})
+        start.assert_not_called()
 
     def test_list_row_has_no_forward_button_only_hide(self):
         """Решение «вперёд» (На оценку рисков / В расчёт) принимается только на
