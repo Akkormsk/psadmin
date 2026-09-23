@@ -1,9 +1,10 @@
 {% if risk %}
+{% if risk.preliminary %}<p class="ts-sub">Предварительно, бесплатно — только то, что уже есть в извещении, без документов и без ИИ. Полная оценка запустится автоматически при переводе «В работу».</p>{% endif %}
 {% if risk.degraded %}<p class="ts-warn">⚠ Аварийный режим: документы закупки недоступны, оценка построена только по данным извещения — менее надёжна, чем по полному тексту контракта.</p>{% endif %}
 <div class="table-wrapper"><table class="table ts-risk-table">
   <tbody>
     <tr><th>Срок исполнения</th><td>
-      {% if risk.execution_deadline.date %}<strong>{{ risk.execution_deadline.date }}</strong> — {% endif %}{{ risk.execution_deadline.assessment|default:"нет данных" }}
+      {% if risk.execution_deadline.date %}<strong>{{ risk.execution_deadline.date }}</strong>{% if risk.execution_deadline.assessment %} — {{ risk.execution_deadline.assessment }}{% endif %}{% else %}нет данных{% endif %}
     </td></tr>
     <tr><th>Обеспечение заявки</th><td>{{ risk.application_security|default:"нет данных" }}</td></tr>
     <tr><th>Обеспечение контракта</th><td>{{ risk.contract_security|default:"нет данных" }}</td></tr>
@@ -20,10 +21,12 @@
   Итоговый уровень риска: <strong>{% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% else %}высокий{% endif %}</strong>
 </p>
 {% endif %}
+{% if not risk.preliminary %}
 <p class="ts-sub">
   {% if risk.degraded %}Аварийная оценка ИИ по данным извещения, без текста документов.{% else %}Автоматическая оценка ИИ по документам закупки{% if risk_docs %}: {{ risk_docs|join:", " }}{% endif %}.{% endif %}
   Не заменяет проверку контракта юристом. <button type="button" class="ts-doc-link" data-risk-refresh>Обновить оценку</button>
 </p>
+{% endif %}
 {% elif risk_error %}
 <p class="ts-warn">Не удалось оценить риски: {{ risk_error }} <button type="button" class="ts-doc-link" data-risk-refresh>Попробовать ещё раз</button></p>
 {% else %}

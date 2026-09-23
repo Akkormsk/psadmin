@@ -380,11 +380,26 @@ def tender_detail(request, pk):
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
 
-    # Оценка рисков читает документы закупки — может занимать до ~30-40с (сеть до ЕИС).
-    # Чтобы это не блокировало открытие карточки, первый расчёт уходит в фон (см.
-    # risk_status ниже, дергается JS-ом со спиннером). Уже посчитанное (успех или
-    # ошибка — risk_checked_at не пуст) отдаём сразу, без лишнего похода в шлюз.
-    risk_needs_fetch = card is not None and tender.risk_checked_at is None
+    if tender.review == FoundTender.UNREVIEWED:
+        # «Входящие» — ещё рано на настоящую (платную) оценку, но бесплатную
+        # предварительную сводку по уже разобранному извещению показываем
+        # всегда: та же форма таблицы, без документов и без ИИ (см.
+        # risk_assessment.preliminary_summary). Кнопки «Оценить риски» тут
+        # нет — оценка стартует автоматически по «В работу».
+        from .risk_assessment import preliminary_summary
+
+        risk_needs_fetch = False
+        risk = preliminary_summary(card) if card else None
+        risk_error = ""
+    else:
+        # Оценка рисков читает документы закупки — может занимать до ~30-40с
+        # (сеть до ЕИС). Чтобы это не блокировало открытие карточки, первый
+        # расчёт уходит в фон (см. risk_status ниже, дергается JS-ом со
+        # спиннером). Уже посчитанное (успех или ошибка — risk_checked_at не
+        # пуст) отдаём сразу, без лишнего похода в шлюз.
+        risk_needs_fetch = card is not None and tender.risk_checked_at is None
+        risk = None if risk_needs_fetch else (tender.risk_assessment or None)
+        risk_error = "" if risk_needs_fetch else tender.risk_error
 
     return render(request, "tender_selection/detail.html", {
         "tender": tender,
@@ -398,8 +413,8 @@ def tender_detail(request, pk):
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
         "risk_needs_fetch": risk_needs_fetch,
-        "risk": None if risk_needs_fetch else (tender.risk_assessment or None),
-        "risk_error": "" if risk_needs_fetch else tender.risk_error,
+        "risk": risk,
+        "risk_error": risk_error,
         "risk_docs": [] if risk_needs_fetch else tender.risk_assessment_docs,
     })
 

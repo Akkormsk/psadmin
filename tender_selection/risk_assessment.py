@@ -85,6 +85,41 @@ def _card_summary(card: dict) -> str:
     return "\n".join(lines)
 
 
+def preliminary_summary(card: dict) -> dict:
+    """Бесплатная предварительная сводка по уже разобранному извещению — без
+    документов, без обращения к ИИ, той же формы, что и настоящая оценка
+    (см. _SCHEMA), но заполнена только тем, что реально есть в структурных
+    данных извещения. Чего там нет (пени, нацрежим, образцы, способ
+    поставки — это всё только из текста контракта) — остаётся незаполненным
+    до настоящей оценки. Нет risk_level/legal_risks — вывод не наш, ИИ ещё
+    не смотрел; бейдж на карточке поэтому не показываем."""
+    from django.utils import timezone as _timezone
+
+    dates = (card or {}).get("dates") or {}
+    money = (card or {}).get("money") or {}
+    result = {"preliminary": True}
+    if dates.get("execution_end"):
+        # dates.execution_end — datetime (см. notification._dt), не готовая строка,
+        # как у настоящей оценки — приводим к тому же виду «ДД.ММ.ГГГГ» для одной
+        # и той же строки таблицы в _risk_block.html.
+        result["execution_deadline"] = {"date": _timezone.localtime(dates["execution_end"]).strftime("%d.%m.%Y")}
+    security = []
+    if money.get("app_guarantee_amount"):
+        security.append(f"{money['app_guarantee_amount']} ₽")
+    if money.get("app_guarantee_part"):
+        security.append(f"{money['app_guarantee_part']}%")
+    if security:
+        result["application_security"] = " / ".join(security)
+    if money.get("contract_guarantee_part"):
+        contract_security = f"{money['contract_guarantee_part']}%"
+        if money.get("treasury_support"):
+            contract_security += "; требуется казначейское сопровождение"
+        result["contract_security"] = contract_security
+    elif money.get("treasury_support"):
+        result["contract_security"] = "требуется казначейское сопровождение"
+    return result
+
+
 def build_context(tender, card: dict, documents: list[dict], *, fetch) -> tuple[str, list[str]]:
     """fetch(url, name) -> bytes — внедряется извне (services._fetch_doc_bytes),
     чтобы этот модуль не тянул сетевые зависимости и легко тестировался моком.

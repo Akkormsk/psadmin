@@ -115,9 +115,12 @@
     {% endif %}
   </section>
 
-  {% if not is_fz223 and card and tender.review != "unreviewed" %}
+  {% if not is_fz223 %}
   <section class="panel panel--separated">
     <div class="panel-header"><h2 class="panel-title">Оценка рисков</h2></div>
+    {% if not card %}
+    <p class="ts-warn">Нет данных извещения — оценить риски пока нечем.</p>
+    {% else %}
     <div id="ts-risk-block" data-risk-url="{% url 'tender_selection:risk_status' tender.pk %}">
       {% if risk_needs_fetch %}
       <p class="ts-sub">Оценка риска запускается по кнопке — читает документы закупки и делает запрос к ИИ.
@@ -126,6 +129,7 @@
       {% include "tender_selection/_risk_block.html" %}
       {% endif %}
     </div>
+    {% endif %}
   </section>
   {% endif %}
 
