@@ -299,6 +299,10 @@
   .ts-risk-table th { text-align: left; color: #8a929e; font-weight: 600; white-space: nowrap; padding-right: 16px; width: 190px; vertical-align: top; }
   .ts-risk-table td { vertical-align: top; }
   .ts-risk-narrative { margin: 14px 0 8px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+  .ts-risk-level { margin: 4px 0 8px; padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  .ts-risk-level--low { background: var(--tint-positive); color: var(--positive-ink); }
+  .ts-risk-level--medium { background: var(--tint-warning); color: var(--warning-ink); }
+  .ts-risk-level--high { background: var(--tint-negative); color: var(--negative-ink); }
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } }
 </style>
 <script>

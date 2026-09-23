@@ -1109,6 +1109,7 @@ h1 {
 .kb-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; background:var(--tint-neutral); color:var(--ink-2); }
 .kb-badge--ok { background:var(--tint-positive); color:var(--positive-ink); }
 .kb-badge--pending { background:var(--tint-neutral); color:var(--ink-2); }
+.kb-badge--warn { background:var(--tint-warning); color:var(--warning-ink); }
 .kb-badge--error { background:var(--tint-negative); color:var(--negative-ink); }
 .tender-source-card { display:grid; gap:10px; margin-top:14px; padding:13px 16px; border:1px solid var(--border); border-radius:11px; background:var(--tint-cool); }
 .tender-source-card header { display:flex; align-items:start; justify-content:space-between; gap:18px; }

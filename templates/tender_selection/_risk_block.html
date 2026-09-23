@@ -11,9 +11,15 @@
     <tr><th>Пени и штрафы</th><td>{{ risk.penalties|default:"нет данных" }}</td></tr>
     <tr><th>Национальный режим</th><td>{{ risk.national_regime|default:"нет данных" }}</td></tr>
     <tr><th>Требования к образцам</th><td>{{ risk.sample_requirements|default:"нет данных" }}</td></tr>
+    <tr><th>Способ поставки</th><td>{{ risk.delivery_mode|default:"нет данных" }}</td></tr>
   </tbody>
 </table></div>
 {% if risk.legal_risks %}<p class="ts-risk-narrative">{{ risk.legal_risks }}</p>{% endif %}
+{% if risk.risk_level %}
+<p class="ts-risk-level ts-risk-level--{{ risk.risk_level }}">
+  Итоговый уровень риска: <strong>{% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% else %}высокий{% endif %}</strong>
+</p>
+{% endif %}
 <p class="ts-sub">
   {% if risk.degraded %}Аварийная оценка ИИ по данным извещения, без текста документов.{% else %}Автоматическая оценка ИИ по документам закупки{% if risk_docs %}: {{ risk_docs|join:", " }}{% endif %}.{% endif %}
   Не заменяет проверку контракта юристом. <button type="button" class="ts-doc-link" data-risk-refresh>Обновить оценку</button>

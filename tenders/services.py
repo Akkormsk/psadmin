@@ -3083,9 +3083,9 @@ def calculate_tender(lines, reduction_percent, russia_delivery, vat_rate):
 
 
 # порог — простое деление ROI на 3 понятные корзины, не балльная система;
-# легко подвинуть, если по факту окажется слишком строго/мягко
-_ROI_GOOD = Decimal("15")
-_ROI_THIN = Decimal("5")
+# 15/30 — временные значения (2026-09-23), критерии обсудим и подвинем отдельно
+_ROI_GOOD = Decimal("30")
+_ROI_THIN = Decimal("15")
 
 
 def verdict_for(estimate, source_tender) -> dict | None:

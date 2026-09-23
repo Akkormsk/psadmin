@@ -95,7 +95,19 @@ def _found_tender_card(tender):
         risk_state, status_label, status_key = "pending", "Не оценена", "new"
     badges = []
     if reviewed:
-        badges.append({"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]})
+        # Как только оценка реально посчитана, вместо мета-статуса ("оценена/не
+        # оценена") показываем светофор по её итоговому уровню — критерии живут
+        # целиком в самом промпте (risk_assessment.py), тут только раскраска.
+        risk_level = (tender.risk_assessment or {}).get("risk_level") if risk_state == "ok" else None
+        risk_badge = {
+            "low": {"state": "ok", "text": "риск: низкий"},
+            "medium": {"state": "warn", "text": "риск: средний"},
+            "high": {"state": "error", "text": "риск: высокий"},
+        }.get(risk_level)
+        if risk_badge:
+            badges.append(risk_badge)
+        else:
+            badges.append({"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]})
     now = timezone.now()
     is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= now + timedelta(days=1))
     return {
@@ -125,7 +137,16 @@ def _estimate_card(estimate):
     summary = estimate.summary_snapshot or {}
     badges = []
     if summary.get("roi") is not None:
-        badges.append({"state": "ok", "text": f"ROI {summary['roi']}%"})
+        from decimal import Decimal, InvalidOperation
+
+        from tenders.services import _ROI_GOOD, _ROI_THIN
+
+        try:
+            roi_value = Decimal(str(summary["roi"]))
+            roi_state = "ok" if roi_value >= _ROI_GOOD else "warn" if roi_value >= _ROI_THIN else "error"
+        except InvalidOperation:
+            roi_state = "pending"
+        badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
     if estimate.outcome_checked_at:
         source_label = "авто" if estimate.outcome_source == estimate.OUTCOME_AUTO else "вручную"
         if estimate.actual_reduction_percent is not None:
