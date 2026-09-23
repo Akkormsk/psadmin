@@ -154,6 +154,16 @@ def _estimate_card(estimate):
             badges.append({"state": "ok", "text": f"факт: снижение {estimate.actual_reduction_percent}% ({source_label})"})
         else:
             badges.append({"state": "pending", "text": f"итог внесён ({source_label})"})
+    # Карточка ведёт на страницу ТЕНДЕРА (с растущими блоками по стадиям), а не
+    # сразу в рабочее пространство расчёта — туда только через кнопку «Перейти
+    # в расчёт» внутри блока «Расчёт» на самой странице тендера. Если у просчёта
+    # нет исходного найденного тендера (создан вручную в «Тендерах») — вести
+    # больше некуда, открываем сам расчёт как раньше.
+    found_tender = FoundTender.objects.filter(pushed_estimate=estimate).first()
+    detail_url = (
+        reverse("tender_selection:detail", args=[found_tender.pk]) if found_tender
+        else reverse("tender_estimate", args=[estimate.pk])
+    )
     return {
         "kind": "estimate",
         "pk": estimate.pk,
@@ -166,7 +176,7 @@ def _estimate_card(estimate):
         # Внесение итога живёт на странице самого тендера (tenders/home.html,
         # рядом с прогнозом снижения), не на карточке канбана — здесь только
         # уже накопленный результат в badges выше.
-        "detail_url": reverse("tender_estimate", args=[estimate.pk]),
+        "detail_url": detail_url,
         "dismiss_url": reverse("tender_selection:dismiss_estimate", args=[estimate.pk]),
         # Архивировать «в тихую» просчёт, по которому ещё не внесён итог торгов, —
         # частая случайная потеря данных; предупреждаем перед этим (см. kanban.html).
