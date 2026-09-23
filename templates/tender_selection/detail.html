@@ -25,7 +25,7 @@
       </div>
       <div class="panel-actions ts-detail__actions">
         {% if pushed_estimate_id %}
-        <a class="ts-onestimate-pill" href="{% url 'tender_estimate' pushed_estimate_id %}">На расчёте — открыть просчёт →</a>
+        <a class="ts-onestimate-pill" href="{% url 'tender_estimate' pushed_estimate_id %}">На расчёте →</a>
         {% else %}
         <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
           {% csrf_token %}
@@ -46,6 +46,24 @@
       </div>
     </div>
   </section>
+
+  {% if pushed_estimate_id %}
+  <section class="panel panel--separated">
+    <div class="panel-header"><h2 class="panel-title">Расчёт</h2></div>
+    {% if calc_verdict %}
+    <div class="tender-verdict__stats">
+      {% if calc_verdict.price %}
+      <div class="tender-verdict__stat"><small>{% if calc_verdict.price_is_actual %}Фактическая цена{% else %}Цена (с прогнозом){% endif %}</small><strong>{{ calc_verdict.price|floatformat:2 }} ₽</strong></div>
+      {% endif %}
+      <div class="tender-verdict__stat"><small>Прибыль</small><strong>{{ calc_verdict.net_profit|floatformat:2 }} ₽</strong></div>
+      <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
+    </div>
+    {% else %}
+    <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
+    {% endif %}
+    <a href="{% url 'tender_estimate' pushed_estimate_id %}" class="button-secondary">Перейти в расчёт →</a>
+  </section>
+  {% endif %}
 
   <section class="panel panel--separated">
     <div class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2></div>

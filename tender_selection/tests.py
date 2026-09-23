@@ -283,7 +283,7 @@ class PushToEstimateTests(TestCase):
         self.assertNotContains(kanban_resp, self.tender.title)
         self.assertContains(kanban_resp, f"№ {est.tender_number}")
         detail_resp = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
-        self.assertContains(detail_resp, "На расчёте — открыть просчёт")
+        self.assertContains(detail_resp, "На расчёте")
         self.assertNotContains(detail_resp, 'name="review"')  # селектор статуса скрыт
 
     def test_pushed_tender_disappears_from_flat_list_view(self):

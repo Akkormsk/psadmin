@@ -366,6 +366,19 @@ def tender_detail(request, pk):
     card = parse_notification(payload) if payload else None
     estimate_id = tender.pushed_estimate_id if tender.status == FoundTender.PUSHED else None
 
+    # Компактная сводка расчёта прямо на странице тендера (см. концепцию: блок
+    # с данными остаётся на каждом пройденном этапе) — цена/прибыль/ROI с учётом
+    # прогноза + кнопка в сам расчёт. Тот же verdict_for, что и на странице
+    # расчёта — одни и те же цифры, не пересчитываем по-своему.
+    calc_verdict = None
+    if estimate_id:
+        from tenders.models import TenderEstimate
+        from tenders.services import verdict_for
+
+        estimate = TenderEstimate.objects.filter(pk=estimate_id).first()
+        if estimate:
+            calc_verdict = verdict_for(estimate, tender)
+
     org = Organization.objects.filter(inn=tender.customer_inn).first() if tender.customer_inn else None
     if tender.law != "fz44" and org is None and tender.customer_inn:
         org = enrich_one_org(tender.customer_inn, tender.law)  # для 223 карточки заказчика больше неоткуда взять
@@ -409,6 +422,7 @@ def tender_detail(request, pk):
         "fetch_failed": payload is None and tender.law == "fz44",
         "is_fz223": tender.law != "fz44",
         "pushed_estimate_id": estimate_id,
+        "calc_verdict": calc_verdict,
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,

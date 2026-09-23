@@ -3160,7 +3160,13 @@ def verdict_for(estimate, source_tender) -> dict | None:
         roi_label, roi_state = "не держится", "negative"
 
     risk = source_tender.risk_assessment if source_tender else None
+    try:
+        price = Decimal(str(snapshot["rrp_total"]))
+    except (KeyError, TypeError, InvalidOperation):
+        price = None
     return {
+        "price": estimate.actual_price if estimate.outcome_checked_at and estimate.actual_price is not None else price,
+        "price_is_actual": bool(estimate.outcome_checked_at and estimate.actual_price is not None),
         "roi": roi,
         "roi_label": roi_label,
         "roi_state": roi_state,
