@@ -26,7 +26,7 @@ class UnitAliasAdmin(admin.ModelAdmin):
 
 @admin.register(TenderSettings)
 class TenderSettingsAdmin(admin.ModelAdmin):
-    list_display = ("vat_rate", "auto_start_product_search", "auto_recalculate_requirements")
+    list_display = ("vat_rate", "roi_good_percent", "roi_thin_percent", "auto_start_product_search", "auto_recalculate_requirements")
 
     def has_add_permission(self, request):
         return not TenderSettings.objects.exists()

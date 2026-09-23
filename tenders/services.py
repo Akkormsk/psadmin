@@ -3082,10 +3082,52 @@ def calculate_tender(lines, reduction_percent, russia_delivery, vat_rate):
     return calculated_lines, summary
 
 
-# порог — простое деление ROI на 3 понятные корзины, не балльная система;
-# 15/30 — временные значения (2026-09-23), критерии обсудим и подвинем отдельно
-_ROI_GOOD = Decimal("30")
-_ROI_THIN = Decimal("15")
+def roi_thresholds() -> tuple[Decimal, Decimal]:
+    """(зелёная граница, жёлтая граница) ROI, % — один источник для раскраски
+    бейджей (tender_selection) и экономического блока расчёта (ниже).
+    Правится в админке (TenderSettings), не в коде — просто деление ROI на 3
+    понятные корзины, не балльная система."""
+    from .models import TenderSettings
+
+    settings = TenderSettings.objects.get_or_create(pk=1)[0]
+    return settings.roi_good_percent, settings.roi_thin_percent
+
+
+def _price_for_roi(purchase_total, russia_delivery, vat_rate, roi_percent) -> Decimal | None:
+    """Обратная задача к calculate_tender: по целевому ROI (%) находим цену
+    продажи (rrp_total), при которой он достигается — НДС считается от самой
+    цены продажи (см. calculate_tender), поэтому это не простое деление, а
+    прямое решение уравнения ROI = (P·(1-v) − C) / (C + P·v) относительно P:
+    P = C·(1+R) / ((1-v) − R·v), где C — расходы без НДС, v — ставка НДС,
+    R — целевой ROI (доли, не проценты)."""
+    C = purchase_total + russia_delivery
+    v = vat_rate / Decimal("100")
+    R = roi_percent / Decimal("100")
+    denominator = (Decimal("1") - v) - R * v
+    if denominator <= 0:
+        return None
+    return _money(C * (Decimal("1") + R) / denominator)
+
+
+def price_thresholds_for(estimate) -> dict | None:
+    """Целевая цена (держит зелёную зону ROI) и минимальная цена (ниже —
+    участвовать невыгодно, жёлтая граница) — та же пара порогов, что красит
+    бейджи (roi_thresholds), просто выражена в рублях, а не в процентах:
+    инструмент прямо для торгов («до X можно опускаться, ниже Y — нельзя»),
+    не для отчёта постфактум."""
+    snapshot = estimate.summary_snapshot or {}
+    if snapshot.get("is_incomplete", True):
+        return None
+    try:
+        purchase_total = Decimal(str(snapshot["purchase_total"]))
+    except (KeyError, TypeError, InvalidOperation):
+        return None
+    good, thin = roi_thresholds()
+    target = _price_for_roi(purchase_total, estimate.russia_delivery, estimate.vat_rate_snapshot, good)
+    floor = _price_for_roi(purchase_total, estimate.russia_delivery, estimate.vat_rate_snapshot, thin)
+    if target is None or floor is None:
+        return None
+    return {"target_price": target, "floor_price": floor}
 
 
 def verdict_for(estimate, source_tender) -> dict | None:
@@ -3095,7 +3137,11 @@ def verdict_for(estimate, source_tender) -> dict | None:
     price_stats_for, то ROI уже «при прогнозируемом снижении») и — если тендер
     пришёл из подбора и там есть оценка риска — её текст про юридические
     риски. Решение по юридической части оставляем человеку: в тексте риска
-    нет структурированного «да/нет», только качественная оценка ИИ."""
+    нет структурированного «да/нет», только качественная оценка ИИ.
+
+    Экономический блок (целевая/минимальная цена) пересчитывается вместе с
+    вердиктом — это одно и то же действие с точки зрения пользователя (кнопка
+    «Проверить/Обновить оценку»), просто разные цифры одного и того же среза."""
     snapshot = estimate.summary_snapshot or {}
     if snapshot.get("is_incomplete", True):
         return None
@@ -3105,9 +3151,10 @@ def verdict_for(estimate, source_tender) -> dict | None:
     except (KeyError, TypeError, InvalidOperation):
         return None
 
-    if roi >= _ROI_GOOD:
+    good, thin = roi_thresholds()
+    if roi >= good:
         roi_label, roi_state = "хороший", "positive"
-    elif roi >= _ROI_THIN:
+    elif roi >= thin:
         roi_label, roi_state = "маржа тонкая", "warning"
     else:
         roi_label, roi_state = "не держится", "negative"
@@ -3121,4 +3168,5 @@ def verdict_for(estimate, source_tender) -> dict | None:
         "reduction_percent": estimate.reduction_percent,
         "legal_risks": (risk or {}).get("legal_risks"),
         "risk_available": bool(risk),
+        "price_thresholds": price_thresholds_for(estimate),
     }

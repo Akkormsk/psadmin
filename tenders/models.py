@@ -9,6 +9,11 @@ class TenderSettings(models.Model):
     vat_rate = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
     auto_start_product_search = models.BooleanField("Автозапуск подбора при открытии", default=False)
     auto_recalculate_requirements = models.BooleanField("Автопересчёт при изменении ТЗ", default=False)
+    # Единственный источник порогов ROI — раскраска бейджей (tender_selection)
+    # и экономический блок расчёта (verdict_for) читают ровно эти два числа,
+    # без своих копий; правит админ здесь, без деплоя.
+    roi_good_percent = models.DecimalField("ROI — зелёная зона, от %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
+    roi_thin_percent = models.DecimalField("ROI — жёлтая зона, от %", max_digits=5, decimal_places=2, default=Decimal("15.00"))
 
     class Meta:
         verbose_name = "Настройки тендеров"

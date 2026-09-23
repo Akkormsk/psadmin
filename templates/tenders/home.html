@@ -34,6 +34,10 @@
       <div class="tender-verdict__stat tender-verdict__stat--{{ verdict.roi_state }}"><small>ROI</small><strong>{{ verdict.roi }}%</strong><span>{{ verdict.roi_label }}</span></div>
       <div class="tender-verdict__stat"><small>Чистая прибыль</small><strong>{{ verdict.net_profit|floatformat:2|intcomma }} ₽</strong></div>
       <div class="tender-verdict__stat"><small>При снижении</small><strong>{{ verdict.reduction_percent }}%</strong></div>
+      {% if verdict.price_thresholds %}
+      <div class="tender-verdict__stat"><small>Целевая цена</small><strong>≥ {{ verdict.price_thresholds.target_price|floatformat:2|intcomma }} ₽</strong><span>держит зелёную зону рентабельности</span></div>
+      <div class="tender-verdict__stat tender-verdict__stat--warning"><small>Минимальная цена</small><strong>≥ {{ verdict.price_thresholds.floor_price|floatformat:2|intcomma }} ₽</strong><span>ниже — участвовать невыгодно</span></div>
+      {% endif %}
     </div>
     {% if verdict.risk_available %}
       <p class="settings-description"><strong>Юридические риски (из оценки риска):</strong> {{ verdict.legal_risks|default:"нет данных" }}</p>

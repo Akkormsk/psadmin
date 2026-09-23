@@ -1255,7 +1255,15 @@ def update_estimate_status(request, pk):
     if status not in dict(TenderEstimate.STATUS_CHOICES):
         return HttpResponse(status=400)
     estimate.status = status
-    estimate.save(update_fields=("status",))
+    update_fields = ["status"]
+    # «Архивировать — невыгодно» — тоже терминальное решение по этому тендеру
+    # (участвовать не будем), уходит в архив сразу же, как и настоящий факт
+    # торгов (см. apply_tender_outcome) — не нужно отдельно жать «Скрыть».
+    if status == TenderEstimate.NOT_PARTICIPATED:
+        from django.utils import timezone
+        estimate.archived_at = timezone.now()
+        update_fields.append("archived_at")
+    estimate.save(update_fields=update_fields)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({
             "status": status,

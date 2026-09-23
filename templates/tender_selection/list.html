@@ -10,11 +10,11 @@
 
   <section class="panel">
     <div class="panel-header">
-      <h2 class="panel-title">Найденные тендеры <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
+      <h2 class="panel-title">Входящие <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
       <div class="panel-actions">
         <span class="kb-viewtabs">
-          <a href="?">Канбан</a>
-          <a href="?view=list" class="is-active">Список</a>
+          <a href="?">Торги</a>
+          <a href="?view=list" class="is-active">Входящие</a>
         </span>
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">

@@ -139,11 +139,12 @@ def _estimate_card(estimate):
     if summary.get("roi") is not None:
         from decimal import Decimal, InvalidOperation
 
-        from tenders.services import _ROI_GOOD, _ROI_THIN
+        from tenders.services import roi_thresholds
 
         try:
+            good, thin = roi_thresholds()
             roi_value = Decimal(str(summary["roi"]))
-            roi_state = "ok" if roi_value >= _ROI_GOOD else "warn" if roi_value >= _ROI_THIN else "error"
+            roi_state = "ok" if roi_value >= good else "warn" if roi_value >= thin else "error"
         except InvalidOperation:
             roi_state = "pending"
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})

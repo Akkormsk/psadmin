@@ -816,7 +816,13 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
 
 def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None, source) -> None:
     """Записать факт торгов на просчёт; при победе — отметить в ContractStat.is_ours,
-    чтобы своя история наконец начала накапливаться (поле раньше нигде не писалось)."""
+    чтобы своя история наконец начала накапливаться (поле раньше нигде не писалось).
+
+    «Результат» фиксирует именно итог торгов — как только он есть (в любую
+    сторону), карточка сама уходит в архив: не нужно отдельно жать «Скрыть»
+    после уже принятого решения. Для выигранных это временно (пока нет
+    отдельного раздела «Исполнение/Заказы» — см. бэклог), для проигранных и
+    невыгодных — постоянно."""
     from tenders.models import TenderEstimate
 
     estimate.status = status
@@ -826,8 +832,9 @@ def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None
         estimate.actual_reduction_percent = reduction_percent
     estimate.outcome_checked_at = timezone.now()
     estimate.outcome_source = source
+    estimate.archived_at = timezone.now()
     estimate.save(update_fields=[
-        "status", "actual_price", "actual_reduction_percent", "outcome_checked_at", "outcome_source",
+        "status", "actual_price", "actual_reduction_percent", "outcome_checked_at", "outcome_source", "archived_at",
     ])
 
     if status == TenderEstimate.WON:
