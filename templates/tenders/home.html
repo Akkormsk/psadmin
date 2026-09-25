@@ -1,10 +1,10 @@
 {% extends "base.html" %}{% load humanize tz %}
-{% block title %}Расчет тендеров{% endblock %}
+{% block title %}{% if source_tender %}Расчёт по тендеру{% else %}Расчёты заказов{% endif %}{% endblock %}
 {% block content %}
 <div class="wrap app-home"><div class="container tender-page">
-{% if source_tender %}<a class="back-link" href="{% url 'tender_selection:detail' source_tender.pk %}">← Вернуться к тендеру</a>{% else %}<a class="back-link" href="{% url 'index' %}">← На главную</a>{% endif %}<h1>Расчет тендеров</h1>
+{% if source_tender %}<a class="back-link" href="{% url 'tender_selection:detail' source_tender.pk %}">← Вернуться к тендеру</a>{% else %}<a class="back-link" href="{% url 'index' %}">← На главную</a>{% endif %}<h1>{% if source_tender %}Расчёт по тендеру{% else %}Расчёты заказов{% endif %}</h1>
 <form method="post" id="tender-form" class="content-stack">{% csrf_token %}<input type="hidden" name="lines_json" id="tender-lines-json"><input type="hidden" name="document_analysis_json" id="tender-document-analysis-json">
-<section class="panel"><div class="panel-header"><h2 class="panel-title">Просчёт тендера</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span><button type="button" class="button-secondary" id="new-tender">Новый просчёт</button><button type="button" class="button-success" id="save-tender"{% if estimate %} hidden{% endif %}>Сохранить</button></div></div>
+<section class="panel"><div class="panel-header"><h2 class="panel-title">Расчёт</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span><button type="button" class="button-secondary" id="new-tender">Новый расчёт</button><button type="button" class="button-success" id="save-tender"{% if estimate %} hidden{% endif %}>Сохранить</button></div></div>
 <div class="tender-meta">
 <label>Номер тендера<input required maxlength="100" name="tender_number" value="{{ form_state.tender_number }}" placeholder="Например, 03731000123"></label>
 <label class="tender-meta__name">Название / комментарий<input required maxlength="300" name="name" value="{{ form_state.name }}" placeholder="Короткое название просчёта"></label>
@@ -16,96 +16,43 @@
 <section class="panel panel--separated"><div class="panel-header"><h2 class="panel-title">Итог</h2></div>
 <div class="tender-parameters"><label>Снижение цены, %<input type="number" min="0" max="100" step="any" name="reduction_percent" id="reduction-percent" value="{{ form_state.reduction_percent }}"></label><label>Доставка по РФ<input type="number" min="0" step="any" name="russia_delivery" id="russia-delivery" value="{{ form_state.russia_delivery }}"></label></div>
 <div class="tender-summary" id="tender-summary"></div>
-{% if source_tender %}<aside class="tender-source-card"><header><div><small>Исходный тендер</small><strong>{{ source_tender.title|default:source_tender.object_info }}</strong></div><a href="{% url 'tender_selection:detail' source_tender.pk %}">Открыть карточку →</a></header><div class="tender-source-card__facts"><span><b>{{ source_tender.get_law_display }}</b> · № {{ source_tender.purchase_number }}</span><span>{% if source_tender.org.name %}{{ source_tender.org.name }}{% else %}ИНН {{ source_tender.customer_inn|default:"—" }}{% endif %}{% if source_tender.org.city or source_tender.region_label %} · {{ source_tender.org.city|default:source_tender.region_label }}{% endif %}</span><span><b>{{ source_tender.max_price|floatformat:2|intcomma }} ₽</b></span><span>{% if source_tender.collecting_finished_at %}Подача до {{ source_tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% else %}Срок подачи не указан{% endif %}</span>{% if source_tender.complaints_raw %}<span class="is-warning">⚠ Есть жалоба</span>{% endif %}</div></aside>{% endif %}
+{% if source_tender %}<aside class="tender-source-card"><header><div><small>Исходный тендер</small><strong>{{ source_tender.title|default:source_tender.object_info }}</strong></div><a href="{% url 'tender_selection:detail' source_tender.pk %}">Открыть карточку →</a></header><div class="tender-source-card__facts"><span><b>{{ source_tender.get_law_display }}</b> · № {{ source_tender.purchase_number }}</span><span>{% if source_tender.org.name %}{{ source_tender.org.name }}{% else %}ИНН {{ source_tender.customer_inn|default:"—" }}{% endif %}{% if source_tender.org.city or source_tender.region_label %} · {{ source_tender.org.city|default:source_tender.region_label }}{% endif %}</span><span><b>{{ source_tender.max_price|floatformat:2|intcomma }} ₽</b></span><span>{% if source_tender.collecting_finished_at %}Подача до {{ source_tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% else %}Срок подачи не указан{% endif %}</span>{% if source_tender.complaints_raw %}<span class="is-warning">⚠ Есть жалоба</span>{% endif %}</div></aside><div class="tender-apply-return"><button type="button" class="button-success" id="apply-return-to-tender">Применить и вернуться к тендеру</button></div>{% endif %}
 <div class="tender-result-note" data-tender-result data-estimate-id="{{ estimate.pk|default:'' }}"><label><span>Комментарий к тендеру</span><textarea name="result_notes" maxlength="5000" rows="3" placeholder="Условия, решения, результат торгов или любая важная заметка">{{ form_state.result_notes }}</textarea><small>Внутренняя заметка к расчёту. Она не влияет на подбор и обучение ассистента.</small></label></div></section>
 </form>
 
 {% if estimate %}
-{% if is_superuser %}
-<section class="panel panel--separated">
-  <div class="panel-header"><h2 class="panel-title">Оценка</h2></div>
-  {% if not verdict_requested %}
-    <p class="settings-description">Только для админа. Смотрит на уже посчитанный ROI (при текущем снижении цены) и — если тендер пришёл из подбора — на оценку юридических рисков.</p>
-    <a href="?verdict=1" class="button-secondary">Проверить оценку</a>
-  {% elif not verdict %}
-    <p class="settings-description">Себестоимость ещё не посчитана до конца (черновик) — оценка станет доступна, когда расчёт будет завершён.</p>
-  {% else %}
-    <div class="tender-verdict__stats">
-      <div class="tender-verdict__stat tender-verdict__stat--{{ verdict.roi_state }}"><small>ROI</small><strong>{{ verdict.roi }}%</strong><span>{{ verdict.roi_label }}</span></div>
-      <div class="tender-verdict__stat"><small>Чистая прибыль</small><strong>{{ verdict.net_profit|floatformat:2|intcomma }} ₽</strong></div>
-      <div class="tender-verdict__stat"><small>При снижении</small><strong>{{ verdict.reduction_percent }}%</strong></div>
-      {% if verdict.price_thresholds %}
-      <div class="tender-verdict__stat"><small>Целевая цена</small><strong>≥ {{ verdict.price_thresholds.target_price|floatformat:2|intcomma }} ₽</strong><span>держит зелёную зону рентабельности</span></div>
-      <div class="tender-verdict__stat tender-verdict__stat--warning"><small>Минимальная цена</small><strong>≥ {{ verdict.price_thresholds.floor_price|floatformat:2|intcomma }} ₽</strong><span>ниже — участвовать невыгодно</span></div>
-      {% endif %}
-    </div>
-    {% if verdict.risk_available %}
-      <p class="settings-description"><strong>Юридические риски (из оценки риска):</strong> {{ verdict.legal_risks|default:"нет данных" }}</p>
-    {% else %}
-      <p class="settings-description">Оценка юридических рисков недоступна — тендер создан вручную или риск ещё не проверен.</p>
-    {% endif %}
-    <a href="?verdict=1" class="button-secondary">Обновить оценку</a>
-  {% endif %}
-</section>
-{% endif %}
-
-{% if estimate.status == "draft" %}
-<div class="tender-outcome__actions tender-outcome__actions--end">
-  <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
-    {% csrf_token %}<input type="hidden" name="status" value="pending">
-    <button type="submit" class="button-success">Отправить на торги</button>
-  </form>
-  <form method="post" action="{% url 'tender_estimate_status' estimate.pk %}">
-    {% csrf_token %}<input type="hidden" name="status" value="not_participated">
-    <button type="submit" class="button-secondary">Архивировать — невыгодно</button>
-  </form>
-</div>
-{% else %}
-<section class="panel panel--separated">
-  <div class="panel-header"><h2 class="panel-title">Результат</h2></div>
-  {% if estimate.outcome_checked_at %}
-    <p class="settings-description">
-      Итог получен {% if estimate.outcome_source == "auto" %}автоматически{% else %}вручную{% endif %}, {{ estimate.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}: статус «{{ estimate.get_status_display }}»{% if estimate.actual_price %}, цена контракта {{ estimate.actual_price|floatformat:2|intcomma }} ₽{% endif %}{% if estimate.actual_reduction_percent is not None %}, фактическое снижение {{ estimate.actual_reduction_percent }}% (прогноз был {{ estimate.reduction_percent }}%){% endif %}.
-    </p>
-  {% elif estimate.status == "pending" %}
-    <p class="settings-description">Итог пока не получен — торги ещё не завершены, или проверка не запускалась.</p>
-    <div class="tender-outcome__actions">
-      <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
-        {% csrf_token %}
-        <button type="submit" class="button-secondary">Синхронизировать сейчас</button>
-      </form>
-      <details class="tender-outcome__manual">
-        <summary class="button-secondary">Внести вручную</summary>
-        <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__manual-options">
-          {% csrf_token %}
-          <button type="submit" name="status" value="won" class="button-secondary">Выиграли</button>
-          <button type="submit" name="status" value="lost" class="button-secondary">Проиграли</button>
-          <button type="submit" name="status" value="not_participated" class="button-secondary">Не участвовали</button>
-        </form>
-      </details>
-    </div>
-  {% elif estimate.status == "not_participated" %}
-    <p class="settings-description">Архивировано как невыгодное — на торги не отправляли.</p>
-  {% else %}
-    <p class="settings-description">Итог для этого статуса не вносится.</p>
-  {% endif %}
-</section>
-{% endif %}
-
 <div class="tender-outcome__actions">
-  <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}"{% if not estimate.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
-    {% csrf_token %}
-    <button type="submit" class="button-secondary">Скрыть</button>
-  </form>
-  <form method="post" action="{% url 'tender_estimate_duplicate' estimate.pk %}">
+  <form method="post" action="{% url duplicate_route estimate.pk %}">
     {% csrf_token %}
     <button type="submit" class="button-secondary">Копировать просчёт</button>
   </form>
-  <form method="post" action="{% url 'tender_estimate_delete' estimate.pk %}" onsubmit="return confirm('Удалить просчёт тендера № {{ estimate.tender_number|escapejs }}?');">
+  <form method="post" action="{% url delete_route estimate.pk %}" onsubmit="return confirm('Удалить расчёт № {{ estimate.tender_number|escapejs }}?');">
     {% csrf_token %}
     <button type="submit" class="button-secondary">Удалить просчёт</button>
   </form>
 </div>
+{% endif %}
+
+{% if not source_tender and saved_estimates %}
+<section class="panel panel--separated">
+  <div class="panel-header"><h2 class="panel-title">Сохранённые расчёты</h2></div>
+  {% for saved in saved_estimates %}
+  <div class="saved-estimate tender-saved-estimate">
+    <a class="saved-estimate__main" href="{% url 'tender_estimate' saved.pk %}">
+      <span>
+        <strong>№ {{ saved.tender_number }} — {{ saved.name }}</strong>
+        <small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=saved.owner %}<span>{{ saved.owner.get_full_name|default:"Имя не указано" }} · {{ saved.updated_at|date:"d.m.Y H:i" }}</span></small>
+      </span>
+      <span class="tender-saved-totals"><strong>{% if saved.summary_snapshot.net_profit %}{{ saved.summary_snapshot.net_profit|floatformat:2|intcomma }} ₽{% else %}—{% endif %}</strong><small>ROI {{ saved.summary_snapshot.roi|default:""|floatformat:2 }}%</small></span>
+    </a>
+    <form class="saved-estimate__status-form is-{{ saved.status }}" data-estimate-status-form data-estimate-id="{{ saved.pk }}" data-status="{{ saved.status }}" method="post" action="{% url 'order_estimate_status' saved.pk %}">{% csrf_token %}<select data-customized="true" class="saved-estimate__status" name="status" aria-label="Статус расчёта № {{ saved.tender_number }}">{% for value, label in saved.STATUS_CHOICES %}<option value="{{ value }}" {% if saved.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></form>
+    <span class="hover-actions">
+      <form method="post" action="{% url 'tender_estimate_duplicate' saved.pk %}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать расчёт" aria-label="Копировать расчёт {{ saved.name }}">⧉</button></form>
+      <form method="post" action="{% url 'tender_estimate_delete' saved.pk %}" onsubmit="return confirm('Удалить расчёт «{{ saved.name|escapejs }}»?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить расчёт" aria-label="Удалить расчёт {{ saved.name }}">×</button></form>
+    </span>
+  </div>
+  {% endfor %}
+</section>
 {% endif %}
 
 <div class="modal-overlay tender-import-modal" id="tender-import-modal"><div class="modal"><div class="modal-header"><h2>Импорт из Excel</h2><button type="button" class="modal-close" id="tender-import-close">×</button></div><div class="tender-import-upload"><input type="file" id="tender-import-file" accept=".xlsx"><p>Файл .xlsx до 10 МБ. Он используется только для импорта и не сохраняется.</p></div><p class="form-error" id="tender-import-error"></p><div id="tender-import-workspace" hidden><div class="tender-import-controls"><label>Лист<select data-customized="true" id="tender-import-sheet"></select></label><label>Строка заголовков<input type="number" min="1" id="tender-import-header"></label><label>Наименование<select data-customized="true" id="tender-import-name"></select></label><label>Количество<select data-customized="true" id="tender-import-quantity"></select></label><label>НМЦК<select data-customized="true" id="tender-import-nmck"></select></label><label>Значение НМЦК<select data-customized="true" id="tender-import-mode"><option value="unit">Цена за единицу</option><option value="total">Общая сумма</option></select></label><label>Строки с<input type="number" min="1" id="tender-import-start"></label><label>по<input type="number" min="1" id="tender-import-end"></label></div><div class="tender-import-table-wrap"><table class="tender-import-table"><thead><tr><th><input type="checkbox" id="tender-import-all" checked></th><th>Строка</th><th>Наименование</th><th>Количество</th><th>НМЦК / ед.</th><th>Сумма НМЦК</th></tr></thead><tbody id="tender-import-rows"></tbody></table></div><div class="tender-import-footer"><span id="tender-import-count"></span><button type="button" class="button-success" id="tender-import-add">Добавить позиции</button></div></div></div></div>
@@ -144,7 +91,7 @@ function render(){holder.innerHTML='';lines.forEach((line,index)=>{const card=do
 card.querySelectorAll('input').forEach(input=>{input.value=line[input.dataset.key]||'';input.addEventListener('input',()=>{line[input.dataset.key]=input.value;calculate();renderDocumentStatuses()})});const linkButton=card.querySelector('.tender-link-button'),popover=card.querySelector('.tender-link-popover');linkButton.onclick=event=>{event.stopPropagation();document.querySelectorAll('.tender-link-popover.is-open').forEach(open=>{if(open!==popover)open.classList.remove('is-open')});popover.classList.toggle('is-open');popover.querySelector('input').focus()};popover.onclick=event=>event.stopPropagation();card.querySelector('.tender-line-ai').onclick=()=>openRequirements(index);const questionControl=card.querySelector('.tender-line-questions');if(questionControl&&!questionControl.disabled)questionControl.onclick=()=>openRequirements(index);card.querySelector('.tender-line__remove').onclick=()=>{if(lines.length===1){lines[0]=emptyLine()}else lines.splice(index,1);render()};holder.append(card)});calculate();renderDocumentStatuses()}
 function calculate(){const coefficient=(100-n(reduction.value))/100;let total={nmck:0,rrp:0,purchase:0,gross:0};holder.querySelectorAll('.tender-line').forEach((card,index)=>{const x=lines[index],qty=n(x.quantity),nmck=qty*n(x.nmck_unit),rrpUnit=n(x.nmck_unit)*coefficient,rrp=qty*rrpUnit,purchaseUnit=n(x.material_unit)+n(x.application_unit)+n(x.logistics_unit),purchase=qty*purchaseUnit,profit=rrp-purchase;[['nmck',nmck],['rrp-unit',rrpUnit],['rrp',rrp],['purchase-unit',purchaseUnit],['purchase',purchase],['profit',profit]].forEach(([key,value])=>{const output=card.querySelector(`[data-out="${key}"]`);output.textContent=money(value);if(key==='profit')output.classList.toggle('is-negative',value<0)});const linkButton=card.querySelector('.tender-link-button'),openLink=card.querySelector('.tender-link-open'),hasLink=Boolean(String(x.product_url||'').trim());linkButton.classList.toggle('has-link',hasLink);linkButton.title=hasLink?'Изменить или открыть ссылку':'Добавить ссылку';openLink.classList.toggle('is-disabled',!hasLink);openLink.href=hasLink?x.product_url:'#';total.nmck+=nmck;total.rrp+=rrp;total.purchase+=purchase;total.gross+=profit});const tax=total.rrp*vat/100,deliveryValue=n(delivery.value),allExpenses=total.purchase+deliveryValue+tax,net=total.rrp-allExpenses,roi=allExpenses?net/allExpenses*100:0;document.getElementById('tender-table-totals').innerHTML=`<div class="tender-table-totals__half"><span><small>Сумма НМЦК</small><strong>${money(total.nmck)}</strong></span><span class="is-rrp"><small>Сумма РРЦ</small><strong>${money(total.rrp)}</strong></span></div><div class="tender-table-totals__half"><span><small>Сумма закупа</small><strong>${money(total.purchase)}</strong></span><span class="is-profit${total.gross<0?' is-negative':''}"><small>Сумма прибыли</small><strong>${money(total.gross)}</strong></span></div>`;document.getElementById('tender-summary').innerHTML=`<div><small>НДС ${vat.toLocaleString('ru-RU')}%</small><strong>${money(tax)}</strong></div><div><small>Доставка по РФ</small><strong>${money(deliveryValue)}</strong></div><div class="tender-summary__primary"><small>Финальная прибыль</small><strong>${money(net)}</strong></div><div class="tender-summary__primary"><small>ROI</small><strong>${roi.toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}%</strong></div>`}
 function validate(scroll=true){let valid=true;holder.querySelectorAll('.tender-line').forEach((card,index)=>{const x=lines[index];card.querySelectorAll('.is-invalid').forEach(el=>el.classList.remove('is-invalid'));card.querySelectorAll('.tender-field-error').forEach(el=>el.textContent='');const required=[['name','Укажите наименование'],['quantity','Укажите количество'],['nmck_unit','Укажите НМЦК']];required.forEach(([key,message])=>{const input=card.querySelector(`[data-key="${key}"]`),bad=key==='name'?!String(x[key]||'').trim():n(x[key])<=0;if(bad){input.classList.add('is-invalid');input.nextElementSibling.textContent=message;valid=false}});const hasExpense=['material_unit','application_unit','logistics_unit'].some(key=>n(x[key])>0),expenseError=card.querySelector('.tender-expense-error'),costGrid=card.querySelector('.tender-compact-grid--cost');expenseError.textContent=hasExpense?'':'Укажите хотя бы один расход.';costGrid.classList.toggle('has-error',!hasExpense);if(!hasExpense)valid=false});if(scroll&&!valid){const first=holder.querySelector('.is-invalid, .has-error');first?.scrollIntoView({behavior:'smooth',block:'center'})}return valid}
-document.addEventListener('click',()=>document.querySelectorAll('.tender-link-popover.is-open').forEach(popover=>popover.classList.remove('is-open')));document.getElementById('new-tender').onclick=()=>{if(confirm('Открыть новый пустой просчёт?'))window.location.href='{% url "tender_home" %}'};document.getElementById('add-tender-line').onclick=()=>{lines.push(emptyLine());render()};reduction.oninput=delivery.oninput=calculate;document.getElementById('tender-form').onsubmit=()=>{document.getElementById('tender-lines-json').value=JSON.stringify(lines);document.getElementById('tender-document-analysis-json').value=JSON.stringify(documentAnalysis);validate()};
+document.addEventListener('click',()=>document.querySelectorAll('.tender-link-popover.is-open').forEach(popover=>popover.classList.remove('is-open')));document.getElementById('new-tender').onclick=()=>{if(confirm('Открыть новый пустой просчёт?'))window.location.href='{% if pipeline %}{% url "tender_pipeline_home" %}{% else %}{% url "tender_home" %}{% endif %}'};document.getElementById('add-tender-line').onclick=()=>{lines.push(emptyLine());render()};reduction.oninput=delivery.oninput=calculate;document.getElementById('tender-form').onsubmit=()=>{document.getElementById('tender-lines-json').value=JSON.stringify(lines);document.getElementById('tender-document-analysis-json').value=JSON.stringify(documentAnalysis);validate()};
 
 const importModal=document.getElementById('tender-import-modal'),importFile=document.getElementById('tender-import-file'),importError=document.getElementById('tender-import-error'),importWorkspace=document.getElementById('tender-import-workspace'),sheetSelect=document.getElementById('tender-import-sheet'),headerInput=document.getElementById('tender-import-header'),nameSelect=document.getElementById('tender-import-name'),quantitySelect=document.getElementById('tender-import-quantity'),nmckSelect=document.getElementById('tender-import-nmck'),modeSelect=document.getElementById('tender-import-mode'),startInput=document.getElementById('tender-import-start'),endInput=document.getElementById('tender-import-end'),importRows=document.getElementById('tender-import-rows'),importAll=document.getElementById('tender-import-all');let workbookPreview=null;
 function columnName(index){let value='',number=index+1;while(number){number--;value=String.fromCharCode(65+number%26)+value;number=Math.floor(number/26)}return value}
@@ -268,8 +215,8 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
   const statusEl=document.getElementById('tender-autosave-status');
   const saveBtn=document.getElementById('save-tender');
   const csrf=form.querySelector('[name="csrfmiddlewaretoken"]').value;
-  const createUrl='{% url "tender_estimate_create" %}';
-  let pk={{ estimate.pk|default:'null' }};
+  const createUrl='{{ save_url }}';
+  let pk={{ estimate.pk|default:'null' }},saveUrl='{{ save_url }}';
   let autosaveEnabled=!!pk;
   let timer=null,inFlight=false,again=false,ready=false;
   function setStatus(text,kind){ if(!statusEl)return; statusEl.textContent=text; statusEl.className='autosave-status'+(kind?' autosave-status--'+kind:''); }
@@ -288,21 +235,32 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
     linesInput.value=JSON.stringify(lines);
     analysisInput.value=JSON.stringify(documentAnalysis);
     try{
-      const res=await fetch(pk?('/tenders/'+pk+'/save/'):createUrl,{method:'POST',headers:{'X-CSRFToken':csrf},body:new FormData(form)});
+      const res=await fetch(pk?saveUrl:createUrl,{method:'POST',headers:{'X-CSRFToken':csrf},body:new FormData(form)});
       const out=await res.json();
       if(!res.ok) throw new Error(out.error||'Не удалось сохранить.');
-      if(out.pk&&!pk){ pk=out.pk; history.replaceState(null,'',out.url); }
+      if(out.pk&&!pk){ pk=out.pk; saveUrl=out.url+'save/'; history.replaceState(null,'',out.url); }
       if(Array.isArray(out.line_ids))out.line_ids.forEach((id,index)=>{if(lines[index])lines[index].id=id});
       autosaveEnabled=true;
       if(saveBtn) saveBtn.hidden=true;
       setStatus((out.incomplete?'Черновик сохранён ':'Сохранено ')+out.saved_at,'ok');
-    }catch(err){ setStatus(err.message||'Ошибка сохранения','error'); }
+      return true;
+    }catch(err){ setStatus(err.message||'Ошибка сохранения','error'); return false; }
     finally{ inFlight=false; if(again) save(); }
   }
   if(saveBtn) saveBtn.onclick=()=>{
     if(!form.checkValidity()){ form.reportValidity(); return; }
     save();
   };
+  {% if source_tender %}
+  const applyReturn=document.getElementById('apply-return-to-tender');
+  applyReturn.onclick=async()=>{
+    if(!form.checkValidity()){ form.reportValidity(); return; }
+    applyReturn.disabled=true;
+    applyReturn.textContent='Сохраняю…';
+    if(await save()) window.location.href='{% url "tender_selection:detail" source_tender.pk %}';
+    else { applyReturn.disabled=false; applyReturn.textContent='Применить и вернуться к тендеру'; }
+  };
+  {% endif %}
   form.addEventListener('input',schedule);
   form.addEventListener('change',schedule);
   const baseRender=render;
@@ -312,11 +270,28 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
       linesInput.value=JSON.stringify(lines);
       analysisInput.value=JSON.stringify(documentAnalysis);
       const data=new FormData(form); data.append('csrfmiddlewaretoken',csrf);
-      navigator.sendBeacon(pk?('/tenders/'+pk+'/save/'):createUrl,data);
+      navigator.sendBeacon(pk?saveUrl:createUrl,data);
     }
   });
   setTimeout(()=>{ ready=true; },0);
 })();
+document.querySelectorAll('[data-estimate-status-form]').forEach(form=>{
+  const select=form.querySelector('select');
+  select.addEventListener('change',async()=>{
+    const previous=form.dataset.status;
+    const data=new FormData(form);
+    select.disabled=true;
+    try{
+      const response=await fetch(form.action,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'},body:data});
+      if(!response.ok)throw new Error();
+      const result=await response.json();
+      form.classList.remove(`is-${previous}`);
+      form.classList.add(`is-${result.status}`);
+      form.dataset.status=result.status;
+    }catch(error){ select.value=previous; }
+    finally{ select.disabled=false; }
+  });
+});
 })();
 </script>
 {% endblock %}

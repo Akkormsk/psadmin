@@ -1,27 +1,20 @@
 {% extends "base.html" %}
 {% load tz tender_selection_extras %}
 
-{% block title %}Подбор тендеров{% endblock %}
+{% block title %}Тендеры{% endblock %}
 
 {% block content %}
 <div class="container">
   <a href="/" class="back-link">← На главную</a>
-  <h1>Подбор тендеров</h1>
+  <h1>Тендеры</h1>
+  <nav class="kb-viewtabs" aria-label="Раздел тендеров">
+    <a href="?view=list">Входящие</a>
+    <a href="?view=kanban" class="is-active">Торги</a>
+  </nav>
 
   <section class="panel">
     <div class="panel-header">
       <h2 class="panel-title">Торги</h2>
-      <div class="panel-actions">
-        <span class="kb-viewtabs">
-          <a href="?" class="is-active">Торги</a>
-          <a href="?view=list">Входящие</a>
-        </span>
-        <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
-        <form method="post" action="{% url 'tender_selection:pull' %}">
-          {% csrf_token %}
-          <button type="submit" class="button-success">Обновить · от&nbsp;{{ settings.min_price|rub }}, за&nbsp;{{ settings.window_days }}&nbsp;дн.</button>
-        </form>
-      </div>
     </div>
 
     <div class="kb-board">
@@ -43,11 +36,10 @@
             </form>
             <div class="kb-card__head">
               <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
-              {% if card.status_label %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
+              {% if card.status_label and card.status_key != "draft" and card.status_key != "pending" %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
             </div>
             {% if card.kind == "found" %}
               <div class="kb-card__meta">
-                <span class="ts-law">{{ card.law_label }}</span>
                 № {{ card.purchase_number }}
               </div>
               <div class="kb-card__row">
@@ -79,13 +71,13 @@
 </div>
 
 <style>
-  .kb-viewtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; margin-right: auto; }
-  .kb-viewtabs a { padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
+  .kb-viewtabs { display: flex; width: 100%; max-width: 420px; margin: 4px auto 14px; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
+  .kb-viewtabs a { flex: 1 1 0; text-align: center; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
   .kb-viewtabs a:first-child { border-left: 0; }
   .kb-viewtabs a.is-active { background: var(--accent); color: #fff; }
 
   .kb-board { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 10px; scroll-snap-type: x proximity; }
-  .kb-column { flex: 0 0 260px; scroll-snap-align: start; }
+  .kb-column { flex: 0 0 300px; scroll-snap-align: start; }
   .kb-column__head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; font-weight: 600; }
   .kb-column__head small { color: var(--ink-3); font-weight: 500; }
   .kb-column__meta { display: inline-flex; align-items: baseline; gap: 6px; }
@@ -107,13 +99,13 @@
   .kb-card__deadline.is-soon { color: #b8434e !important; font-weight: 600; }
   .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
-  .kb-archive { flex: 0 0 72px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; text-decoration: none; }
+  .kb-archive { flex: 0 0 56px; scroll-snap-align: start; margin-left: auto; padding-left: 14px; border-left: 1px dashed var(--field-border); display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 30px; color: var(--ink-3); font-size: 11px; text-align: center; text-decoration: none; }
   .kb-archive:hover { color: var(--ink); }
   .kb-archive i { font-size: 18px; font-style: normal; }
 
   @media (max-width: 768px) {
     .kb-column { flex-basis: 82vw; }
-    .panel-header .kb-viewtabs { order: -1; width: 100%; margin: 0 0 12px; }
+    .kb-viewtabs { max-width: none; }
   }
 </style>
 {% endblock %}

@@ -8,24 +8,37 @@
   {% if request.user.is_superuser %}
   <a href="{% url 'tender_selection:list' %}" class="back-link">← к списку</a>
   {% elif pushed_estimate_id %}
-  <a href="{% url 'tender_estimate' pushed_estimate_id %}" class="back-link">← назад к просчёту</a>
+  <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}" class="back-link">← назад к просчёту</a>
   {% endif %}
-  <h1>Подбор тендеров</h1>
+  <h1>Тендеры</h1>
+  <nav class="ts-lifecycle" aria-label="Стадия тендера">
+    {% for stage in lifecycle %}<span class="ts-lifecycle__stage ts-lifecycle__stage--{{ stage.state }}"><b>{% if stage.state == "done" %}✓{% elif stage.state == "current" %}●{% else %}○{% endif %}</b> {{ stage.label }}</span>{% if not forloop.last %}<i aria-hidden="true">—</i>{% endif %}{% endfor %}
+  </nav>
 
   <section class="panel">
     <div class="panel-header">
       <div class="ts-detail__head">
         <h2 class="panel-title"><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> {{ tender.title|default:tender.object_info }}</h2>
         <p class="settings-description">
-          № {{ tender.purchase_number }}
+          № {{ display_purchase_number }}
           · {% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}
           {% if card.eis_href or tender.eis_url %} · <a href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
           {% if card.print_form_url %} · <a href="{{ card.print_form_url }}" target="_blank" rel="noopener">печатная форма ↗</a>{% endif %}
         </p>
+        {% if is_manual %}<p class="ts-warn">Данные ЕИС не загружены. Карточка создана из ручного расчёта; недостающую информацию и документы можно будет добавить позже.</p>{% endif %}
       </div>
       <div class="panel-actions ts-detail__actions">
-        {% if pushed_estimate_id %}
-        <a class="ts-onestimate-pill" href="{% url 'tender_estimate' pushed_estimate_id %}">На расчёте →</a>
+        {% if estimate %}
+        <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}"{% if not estimate.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
+          {% csrf_token %}
+          <button type="submit" class="button-secondary">Скрыть</button>
+        </form>
+        {% if estimate.status == "draft" %}
+        <form method="post" action="{% url 'tender_pipeline_estimate_status' estimate.pk %}">
+          {% csrf_token %}<input type="hidden" name="status" value="pending">
+          <button type="submit" class="button-success">На торги →</button>
+        </form>
+        {% endif %}
         {% else %}
         <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
           {% csrf_token %}
@@ -47,26 +60,8 @@
     </div>
   </section>
 
-  {% if pushed_estimate_id %}
-  <section class="panel panel--separated">
-    <div class="panel-header"><h2 class="panel-title">Расчёт</h2></div>
-    {% if calc_verdict %}
-    <div class="tender-verdict__stats">
-      {% if calc_verdict.price %}
-      <div class="tender-verdict__stat"><small>{% if calc_verdict.price_is_actual %}Фактическая цена{% else %}Цена (с прогнозом){% endif %}</small><strong>{{ calc_verdict.price|floatformat:2 }} ₽</strong></div>
-      {% endif %}
-      <div class="tender-verdict__stat"><small>Прибыль</small><strong>{{ calc_verdict.net_profit|floatformat:2 }} ₽</strong></div>
-      <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
-    </div>
-    {% else %}
-    <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
-    {% endif %}
-    <a href="{% url 'tender_estimate' pushed_estimate_id %}" class="button-secondary">Перейти в расчёт →</a>
-  </section>
-  {% endif %}
-
-  <section class="panel panel--separated">
-    <div class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2></div>
+  <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
+    <summary class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2><small class="ts-stage-summary">{% if card.items %}{{ card.items|length }} позиций{% elif is_manual %}данные ЕИС не загружены{% else %}основные условия закупки{% endif %}</small></summary>
     {% if is_fz223 %}
     <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
       <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку закупки ↗</a></p>
@@ -131,11 +126,11 @@
       </tbody>
     </table></div>
     {% endif %}
-  </section>
+  </details>
 
   {% if not is_fz223 %}
-  <section class="panel panel--separated">
-    <div class="panel-header"><h2 class="panel-title">Оценка рисков</h2></div>
+  <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
+    <summary class="panel-header"><h2 class="panel-title">Оценка рисков</h2><small class="ts-stage-summary">{% if risk.risk_level %}риск: {% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% else %}высокий{% endif %}{% elif not card %}нет данных извещения{% elif risk_needs_fetch %}ожидает оценки{% else %}нет данных{% endif %}</small></summary>
     {% if not card %}
     <p class="ts-warn">Нет данных извещения — оценить риски пока нечем.</p>
     {% else %}
@@ -148,12 +143,12 @@
       {% endif %}
     </div>
     {% endif %}
-  </section>
+  </details>
   {% endif %}
 
   {% if price_stats %}
-  <section class="panel panel--separated">
-    <div class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках</h2></div>
+  <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
+    <summary class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках <small class="ts-count">{{ price_stats.median }}%</small></h2></summary>
     <p class="ts-stats-lead">
       Медианное снижение <strong>{{ price_stats.median }}%</strong>, разброс {{ price_stats.range_lo }}–{{ price_stats.range_hi }}%.
       Выборка: {{ price_stats.count }} (своя история — {{ price_stats.own_count }}, открытая — {{ price_stats.market_count }}){% if price_stats.same_region %}, в этом регионе — {{ price_stats.same_region }}{% endif %}.
@@ -183,11 +178,80 @@
       Отбор: по совпадению слов в названии и товарных позициях — сначала свои прошлые тендеры, затем открытая история похожих закупок{% if price_stats.categories %} (категория {{ price_stats.categories|join:", " }}){% endif %}.
       Совместные и многолотовые закупки исключены.
     </p>
-  </section>
+  </details>
   {% endif %}
 
-  <section class="panel panel--separated">
-    <div class="panel-header"><h2 class="panel-title">Документы{% if card.documents %} <small class="ts-count">{{ card.documents|length }}</small>{% endif %}</h2></div>
+  {% if pushed_estimate_id %}
+  <details class="panel panel--separated" {% if active_stage == "calculation" %}open{% endif %}>
+    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><small class="ts-stage-summary">{% if calc_verdict %}прибыль {{ calc_verdict.net_profit|floatformat:0 }} ₽ · ROI {{ calc_verdict.roi }}%{% else %}расчёт не завершён{% endif %}</small></summary>
+    {% if calc_verdict %}
+    <div class="tender-verdict__stats">
+      {% if calc_verdict.price %}
+      <div class="tender-verdict__stat"><small>{% if calc_verdict.price_is_actual %}Фактическая цена{% else %}Цена (с прогнозом){% endif %}</small><strong>{{ calc_verdict.price|floatformat:2 }} ₽</strong></div>
+      {% endif %}
+      <div class="tender-verdict__stat"><small>Прибыль</small><strong>{{ calc_verdict.net_profit|floatformat:2 }} ₽</strong></div>
+      <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
+    </div>
+    {% else %}
+    <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
+    {% endif %}
+    {% if calc_verdict.price_thresholds %}
+    <table class="tender-auction-guide">
+      <caption>Ориентиры для торгов</caption>
+      <tbody>
+        <tr><th>Прогнозная цена</th><td>{{ calc_verdict.price|floatformat:2 }} ₽</td><td>ROI {{ calc_verdict.roi }}%</td></tr>
+        <tr><th>Желаемая граница</th><td>{{ calc_verdict.price_thresholds.target_price|floatformat:2 }} ₽</td><td>ROI {{ calc_verdict.price_thresholds.target_roi }}%</td></tr>
+        <tr><th>Минимальная цена</th><td>{{ calc_verdict.price_thresholds.floor_price|floatformat:2 }} ₽</td><td>ROI {{ calc_verdict.price_thresholds.floor_roi }}%</td></tr>
+      </tbody>
+    </table>
+    {% endif %}
+    <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}" class="button-success">Перейти в расчёт →</a>
+  </details>
+  {% endif %}
+
+  {% if estimate and estimate.status != "draft" %}
+  <details class="panel panel--separated" {% if active_stage == "bidding" or active_stage == "result" %}open{% endif %}>
+    <summary class="panel-header"><h2 class="panel-title">{% if estimate.status == "pending" %}Торги{% else %}Результат{% endif %}</h2><small class="ts-stage-summary">{% if estimate.status == "pending" %}ожидаем результат{% else %}{{ estimate.get_status_display }}{% if estimate.actual_reduction_percent is not None %} · снижение {{ estimate.actual_reduction_percent }}%{% endif %}{% endif %}</small></summary>
+    {% if estimate.outcome_checked_at %}
+    <p class="settings-description">
+      Данные результата обновлены {% if estimate.outcome_source == "auto" %}из ЕИС{% else %}вручную{% endif %}, {{ estimate.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}: статус «{{ estimate.get_status_display }}»{% if estimate.actual_price %}, цена контракта {{ estimate.actual_price|floatformat:2 }} ₽{% endif %}{% if estimate.actual_reduction_percent is not None %}, фактическое снижение {{ estimate.actual_reduction_percent }}% (прогноз был {{ estimate.reduction_percent }}%){% endif %}.
+    </p>
+    {% endif %}
+    {% if estimate.status == "pending" %}
+    {% if not estimate.outcome_checked_at %}
+    <p class="settings-description">Итог пока не получен — торги ещё не завершены, или проверка не запускалась.</p>
+    {% else %}
+    <p class="settings-description">Контракт найден, но итог участия ещё нужно подтвердить вручную.</p>
+    {% endif %}
+    <div class="tender-outcome__actions">
+      <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="button-success">Загрузить результат из ЕИС</button>
+      </form>
+      <details class="tender-outcome__manual">
+        <summary class="button-secondary">Внести вручную</summary>
+        <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__manual-options">
+          {% csrf_token %}
+          <label>Фактическое снижение, % <input type="number" name="actual_reduction_percent" min="0" max="100" step="0.01"></label>
+          <button type="submit" name="status" value="won" class="button-secondary">Выиграли</button>
+          <button type="submit" name="status" value="lost" class="button-secondary">Проиграли</button>
+        </form>
+      </details>
+    </div>
+    {% else %}
+    {% if not estimate.outcome_checked_at %}
+    <p class="settings-description">Итог зафиксирован ранее: статус «{{ estimate.get_status_display }}». Подробные данные по торгам не были сохранены.</p>
+    {% endif %}
+    <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="button-secondary">Обновить данные из ЕИС</button>
+    </form>
+    {% endif %}
+  </details>
+  {% endif %}
+
+  <details class="panel panel--separated">
+    <summary class="panel-header"><h2 class="panel-title">Документы{% if card.documents %} <small class="ts-count">{{ card.documents|length }}</small>{% endif %}</h2></summary>
     {% if card.documents %}
     <ul class="ts-docs">
       {% for doc in card.documents %}
@@ -204,7 +268,7 @@
     {% else %}
     <p class="settings-description">Список файлов недоступен.</p>
     {% endif %}
-  </section>
+  </details>
 
   {% if clarifications %}
   <section class="panel panel--separated">
@@ -258,8 +322,11 @@
       <button type="button" class="modal-close" id="ts-doc-close" aria-label="Закрыть">&times;</button>
     </div>
     <div id="ts-doc-body" class="ts-doc-body"></div>
+    <div class="ts-doc-actions">
+      <button type="button" class="btn btn-secondary ts-doc-btn" id="ts-doc-replace">Обновить из файла</button>
+    </div>
     <div class="ts-doc-fallback" id="ts-doc-fallback" hidden>
-      <p class="ts-sub">Сервер не может сам скачать файл с портала ЕИС. В браузере ссылка выше открывается — скачайте файл и загрузите его сюда:</p>
+      <p class="ts-sub">Выберите скачанный оригинал. Он заменит сохранённый предпросмотр этого документа.</p>
       <input type="file" id="ts-doc-upload-input" accept=".docx,.xlsx,.pdf,.doc,.zip">
       <p class="ts-doc-upload-status ts-sub" id="ts-doc-upload-status"></p>
     </div>
@@ -268,6 +335,22 @@
 <form id="ts-csrf-form" hidden>{% csrf_token %}</form>
 
 <style>
+  .ts-lifecycle { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:-6px 0 14px; color:var(--ink-3); font-size:12px; }
+  .ts-lifecycle i { font-style:normal; color:var(--border); }
+  .ts-lifecycle__stage b { margin-right:2px; }
+  .ts-lifecycle__stage--done { color:var(--positive-ink); }
+  .ts-lifecycle__stage--current { color:var(--accent); font-weight:700; }
+  .ts-stage-summary { margin-left:auto; color:var(--ink-3); font-size:11px; font-weight:400; text-align:right; }
+  .tender-auction-guide { width:min(620px,100%); margin:14px 0; border-collapse:collapse; font-size:13px; }
+  .tender-auction-guide caption { margin-bottom:6px; text-align:left; color:var(--ink-2); font-weight:700; }
+  .tender-auction-guide th, .tender-auction-guide td { padding:7px 10px; border-top:1px solid var(--border); text-align:left; }
+  .tender-auction-guide th { font-weight:600; }
+  .tender-auction-guide td:nth-child(2) { font-weight:700; white-space:nowrap; }
+  .tender-auction-guide td:last-child { color:var(--ink-3); white-space:nowrap; }
+  .ts-detail > details.panel > summary.panel-header { cursor: pointer; list-style: none; }
+  .ts-detail > details.panel > summary.panel-header::-webkit-details-marker { display: none; }
+  .ts-detail > details.panel > summary.panel-header .panel-title::before { content: "▸ "; color: var(--ink-3); }
+  .ts-detail > details.panel[open] > summary.panel-header .panel-title::before { content: "▾ "; }
   .ts-detail__head { min-width: 0; flex: 1 1 auto; }
   .ts-detail__head .panel-title { font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
   .ts-detail__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 0 auto; }
@@ -302,7 +385,12 @@
   .ts-doc-body h4 { margin: 16px 0 6px; }
   .ts-doc-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
   .ts-doc-table td { border: 1px solid #e0e4ea; padding: 4px 8px; vertical-align: top; }
+  .ts-doc-page { position: relative; margin: 0 0 18px; padding: 22px; background: #fff; border: 1px solid #e0e4ea; border-radius: 10px; box-shadow: 0 1px 3px rgba(32,38,48,.05); overflow: auto; }
+  .ts-doc-page__number { display: block; margin: -8px 0 14px; color: #8b929d; font-weight: 700; }
+  .ts-doc-page p { line-height: 1.55; }
+  .ts-doc-inline-image { display: block; max-width: min(100%, 640px); max-height: 480px; margin: 8px 0; object-fit: contain; }
   .ts-doc-loading { color: #6b7280; }
+  .ts-doc-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
   .ts-doc-fallback { margin-top: 14px; padding-top: 14px; border-top: 1px solid #e0e4ea; }
   .ts-doc-upload-status { margin-top: 6px; }
   .ts-extras { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
@@ -325,6 +413,12 @@
   .ts-risk-level--low { background: var(--tint-positive); color: var(--positive-ink); }
   .ts-risk-level--medium { background: var(--tint-warning); color: var(--warning-ink); }
   .ts-risk-level--high { background: var(--tint-negative); color: var(--negative-ink); }
+  .ts-risk-level--unknown { background: var(--surface-muted); color: var(--ink-2); }
+  .ts-risk-factors { margin: 12px 0; font-size: 13px; }
+  .ts-risk-factors ul { margin: 6px 0 0; padding-left: 20px; }
+  .ts-risk-factor { margin: 4px 0; }
+  .ts-risk-factor--medium { color: var(--warning-ink); }
+  .ts-risk-factor--high { color: var(--negative-ink); font-weight: 600; }
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } }
 </style>
 <script>
@@ -333,6 +427,7 @@
     var title = document.getElementById("ts-doc-title");
     var body = document.getElementById("ts-doc-body");
     var fallback = document.getElementById("ts-doc-fallback");
+    var replaceButton = document.getElementById("ts-doc-replace");
     var uploadInput = document.getElementById("ts-doc-upload-input");
     var uploadStatus = document.getElementById("ts-doc-upload-status");
     var csrfToken = document.querySelector("#ts-csrf-form [name=csrfmiddlewaretoken]").value;
@@ -363,6 +458,10 @@
     document.getElementById("ts-doc-close").addEventListener("click", close);
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+    replaceButton.addEventListener("click", function () {
+      fallback.hidden = false;
+      uploadInput.click();
+    });
 
     var zipEntryUrlTpl = "{% url 'tender_selection:doc_zip_entry' tender.pk 999999 'ZZZPATHZZZ' %}";
 

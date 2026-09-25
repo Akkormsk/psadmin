@@ -1,21 +1,21 @@
 {% extends "base.html" %}
 {% load tz tender_selection_extras %}
 
-{% block title %}Подбор тендеров{% endblock %}
+{% block title %}Тендеры{% endblock %}
 
 {% block content %}
 <div class="container">
   <a href="/" class="back-link">← На главную</a>
-  <h1>Подбор тендеров</h1>
+  <h1>Тендеры</h1>
+  <nav class="kb-viewtabs" aria-label="Раздел тендеров">
+    <a href="?view=list" class="is-active">Входящие</a>
+    <a href="?view=kanban">Торги</a>
+  </nav>
 
   <section class="panel">
     <div class="panel-header">
       <h2 class="panel-title">Входящие <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
       <div class="panel-actions">
-        <span class="kb-viewtabs">
-          <a href="?">Торги</a>
-          <a href="?view=list" class="is-active">Входящие</a>
-        </span>
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
           {% csrf_token %}
@@ -23,7 +23,6 @@
         </form>
       </div>
     </div>
-
     <div class="ts-controls">
       <label class="ts-sort">Сортировать
         <select onchange="tsGo('sort', this.value)">
@@ -85,7 +84,7 @@
       <div class="ts-row-actions">
         <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
           {% csrf_token %}<input type="hidden" name="review" value="interesting">
-          <button type="submit" class="button-success ts-row-work">В работу →</button>
+          <button type="submit" class="ts-row-work">В работу →</button>
         </form>
         <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
           {% csrf_token %}
@@ -122,8 +121,8 @@
 </div>
 
 <style>
-  .kb-viewtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; margin-right: auto; }
-  .kb-viewtabs a { padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
+  .kb-viewtabs { display: flex; width: 100%; max-width: 420px; margin: 4px auto 14px; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
+  .kb-viewtabs a { flex: 1 1 0; text-align: center; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
   .kb-viewtabs a:first-child { border-left: 0; }
   .kb-viewtabs a.is-active { background: var(--accent); color: #fff; }
   .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
@@ -142,7 +141,9 @@
   .ts-tender .tender-saved-totals small { white-space: nowrap; }
   .ts-soon-label { color: #b8434e !important; font-weight: 600; }
   .ts-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-  .ts-row-work { font-size: 12px; padding: 6px 12px; white-space: nowrap; }
+  .ts-row-work { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 13px; font-weight: 600;
+                 color: #3366cc; text-decoration: underline; cursor: pointer; white-space: nowrap; }
+  .ts-row-work:hover { color: #1a4fb0; }
   .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
   .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
   .ts-flag { color: #b8434e; font-weight: 700; font-size: 11px; }

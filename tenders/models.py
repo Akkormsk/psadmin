@@ -495,6 +495,89 @@ class TenderLine(models.Model):
         return self.name
 
 
+class OrderEstimate(models.Model):
+    """Самостоятельный расчёт заказа вне тендерного пайплайна.
+
+    Поля пока совпадают с переходным интерфейсом старого расчёта тендера.
+    Это сохраняет историю и экран менеджера; тендерная связь здесь намеренно
+    отсутствует.
+    """
+
+    DRAFT = "draft"
+    PENDING = "pending"
+    NOT_PARTICIPATED = "not_participated"
+    LOST = "lost"
+    WON = "won"
+    STATUS_CHOICES = TenderEstimate.STATUS_CHOICES
+
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="order_estimates", verbose_name="Ответственный")
+    legacy_calculation_id = models.PositiveBigIntegerField(
+        "Старый ID расчёта", null=True, blank=True, unique=True,
+    )
+    order_number = models.CharField("Номер расчёта", max_length=100)
+    name = models.CharField("Название / комментарий", max_length=300)
+    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
+    reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
+    russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
+    summary_snapshot = models.JSONField(default=dict, blank=True)
+    document_analysis = models.JSONField("Анализ документов", default=dict, blank=True)
+    notes = models.TextField("Комментарий", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "Расчёт заказа"
+        verbose_name_plural = "Расчёты заказов"
+
+    def __str__(self):
+        return f"{self.order_number} — {self.name}"
+
+    @property
+    def tender_number(self):
+        """Compatibility name for the shared calculation form.
+
+        The field is deliberately stored as ``order_number``: an order
+        calculation is not a tender and must not acquire a Tender relation.
+        """
+        return self.order_number
+
+    @tender_number.setter
+    def tender_number(self, value):
+        self.order_number = value
+
+    @property
+    def result_notes(self):
+        return self.notes
+
+    @result_notes.setter
+    def result_notes(self, value):
+        self.notes = value
+
+
+class OrderLine(models.Model):
+    estimate = models.ForeignKey(OrderEstimate, on_delete=models.CASCADE, related_name="lines")
+    name = models.CharField("Наименование", max_length=500)
+    quantity = models.DecimalField("Количество", max_digits=14, decimal_places=2)
+    nmck_unit = models.DecimalField("Цена за единицу", max_digits=14, decimal_places=2)
+    material_unit = models.DecimalField("Материал", max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    application_unit = models.DecimalField("Нанесение", max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    logistics_unit = models.DecimalField("Логистика", max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    product_url = models.URLField("Ссылка", max_length=1000, blank=True)
+    comment = models.CharField("Комментарий", max_length=500, blank=True)
+    requirements = models.JSONField("Требования", default=dict, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "pk"]
+        verbose_name = "Позиция расчёта заказа"
+        verbose_name_plural = "Позиции расчётов заказов"
+
+    def __str__(self):
+        return self.name
+
+
 class CascadeLabPreset(models.Model):
     """Явно сохранённая администратором комбинация параметров каскада."""
 

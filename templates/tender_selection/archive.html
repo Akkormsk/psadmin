@@ -10,7 +10,7 @@
 
   <section class="panel">
     <div class="panel-header">
-      <h2 class="panel-title">Скрытые карточки <small class="ts-count">старше месяца удаляются автоматически</small></h2>
+      <h2 class="panel-title">Скрытые карточки</h2>
     </div>
 
     <div class="kb-column__cards ts-archive-grid">
@@ -20,9 +20,9 @@
           <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
         </div>
         <div class="kb-card__meta">
-          <span class="ts-law">{{ card.law_label }}</span>
           № {{ card.purchase_number }}
         </div>
+        <form method="post" action="{% url 'tender_selection:restore' card.pk %}">{% csrf_token %}<button type="submit" class="button-secondary">Восстановить</button></form>
       </div>
       {% endfor %}
       {% for card in estimates %}
@@ -37,6 +37,7 @@
           {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
         </div>
         {% endif %}
+        <form method="post" action="{% url 'tender_selection:restore_estimate' card.pk %}">{% csrf_token %}<button type="submit" class="button-secondary">Восстановить</button></form>
       </div>
       {% empty %}
       {% endfor %}

@@ -269,10 +269,7 @@ def _estimate_keywords(estimate) -> set[str]:
 
 
 def _region_of_estimate(estimate):
-    if not estimate.tender_id:
-        return None
-    found = getattr(estimate.tender, "found_tender", None)
-    return found.region if found else None
+    return estimate.tender.region if estimate.tender_id else None
 
 
 def price_stats_for(tender, card=None) -> dict | None:
@@ -295,7 +292,7 @@ def price_stats_for(tender, card=None) -> dict | None:
 
     own_pool = (
         TenderEstimate.objects.exclude(actual_reduction_percent=None)
-        .select_related("tender", "tender__found_tender")
+        .select_related("tender")
         .prefetch_related("lines")
     )
     own_scored = [

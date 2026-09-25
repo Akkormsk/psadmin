@@ -42,6 +42,14 @@
           <label for="window_days">Окно по дате публикации, дней</label>
           <input type="number" id="window_days" name="window_days" value="{{ settings.window_days }}" min="1" max="30">
         </div>
+        <div class="form-group">
+          <label for="risk_warning_days">Короткий срок, дней</label>
+          <input type="number" id="risk_warning_days" name="risk_warning_days" value="{{ settings.risk_warning_days }}" min="1" max="90">
+        </div>
+        <div class="form-group">
+          <label for="risk_critical_days">Критический срок, дней</label>
+          <input type="number" id="risk_critical_days" name="risk_critical_days" value="{{ settings.risk_critical_days }}" min="1" max="90">
+        </div>
       </div>
 
       <h3 class="settings-subtitle">Источники</h3>

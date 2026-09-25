@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from .models import (
-    ContractStat, DocumentPreview, FilterSettings, FoundTender, Organization, PullRun, StatsRun,
+    ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, StatsRun, Tender,
 )
 
 
@@ -27,8 +27,8 @@ class FilterSettingsAdmin(admin.ModelAdmin):
         return False
 
 
-@admin.register(FoundTender)
-class FoundTenderAdmin(admin.ModelAdmin):
+@admin.register(Tender)
+class TenderAdmin(admin.ModelAdmin):
     list_display = ("purchase_number", "law", "title", "max_price", "region", "review", "published_at", "status")
     list_filter = ("law", "review", "status", "stage", "purchase_type")
     list_editable = ("review",)

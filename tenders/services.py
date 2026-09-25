@@ -3127,7 +3127,12 @@ def price_thresholds_for(estimate) -> dict | None:
     floor = _price_for_roi(purchase_total, estimate.russia_delivery, estimate.vat_rate_snapshot, thin)
     if target is None or floor is None:
         return None
-    return {"target_price": target, "floor_price": floor}
+    return {
+        "target_price": target,
+        "floor_price": floor,
+        "target_roi": good,
+        "floor_roi": thin,
+    }
 
 
 def verdict_for(estimate, source_tender) -> dict | None:

@@ -1119,6 +1119,7 @@ h1 {
 .tender-source-card header a { flex:none; color:var(--accent); font-size:11px; font-weight:700; }
 .tender-source-card__facts { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--ink-2); font-size:11px; }
 .tender-source-card__facts span { white-space:nowrap; }
+.tender-apply-return { display:flex; justify-content:flex-end; margin-top:12px; }
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:var(--ink-3); }
 

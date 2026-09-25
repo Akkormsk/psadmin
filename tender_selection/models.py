@@ -17,6 +17,8 @@ class FilterSettings(models.Model):
     )
     min_price = models.DecimalField("Минимальная НМЦК, ₽", max_digits=16, decimal_places=2, default=Decimal("300000"))
     window_days = models.PositiveSmallIntegerField("Окно по дате публикации, дней", default=7)
+    risk_warning_days = models.PositiveSmallIntegerField("Риск: короткий срок, дней", default=14)
+    risk_critical_days = models.PositiveSmallIntegerField("Риск: критический срок, дней", default=7)
     okpd2_codes = models.JSONField("Категории ОКПД2", default=list, blank=True)
     regions = models.JSONField("Регионы (коды)", default=list, blank=True)
     laws = models.JSONField("Источники", default=list, blank=True)
@@ -34,51 +36,24 @@ class FilterSettings(models.Model):
 
 
 class Tender(models.Model):
-    """Один тендер по его настоящему номеру закупки — общий якорь. Найденный
-    тендер (документы, оценка риска) и расчёт (товары, себестоимость,
-    результат торгов) ссылаются на один и тот же Tender.id независимо от
-    канала, которым они попали в систему — это и есть единая сущность
-    тендера, без слияния самих таблиц FoundTender/TenderEstimate."""
+    """Единая карточка тендера от импорта до архива."""
 
     LAW_CHOICES = (("fz44", "44-ФЗ"), ("fz223", "223-ФЗ"))
-
-    law = models.CharField("Закон", max_length=8, choices=LAW_CHOICES, default="fz44", db_index=True)
-    purchase_number = models.CharField("Номер закупки", max_length=40, db_index=True)
-    created_at = models.DateTimeField("Создан", auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["law", "purchase_number"], name="uniq_tender_law_purchase_number"),
-        ]
-        verbose_name = "Тендер"
-        verbose_name_plural = "Тендеры"
-
-    def __str__(self):
-        return f"{self.get_law_display()} {self.purchase_number}"
-
-
-class FoundTender(models.Model):
+    EIS = "eis"
+    MANUAL = "manual"
+    SOURCE_CHOICES = ((EIS, "ЕИС"), (MANUAL, "Вручную"))
     NEW = "new"
     DISMISSED = "dismissed"
     PUSHED = "pushed"
-    STATUS_CHOICES = (
-        (NEW, "Новый"),
-        (DISMISSED, "Скрыт"),
-        (PUSHED, "На расчёте"),
-    )
-
+    STATUS_CHOICES = ((NEW, "Новый"), (DISMISSED, "Скрыт"), (PUSHED, "В работе"))
     UNREVIEWED = "unreviewed"
     INTERESTING = "interesting"
-    REVIEW_CHOICES = (
-        (UNREVIEWED, "Не проверен"),
-        (INTERESTING, "В работе"),
-    )
-
-    LAW_CHOICES = (("fz44", "44-ФЗ"), ("fz223", "223-ФЗ"))
+    REVIEW_CHOICES = ((UNREVIEWED, "Не проверен"), (INTERESTING, "В работе"))
 
     law = models.CharField("Закон", max_length=8, choices=LAW_CHOICES, default="fz44", db_index=True)
     purchase_number = models.CharField("Номер закупки", max_length=40, db_index=True)
-    object_info = models.TextField("Наименование объекта закупки (как в ЕИС)")
+    source = models.CharField("Источник", max_length=12, choices=SOURCE_CHOICES, default=EIS)
+    object_info = models.TextField("Наименование объекта закупки (как в ЕИС)", blank=True)
     title = models.TextField("Название", blank=True)
     max_price = models.DecimalField("НМЦК", max_digits=16, decimal_places=2, null=True, blank=True)
     currency_code = models.CharField("Валюта", max_length=8, blank=True)
@@ -93,8 +68,8 @@ class FoundTender(models.Model):
     raw = models.JSONField("Ответ API", default=dict, blank=True)
     notification_raw = models.JSONField("Извещение (сырое)", default=dict, blank=True)
     notification_checked_at = models.DateTimeField("Извещение загружено", null=True, blank=True)
-    clarifications_raw = models.JSONField("Разъяснения (сырое)", default=list, blank=True)
-    complaints_raw = models.JSONField("Жалобы (сырое)", default=list, blank=True)
+    clarifications_raw = models.JSONField("Разъяснения (сырые)", default=list, blank=True)
+    complaints_raw = models.JSONField("Жалобы (сырые)", default=list, blank=True)
     extras_checked_at = models.DateTimeField("Разъяснения/жалобы загружены", null=True, blank=True)
     risk_assessment = models.JSONField("Оценка рисков", default=dict, blank=True)
     risk_assessment_docs = models.JSONField("Документы, использованные при оценке", default=list, blank=True)
@@ -102,29 +77,21 @@ class FoundTender(models.Model):
     risk_error = models.CharField("Ошибка оценки рисков", max_length=400, blank=True)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=NEW)
     review = models.CharField("Проверка", max_length=16, choices=REVIEW_CHOICES, default=UNREVIEWED)
-    tender = models.OneToOneField(
-        Tender, on_delete=models.SET_NULL, null=True, blank=True, related_name="found_tender",
-        verbose_name="Тендер (общий якорь)",
-    )
-    pushed_estimate = models.OneToOneField(
-        "tenders.TenderEstimate", on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="found_tender", verbose_name="Просчёт",
-    )
     opened_at = models.DateTimeField("Открыт пользователем (впервые)", null=True, blank=True)
-    first_seen_at = models.DateTimeField("Впервые найден", auto_now_add=True)
-    last_pulled_at = models.DateTimeField("Последняя выгрузка")
+    first_seen_at = models.DateTimeField("Впервые найден", null=True, blank=True)
+    last_pulled_at = models.DateTimeField("Последняя выгрузка", null=True, blank=True)
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
 
     class Meta:
-        ordering = ["-published_at", "-first_seen_at"]
         constraints = [
-            models.UniqueConstraint(fields=["law", "purchase_number"], name="uniq_law_purchase_number"),
+            models.UniqueConstraint(fields=["law", "purchase_number"], name="uniq_tender_law_purchase_number"),
         ]
-        verbose_name = "Найденный тендер"
-        verbose_name_plural = "Найденные тендеры"
+        verbose_name = "Тендер"
+        verbose_name_plural = "Тендеры"
 
     def __str__(self):
-        return f"{self.purchase_number} — {self.title or self.object_info}"
+        return f"{self.get_law_display()} {self.purchase_number}"
 
 
 class Organization(models.Model):

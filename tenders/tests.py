@@ -105,6 +105,7 @@ class TenderTests(TestCase):
         self.assertContains(response, "ИНН 1234567890")
         self.assertContains(response, "Сувенирная продукция")
         self.assertContains(response, reverse("tender_selection:detail", args=[source.pk]))
+        self.assertContains(response, "Применить и вернуться к тендеру")
         self.assertNotContains(response, "Перечень товаров")
 
     def test_general_tender_comment_is_always_visible(self):
@@ -296,6 +297,8 @@ class TenderTests(TestCase):
         self.assertEqual(result["roi"], Decimal("2.19"))
 
     def test_user_can_save_and_open_own_estimate(self):
+        from tender_selection.models import FoundTender
+
         self.client.force_login(self.user)
         payload = [{**self.payload[0], "requirements": {"requirements": [{"label": "Материал", "value": "пластик"}], "questions": []}}]
         analysis = {"technical": {"name": "ТЗ.pdf", "matched": 1, "questions": 0}}
@@ -308,6 +311,23 @@ class TenderTests(TestCase):
         self.assertFalse(estimate.summary_snapshot["is_incomplete"])
         self.assertEqual(estimate.document_analysis["technical"]["matched"], 1)
         self.assertEqual(estimate.lines.get().requirements["requirements"][0]["value"], "пластик")
+        self.assertFalse(FoundTender.objects.exists())
+
+    def test_saved_calculations_list_excludes_pipeline_calculations(self):
+        from tender_selection.models import FoundTender
+
+        standalone = TenderEstimate.objects.create(owner=self.user, tender_number="standalone", name="Самостоятельный")
+        pipeline = TenderEstimate.objects.create(owner=self.user, tender_number="pipeline", name="Из тендера")
+        FoundTender.objects.create(
+            purchase_number="pipeline", object_info="Из ЕИС", status=FoundTender.PUSHED,
+            pushed_estimate=pipeline, last_pulled_at=timezone.now(),
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, standalone.name)
+        self.assertNotContains(response, pipeline.name)
 
     def test_autosave_creates_then_updates_one_estimate(self):
         self.client.force_login(self.user)
@@ -384,10 +404,10 @@ class TenderTests(TestCase):
         content = self.client.get(reverse("tender_estimate", args=[estimate.pk])).content.decode()
         self.assertIn('id="save-tender" hidden', content)  # already saved — autosave takes over
 
-    def test_draft_estimate_shows_forward_and_archive_buttons_instead_of_selector(self):
-        """Статус-дропдаун из отдельного списка «Сохранённые просчёты» убран
-        (сам список тоже) — на черновике вместо него 2 понятные кнопки внизу
-        страницы расчёта: отправить на торги или архивировать как невыгодное."""
+    def test_estimate_page_has_no_lifecycle_buttons(self):
+        """Страница расчёта — чистый калькулятор: переход «на торги»/архивирование/
+        внесение итога живут на странице тендера (tender_selection), не здесь.
+        Статус-дропдаун из отдельного списка «Сохранённые просчёты» тоже убран."""
         estimate = TenderEstimate.objects.create(
             owner=self.user, tender_number="123", name="Тест",
             summary_snapshot={"is_incomplete": True, "net_profit": "1000", "roi": "10"},
@@ -396,8 +416,7 @@ class TenderTests(TestCase):
 
         response = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
 
-        self.assertContains(response, "Отправить на торги")
-        self.assertContains(response, "Архивировать")
+        self.assertNotContains(response, "Отправить на торги")
         self.assertNotContains(response, "Итог торгов")
         self.assertNotContains(response, "data-estimate-status-form")
         self.assertNotContains(response, "Сохранённые просчёты")
@@ -504,7 +523,6 @@ class TenderTests(TestCase):
         self.assertEqual(estimate.lines.get().name, "Ручка")
         reopened = self.client.get(reverse("tender_estimate", args=[estimate.pk]))
         self.assertContains(reopened, "Ручка")
-        self.assertContains(reopened, "Отправить на торги")
 
     def test_partially_filled_line_values_are_preserved_in_draft(self):
         partial = {"name": "", "quantity": "50", "nmck_unit": "", "material_unit": "12.50", "application_unit": "", "logistics_unit": "", "product_url": "", "comment": "Уточнить товар", "requirements": {}}

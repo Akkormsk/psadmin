@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 
 from django.contrib import messages
@@ -15,7 +16,7 @@ from django.views.decorators.http import require_POST
 
 from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
 from .filtering import match_title, parse_terms
-from .models import DocumentPreview, FilterSettings, FoundTender, Organization, PullRun
+from .models import DocumentPreview, FilterSettings, Organization, PullRun, Tender
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
@@ -34,7 +35,7 @@ SORTS = {
     "price_lo": F("max_price").asc(nulls_last=True),
 }
 DEFAULT_SORT = "deadline"
-LAW_LABELS = dict(FoundTender.LAW_CHOICES)
+LAW_LABELS = dict(Tender.LAW_CHOICES)
 
 
 def superuser_required(view):
@@ -54,26 +55,16 @@ def _tender_viewable_by(user, tender):
     своего просчёта, а не подбором номера в адресной строке и не через каталог."""
     if user.is_superuser:
         return True
-    if tender.status != FoundTender.PUSHED or not tender.pushed_estimate_id:
+    if tender.status != Tender.PUSHED:
         return False
     from tenders.models import TenderEstimate
 
-    return TenderEstimate.objects.filter(pk=tender.pushed_estimate_id, owner=user).exists()
+    return tender.estimates.filter(owner=user).exists()
 
 
 def tender_viewer_required(view):
-    """Как superuser_required, но также пускает владельца просчёта, в который попал
-    именно этот тендер (см. _tender_viewable_by) — карточка тендера и его документы
-    доступны менеджеру со своего просчёта, каталог подбора (tender_list и все
-    остальные view) по-прежнему только суперюзеру."""
-    @wraps(view)
-    def wrapped(request, pk, *args, **kwargs):
-        tender = get_object_or_404(FoundTender, pk=pk)
-        if not _tender_viewable_by(request.user, tender):
-            raise Http404
-        return view(request, pk, *args, **kwargs)
-
-    return login_required(wrapped)
+    """Весь lifecycle тендера доступен только администратору."""
+    return superuser_required(view)
 
 
 def _found_tender_card(tender):
@@ -86,7 +77,7 @@ def _found_tender_card(tender):
     Оценка риска не показывается, пока тендер не прошёл «Входящие» — на
     этой стадии её ещё не считали (расчёт запускается при открытии карточки
     на стадии «Проверка»), нечего показывать раньше времени."""
-    reviewed = tender.review != FoundTender.UNREVIEWED
+    reviewed = tender.review != Tender.UNREVIEWED
     if tender.risk_error:
         risk_state, status_label, status_key = "error", "Ошибка оценки", "error"
     elif tender.risk_checked_at:
@@ -119,7 +110,7 @@ def _found_tender_card(tender):
         "max_price": tender.max_price,
         "deadline": tender.collecting_finished_at,
         "is_soon": is_soon,
-        "status_label": status_label if reviewed else "",
+        "status_label": "",
         "status_key": status_key,
         "badges": badges,
         "detail_url": reverse("tender_selection:detail", args=[tender.pk]),
@@ -151,19 +142,13 @@ def _estimate_card(estimate):
     if estimate.outcome_checked_at:
         source_label = "авто" if estimate.outcome_source == estimate.OUTCOME_AUTO else "вручную"
         if estimate.actual_reduction_percent is not None:
-            badges.append({"state": "ok", "text": f"факт: снижение {estimate.actual_reduction_percent}% ({source_label})"})
+            badges.append({"state": "pending", "text": f"факт: снижение {estimate.actual_reduction_percent}% ({source_label})"})
         else:
             badges.append({"state": "pending", "text": f"итог внесён ({source_label})"})
     # Карточка ведёт на страницу ТЕНДЕРА (с растущими блоками по стадиям), а не
     # сразу в рабочее пространство расчёта — туда только через кнопку «Перейти
-    # в расчёт» внутри блока «Расчёт» на самой странице тендера. Если у просчёта
-    # нет исходного найденного тендера (создан вручную в «Тендерах») — вести
-    # больше некуда, открываем сам расчёт как раньше.
-    found_tender = FoundTender.objects.filter(pushed_estimate=estimate).first()
-    detail_url = (
-        reverse("tender_selection:detail", args=[found_tender.pk]) if found_tender
-        else reverse("tender_estimate", args=[estimate.pk])
-    )
+    # в расчёт» внутри блока «Расчёт» на самой странице тендера.
+    detail_url = reverse("tender_selection:detail", args=[estimate.tender_id]) if estimate.tender_id else ""
     return {
         "kind": "estimate",
         "pk": estimate.pk,
@@ -202,7 +187,7 @@ def _kanban_toggle_qs(dirs, key):
 
 def kanban(request):
     """Единая доска жизненного цикла тендера — не новая сущность, а объединённое
-    чтение FoundTender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
+    чтение Tender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
     источника: перенос из подбора или ручной импорт) в одном списке карточек."""
     dirs = _kanban_column_dirs(request)
     settings = FilterSettings.load()
@@ -230,12 +215,14 @@ def kanban(request):
     # сюда тендер попадает только после «В работу» (review != unreviewed).
     review = [
         _found_tender_card(t) for t in
-        _visible(FoundTender.objects.filter(status=FoundTender.NEW).exclude(review=FoundTender.UNREVIEWED), "review")
+        _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), "review")
     ]
 
     from tenders.models import TenderEstimate
 
-    live_estimates = TenderEstimate.objects.filter(archived_at__isnull=True)
+    live_estimates = TenderEstimate.objects.filter(
+        tender__isnull=False,
+    ).exclude(tender__status=Tender.DISMISSED)
     calculation = [
         _estimate_card(e) for e in
         live_estimates.filter(status=TenderEstimate.DRAFT).order_by(*_order("calculation", "updated_at"))
@@ -260,8 +247,7 @@ def kanban(request):
         column["dir"] = dirs[column["key"]]
         column["toggle_qs"] = _kanban_toggle_qs(dirs, column["key"])
     archived_count = (
-        FoundTender.objects.filter(status=FoundTender.DISMISSED).count()
-        + TenderEstimate.objects.filter(archived_at__isnull=False).count()
+        Tender.objects.filter(status=Tender.DISMISSED).count()
     )
     return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count, "settings": settings})
 
@@ -297,7 +283,13 @@ def tender_list(request):
     переведён «В работу» (review=unreviewed). Жизненным циклом уже отобранных
     занимается канбан (kanban()), не этот экран — сюда попавшие «в работу»
     не возвращаются, и статус тут показывать нечего."""
-    if request.GET.get("view") != "list":
+    view = request.GET.get("view")
+    if view is None:
+        # Голый заход без ?view= — открываем ту вкладку, что смотрели в
+        # прошлый раз в этой сессии, а не всегда канбан («Торги»).
+        view = request.session.get("ts_last_view", "kanban")
+    request.session["ts_last_view"] = "list" if view == "list" else "kanban"
+    if view != "list":
         return kanban(request)
 
     settings = FilterSettings.load()
@@ -316,7 +308,7 @@ def tender_list(request):
     now = timezone.now()
     soon_cutoff = now + timedelta(days=1)
 
-    queryset = FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED)
+    queryset = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
     if law_filter != "all":
         queryset = queryset.filter(law=law_filter)
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
@@ -346,7 +338,7 @@ def tender_list(request):
         )
 
     counts = dict(
-        FoundTender.objects.filter(status=FoundTender.NEW, review=FoundTender.UNREVIEWED)
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
         .values_list("law").annotate(n=Count("law"))
     )
     return render(request, "tender_selection/list.html", {
@@ -368,19 +360,21 @@ def tender_list(request):
 
 @tender_viewer_required
 def tender_detail(request, pk):
-    tender = get_object_or_404(FoundTender, pk=pk)
+    tender = get_object_or_404(Tender, pk=pk)
     if tender.opened_at is None:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
         tender.opened_at = timezone.now()
         tender.save(update_fields=["opened_at"])
-    payload = notification_for(tender, force=request.GET.get("refresh") == "1")
+    is_manual = tender.source == Tender.MANUAL
+    payload = None if is_manual else notification_for(tender, force=request.GET.get("refresh") == "1")
     card = parse_notification(payload) if payload else None
-    estimate_id = tender.pushed_estimate_id if tender.status == FoundTender.PUSHED else None
+    estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
 
     # Компактная сводка расчёта прямо на странице тендера (см. концепцию: блок
     # с данными остаётся на каждом пройденном этапе) — цена/прибыль/ROI с учётом
     # прогноза + кнопка в сам расчёт. Тот же verdict_for, что и на странице
     # расчёта — одни и те же цифры, не пересчитываем по-своему.
     calc_verdict = None
+    estimate = None
     if estimate_id:
         from tenders.models import TenderEstimate
         from tenders.services import verdict_for
@@ -389,21 +383,31 @@ def tender_detail(request, pk):
         if estimate:
             calc_verdict = verdict_for(estimate, tender)
 
+    lifecycle = _tender_lifecycle(tender, estimate)
+    active_stage = "review" if estimate is None else (
+        "calculation" if estimate.status == TenderEstimate.DRAFT else
+        "bidding" if estimate.status == TenderEstimate.PENDING else "result"
+    )
+
     org = Organization.objects.filter(inn=tender.customer_inn).first() if tender.customer_inn else None
     if tender.law != "fz44" and org is None and tender.customer_inn:
         org = enrich_one_org(tender.customer_inn, tender.law)  # для 223 карточки заказчика больше неоткуда взять
 
-    clar_raw, comp_raw = extras_for(tender, force=request.GET.get("refresh") == "1")
+    clar_raw, comp_raw = ([], []) if is_manual else extras_for(tender, force=request.GET.get("refresh") == "1")
 
     # Прогноз снижения и оценка риска не показываются на «Входящих» — рано,
     # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
     # начиная с «Проверки» (review != unreviewed).
-    stats = price_stats_for(tender, card) if tender.review != FoundTender.UNREVIEWED else None
+    stats = price_stats_for(tender, card) if card and tender.review != Tender.UNREVIEWED else None
     if stats:
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
 
-    if tender.review == FoundTender.UNREVIEWED:
+    if is_manual:
+        risk_needs_fetch = False
+        risk = None
+        risk_error = ""
+    elif tender.review == Tender.UNREVIEWED:
         # «Входящие» — ещё рано на настоящую (платную) оценку, но бесплатную
         # предварительную сводку по уже разобранному извещению показываем
         # всегда: та же форма таблицы, без документов и без ИИ (см.
@@ -420,19 +424,27 @@ def tender_detail(request, pk):
         # расчёт уходит в фон (см. risk_status ниже, дергается JS-ом со
         # спиннером). Уже посчитанное (успех или ошибка — risk_checked_at не
         # пуст) отдаём сразу, без лишнего похода в шлюз.
-        risk_needs_fetch = card is not None and tender.risk_checked_at is None
+        risk_needs_fetch = card is not None and (
+            tender.risk_checked_at is None or "risk_factors" not in (tender.risk_assessment or {})
+        )
         risk = None if risk_needs_fetch else (tender.risk_assessment or None)
         risk_error = "" if risk_needs_fetch else tender.risk_error
 
     return render(request, "tender_selection/detail.html", {
         "tender": tender,
+        "is_manual": is_manual,
+        "display_purchase_number": (tender.raw or {}).get("display_number") or tender.purchase_number,
         "card": card,
         "org": org,
         "region_label": region_name(tender.region) if tender.region else "",
         "fetch_failed": payload is None and tender.law == "fz44",
         "is_fz223": tender.law != "fz44",
         "pushed_estimate_id": estimate_id,
+        "pipeline_estimate_id": estimate_id,
         "calc_verdict": calc_verdict,
+        "lifecycle": lifecycle,
+        "active_stage": active_stage,
+        "estimate": estimate,
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
@@ -443,12 +455,28 @@ def tender_detail(request, pk):
     })
 
 
+def _tender_lifecycle(tender, estimate):
+    """Короткий ориентир на карточке: этапы, а не вторая навигация."""
+    status = estimate.status if estimate else ""
+    current = "incoming" if tender.review == Tender.UNREVIEWED else "evaluation"
+    if estimate:
+        current = "calculation" if status == "draft" else "bidding" if status == "pending" else "result"
+
+    order = ("incoming", "evaluation", "calculation", "bidding", "result")
+    labels = {"incoming": "Входящие", "evaluation": "Оценка", "calculation": "Расчёт", "bidding": "Торги", "result": "Результат"}
+    current_index = order.index(current)
+    return [
+        {"label": labels[key], "state": "done" if index < current_index else "current" if index == current_index else "future"}
+        for index, key in enumerate(order)
+    ]
+
+
 @tender_viewer_required
 def risk_status(request, pk):
     """AJAX-эндпоинт для блока «Оценка рисков» на карточке — считает (или берёт из
     кэша) и отдаёт готовый HTML-фрагмент. Чтение документов и запрос к ИИ-шлюзу могут
     занять десятки секунд, поэтому вызывается из JS отдельно от рендера страницы."""
-    tender = get_object_or_404(FoundTender, pk=pk)
+    tender = get_object_or_404(Tender, pk=pk)
     risk = risk_assessment_for(tender, force=request.GET.get("refresh") == "1")
     html = render_to_string("tender_selection/_risk_block.html", {
         "risk": risk, "risk_error": tender.risk_error, "risk_docs": tender.risk_assessment_docs,
@@ -465,6 +493,13 @@ def _doc_by_idx(tender, idx):
     return docs[idx], None
 
 
+def _clear_tender_document_previews(tender):
+    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    urls = [doc.get("url") for doc in (card or {}).get("documents", []) if doc.get("url")]
+    if urls:
+        DocumentPreview.objects.filter(url__in=urls).delete()
+
+
 
 
 def _result_json(name, result):
@@ -475,7 +510,7 @@ def _result_json(name, result):
 
 @tender_viewer_required
 def doc_preview(request, pk, idx):
-    tender = get_object_or_404(FoundTender, pk=pk)
+    tender = get_object_or_404(Tender, pk=pk)
     doc, err = _doc_by_idx(tender, idx)
     if err:
         return err
@@ -505,7 +540,7 @@ def doc_upload(request, pk, idx):
     """Ручной запасной путь: если у сервера вдруг снова не будет сети до ЕИС —
     пользователь скачивает файл сам и загружает сюда, дальше тот же разбор
     (extract_preview), что и при автоскачивании."""
-    tender = get_object_or_404(FoundTender, pk=pk)
+    tender = get_object_or_404(Tender, pk=pk)
     doc, err = _doc_by_idx(tender, idx)
     if err:
         return err
@@ -530,7 +565,7 @@ def doc_zip_entry(request, pk, idx, entry):
     """Провал внутрь многофайлового архива: качаем документ заново (файл-то один
     и тот же — кэш предпросмотра держит только итог разбора КОНКРЕТНОГО вложенного
     файла, не сырые байты архива) и достаём из него нужный вложенный файл."""
-    tender = get_object_or_404(FoundTender, pk=pk)
+    tender = get_object_or_404(Tender, pk=pk)
     doc, err = _doc_by_idx(tender, idx)
     if err:
         return err
@@ -620,6 +655,11 @@ def filter_settings(request):
         settings.exclude_words = request.POST.get("exclude_words", "").strip()
         settings.min_price = request.POST.get("min_price") or 0
         settings.window_days = request.POST.get("window_days") or 7
+        settings.risk_warning_days = int(request.POST.get("risk_warning_days") or 14)
+        settings.risk_critical_days = int(request.POST.get("risk_critical_days") or 7)
+        if settings.risk_critical_days >= settings.risk_warning_days:
+            messages.error(request, "Критический срок должен быть меньше предупреждающего.")
+            return redirect("tender_selection:settings")
         settings.okpd2_codes = request.POST.getlist("okpd2")
         settings.regions = [r for r in request.POST.getlist("region") if r.isdigit()]
         settings.laws = [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"]
@@ -634,7 +674,7 @@ def filter_settings(request):
         "settings": settings,
         "categories": [(code, label, code in chosen_codes) for code, label in CATEGORY_GROUPS],
         "regions": [(code, name, str(code) in chosen_regions) for code, name in sorted(REGION_NAMES.items(), key=lambda x: x[1])],
-        "laws": [(code, label, code in chosen_laws) for code, label in FoundTender.LAW_CHOICES],
+        "laws": [(code, label, code in chosen_laws) for code, label in Tender.LAW_CHOICES],
         "using_defaults": not settings.okpd2_codes,
     })
 
@@ -668,16 +708,16 @@ def pull_now(request):
 @superuser_required
 @require_POST
 def push_estimate(request, pk):
-    tender = get_object_or_404(FoundTender, pk=pk)
-    if tender.status == FoundTender.PUSHED and tender.pushed_estimate_id:
-        return redirect("tender_estimate", pk=tender.pushed_estimate_id)
+    tender = get_object_or_404(Tender, pk=pk)
+    if tender.status == Tender.PUSHED and tender.estimates.exists():
+        return redirect("tender_selection:detail", pk=tender.pk)
     try:
-        estimate_id = push_to_estimate(tender, request.user)
+        push_to_estimate(tender, request.user)
     except Exception as exc:  # noqa: BLE001
         messages.error(request, f"Не удалось создать просчёт: {exc}")
         return redirect("tender_selection:detail", pk=pk)
     messages.success(request, "Просчёт создан. Позиции подставлены из извещения.")
-    return redirect("tender_estimate", pk=estimate_id)
+    return redirect("tender_selection:detail", pk=tender.pk)
 
 
 @superuser_required
@@ -690,9 +730,20 @@ def enter_outcome(request, pk):
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
     manual_status = request.POST.get("status")
+    manual_reduction = request.POST.get("actual_reduction_percent", "").strip()
+    try:
+        reduction_percent = Decimal(manual_reduction) if manual_reduction else None
+        if reduction_percent is not None and not Decimal("0") <= reduction_percent <= Decimal("100"):
+            raise InvalidOperation
+    except InvalidOperation:
+        messages.error(request, "Фактическое снижение должно быть числом от 0 до 100.")
+        return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
     if manual_status in (TenderEstimate.WON, TenderEstimate.LOST, TenderEstimate.NOT_PARTICIPATED):
-        apply_tender_outcome(estimate, status=manual_status, source=TenderEstimate.OUTCOME_MANUAL)
+        apply_tender_outcome(
+            estimate, status=manual_status, reduction_percent=reduction_percent,
+            source=TenderEstimate.OUTCOME_MANUAL,
+        )
         messages.success(request, f"Итог внесён вручную: {estimate.get_status_display()}.")
     else:
         outcome = fetch_tender_outcome(estimate)
@@ -716,56 +767,68 @@ def enter_outcome(request, pk):
 @superuser_required
 @require_POST
 def dismiss(request, pk):
-    tender = get_object_or_404(FoundTender, pk=pk)
-    tender.status = FoundTender.DISMISSED
+    tender = get_object_or_404(Tender, pk=pk)
+    _clear_tender_document_previews(tender)
+    tender.status = Tender.DISMISSED
     tender.archived_at = timezone.now()
     tender.save(update_fields=["status", "archived_at"])
-    return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+    return redirect("tender_selection:list")
 
 
 @superuser_required
 @require_POST
 def dismiss_estimate(request, pk):
-    """Архивировать просчёт с любой стадии («Расчёт»/«Торги»/«Результат») —
-    тот же единый архив, что и у «Входящих» (FoundTender.archived_at), просто
-    на другой модели: у просчёта нет своего статуса «скрыт»."""
+    """Архивировать карточку Tender со стадии расчёта, торгов или результата."""
     from tenders.models import TenderEstimate
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
-    estimate.archived_at = timezone.now()
-    estimate.save(update_fields=["archived_at"])
-    return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+    tender = get_object_or_404(Tender, pk=estimate.tender_id)
+    _clear_tender_document_previews(tender)
+    tender.status = Tender.DISMISSED
+    tender.archived_at = timezone.now()
+    tender.save(update_fields=["status", "archived_at"])
+    return redirect("tender_selection:list")
+
+
+@superuser_required
+@require_POST
+def restore(request, pk):
+    tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
+    tender.status = Tender.NEW
+    tender.archived_at = None
+    tender.save(update_fields=["status", "archived_at"])
+    return redirect("tender_selection:list")
+
+
+@superuser_required
+@require_POST
+def restore_estimate(request, pk):
+    from tenders.models import TenderEstimate
+
+    estimate = get_object_or_404(TenderEstimate, pk=pk)
+    return restore(request, estimate.tender_id)
 
 
 @superuser_required
 def archive(request):
-    """Единый архив — сюда попадает всё скрытое, с любой стадии жизненного
-    цикла (найденный тендер до расчёта или уже созданный просчёт). Только
-    просмотр — восстановление не делаем, не просили; старше месяца чистит
-    фоновый демон (см. services.purge_archived)."""
-    from tenders.models import TenderEstimate
-
+    """Единый архив скрытых карточек с возможностью восстановления."""
     found = [
         _found_tender_card(t) for t in
-        FoundTender.objects.filter(status=FoundTender.DISMISSED).order_by("-archived_at")
+        Tender.objects.filter(status=Tender.DISMISSED).order_by("-archived_at")
     ]
-    estimates = [
-        _estimate_card(e) for e in
-        TenderEstimate.objects.filter(archived_at__isnull=False).order_by("-archived_at")
-    ]
-    return render(request, "tender_selection/archive.html", {"found": found, "estimates": estimates})
+    return render(request, "tender_selection/archive.html", {"found": found, "estimates": []})
 
 
 @superuser_required
 @require_POST
 def set_review(request, pk):
-    tender = get_object_or_404(FoundTender, pk=pk)
+    tender = get_object_or_404(Tender, pk=pk)
     value = request.POST.get("review", "")
-    if value in dict(FoundTender.REVIEW_CHOICES):
-        was_unreviewed = tender.review == FoundTender.UNREVIEWED
+    if value in dict(Tender.REVIEW_CHOICES):
+        was_unreviewed = tender.review == Tender.UNREVIEWED
         tender.review = value
         tender.save(update_fields=["review"])
-        if was_unreviewed and value != FoundTender.UNREVIEWED and not tender.risk_checked_at:
+        if was_unreviewed and value != Tender.UNREVIEWED and not tender.risk_checked_at:
             start_risk_assessment_in_background(tender.pk)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"review": tender.review, "label": tender.get_review_display()})

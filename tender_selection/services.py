@@ -1,5 +1,5 @@
 """Оркестрация выгрузки закупок: тянет страницы через gosplan.iter_purchases,
-сохраняет FoundTender, пишет журнал PullRun.
+сохраняет Tender, пишет журнал PullRun.
 
 Фильтр по цене и категориям задаётся на стороне API; плюс/минус-слова
 применяются позже, при показе списка (см. filtering.py).
@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from django.utils import timezone
+from django.db import transaction
 
 import os
 
@@ -20,7 +21,7 @@ from . import gosplan
 from .documents import DocumentError, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .filtering import match_title, parse_terms
-from .models import ContractStat, FilterSettings, FoundTender, Organization, PullRun
+from .models import ContractStat, FilterSettings, Organization, PullRun, Tender
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,11 @@ def effective_laws(settings) -> list[str]:
 # Совместимость со старым кодом/тестами.
 TARGETED_OKPD2 = DEFAULT_OKPD2
 TARGETED_OKPD2_BATCHES = _chunk(DEFAULT_OKPD2)
+
+
+def tender_anchor_for(law: str, purchase_number: str) -> Tender:
+    """Вернуть единый Tender для закупки независимо от её текущей стадии."""
+    return Tender.objects.get_or_create(law=law, purchase_number=purchase_number)[0]
 
 
 def _parse_dt(value):
@@ -153,7 +159,7 @@ def _risk_eligible(tender, settings, include, exclude) -> bool:
         tender.law == "fz44"
         # риск не считаем, пока тендер не дошёл до «Проверки» — на «Входящих»
         # ещё не решили, что он вообще стоит внимания
-        and tender.review != FoundTender.UNREVIEWED
+        and tender.review != Tender.UNREVIEWED
         and (not settings.min_price or tender.max_price is None or tender.max_price >= settings.min_price)
         and (tender.collecting_finished_at is None or tender.collecting_finished_at >= timezone.now())
         and match_title(tender.title or tender.object_info, include, exclude)[0]
@@ -218,11 +224,12 @@ def run_pull(
                 if not number or (law, number) in seen:
                     continue
                 seen.add((law, number))
-                tender, is_created = FoundTender.objects.update_or_create(
-                    law=law,
-                    purchase_number=number,
-                    defaults=_record_to_fields(record, run.started_at, law),
-                )
+                with transaction.atomic():
+                    tender, is_created = Tender.objects.update_or_create(
+                        law=law,
+                        purchase_number=number,
+                        defaults={**_record_to_fields(record, run.started_at, law), "source": Tender.EIS},
+                    )
                 created += int(is_created)
                 updated += int(not is_created)
         run.ok = True
@@ -317,7 +324,7 @@ def retry_pending_documents(*, limit: int = 5, recent: int = 50) -> tuple[int, i
     attempted = 0
     succeeded = 0
     tenders = (
-        FoundTender.objects.filter(law="fz44")
+        Tender.objects.filter(law="fz44")
         .exclude(notification_raw={})
         .order_by("-last_pulled_at")[:recent]
     )
@@ -359,7 +366,7 @@ def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[
     Возвращает (сколько тендеров пробовали, сколько удалось)."""
     attempted = succeeded = 0
     tenders = (
-        FoundTender.objects.filter(law="fz44", notification_checked_at__isnull=True)
+        Tender.objects.filter(law="fz44", notification_checked_at__isnull=True)
         .order_by("-last_pulled_at")[:recent]
     )
     for tender in tenders:
@@ -385,9 +392,9 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     exclude = parse_terms(settings.exclude_words)
     now = timezone.now()
     attempted = succeeded = 0
-    tenders = FoundTender.objects.filter(
+    tenders = Tender.objects.filter(
         law="fz44", risk_checked_at__isnull=True,
-    ).exclude(review=FoundTender.UNREVIEWED).order_by("first_seen_at")[:300]
+    ).exclude(review=Tender.UNREVIEWED).order_by("first_seen_at")[:300]
     for tender in tenders:
         if attempted >= limit:
             break
@@ -406,31 +413,21 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
 
 
 _EXPIRED_INCOMING_TTL = timedelta(days=7)
-_ARCHIVE_TTL = timedelta(days=30)
-
-
 def purge_stale() -> dict:
-    """Фоновая уборка «Входящих» и архива — навсегда удаляет:
+    """Фоновая уборка «Входящих» — навсегда удаляет:
     - просроченные «Входящие» (срок подачи истёк более недели назад, тендер
-      так и не был переведён «в работу») — они больше никому не нужны;
-    - карточки старше месяца в архиве, с любой стадии (найденный тендер или
-      просчёт) — «Скрыть» не подразумевает хранить вечно."""
-    from tenders.models import TenderEstimate
+      так и не был переведён «в работу») — они больше никому не нужны.
+
+    Архив не очищается: скрытые карточки можно восстановить."""
 
     now = timezone.now()
-    expired_incoming, _ = FoundTender.objects.filter(
-        status=FoundTender.NEW, review=FoundTender.UNREVIEWED,
+    expired_incoming, _ = Tender.objects.filter(
+        status=Tender.NEW, review=Tender.UNREVIEWED,
         collecting_finished_at__lt=now - _EXPIRED_INCOMING_TTL,
     ).delete()
-    archived_found, _ = FoundTender.objects.filter(
-        status=FoundTender.DISMISSED, archived_at__lt=now - _ARCHIVE_TTL,
-    ).delete()
-    archived_estimates, _ = TenderEstimate.objects.filter(
-        archived_at__lt=now - _ARCHIVE_TTL,
-    ).delete()
     return {
-        "expired_incoming": expired_incoming, "archived_found": archived_found,
-        "archived_estimates": archived_estimates,
+        "expired_incoming": expired_incoming, "archived_found": 0,
+        "archived_estimates": 0,
     }
 
 
@@ -494,7 +491,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     """
     if tender.law != "fz44":
         return None
-    if tender.risk_assessment and not force:
+    if tender.risk_assessment and "risk_factors" in tender.risk_assessment and not force:
         return tender.risk_assessment
     if not tender.notification_raw:
         return None
@@ -531,6 +528,13 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
             tender.save(update_fields=["risk_checked_at", "risk_error"])
             return None
         data = dict(result["data"])
+        from .risk_policy import classify_risk
+
+        data.update(classify_risk(
+            data.get("risk_facts"),
+            warning_days=FilterSettings.load().risk_warning_days,
+            critical_days=FilterSettings.load().risk_critical_days,
+        ))
         data["degraded"] = True
         tender.risk_assessment = data
         tender.risk_assessment_docs = []
@@ -547,7 +551,17 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         tender.save(update_fields=["risk_checked_at", "risk_error"])
         return None
 
-    tender.risk_assessment = result["data"]
+    from .risk_policy import classify_risk
+
+    data = dict(result["data"])
+    settings = FilterSettings.load()
+    policy = classify_risk(
+        data.get("risk_facts"),
+        warning_days=settings.risk_warning_days,
+        critical_days=settings.risk_critical_days,
+    )
+    data.update(policy)
+    tender.risk_assessment = data
     tender.risk_assessment_docs = used_names
     tender.risk_checked_at = timezone.now()
     tender.risk_error = ""
@@ -576,7 +590,7 @@ def start_risk_assessment_in_background(tender_id: int) -> None:
     def _job():
         close_old_connections()
         try:
-            tender = FoundTender.objects.get(pk=tender_id)
+            tender = Tender.objects.get(pk=tender_id)
             risk_assessment_for(tender)
         except Exception:
             logger.exception("Фоновая оценка риска не удалась для тендера %s", tender_id)
@@ -592,7 +606,6 @@ def push_to_estimate(tender, user):
 
     from tenders.models import TenderEstimate, TenderLine
 
-    from .models import Tender
     from .notification import parse_notification
     from .stats import price_stats_for
 
@@ -616,11 +629,9 @@ def push_to_estimate(tender, user):
             "categories": stats["categories"],
         }
 
-    tender_anchor, _ = Tender.objects.get_or_create(law=tender.law, purchase_number=tender.purchase_number)
-
     estimate = TenderEstimate.objects.create(
         owner=user,
-        tender=tender_anchor,
+        tender=tender,
         tender_number=tender.purchase_number[:100],
         name=customer[:300],
         reduction_percent=reduction,
@@ -656,10 +667,8 @@ def push_to_estimate(tender, user):
         ))
     TenderLine.objects.bulk_create(lines)
 
-    tender.status = FoundTender.PUSHED
-    tender.tender = tender_anchor
-    tender.pushed_estimate = estimate
-    tender.save(update_fields=["status", "tender", "pushed_estimate"])
+    tender.status = Tender.PUSHED
+    tender.save(update_fields=["status"])
     return estimate.pk
 
 
@@ -718,7 +727,7 @@ def enrich_organizations(limit: int = 20) -> int:
     """Подтянуть карточки заказчиков по ИНН, которых ещё нет в кэше. Один запрос на ИНН."""
     known = set(Organization.objects.values_list("inn", flat=True))
     todo, seen = [], set()
-    for law, inn in FoundTender.objects.exclude(customer_inn="").values_list("law", "customer_inn"):
+    for law, inn in Tender.objects.exclude(customer_inn="").values_list("law", "customer_inn"):
         inn = (inn or "").strip()
         if inn and inn not in known and inn not in seen:
             seen.add(inn)
@@ -818,11 +827,8 @@ def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None
     """Записать факт торгов на просчёт; при победе — отметить в ContractStat.is_ours,
     чтобы своя история наконец начала накапливаться (поле раньше нигде не писалось).
 
-    «Результат» фиксирует именно итог торгов — как только он есть (в любую
-    сторону), карточка сама уходит в архив: не нужно отдельно жать «Скрыть»
-    после уже принятого решения. Для выигранных это временно (пока нет
-    отдельного раздела «Исполнение/Заказы» — см. бэклог), для проигранных и
-    невыгодных — постоянно."""
+    «Результат» фиксирует итог торгов. Карточка остаётся на этой стадии,
+    пока пользователь явно не скроет её в архив."""
     from tenders.models import TenderEstimate
 
     estimate.status = status
@@ -832,9 +838,8 @@ def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None
         estimate.actual_reduction_percent = reduction_percent
     estimate.outcome_checked_at = timezone.now()
     estimate.outcome_source = source
-    estimate.archived_at = timezone.now()
     estimate.save(update_fields=[
-        "status", "actual_price", "actual_reduction_percent", "outcome_checked_at", "outcome_source", "archived_at",
+        "status", "actual_price", "actual_reduction_percent", "outcome_checked_at", "outcome_source",
     ])
 
     if status == TenderEstimate.WON:

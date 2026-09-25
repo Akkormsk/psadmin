@@ -3,7 +3,7 @@
 национальный режим, требования к образцам) + свободный текст с общим выводом.
 
 Запускается при синхронизации нового подходящего тендера или при открытии карточки
-(см. services.risk_assessment_for). Результат кэшируется на FoundTender.
+(см. services.risk_assessment_for). Результат кэшируется на Tender.
 
 Проверено вживую 16.09.2026 на реальных документах (не мок): полный текст двух
 документов (~130к символов, «Описание объекта закупки» + «Проект контракта») —
@@ -186,13 +186,14 @@ _SCHEMA = """{
   "national_regime": "применим ли нацрежим (ПП 1875 и аналогичные) по ОКПД2/тексту — что разрешено/запрещено, что подтвердить, или явно 'признаков не найдено'",
   "sample_requirements": "требуются ли образцы/испытания, в какой срок, за чей счёт — по тексту, или 'нет данных'",
   "delivery_mode": "по тексту контракта: поставка по заявкам заказчика (объём каждой партии определяется заявкой, заказчик не обязан выбрать весь объём) — опиши на каких условиях; или разовая поставка всего объёма единой партией; если в тексте нет явного указания — напиши 'не найдено явного указания — вероятно разовая поставка'",
+  "risk_facts": {"documents_sufficient": "true только если прочитаны проект контракта или ТЗ с условиями исполнения", "execution_days": "целое число дней на исполнение после заключения контракта, или null", "national_regime": "none | confirmation_required | blocked | unknown", "samples": "none | required | impossible_deadline | unknown", "delivery_mode": "one_time | requests_with_end | requests_open_ended | unknown"},
   "legal_risks": "свободный текст 3-6 предложений: общая оценка юридических рисков по доступным данным",
   "risk_level": "одно слово: low (риски незначительны или их нет), medium (есть на что обратить внимание, но участвовать можно) или high (серьёзные риски, требуется отдельное решение перед участием) — твоя итоговая оценка по всем пунктам выше"
 }"""
 
 REQUIRED_KEYS = (
     "execution_deadline", "application_security", "contract_security", "security_exemption",
-    "penalties", "national_regime", "sample_requirements", "delivery_mode", "legal_risks", "risk_level",
+    "penalties", "national_regime", "sample_requirements", "delivery_mode", "risk_facts", "legal_risks", "risk_level",
 )
 
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import base64
 import re
 import zipfile
 from urllib.error import HTTPError, URLError
@@ -76,7 +77,36 @@ def _docx_gridspan(tc) -> int:
         return 1
 
 
-def _docx_cell_text(tc) -> str:
+def _docx_inline_images(tc, doc) -> str:
+    """Return small in-cell DOCX pictures without retaining the source file.
+
+    Images are reduced before entering the preview cache, so the document is
+    still cheap to show and can be cleared together with the tender archive.
+    """
+    from docx.oxml.ns import qn
+    from PIL import Image
+
+    images = []
+    for blip in tc.findall(".//" + qn("a:blip"))[:12]:
+        relation_id = blip.get(qn("r:embed"))
+        part = doc.part.related_parts.get(relation_id)
+        if part is None:
+            continue
+        try:
+            image = Image.open(io.BytesIO(part.blob))
+            image.thumbnail((640, 480))
+            if image.mode not in {"RGB", "L"}:
+                image = image.convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=65, optimize=True)
+            encoded = base64.b64encode(output.getvalue()).decode("ascii")
+            images.append(f'<img class="ts-doc-inline-image" src="data:image/jpeg;base64,{encoded}" alt="Изображение из документа">')
+        except Exception:
+            continue
+    return "".join(images)
+
+
+def _docx_cell_html(tc, doc) -> str:
     from docx.oxml.ns import qn
 
     paras = []
@@ -84,10 +114,10 @@ def _docx_cell_text(tc) -> str:
         text = "".join(node.text or "" for node in p.iter(qn("w:t"))).strip()
         if text:
             paras.append(escape(text))
-    return "<br>".join(paras)
+    return "<br>".join(paras) + _docx_inline_images(tc, doc)
 
 
-def _docx_table_html(table) -> str:
+def _docx_table_html(table, doc) -> str:
     """Учитывает объединение ячеек (colspan через w:gridSpan, rowspan через w:vMerge).
 
     Важно: работаем с СЫРЫМ XML (w:tr/w:tc) каждой строки, а не через table.rows[i].cells —
@@ -134,7 +164,7 @@ def _docx_table_html(table) -> str:
                     else:
                         break
             attrs = (f' colspan="{colspan}"' if colspan > 1 else "") + (f' rowspan="{rowspan}"' if rowspan > 1 else "")
-            cells_html.append(f"<td{attrs}>{_docx_cell_text(tc)}</td>")
+            cells_html.append(f"<td{attrs}>{_docx_cell_html(tc, doc)}</td>")
         if cells_html:
             rows_html.append("<tr>" + "".join(cells_html) + "</tr>")
     return f'<table class="ts-doc-table">{"".join(rows_html)}</table>' if rows_html else ""
@@ -146,22 +176,27 @@ def _docx_html(data: bytes) -> str:
     from docx.table import Table
 
     doc = Document(io.BytesIO(data))
-    out, count = [], 0
+    out, count = ["<section class='ts-doc-page'>"], 0
     for child in doc.element.body.iterchildren():
         if count > MAX_PARAGRAPHS:
             out.append("<p>…</p>")
             break
         if child.tag == qn("w:p"):
+            if child.findall(".//" + qn("w:lastRenderedPageBreak")) or any(
+                node.get(qn("w:type")) == "page" for node in child.findall(".//" + qn("w:br"))
+            ):
+                out.append("</section><section class='ts-doc-page'>")
             text = "".join(node.text or "" for node in child.iter(qn("w:t"))).strip()
             if text:
                 out.append(f"<p>{escape(text)}</p>")
                 count += 1
         elif child.tag == qn("w:tbl"):
-            html = _docx_table_html(Table(child, doc))
+            html = _docx_table_html(Table(child, doc), doc)
             if html:
                 out.append(html)
                 count += 1
-    return "\n".join(out) or "<p class='ts-sub'>Документ без текста.</p>"
+    out.append("</section>")
+    return "\n".join(out) if count else "<p class='ts-sub'>Документ без текста.</p>"
 
 
 def _xlsx_html(data: bytes) -> str:
@@ -205,7 +240,8 @@ def _xlsx_html(data: bytes) -> str:
             if any_value:
                 rows.append("<tr>" + "".join(cells) + "</tr>")
                 row_count += 1
-        out.append('<table class="ts-doc-table">' + "".join(rows) + "</table>" if rows else "<p class='ts-sub'>Лист пуст.</p>")
+        body = '<table class="ts-doc-table">' + "".join(rows) + "</table>" if rows else "<p class='ts-sub'>Лист пуст.</p>"
+        out.append("<section class='ts-doc-page'>" + body + "</section>")
     wb.close()
     return "\n".join(out)
 
@@ -215,10 +251,10 @@ def _pdf_html(data: bytes) -> str:
 
     reader = PdfReader(io.BytesIO(data))
     parts = []
-    for page in reader.pages[:MAX_PDF_PAGES]:
+    for page_no, page in enumerate(reader.pages[:MAX_PDF_PAGES], start=1):
         text = (page.extract_text() or "").strip()
         if text:
-            parts.append("<p>" + "<br>".join(escape(line) for line in text.splitlines() if line.strip()) + "</p>")
+            parts.append("<section class='ts-doc-page'><small class='ts-doc-page__number'>Страница " + str(page_no) + "</small><p>" + "<br>".join(escape(line) for line in text.splitlines() if line.strip()) + "</p></section>")
     if len(reader.pages) > MAX_PDF_PAGES:
         parts.append("<p>…</p>")
     return "\n".join(parts) or "<p class='ts-sub'>В PDF нет извлекаемого текста (возможно, скан).</p>"
