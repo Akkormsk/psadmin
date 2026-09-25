@@ -16,21 +16,48 @@ def copy_found_tenders_to_tenders(apps, schema_editor):
         "first_seen_at", "last_pulled_at", "archived_at",
     )
 
-    for found in FoundTender.objects.select_related("tender", "pushed_estimate").iterator():
-        tender = found.tender
-        if tender is None:
-            tender, _ = Tender.objects.get_or_create(
-                law=found.law,
-                purchase_number=found.purchase_number,
-            )
-            found.tender_id = tender.pk
-            found.save(update_fields=["tender"])
-        for field in copied_fields:
-            setattr(tender, field, getattr(found, field))
-        tender.source = "manual" if (found.raw or {}).get("manual_entry") else "eis"
-        tender.save(update_fields=["source", *copied_fields])
-        if found.pushed_estimate_id:
-            TenderEstimate.objects.filter(pk=found.pushed_estimate_id, tender__isnull=True).update(tender_id=tender.pk)
+    found_fields = (
+        "pk", "law", "purchase_number", "tender_id", "pushed_estimate_id",
+        *copied_fields,
+    )
+    batch_size = 25
+    batch = []
+
+    def save_batch(rows):
+        tenders = []
+        estimate_tenders = {}
+        for found in rows:
+            tender_id = found["tender_id"]
+            if tender_id is None:
+                tender, _ = Tender.objects.get_or_create(
+                    law=found["law"], purchase_number=found["purchase_number"],
+                )
+                tender_id = tender.pk
+                FoundTender.objects.filter(pk=found["pk"]).update(tender_id=tender_id)
+
+            tender = Tender(pk=tender_id)
+            for field in copied_fields:
+                setattr(tender, field, found[field])
+            tender.source = "manual" if (found["raw"] or {}).get("manual_entry") else "eis"
+            tenders.append(tender)
+            if found["pushed_estimate_id"]:
+                estimate_tenders[found["pushed_estimate_id"]] = tender_id
+
+        Tender.objects.bulk_update(tenders, ["source", *copied_fields], batch_size=batch_size)
+        estimates = list(TenderEstimate.objects.filter(
+            pk__in=estimate_tenders, tender__isnull=True,
+        ).only("pk"))
+        for estimate in estimates:
+            estimate.tender_id = estimate_tenders[estimate.pk]
+        TenderEstimate.objects.bulk_update(estimates, ["tender"], batch_size=batch_size)
+
+    for found in FoundTender.objects.values(*found_fields).order_by("pk").iterator(chunk_size=batch_size):
+        batch.append(found)
+        if len(batch) == batch_size:
+            save_batch(batch)
+            batch = []
+    if batch:
+        save_batch(batch)
 
     # Standalone historical calculations are intentionally left without a
     # Tender. The next migration moves them to OrderEstimate instead of
