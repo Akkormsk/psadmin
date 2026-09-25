@@ -2,7 +2,9 @@
 
 Один поток внутри процесса приложения: раз в 30 минут — свежие тендеры,
 каждые ~6 часов — статистика по контрактам. Включается только при
-``TENDER_AUTOPULL_ENABLED=1``; под management-командами и в тестах не стартует.
+``TENDER_AUTOPULL_ENABLED=1`` и ``TENDER_AUTOPULL_WEB_ENABLED=1``; под
+management-командами и в тестах не стартует. Второй флаг не даёт тяжёлой
+фоновой обработке случайно запускаться в веб-процессе при деплое.
 На машине разработчика вместо этого запускают ``manage.py pull_tenders --loop``.
 """
 from __future__ import annotations
@@ -24,6 +26,13 @@ _SKIP_ARGV = {
     "migrate", "makemigrations", "collectstatic", "test", "shell",
     "createsuperuser", "makemessages", "compilemessages", "check", "dbshell",
 }
+
+
+def _web_autopull_enabled() -> bool:
+    return (
+        os.environ.get("TENDER_AUTOPULL_ENABLED") == "1"
+        and os.environ.get("TENDER_AUTOPULL_WEB_ENABLED") == "1"
+    )
 
 
 def _run_once(tick: int) -> None:
@@ -142,7 +151,7 @@ def start() -> None:
         threading.Thread(target=_network_probe_once, name="eis-netprobe", daemon=True).start()
         return  # разовый зонд — обычный автосбор в этом режиме не запускаем
 
-    if os.environ.get("TENDER_AUTOPULL_ENABLED") != "1":
+    if not _web_autopull_enabled():
         return
     _started = True
     threading.Thread(target=_loop, name="tender-autopull", daemon=True).start()
