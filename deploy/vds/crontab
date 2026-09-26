@@ -1,0 +1,5 @@
+# deploy user's crontab, installed with: crontab ~/psadmin/deploy/vds/crontab
+# Server clock is UTC (MSK = UTC+3).
+30 3 * * * $HOME/psadmin/deploy/vds/backup.sh >> $HOME/backup.log 2>&1
+*/30 * * * * flock -n /tmp/autopull.lock $HOME/psadmin/deploy/vds/run.sh autopull_tick >> $HOME/autopull.log 2>&1
+15 */6 * * * flock -n /tmp/price-stats.lock $HOME/psadmin/deploy/vds/run.sh collect_price_stats >> $HOME/autopull.log 2>&1
