@@ -7,7 +7,10 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: .env
     restart: unless-stopped
-    mem_limit: 1400m
+    mem_limit: 1200m
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       # InternalHealthCheckMiddleware answers "ok" only for a private, non-loopback Host.
       test: ["CMD", "python", "-c", "import socket,urllib.request as u; u.urlopen('http://%s:8000/' % socket.gethostbyname(socket.gethostname()), timeout=5)"]
@@ -15,6 +18,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    mem_limit: 500m
+    command: postgres -c shared_buffers=128MB -c max_connections=30
+    environment:
+      POSTGRES_DB: psadmin
+      POSTGRES_USER: psadmin
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "psadmin", "-d", "psadmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   caddy:
     image: caddy:2
@@ -30,5 +50,6 @@ services:
       - web
 
 volumes:
+  pgdata:
   caddy_data:
   caddy_config:
