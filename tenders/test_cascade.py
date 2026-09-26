@@ -13,7 +13,7 @@ from django.test import TestCase as DjangoTestCase
 
 from .cascade import Cascade
 from .models import (
-    CascadeCache, CatalogProduct, CatalogSupplier, Lesson, RequirementSkipRule, UnitAlias,
+    AttributeConceptHint, CascadeCache, CatalogProduct, CatalogSupplier, Lesson, RequirementSkipRule, UnitAlias,
 )
 
 
@@ -129,6 +129,65 @@ class CascadeStep1Tests(TestCase):
         gw2 = _Gateway(criteria=[])
         _run(gw2, _line(rows=rows))
         self.assertEqual(gw2.calls["step1"], 0)
+
+    def test_splits_a_multi_axis_row_into_separate_criteria_with_their_own_bounds(self):
+        """Строка ТЗ с несколькими числами через «х» — модель возвращает
+        МАССИВ разборов на один и тот же номер строки; шаг 1 создаёт по
+        отдельному Criterion на каждую ось, у каждого свои num_min/num_max,
+        без верхней границы там, где ТЗ её не назвало (num_max=None)."""
+        rows = [{"label": "Размер, мм", "value": "не менее 240 x 340"}]
+        gw = _Gateway(criteria={
+            "1": [
+                {"label": "Длина", "concept": "длина папки", "operator": ">=", "value": "240",
+                 "unit": "мм", "num_min": 240},
+                {"label": "Ширина", "concept": "ширина папки", "operator": ">=", "value": "340",
+                 "unit": "мм", "num_min": 340},
+            ],
+        })
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual([c.label for c in result.tz], ["Длина", "Ширина"])
+        self.assertEqual([c.num_min for c in result.tz], [Decimal("240"), Decimal("340")])
+        self.assertTrue(all(c.num_max is None for c in result.tz))
+        self.assertTrue(all(c.source_label == "Размер, мм" for c in result.tz))
+
+    def test_unchecking_the_original_row_unchecks_every_split_criterion(self):
+        """Галочка клиента снята на ИСХОДНОЙ (составной) строке ТЗ — обе
+        разделённые оси должны стать checked=False, не только та, чья
+        собственная метка случайно совпала бы с исходной."""
+        rows = [{"label": "Размер, мм", "value": "≥ 240 x 340", "selected": False}]
+        gw = _Gateway(criteria={
+            "1": [
+                {"label": "Длина", "concept": "длина", "num_min": 240},
+                {"label": "Ширина", "concept": "ширина", "num_min": 340},
+            ],
+        })
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(len(result.tz), 2)
+        self.assertTrue(all(not c.checked for c in result.tz))
+        self.assertEqual(result.tz[0].importance_reason, "Снято вручную в ТЗ")
+
+    def test_single_object_per_row_without_array_wrapper_still_works(self):
+        """Обычная (неразделённая) строка — модель по привычке вернула один
+        объект, а не массив из одного элемента. Не должно ломаться."""
+        rows = [{"label": "Цвет", "value": "синий"}]
+        gw = _Gateway(criteria={"1": {"concept": "цвет", "operator": "=", "value": "синий"}})
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(len(result.tz), 1)
+        self.assertEqual(result.tz[0].concept, "цвет")
+        self.assertEqual(result.tz[0].label, "Цвет")
+
+    def test_range_value_is_not_split_into_two_axes(self):
+        """Два числа — но это разброс ОДНОЙ величины (запятая/тире, не «х»),
+        значит одна запись с num_min и num_max, не две оси."""
+        rows = [{"label": "Плотность", "value": "200-220 г/м2"}]
+        gw = _Gateway(criteria={
+            "1": [{"concept": "плотность", "operator": "~", "value": "200-220",
+                   "unit": "г/м2", "num_min": 200, "num_max": 220}],
+        })
+        result = _run(gw, _line(rows=rows))
+        self.assertEqual(len(result.tz), 1)
+        self.assertEqual(result.tz[0].num_min, Decimal("200"))
+        self.assertEqual(result.tz[0].num_max, Decimal("220"))
 
     def test_shifted_n_labels_do_not_misalign_criteria_when_counts_match(self):
         """Основной формат ответа — объект с ключом-номером строки (см. ниже),
@@ -383,11 +442,12 @@ class CascadeHardGateTests(TestCase):
 class CascadeCollapseTests(TestCase):
     def test_collapse_keeps_the_variant_that_fits_the_capacity_tz(self):
         for cap, eid, price in [("16", "F16", "410"), ("32", "F32", "491"), ("64", "F64", "690")]:
-            _product(f"USB-флешка Твист {cap} ГБ", external_id=eid, group_id="G1", price=price)
+            _product(f"USB-флешка Твист {cap} ГБ", external_id=eid, group_id="G1", price=price,
+                      attributes=[{"name": "Объем памяти", "value": f"{cap} ГБ"}])
         gw = _Gateway(
             queries=["флешка"],
             criteria=[{"n": 1, "concept": "ёмкость памяти", "operator": ">=", "value": "32 ГБ",
-                       "unit": "ГБ", "keep": True, "axis": "capacity", "num_min": 32768}],
+                       "unit": "ГБ", "keep": True, "axis": "capacity", "num_min": 32}],
             grid=[{"id": "F32", "cells": {"1": "y"}}],
         )
         result = _run(gw, _line(rows=[{"label": "Ёмкость", "value": "не менее 32 ГБ"}]))
@@ -425,7 +485,8 @@ class CascadeCollapseTests(TestCase):
 
     def test_agent_brief_lists_the_variants(self):
         for cap, eid in [("16", "F16"), ("32", "F32")]:
-            _product(f"USB-флешка {cap} ГБ", external_id=eid, group_id="G1")
+            _product(f"USB-флешка {cap} ГБ", external_id=eid, group_id="G1",
+                      attributes=[{"name": "Объем памяти", "value": f"{cap} ГБ"}])
         cascade = Cascade(_line())
         cascade.tz = []
         card = cascade._serialize(
@@ -561,24 +622,28 @@ class CascadeFeedbackTests(TestCase):
 
 class CascadeAxisPrefillTests(TestCase):
     def test_code_marks_the_capacity_row_itself_and_overrides_the_model(self):
-        _product("Флешка Твист 8 ГБ", external_id="P1")
+        # Слова понятия ТЗ пересекаются со словами названия атрибута карточки
+        # («объём памяти» ↔ «Объем памяти») — код находит его сам, без
+        # заранее зашитого в код понятия «ёмкость»/«объём».
+        _product("Флешка Твист 8 ГБ", external_id="P1",
+                  attributes=[{"name": "Объем памяти", "value": "8 ГБ"}])
         gw = _Gateway(
             queries=["флешка"],
-            criteria=[{"n": 1, "concept": "ёмкость", "operator": ">=", "value": "32 ГБ",
-                       "keep": True, "axis": "capacity", "num_min": 32768}],
+            criteria=[{"n": 1, "concept": "объём памяти", "operator": ">=", "value": "32 ГБ",
+                       "unit": "ГБ", "keep": True, "axis": "capacity", "num_min": 32}],
             grid=[{"id": "P1", "cells": {"1": "y"}}],   # модель ошибочно говорит "подходит"
         )
-        result = _run(gw, _line(name="Флешка", rows=[{"label": "Ёмкость", "value": "не менее 32 ГБ"}]))
+        result = _run(gw, _line(name="Флешка", rows=[{"label": "Объём памяти", "value": "не менее 32 ГБ"}]))
         card = result.candidates[0]
         self.assertEqual(card["mismatch_count"], 1)   # код поставил ✗ по 8 ГБ vs ≥32
         self.assertIn("8", card["mismatches"][0])
 
     def test_silent_card_is_left_to_the_agent(self):
-        _product("Флешка Твист", external_id="P1")   # ёмкости в названии нет
+        _product("Флешка Твист", external_id="P1")   # ёмкости нигде нет
         gw = _Gateway(
             queries=["флешка"],
             criteria=[{"n": 1, "concept": "ёмкость", "operator": ">=", "value": "32 ГБ",
-                       "keep": True, "axis": "capacity", "num_min": 32768}],
+                       "unit": "ГБ", "keep": True, "axis": "capacity", "num_min": 32}],
             grid=[{"id": "P1", "cells": {"1": "m"}}],
         )
         result = _run(gw, _line(name="Флешка", rows=[{"label": "Ёмкость", "value": "не менее 32 ГБ"}]))
@@ -651,6 +716,31 @@ class CascadeGenericNumericAttributeTests(TestCase):
         self.assertEqual(card["matrix"][0]["source"], "code")
         self.assertEqual(card["mismatch_count"], 1)
 
+    def test_a_confirmed_mismatch_skips_the_agent_for_the_rest_of_the_card(self):
+        """Код уже нашёл жёсткое несовпадение по ОДНОЙ строке (плотность
+        80 вместо ≥140) — агент не зовётся на ДОРАЗБОР второй, ещё не
+        решённой строки: эта карточка уже не станет exact-совпадением, а
+        сортировка шага 7 и так ставит matrix_status != "complete" ниже
+        точных совпадений. Карточка при этом никуда не пропадает, mismatch
+        остаётся видимым."""
+        _product("Бумага тонкая", external_id="P1", attributes=[{"name": "Плотность", "value": "80 г/м²"}])
+        criteria = [
+            {"n": 1, "concept": "плотность бумаги", "operator": ">=", "value": "140 г/м²",
+             "unit": "г/м²", "num_min": 140, "keep": True},
+            {"n": 2, "concept": "морозостойкость сырья", "operator": ">=", "value": "5 баллов",
+             "unit": "баллов", "num_min": 5, "keep": True},
+        ]
+        gw = _Gateway(queries=["бумага"], criteria=criteria, grid=[])
+        result = _run(gw, _line(name="Бумага", rows=[
+            {"label": "Плотность", "value": "не менее 140 г/м²"},
+            {"label": "Морозостойкость", "value": "не менее 5 баллов"},
+        ]))
+        card = result.candidates[0]
+        self.assertEqual(gw.calls["step6"], 0)
+        self.assertEqual(card["mismatch_count"], 1)
+        self.assertNotEqual(card["matrix_status"], "complete")
+        self.assertEqual(result.diagnostics["step6_skipped_disqualified"], 1)
+
     def test_no_matching_attribute_name_is_left_to_the_agent(self):
         _product("Бумага", external_id="P1", attributes=[{"name": "Граммаж", "value": "150 г/м²"}])
         gw = _Gateway(queries=["бумага"], criteria=self._criterion(), grid=[{"id": "P1", "cells": {"1": "y"}}])
@@ -697,6 +787,37 @@ class CascadeGenericNumericAttributeTests(TestCase):
                  attributes=[{"name": "Плотность", "value": "150 г/м2"}])
         gw = _Gateway(queries=["ткань"], criteria=self._criterion(unit="г/м²", value="140 г/м²"), grid=[])
         result = _run(gw, _line(name="Ткань", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)
+
+    def test_range_valued_attribute_is_not_confused_by_its_own_second_number(self):
+        """Регрессия: «200-220 г/м2» на карточке — _UNIT_TAIL_RE (в её класс
+        символов нарочно входят цифры ради «г/м2» без пробела) подъедала
+        «220» как единицу измерения вместо «г/м2», единицы переставали
+        совпадать, и код отказывался от заведомо подходящего атрибута
+        (200 >= 140). Нижняя граница диапазона берётся числом."""
+        _product("Рубашка поло", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "200-220 г/м2"}])
+        gw = _Gateway(queries=["рубашка"], criteria=self._criterion(), grid=[])
+        result = _run(gw, _line(name="Рубашка", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["matrix"][0]["source"], "code")
+        self.assertEqual(card["mismatch_count"], 0)
+
+    def test_denier_spelling_variants_are_recognized_as_the_same_unit(self):
+        """Денье — реальная и частая единица у тканевых сумок/рюкзаков/
+        дождевиков («210D»), встречающаяся и в самой строке ТЗ под разными
+        написаниями. Таблица UnitAlias (миграция 0033) сводит «D»/«den»/
+        «ден»/«денье» к одному каноническому виду — код не гадает конвертацию
+        в другую физическую величину (г/м², см. docs/backlog/
+        cascade-step5-matching.md, п.2), только узнаёт одну и ту же единицу,
+        записанную по-разному."""
+        _product("Рюкзак-мешок", external_id="P1",
+                 attributes=[{"name": "Плотность", "value": "210D"}])
+        gw = _Gateway(queries=["рюкзак"], criteria=self._criterion(unit="ден", value="200 ден", num_min=200),
+                       grid=[])
+        result = _run(gw, _line(name="Рюкзак", rows=[{"label": "Плотность", "value": "не менее 200 ден"}]))
         card = result.candidates[0]
         self.assertEqual(card["matrix"][0]["source"], "code")
         self.assertEqual(card["mismatch_count"], 0)
@@ -751,11 +872,13 @@ class CascadeGenericNumericAttributeTests(TestCase):
 
 
 class CascadeDiscoveryTests(TestCase):
-    def test_agent_attribute_hint_closes_the_cell_for_the_next_wave_without_a_call(self):
+    def test_agent_attribute_hint_is_learned_and_reused_on_a_later_run(self):
+        """Агент называет атрибут в поле "a" (шаг 6) — код запоминает пару
+        понятие→атрибут в AttributeConceptHint. На следующем прогоне (любая
+        карточка, необязательно та же) шаг 5 уже сам находит эту
+        характеристику по словарю и закрывает клетку без агента."""
         _product("Бумага 1", external_id="P1", price="1",
                  attributes=[{"name": "Граммаж", "value": "150 г/м²"}])
-        _product("Бумага 2", external_id="P2", price="2",
-                 attributes=[{"name": "Граммаж", "value": "120 г/м²"}])
         criteria = [{"n": 1, "concept": "плотность", "operator": ">=", "value": "140 г/м²",
                      "unit": "г/м²", "num_min": 140, "keep": True}]
         calls = {"step6": 0}
@@ -773,17 +896,114 @@ class CascadeDiscoveryTests(TestCase):
                 return {"grid": [{"c": 1, "r": 1, "v": "y", "w": "150", "a": "Граммаж"}]}, usage
             raise AssertionError(prompt[:80])
 
+        line = _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}])
         with patch("tenders.services._ai_gateway_json", side_effect=gateway):
-            result = Cascade(
-                _line(name="Бумага", rows=[{"label": "Плотность", "value": "не менее 140 г/м²"}]),
-                step_settings={"6": {"first_batch": 1, "ceiling": 10}},
-            ).run()
+            Cascade(line).run()
 
-        self.assertEqual(calls["step6"], 1)  # вторая карточка не звала агента вовсе
+        self.assertEqual(calls["step6"], 1)
+        self.assertTrue(AttributeConceptHint.objects.filter(attribute_name="Граммаж").exists())
+
+        # Второй прогон, ДРУГАЯ карточка с тем же названием атрибута — шаг 5
+        # закрывает клетку сам, по словарю, агента для неё не зовёт.
+        _product("Бумага 2", external_id="P2", price="2",
+                 attributes=[{"name": "Граммаж", "value": "120 г/м²"}])
+        with patch("tenders.services._ai_gateway_json", side_effect=gateway):
+            result = Cascade(line).run()
+
+        self.assertEqual(calls["step6"], 1)  # новых вызовов агента не было
         by_id = {c["id"]: c for c in result.candidates}
-        self.assertEqual(by_id["P1"]["matrix"][0]["source"], "agent")
         self.assertEqual(by_id["P2"]["matrix"][0]["source"], "code")
-        self.assertEqual(by_id["P2"]["mismatch_count"], 1)  # 120 < 140, найдено кодом по подсказке
+        self.assertEqual(by_id["P2"]["mismatch_count"], 1)  # 120 < 140, найдено кодом по словарю
+
+
+class CascadeCompositeAxisTests(TestCase):
+    """Несколько критериев одной строки ТЗ (source_label) против одного
+    составного значения карточки («25 х 34 см») — комбинаторика без
+    единого вызова агента, см. _prefill_composite_axis_groups."""
+
+    def test_composite_card_value_resolves_all_split_axes_with_cm_to_mm(self):
+        _product("Папка для документов Norton, черный", external_id="P1",
+                  attributes=[{"name": "Размер товара (см)", "value": "25 х 34"}])
+        gw = _Gateway(
+            queries=["папка"],
+            criteria={
+                "1": [
+                    {"label": "Длина", "concept": "длина папки", "operator": ">=", "value": "240",
+                     "unit": "мм", "num_min": 240},
+                    {"label": "Ширина", "concept": "ширина папки", "operator": ">=", "value": "330",
+                     "unit": "мм", "num_min": 330},
+                ],
+            },
+        )
+        result = _run(gw, _line(name="Папка", rows=[{"label": "Размер, мм", "value": "≥240 x 330"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["mismatch_count"], 0)
+        self.assertEqual(card["match_count"], 2)
+        self.assertTrue(all(e["source"] == "code" for e in card["matrix"]))
+
+    def test_axis_failing_every_order_is_marked_n_when_attribute_name_matches(self):
+        _product("Папка для документов Norton, черный", external_id="P1",
+                  attributes=[{"name": "Размер товара (см)", "value": "10 х 12"}])
+        gw = _Gateway(
+            queries=["папка"],
+            criteria={
+                "1": [
+                    {"label": "Длина", "concept": "длина папки", "operator": ">=", "value": "240",
+                     "unit": "мм", "num_min": 240},
+                    {"label": "Ширина", "concept": "ширина папки", "operator": ">=", "value": "330",
+                     "unit": "мм", "num_min": 330},
+                ],
+            },
+        )
+        result = _run(gw, _line(name="Папка", rows=[{"label": "Размер, мм", "value": "≥240 x 330"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["mismatch_count"], 2)
+        self.assertTrue(all(e["source"] == "code" for e in card["matrix"]))
+
+    def test_unrelated_attribute_name_can_still_say_yes(self):
+        """Составное значение нашлось у атрибута, чьё имя никак не связано
+        со строкой ТЗ, но набор чисел удовлетворяет обеим осям сразу —
+        достаточно самого совпадения чисел, имя атрибута не обязательно."""
+        _product("Сумка", external_id="P1",
+                  attributes=[{"name": "Вес упаковки (см)", "value": "10 х 12"}])
+        gw = _Gateway(
+            queries=["сумка"],
+            criteria={
+                "1": [
+                    {"label": "Длина", "concept": "длина", "operator": ">=", "value": "50",
+                     "unit": "мм", "num_min": 50},
+                    {"label": "Ширина", "concept": "ширина", "operator": ">=", "value": "80",
+                     "unit": "мм", "num_min": 80},
+                ],
+            },
+        )
+        result = _run(gw, _line(name="Сумка", rows=[{"label": "Размер, мм", "value": "≥50 x 80"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["match_count"], 2)
+        self.assertEqual(card["mismatch_count"], 0)
+
+    def test_unrelated_attribute_name_never_produces_a_false_no(self):
+        """Тот же несвязанный по имени атрибут, но числа НЕ подходят ни при
+        одном порядке — код не рискует говорить "нет" по неподтверждённому
+        полю, оставляет строку агенту вместо того, чтобы гадать."""
+        _product("Сумка", external_id="P1",
+                  attributes=[{"name": "Вес упаковки (см)", "value": "1 х 2"}])
+        gw = _Gateway(
+            queries=["сумка"],
+            criteria={
+                "1": [
+                    {"label": "Длина", "concept": "длина", "operator": ">=", "value": "240",
+                     "unit": "мм", "num_min": 240},
+                    {"label": "Ширина", "concept": "ширина", "operator": ">=", "value": "330",
+                     "unit": "мм", "num_min": 330},
+                ],
+            },
+        )
+        result = _run(gw, _line(name="Сумка", rows=[{"label": "Размер, мм", "value": "≥240 x 330"}]))
+        card = result.candidates[0]
+        self.assertEqual(card["match_count"], 0)
+        self.assertEqual(card["mismatch_count"], 0)
+        self.assertNotEqual(card["matrix_status"], "complete")
 
 
 class CascadeOpenAxisTests(TestCase):
@@ -828,19 +1048,21 @@ class BuildHypothesisIntegrationTests(TestCase):
     def test_end_to_end_through_build_training_hypothesis(self):
         from .services import build_training_hypothesis
 
-        _product("USB-флешка Твист 32 ГБ", external_id="F32", group_id="G1", price="491")
-        _product("USB-флешка Твист 16 ГБ", external_id="F16", group_id="G1", price="410")
+        _product("USB-флешка Твист 32 ГБ", external_id="F32", group_id="G1", price="491",
+                  attributes=[{"name": "Объем памяти", "value": "32 ГБ"}])
+        _product("USB-флешка Твист 16 ГБ", external_id="F16", group_id="G1", price="410",
+                  attributes=[{"name": "Объем памяти", "value": "16 ГБ"}])
         gw = _Gateway(
             item="флешка", queries=["флешка", "флеш-накопитель"],
             criteria=[{"n": 1, "concept": "ёмкость памяти", "operator": ">=", "value": "32 ГБ",
-                       "keep": True, "axis": "capacity", "num_min": 32768}],
+                       "unit": "ГБ", "keep": True, "axis": "capacity", "num_min": 32}],
             grid=[{"id": "F32", "cells": {"1": "y"}}],
         )
         line = _line(name="Поставка флеш-накопителей с логотипом", rows=[
             {"label": "Ёмкость", "value": "не менее 32 ГБ"},
         ])
         with patch("tenders.services._ai_gateway_json", side_effect=gw):
-            hypothesis = build_training_hypothesis(line)
+            hypothesis = build_training_hypothesis(line, current={"route": {"steps": ["Закупка готового изделия"], "processes": [{"id": "purchase", "kind": "catalog", "name": "Закупка готового изделия"}]}}, recompute="catalog")
         self.assertEqual(hypothesis["search_plan"]["item"], "флешка")
         self.assertTrue(hypothesis["catalog_candidates"])
         self.assertIn("32", hypothesis["catalog_candidates"][0]["name"])

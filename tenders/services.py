@@ -2435,27 +2435,6 @@ def _requirement_skip_labels():
 
 
 
-_FROZEN_ROUTE_STEPS = ["Закупка готового изделия", "Нанесение"]
-_FROZEN_ROUTE_REASON = "Маршрут временно не анализируется (идёт настройка поиска) — принят по умолчанию."
-
-
-def _frozen_route(reason=None, purchase_details=None):
-    """The route is frozen to a fixed two-step list while product search is
-    being perfected. Carries BOTH the display list (`steps`) and the
-    matching internal process list (`processes`) — anything that rebuilds
-    the route from `processes` (e.g. picking a supplier product) then keeps
-    the second step instead of silently dropping it."""
-    return {
-        "name": " + ".join(_FROZEN_ROUTE_STEPS),
-        "steps": list(_FROZEN_ROUTE_STEPS),
-        "processes": [
-            {"name": "Закупка готового изделия", "details": list(purchase_details or [])},
-            {"name": "Нанесение", "details": []},
-        ],
-        "reason": _cell_text(reason)[:700] or _FROZEN_ROUTE_REASON,
-    }
-
-
 # --- Шаг 4 каталога: дешёвый фильтр названий -----------------------------
 # Читает ТОЛЬКО название товара (не карточку), сотнями, пачками по 240 —
 # отсеивает коробку/чехол/кабель/набор. Спорное оставляет; всё остальное
@@ -2725,48 +2704,32 @@ def learn_lessons_from_session(hypothesis, session, user):
     return saved
 
 
-def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None, clear_ranking=False):
-    """Собирает вход для восьмишагового каскада подбора (tenders/cascade.py) и
-    раскладывает его результат в гипотезу обучающего диалога.
+def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None, clear_ranking=False, step_id="", learn_for_similar=True):
+    from .routes import build_route_hypothesis, catalog_step_state, merge_catalog_step, route_instructions
 
-    `recompute`:
-    - "all" (по умолчанию) — полный пересчёт (маршрут строится заново).
-    - "catalog" — оставить прежний маршрут; каскад всё равно перегоняется,
-      но шаг 1 (разбор ТЗ + синонимы) сам берётся из кэша, если ТЗ не менялось.
+    current = current if isinstance(current, dict) else {}
+    instructions = route_instructions(current, feedback, instructions_override, recompute, step_id, learn_for_similar)
+    if recompute != "catalog":
+        return build_route_hypothesis(line, current, instructions, progress_callback)
+    step, state = catalog_step_state(current, step_id)
+    search_line = {**line, "name": step.get("catalog_item") or line.get("name")}
+    result = _build_catalog_hypothesis(
+        search_line, current={**current, **state}, progress_callback=progress_callback,
+        session_instructions=[entry for entry in instructions if entry.get("scope") not in {"catalog", "requirements"} or entry.get("step_id", step["id"]) == step["id"]],
+        clear_ranking=clear_ranking,
+    )
+    result["session_instructions"] = [
+        *[entry for entry in instructions if entry.get("scope") in {"catalog", "requirements"} and entry.get("step_id", step["id"]) != step["id"]],
+        *result.get("session_instructions", []),
+    ]
+    return merge_catalog_step(current, result, line, step["id"])
 
-    Здесь: сбор фидбека сессии + сохранённых правил «вне подбора» + подходящих
-    уроков → Cascade(...).run() → карточки, план, галочки, вердикты фидбека →
-    гипотеза. «Принять и обучить» дальше пишет каждую инструкцию в Lesson.
-    """
+
+def _build_catalog_hypothesis(line, current, session_instructions, progress_callback=None, clear_ranking=False):
+    """Run the existing eight-step product search for one requested route stage."""
     started_at = time.perf_counter()
     from .catalog import CatalogSyncError
     from .cascade import Cascade
-
-    if progress_callback:
-        progress_callback("cases")
-    # The admin's free-text feedback for the product shortlist, accumulated
-    # across turns. This replaces the old trigger→action rule DSL entirely:
-    # the AI shortlist pass (step 5) reads these as plain text alongside the
-    # lessons pulled from earlier similar positions, and edits the cards.
-    prior_instructions = [
-        value for value in ((current.get("session_instructions") if isinstance(current, dict) else None) or [])
-        if isinstance(value, dict) and _cell_text(value.get("text"))
-    ]
-    if instructions_override is not None:
-        session_instructions = [
-            {"text": _cell_text(value.get("text"))[:600], "scope": _cell_text(value.get("scope")) or "catalog"}
-            for value in instructions_override if isinstance(value, dict) and _cell_text(value.get("text"))
-        ]
-    else:
-        session_instructions = list(prior_instructions)
-        if feedback:
-            # The catalog box triggers recompute="catalog"; the route box
-            # triggers a full rebuild. While the route is frozen only catalog
-            # feedback reaches the shortlist pass.
-            session_instructions.append({
-                "text": _cell_text(feedback)[:600],
-                "scope": "catalog" if recompute == "catalog" else "route",
-            })
 
     # Session-only sort flip ("сначала дорогие") — carried between turns,
     # never written to a lesson. Applied to the first deterministic sort
@@ -2786,10 +2749,10 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
     ]
     skip_labels = {rule["label_normalized"] for rule in _requirement_skip_labels()}
     prior_route = current.get("route") if isinstance(current, dict) else None
-    if recompute == "catalog" and isinstance(prior_route, dict) and prior_route.get("steps"):
+    if isinstance(prior_route, dict) and prior_route.get("steps"):
         route = prior_route
     else:
-        route = _frozen_route()
+        raise TenderAIError("Сначала постройте маршрут и выберите этап подбора.")
 
     cascade_started_at = time.perf_counter()
     catalog_warning = ""
@@ -2876,7 +2839,7 @@ def build_training_hypothesis(line, current=None, feedback="", progress_callback
         "route": route,
         "costs": [],
         "questions": [],
-        "assumptions": ["Маршрут временно принят по умолчанию — идёт настройка поиска."],
+        "assumptions": current.get("assumptions", []),
         "matched_example_ids": [],
         # The admin's own words, cumulative across the session — shown as
         # "Ваши корректировки". The per-instruction "applied / not applied"
@@ -2980,23 +2943,6 @@ def apply_catalog_candidate(hypothesis, line, product_id, selection_mode="manual
         "confirmed": False,
     })
     raw["costs"] = costs
-    # Route stays frozen (search-tuning phase) — picking a product only
-    # fills in the purchase step's supplier detail and its reason line; it
-    # must not drop "Нанесение" or let the general normalizer's route/type
-    # guesses (which would show 55% + "Другой тип производства") surface.
-    fit_exact = candidate.get("fit") == "exact"
-    mismatch_text = "; ".join(_short_text_list(candidate.get("mismatches"), limit=3))
-    if selection_mode == "automatic":
-        if fit_exact:
-            route_reason = f"Автоматически взят лучший по подбору товар: {supplier_name}, полностью соответствует проверенным требованиям ТЗ. Его цена включена в закупочную себестоимость; нанесение — отдельный процесс."
-        else:
-            route_reason = f"Автоматически взят первый по подбору товар: {supplier_name}. Проверьте расхождения: {mismatch_text or 'часть характеристик требует проверки'}. При необходимости выберите в списке другой."
-    elif fit_exact:
-        route_reason = f"Готовое изделие найдено у поставщика {supplier_name} и соответствует проверенным требованиям ТЗ. Его актуальная цена включена в закупочную себестоимость; нанесение считается отдельным процессом."
-    else:
-        route_reason = f"Товар поставщика {supplier_name} выбран администратором как рабочая альтернатива. Расхождения, которые нужно учитывать: {mismatch_text or 'часть характеристик требует проверки'}."
-    purchase_details = [f"{supplier_name}, арт. {candidate.get('article', '')}".strip().strip(",")]
-    raw["route"] = _frozen_route(reason=route_reason, purchase_details=purchase_details)
     raw["questions"] = [
         value for value in raw.get("questions", []) if not (
             "цен" in _normalized_text(value)
@@ -3005,10 +2951,7 @@ def apply_catalog_candidate(hypothesis, line, product_id, selection_mode="manual
     ] if isinstance(raw.get("questions"), list) else []
     production_types = list(ProductionType.objects.filter(is_active=True))
     normalized = _normalize_training_hypothesis(raw, line, production_types, raw.get("matched_example_ids", []))
-    # Pin the frozen route/type/confidence back over the normalizer's guesses.
-    normalized["route"] = _frozen_route(reason=route_reason, purchase_details=purchase_details)
-    normalized["product_type"] = ""
-    normalized["confidence"] = 1.0
+    normalized = {**raw, **normalized, "route": raw.get("route", {})}
     # Keep the whole shortlist (so any of them can still be swapped in), and
     # move the chosen one to the front — its card is then the one shown when
     # the block is collapsed, no separate preview handling needed.

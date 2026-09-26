@@ -27,8 +27,6 @@ class CascadeLabViewTests(TestCase):
         response = self.client.get(reverse("cascade_lab"))
         self.assertContains(response, "Лаборатория каскада")
         self.assertContains(response, "Максимум активных требований")
-        self.assertContains(response, "Карточек в одной волне")
-        self.assertContains(response, "Максимум новых карточек для ИИ")
         self.assertContains(response, "Применить настройки к подбору товаров")
         script = (Path(__file__).resolve().parents[1] / "static" / "tenders" / "cascade_lab.js").read_text(encoding="utf-8")
         self.assertIn('if (step !== 8 || side !== "output" || !row.url) return name;', script)
@@ -43,12 +41,12 @@ class CascadeLabViewTests(TestCase):
     def test_active_config_settings_prefill_the_lab_form(self):
         CascadeConfigVersion.objects.create(
             name="В поиске", created_by=self.admin, is_active=True,
-            settings={"steps": {"6": {"first_batch": 42}}},
+            settings={"steps": {"1": {"max_active_requirements": 42}}},
         )
         self.client.force_login(self.admin)
         response = self.client.get(reverse("cascade_lab"))
         self.assertContains(response, "data-active-config-settings=")
-        self.assertContains(response, "&quot;first_batch&quot;: 42")
+        self.assertContains(response, "&quot;max_active_requirements&quot;: 42")
 
     def test_no_active_config_leaves_prefill_empty(self):
         self.client.force_login(self.admin)
@@ -155,12 +153,10 @@ class CascadeLabViewTests(TestCase):
     def test_catalog_family_variants_survive_step_by_step_resume(self):
         supplier = CatalogSupplier.objects.create(code="test", name="Test")
         parent = CatalogProduct.objects.create(
-            supplier=supplier, external_id="16", name="Флешка 16 ГБ",
-            family_key="test:flash", variant_axes={"capacity_mb": 16384},
+            supplier=supplier, external_id="16", name="Флешка 16 ГБ", family_key="test:flash",
         )
         child = CatalogProduct.objects.create(
-            supplier=supplier, external_id="32", name="Флешка 32 ГБ",
-            family_key="test:flash", variant_axes={"capacity_mb": 32768},
+            supplier=supplier, external_id="32", name="Флешка 32 ГБ", family_key="test:flash",
         )
 
         restored = _decode_output(_encode_output([parent]))

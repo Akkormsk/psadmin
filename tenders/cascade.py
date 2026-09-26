@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -25,6 +27,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from django.db.models import F
 from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 
@@ -34,7 +37,6 @@ from .catalog import (
     OasisClient,
     _aggregate_color_variants,
     _attribute_values,
-    _capacity_mb,
     _color_family,
     _colors_compatible,
     _gifts_name_colors,
@@ -48,7 +50,7 @@ from .catalog import (
     _text_search_pool,
     _variant_size,
 )
-from .models import CascadeCache, CatalogProduct, CatalogSupplier, UnitAlias
+from .models import AttributeConceptHint, CascadeCache, CatalogProduct, CatalogSupplier, UnitAlias
 from .cascade_settings import text_search_settings
 
 logger = logging.getLogger(__name__)
@@ -76,19 +78,7 @@ def _selected_model(value, default):
     return value if value in available_models() else default
 
 
-def _axis_short(value, axis: str) -> str:
-    if axis == "capacity":
-        gb = value / 1024
-        return f"{int(gb) if gb == int(gb) else round(gb, 1)} ГБ"
-    if axis == "volume":
-        return f"{int(value) if value == int(value) else round(value, 1)} мл"
-    return str(value)
-
 import re as _re
-
-_VOLUME_RE = _re.compile(r"(\d+(?:\.\d+)?)\s*(мл|ml|л|l|литр\w*)(?![а-яa-z])", _re.I)
-_CAP_LABEL_RE = _re.compile(r"\d+(?:[.,]\d+)?\s*(?:гб|gb|тб|tb|мб|mb|гигабайт|терабайт|мегабайт)", _re.I)
-_VOL_LABEL_RE = _re.compile(r"\d+(?:[.,]\d+)?\s*(?:мл|ml|л|l|литр\w*)(?![а-яa-z])", _re.I)
 
 
 # --------------------------------------------------------------------------- #
@@ -98,7 +88,8 @@ _VOL_LABEL_RE = _re.compile(r"\d+(?:[.,]\d+)?\s*(?:мл|ml|л|l|литр\w*)(?![
 class Criterion:
     """Одна строка ТЗ после смыслового разбора (шаг 1)."""
 
-    label: str          # исходное название строки ТЗ (для панели и уроков)
+    label: str          # название строки — своё у каждой оси, если строка ТЗ
+                        # разделена на несколько критериев (см. source_label)
     raw_value: str       # исходное значение строки ТЗ
     concept: str         # о чём строка, словами модели («ёмкость памяти»)
     operator: str        # >= <= = != ~ in
@@ -107,8 +98,8 @@ class Criterion:
     checked: bool = True  # участвует ли в подборе
     axis: str = ""        # свободное слово-код оси варианта («capacity», «power», …)
                            # или "" — не ограничено списком, решает модель шага 1
-    num_min: Decimal | None = None   # нижняя граница; для axis capacity/volume — в МБ/мл,
-    num_max: Decimal | None = None   # для остальных — в исходной единице (unit)
+    num_min: Decimal | None = None   # нижняя граница, в исходной единице (unit)
+    num_max: Decimal | None = None   # верхняя граница, в исходной единице (unit)
     options: list[str] = field(default_factory=list)  # набор допустимых значений
     axis_mode: str = "choose_one"  # choose_one | fulfill_set
     importance: int = 50
@@ -116,6 +107,10 @@ class Criterion:
     maps_to: str = ""     # "color" | "material" | "" — критерий про фиксированное
                            # поле карточки (цвет/материал), не про атрибут-строку.
                            # Решает модель шага 1, не подстрока в названии критерия.
+    source_label: str = ""  # исходное название строки ТЗ ДО разделения на оси —
+                           # по нему матчатся галочка клиента и RequirementSkipRule,
+                           # не по label. Пусто означает "то же самое, что label"
+                           # (обычная, неразделённая строка).
 
     def as_row(self) -> tuple[str, str]:
         return (self.label or self.concept, self.value or self.raw_value)
@@ -164,16 +159,16 @@ def _decimal(value):
         return None
 
 
-def _volume_ml(text: str):
-    """Объём строки («450 мл», «0,5 л») в миллилитрах, либо None."""
-    match = _VOLUME_RE.search(str(text or "").lower().replace(",", "."))
-    if not match:
-        return None
-    number = _decimal(match.group(1))
-    if number is None:
-        return None
-    unit = match.group(2).lower()
-    return number * (1000 if unit.startswith(("л", "l")) and unit != "ml" else 1)
+def _as_entry_list(value) -> list:
+    """Ответ шага 1 на одну строку ТЗ — список разборов (обычно один, больше
+    одного — когда строка реально описывает несколько осей сразу, см.
+    промпт). Модель может по привычке вернуть один объект вместо массива
+    из одного элемента — оборачиваем, а не отбрасываем как ошибку формата."""
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
 
 
 _NUMBER_RE = _re.compile(r"-?\d+(?:[.,]\d+)?")
@@ -181,6 +176,11 @@ _NUMBER_RE = _re.compile(r"-?\d+(?:[.,]\d+)?")
 # верхние индексы («г/м²») — раньше без них «г/м2» обрезался до «г/м» ещё на
 # этапе извлечения, и словарь единиц (_UNIT_ALIASES) не мог его распознать.
 _UNIT_TAIL_RE = _re.compile(r"[a-zа-я0-9²³%/]+", _re.I)
+# Диапазон значения атрибута карточки («200-220 г/м2») — второе число после
+# дефиса нужно пропустить ПЕРЕД поиском единицы, иначе _UNIT_TAIL_RE (в её
+# класс символов нарочно входят и цифры, см. выше) примет его за единицу
+# измерения и сравнение единиц сломается на ровном месте.
+_RANGE_TAIL_RE = _re.compile(r"^\s*-\s*\d+(?:[.,]\d+)?")
 
 
 def _numeric_from_text(text: str):
@@ -188,16 +188,69 @@ def _numeric_from_text(text: str):
     (без перевода — единица берётся как есть, сравнивается через
     _units_compatible). Хвост возвращается «сырым» (только приведён к
     нижнему регистру) — верхние индексы ²/³ и разделитель «/» должны
-    дожить до сравнения единиц, _norm_label их бы вырезал раньше времени."""
+    дожить до сравнения единиц, _norm_label их бы вырезал раньше времени.
+    Диапазон («200-220 г/м2») — берём нижнюю границу числом, вторую половину
+    диапазона пропускаем перед поиском единицы (см. _RANGE_TAIL_RE)."""
     match = _NUMBER_RE.search(_cell(text))
     if not match:
         return None, ""
     number = _decimal(match.group(0))
     if number is None:
         return None, ""
-    tail = _cell(text)[match.end():match.end() + 12]
+    tail = _cell(text)[match.end():]
+    range_tail = _RANGE_TAIL_RE.match(tail)
+    if range_tail:
+        tail = tail[range_tail.end():]
+    tail = tail[:12]
     unit_match = _UNIT_TAIL_RE.search(tail)
     return number, unit_match.group(0).lower().strip() if unit_match else ""
+
+
+_COMPOSITE_SEP_RE = _re.compile(r"[xх*]", _re.I)
+_TOLERANCE_RE = _re.compile(r"±\s*\d+(?:[.,]\d+)?")
+_NAME_UNIT_HINT_RE = _re.compile(r"\(([^)]+)\)\s*$")
+
+
+def _split_composite_numbers(value_text, name_text=""):
+    """Несколько чисел через «х»/«x»/«*» в одном значении атрибута карточки
+    («23,5 х 32,5 х 2», «38±2 х 42±1 см») — список чисел + общая единица
+    (берётся из хвоста значения, а если там её нет — из подписи самого
+    атрибута, «Размер товара (см)» → «см»). Меньше двух чисел — это не
+    составное значение (обычное одиночное число), возвращаем пустой список,
+    вызывающий сам решает, что делать дальше."""
+    text = _cell(value_text)
+    if not _COMPOSITE_SEP_RE.search(text):
+        return [], ""
+    numbers = []
+    tail_unit = ""
+    for piece in _COMPOSITE_SEP_RE.split(text):
+        number, unit = _numeric_from_text(_TOLERANCE_RE.sub("", piece))
+        if number is None:
+            continue
+        numbers.append(number)
+        if unit:
+            tail_unit = unit
+    if len(numbers) < 2:
+        return [], ""
+    if not tail_unit:
+        hint = _NAME_UNIT_HINT_RE.search(_cell(name_text))
+        tail_unit = hint.group(1).strip() if hint else ""
+    return numbers, tail_unit
+
+
+_LENGTH_TO_MM = {"мм": Decimal(1), "mm": Decimal(1), "см": Decimal(10), "cm": Decimal(10), "м": Decimal(1000), "m": Decimal(1000)}
+
+
+def _length_mm(number, unit):
+    """Число в мм, если unit — распознанная линейная единица (мм/см/м).
+    Единственная конвертация величин, которую код себе позволяет: между
+    кратными друг другу единицами ДЛИНЫ — точная и универсальная, не
+    физическое угадывание (в отличие от денье/классности полотна, которые
+    без домысливания не переводятся, см. docs, §10 п.8)."""
+    if number is None:
+        return None
+    factor = _LENGTH_TO_MM.get(_cell(unit).strip().lower())
+    return number * factor if factor is not None else None
 
 
 # Единицы измерения, реально встречающиеся в каталоге. Один физический
@@ -318,16 +371,43 @@ def _attribute_numeric_value(attributes, concept_tokens: set, required_unit: str
     return matches[0][0], matches[0][1]
 
 
-def _variant_label(product) -> str:
-    """Метка варианта: «XL» / «размер 50» из _variant_size, иначе ёмкость или
-    объём из названия («16 ГБ», «450 мл») — флешки/кружки не кладут ёмкость в
-    поле «Размер», а различаются именно ей."""
+def _group_varying_attribute(skus) -> str:
+    """Имя атрибута, который реально различается по значению внутри этой
+    семьи SKU — настоящая ось варианта, найденная по данным поставщика, а
+    не по зашитому в код списку понятий («ёмкость»/«объём»/...): для
+    флешек это окажется «Объём памяти», для бумаги — «Плотность», без
+    единой строчки, которая знала бы про них заранее. Найдено 0 или больше
+    одного различающихся атрибутов — "" (молчим, не гадаем)."""
+    if len(skus) < 2:
+        return ""
+    values_by_name: dict[str, set] = {}
+    for product in skus:
+        for attribute in (product.attributes if isinstance(product.attributes, list) else []):
+            if not isinstance(attribute, dict):
+                continue
+            name = _cell(attribute.get("name"))
+            value = _cell(attribute.get("value"))
+            if not name or not value:
+                continue
+            values_by_name.setdefault(name, set()).add(value)
+    varying = [name for name, values in values_by_name.items() if len(values) > 1]
+    return varying[0] if len(varying) == 1 else ""
+
+
+def _variant_label(product, varying_attribute: str = "") -> str:
+    """Метка варианта: «XL» / «размер 50» из _variant_size, иначе значение
+    атрибута, который отличает эту SKU от остальных в семье
+    (_group_varying_attribute) — какой именно это атрибут, код не знает
+    заранее, только то, что он тут единственный различающийся."""
     label = _variant_size(product)
     if label:
         return label
-    text = f"{product.name} {product.full_name or ''}"
-    match = _CAP_LABEL_RE.search(text) or _VOL_LABEL_RE.search(text)
-    return _cell(match.group(0)) if match else ""
+    if not varying_attribute:
+        return ""
+    for attribute in (product.attributes if isinstance(product.attributes, list) else []):
+        if isinstance(attribute, dict) and _cell(attribute.get("name")) == varying_attribute:
+            return _cell(attribute.get("value"))[:40]
+    return ""
 
 
 def _cache_get(kind: str, key: str):
@@ -344,6 +424,44 @@ def _cache_put(kind: str, key: str, payload: dict) -> None:
         CascadeCache.objects.update_or_create(kind=kind, key=key, defaults={"payload": payload})
     except Exception:
         logger.exception("CascadeCache write failed (%s)", kind)
+
+
+def _concept_key(crit: "Criterion") -> str:
+    """Ключ понятия критерия для словаря атрибутов (AttributeConceptHint) —
+    набор смысловых слов, а не жёстко заданное имя: два по-разному
+    сформулированных, но однозначно совпадающих по смыслу критерия дают
+    один и тот же ключ; никакое конкретное понятие (ёмкость/объём/...) в
+    коде не упомянуто."""
+    return " ".join(sorted(_meaningful_tokens(f"{crit.concept} {crit.label}")))
+
+
+def _learned_attribute_name(crit: "Criterion") -> str:
+    """Название атрибута, которое агент раньше уже подтвердил для этого
+    понятия — на любой карточке, любого поставщика. Пусто, если понятие ещё
+    ни разу не встречалось."""
+    key = _concept_key(crit)
+    if not key:
+        return ""
+    hint = AttributeConceptHint.objects.filter(concept_key=key).order_by("-hits").first()
+    return hint.attribute_name if hint else ""
+
+
+def _remember_attribute_hint(crit: "Criterion", attribute_name: str) -> None:
+    """Агент шага 6 сам назвал атрибут для критерия — запоминаем эту пару в
+    словаре, чтобы шаг 5 в следующий раз закрыл такой же критерий сам, без
+    нового обращения к агенту. Растёт только от реальных подтверждений."""
+    key = _concept_key(crit)
+    attribute_name = _cell(attribute_name)[:120]
+    if not key or not attribute_name:
+        return
+    try:
+        obj, created = AttributeConceptHint.objects.get_or_create(
+            concept_key=key, attribute_name=attribute_name, defaults={"hits": 1},
+        )
+        if not created:
+            AttributeConceptHint.objects.filter(pk=obj.pk).update(hits=F("hits") + 1)
+    except Exception:
+        logger.exception("AttributeConceptHint write failed")
 
 
 def _ai_json(prompt, *, max_tokens, timeout=45, model, images=None):
@@ -512,7 +630,7 @@ class Cascade:
         # вызывая модель заново. Любая правка промпта/разбора шага 1 ОБЯЗАНА
         # поднимать эту версию, иначе результат невозможно будет проверить
         # без ручной чистки CascadeCache.
-        criteria_cache_key = f"criteria-v5|{self._tz_hash}|{model}"
+        criteria_cache_key = f"criteria-v6|{self._tz_hash}|{model}"
         cached = _cache_get("criteria", criteria_cache_key) if use_cache else None
         if cached:
             self._load_step1(cached, rows)
@@ -532,15 +650,16 @@ class Cascade:
 Строки ТЗ:
 {numbered}
 
-Верни только JSON. criteria — ОБЪЕКТ, а не массив: ключ — номер строки СТРОГО из списка выше ("1", "2", ...), значение — разбор этой строки:
-{{"criteria":{{"1":{{"concept":"о чём строка, своими словами","operator":">=|<=|=|!=|~|in","value":"...","unit":"...","importance":80,"importance_reason":"почему именно такой приоритет","axis":"","axis_mode":"choose_one|fulfill_set","num_min":null,"num_max":null,"options":[],"maps_to":""}}}}}}
+Верни только JSON. criteria — ОБЪЕКТ, а не массив: ключ — номер строки СТРОГО из списка выше ("1", "2", ...), значение — МАССИВ из одного или нескольких разборов этой строки (несколько — только для строки с несколькими независимыми осями сразу, см. правило про «х»/«*» ниже):
+{{"criteria":{{"1":[{{"label":"","concept":"о чём строка, своими словами","operator":">=|<=|=|!=|~|in","value":"...","unit":"...","importance":80,"importance_reason":"почему именно такой приоритет","axis":"","axis_mode":"choose_one|fulfill_set","num_min":null,"num_max":null,"options":[],"maps_to":""}}]}}}}
 
 Правила:
 - criteria: РОВНО один ключ на каждую пронумерованную строку ТЗ, без пропусков. Ключ — это номер строки, к которой относится разбор именно её содержимого, а не порядковый номер по счёту заполнения. Даже если две строки означают одно и то же по смыслу (например «синий» и «цвет: синий») — НЕ объединяй их в одну запись, верни для каждой свой ключ с одинаковым разобранным значением. Каждое значение должно описывать ИМЕННО ту строку, чей номер стоит ключом — не соседнюю. Характеристикой может быть ЛЮБОЕ измеримое или описываемое свойство товара — не ограничивайся заранее известным списком (плотность, яркость, мощность, температура, вязкость — что угодно).
+- Строка с НЕСКОЛЬКИМИ числами через «х»/«x»/«*», где каждое число — своя измеримая ось одного товара (например «Размер, мм: ≥240 x 340» — длина и ширина; «не менее 7*7*7 см» — длина, ширина и высота): верни в массиве этой строки ПО ОДНОЙ записи на каждую ось, у каждой свои num_min/num_max и короткий "label" для этой оси (например "Длина", "Ширина", "Высота" — только то, что реально следует из текста, не придумывай). Не разделяй так строку, где число одно, или где два числа — это разброс ОДНОЙ и той же величины (например «200-220 г/м2» — это одна запись, плотность, с num_min:200 и num_max:220, а не две разные оси). Для обычной (неразделённой) строки "label" можно оставить пустым — возьмётся название строки как есть.
 - axis: короткое слово-код латиницей, если это то, чем отличаются варианты ОДНОГО товара — то есть по этому признаку у одного и того же артикула бывает несколько версий на выбор (ёмкость памяти, объём, размер одежды, мощность инструмента — что угодно, список не фиксирован). Иначе "".
 - axis_mode: "choose_one", когда для заказа выбирается одно значение оси; "fulfill_set", когда заказ собирается из нескольких вариантов (например, размерный ряд).
 - importance: 0..100 — единственный сигнал приоритета, ЗАМЕНЯЕТ собой отдельное решение «проверять/не проверять». Это НЕ общая важность требования для бизнеса, а приоритет ИМЕННО для проверки конкретного товара по каталогу. Низкий приоритет (не выше 20) для ДВУХ разных случаев, оценивай оба: (1) требование в принципе не с чем сравнить в карточке каталога (маркировка Честного Знака, документы, сроки поставки, гарантия, условия производства и пошива) — даже если по факту важно для сделки, сверять нечем; (2) строка ПОВТОРЯЕТ по смыслу уже описанную выше строку того же ТЗ (например «цвет: синий» после «Цвет продукции: синий») — повторная проверка того же самого не даёт НОВОЙ информации для сопоставления с каталогом, даже если сам признак сам по себе важен. Для дублей используй разбор той же строки, что и у оригинала, но с низким importance. importance_reason — короткое объяснение именно с точки зрения проверки по каталогу (в т.ч. если это дубль — так и укажи).
-- num_min/num_max: для ЛЮБОГО критерия с числовой границей. Для оси "capacity" (объём памяти/накопителя) переведи в МБ (32 ГБ → 32768). Для оси "volume" (объём жидкости/тары) переведи в мл (0,5 л → 500). Для остальных числовых критериев — оставь число как есть, единицу измерения запиши в unit, ничего не пересчитывай (плотность «140 г/м²» → num_min:140, unit:"г/м²"). «Не менее/от/минимум» → num_min, «не более/до/максимум» → num_max, диапазон → оба, конкретное число без оговорок → оба равны значению. Нечисловой критерий или число не назвали — null.
+- num_min/num_max: для ЛЮБОГО критерия с числовой границей — оставь число как есть, единицу измерения запиши в unit, ничего не пересчитывай (32 ГБ → num_min:32, unit:"ГБ"; 0,5 л → num_min:0.5, unit:"л"; плотность «140 г/м²» → num_min:140, unit:"г/м²"). «Не менее/от/минимум» → num_min, «не более/до/максимум» → num_max, диапазон → оба, конкретное число без оговорок → оба равны значению. Нечисловой критерий или число не назвали — null.
 - options: список допустимых значений, если требование перечислением (размеры «M, L, XL»; несколько цветов). Иначе [].
 - maps_to: "color", если критерий про цвет товара целиком (не про цвет логотипа/принта/упаковки); "material", если критерий про материал/состав товара целиком. Иначе "".
 """
@@ -586,19 +705,20 @@ class Cascade:
             # номер строки — это ключ объекта, а не отдельный счётчик или
             # позиция, модели физически нечего перепутать между "куда писать"
             # и "что писать".
-            ordered = [raw_criteria.get(str(i)) if isinstance(raw_criteria.get(str(i)), dict) else {}
-                       for i in range(1, len(rows) + 1)]
-            matched = sum(1 for entry in ordered if entry)
+            ordered = [_as_entry_list(raw_criteria.get(str(i))) for i in range(1, len(rows) + 1)]
+            matched = sum(1 for entry_list in ordered if entry_list)
             if matched != len(rows):
                 self.diagnostics["step1_count_mismatch"] = {"rows": len(rows), "criteria": matched}
         elif isinstance(raw_criteria, list):
             # Модель проигнорировала формат объекта и всё равно вернула
             # массив — резерв на основе тех же эвристик, что были основными
             # до перехода на объект: порядок при точном совпадении длины,
-            # иначе поле "n" (см. историю в git).
+            # иначе поле "n" (см. историю в git). Разделение строки на
+            # несколько осей в этом резервном пути не поддержано — тут и так
+            # модель уже не выполнила основной формат ответа.
             valid_entries = [entry for entry in raw_criteria if isinstance(entry, dict)]
             if len(valid_entries) == len(rows):
-                ordered = valid_entries
+                ordered = [[entry] for entry in valid_entries]
             else:
                 self.diagnostics["step1_count_mismatch"] = {"rows": len(rows), "criteria": len(valid_entries)}
                 by_n = {}
@@ -608,38 +728,45 @@ class Cascade:
                     except (TypeError, ValueError):
                         continue
                     by_n[n] = entry
-                ordered = [by_n.get(i, {}) for i in range(1, len(rows) + 1)]
+                ordered = [_as_entry_list(by_n.get(i)) for i in range(1, len(rows) + 1)]
         else:
-            ordered = [{} for _ in rows]
+            ordered = [[] for _ in rows]
             if rows:
                 self.diagnostics["step1_count_mismatch"] = {"rows": len(rows), "criteria": 0}
         criteria = []
-        for row, entry in zip(rows, ordered):
-            # axis — свободный код оси, не закрытый список: модель сама решает,
-            # чем отличаются варианты ЭТОГО товара, а не только капасити/объём/размер.
-            axis = _norm_label(entry.get("axis"))[:24]
-            options = [
-                _cell(v)[:60] for v in (entry.get("options") if isinstance(entry.get("options"), list) else [])
-                if _cell(v)
-            ][:12]
-            maps_to = _cell(entry.get("maps_to")).lower()
-            maps_to = maps_to if maps_to in {"color", "material"} else ""
-            criteria.append({
-                "label": _cell(row.get("label"))[:200],
-                "raw_value": _cell(row.get("value"))[:500],
-                "concept": _cell(entry.get("concept"))[:120] or _cell(row.get("label"))[:120],
-                "operator": _cell(entry.get("operator"))[:4] or "~",
-                "value": _cell(entry.get("value"))[:200] or _cell(row.get("value"))[:200],
-                "unit": _cell(entry.get("unit"))[:24],
-                "axis": axis,
-                "num_min": str(_decimal(entry.get("num_min"))) if _decimal(entry.get("num_min")) is not None else None,
-                "num_max": str(_decimal(entry.get("num_max"))) if _decimal(entry.get("num_max")) is not None else None,
-                "options": options,
-                "axis_mode": "fulfill_set" if _cell(entry.get("axis_mode")) == "fulfill_set" else "choose_one",
-                "importance": max(0, min(100, int(entry.get("importance") or 50))),
-                "importance_reason": _cell(entry.get("importance_reason"))[:160],
-                "maps_to": maps_to,
-            })
+        for row, entry_list in zip(rows, ordered):
+            for entry in entry_list or [{}]:
+                # axis — свободный код оси, не закрытый список: модель сама решает,
+                # чем отличаются варианты ЭТОГО товара, а не только капасити/объём/размер.
+                axis = _norm_label(entry.get("axis"))[:24]
+                options = [
+                    _cell(v)[:60] for v in (entry.get("options") if isinstance(entry.get("options"), list) else [])
+                    if _cell(v)
+                ][:12]
+                maps_to = _cell(entry.get("maps_to")).lower()
+                maps_to = maps_to if maps_to in {"color", "material"} else ""
+                criteria.append({
+                    # label — своя метка оси при разделении строки на несколько
+                    # (например "Длина"/"Ширина"), иначе — название строки как есть.
+                    # source_label — ВСЕГДА исходное название строки: галочка
+                    # клиента и RequirementSkipRule матчатся по нему, а не по
+                    # метке оси, иначе снятая в ТЗ строка не снимет своих детей.
+                    "label": _cell(entry.get("label"))[:200] or _cell(row.get("label"))[:200],
+                    "source_label": _cell(row.get("label"))[:200],
+                    "raw_value": _cell(row.get("value"))[:500],
+                    "concept": _cell(entry.get("concept"))[:120] or _cell(row.get("label"))[:120],
+                    "operator": _cell(entry.get("operator"))[:4] or "~",
+                    "value": _cell(entry.get("value"))[:200] or _cell(row.get("value"))[:200],
+                    "unit": _cell(entry.get("unit"))[:24],
+                    "axis": axis,
+                    "num_min": str(_decimal(entry.get("num_min"))) if _decimal(entry.get("num_min")) is not None else None,
+                    "num_max": str(_decimal(entry.get("num_max"))) if _decimal(entry.get("num_max")) is not None else None,
+                    "options": options,
+                    "axis_mode": "fulfill_set" if _cell(entry.get("axis_mode")) == "fulfill_set" else "choose_one",
+                    "importance": max(0, min(100, int(entry.get("importance") or 50))),
+                    "importance_reason": _cell(entry.get("importance_reason"))[:160],
+                    "maps_to": maps_to,
+                })
         return {"criteria": criteria}
 
     def _load_step1(self, payload, rows) -> None:
@@ -649,7 +776,10 @@ class Cascade:
         }
         self.tz = []
         for entry in payload.get("criteria") if isinstance(payload.get("criteria"), list) else []:
-            label_n = _norm_label(entry.get("label"))
+            # Галочка клиента/правило "вне подбора" матчатся по ИСХОДНОЙ
+            # строке ТЗ (source_label), а не по метке оси — иначе снятая в
+            # ТЗ составная строка не снимет свои разделённые критерии.
+            label_n = _norm_label(entry.get("source_label") or entry.get("label"))
             importance = max(0, min(100, int(entry.get("importance") or 50)))
             importance_reason = _cell(entry.get("importance_reason"))[:160]
             # приоритет: явная галочка клиента > сохранённое правило "вне подбора" > важность.
@@ -669,6 +799,7 @@ class Cascade:
             self.tz.append(Criterion(
                 label=_cell(entry.get("label"))[:200],
                 raw_value=_cell(entry.get("raw_value"))[:500],
+                source_label=_cell(entry.get("source_label"))[:200],
                 concept=_cell(entry.get("concept"))[:120],
                 operator=_cell(entry.get("operator"))[:4] or "~",
                 value=_cell(entry.get("value"))[:200],
@@ -685,12 +816,17 @@ class Cascade:
             ))
         limit = max(0, min(100, int(self.step_settings.get("1", {}).get("max_active_requirements", 0) or 0)))
         if limit:
+            # Разбиение строки ТЗ на несколько осей («40 х 50» → длина+ширина)
+            # не должно СЪЕДАТЬ лимит своих же соседей — лишние строки,
+            # появившиеся из разбиения (их не было в исходном ТЗ), поднимают
+            # лимит на столько же, сколько сами добавили.
+            limit += max(0, len(self.tz) - len(rows))
             explicit_labels = {
                 _norm_label(row.get("label")) for row in rows
                 if isinstance(row, dict) and row.get("selected") is True
             }
-            explicit_count = sum(c.checked and _norm_label(c.label) in explicit_labels for c in self.tz)
-            candidates = [c for c in self.tz if c.checked and _norm_label(c.label) not in explicit_labels]
+            explicit_count = sum(c.checked and _norm_label(c.source_label or c.label) in explicit_labels for c in self.tz)
+            candidates = [c for c in self.tz if c.checked and _norm_label(c.source_label or c.label) not in explicit_labels]
             selected = {id(c) for c in sorted(candidates, key=lambda c: -c.importance)[:max(0, limit - explicit_count)]}
             for criterion in candidates:
                 if id(criterion) not in selected:
@@ -714,7 +850,7 @@ class Cascade:
         model = _selected_model(settings.get("model"), _TITLE_MODEL)
         use_cache = settings.get("cache", "yes") != "no"
         raw_name = _cell(self.line.get("name"))[:300]
-        cache_key = hashlib.sha1(f"title-v1|{model}|{raw_name}".encode("utf-8")).hexdigest()
+        cache_key = hashlib.sha1(f"title-v2|{model}|{raw_name}".encode("utf-8")).hexdigest()
         payload = _cache_get("searchplan", cache_key) if use_cache else None
 
         if not self._valid_search_plan(payload):
@@ -726,7 +862,8 @@ class Cascade:
 {{"item":"чистое конкретное название товара, 1-3 слова","queries":["от {minimum} до {maximum} вариантов названия этого же товара"]}}
 
 Убери канцелярские и закупочные слова, упоминания заказчика, символики, логотипа, изготовления и поставки.
-В queries дай синонимы, разговорные названия, английские варианты и альтернативные написания только этого вида товара.
+В queries дай синонимы, разговорные названия и альтернативные написания только этого вида товара — только
+на русском: каталоги поставщиков на русском языке, английские варианты ничего не находят и только засоряют поиск.
 Не добавляй характеристики: цвет, материал, объём, размер и способ нанесения.
 Не переходи к соседнему товару: флешка не карта памяти, шопер не рюкзак.
 Не создавай бессмысленные дубли только ради количества.
@@ -974,29 +1111,26 @@ class Cascade:
         return fitting
 
     def _axis_value(self, product, crit: Criterion):
-        """Значение оси у конкретного SKU: ёмкость/объём — по названию
-        (быстрый и точный способ для этих двух, см. docs); любая другая
-        числовая ось — по совпадающей характеристике самого SKU. Молчит
-        товар — None, вызывающий это не считает нарушением."""
-        if crit.axis == "capacity":
-            return _capacity_mb(f"{product.name} {product.full_name or ''} {product.size or ''}")
-        if crit.axis == "volume":
-            return _volume_ml(f"{product.name} {product.full_name or ''} {product.size or ''}")
+        """Числовое значение оси у конкретного SKU — по совпадающей
+        характеристике самого SKU, тем же путём для любой оси (ёмкость,
+        объём, плотность — что угодно, код не различает их по имени).
+        Молчит товар — None, вызывающий это не считает нарушением."""
         if crit.num_min is None and crit.num_max is None:
             return None
         number, _name = _attribute_numeric_value(
             product.attributes if isinstance(product.attributes, list) else [],
             _meaningful_tokens(f"{crit.concept} {crit.label}"), crit.unit,
-            discovered_name=self._discovered_attrs.get(self._row_of.get(id(crit)), ""),
+            discovered_name=self._discovered_attrs.get(self._row_of.get(id(crit))) or _learned_attribute_name(crit),
         )
         return number
 
     def _serialize(self, face, skus) -> dict:
         variants, variant_ids, sizes = [], [], []
+        varying_attribute = _group_varying_attribute(skus)
         for product in sorted(skus, key=lambda p: p.effective_price or Decimal("Infinity")):
             raw = product.raw_data if isinstance(product.raw_data, dict) else {}
             inner = raw.get("variants") if isinstance(raw.get("variants"), list) and raw.get("variants") else None
-            label = _variant_label(product)
+            label = _variant_label(product, varying_attribute)
             if inner:
                 for variant in inner:
                     if isinstance(variant, dict) and variant.get("product_id") not in variant_ids:
@@ -1069,13 +1203,22 @@ class Cascade:
     def step_6_agent_matrix(self, cards) -> list[dict]:
         """Шаг 5 уже решил кодом то, что мог; сюда попадают только строки с
         `matrix[].source == "not_checked"`. Карточка, полностью решённая
-        шагом 5, в агент вообще не идёт — сразу в `settled`."""
+        шагом 5, в агент вообще не идёт — сразу в `settled`. Карточка с
+        ХОТЯ БЫ одним code-подтверждённым несовпадением — туда же: код уже
+        знает, что она не подходит, агент её выше exact-совпадения не
+        поднимет, а токены на дооценку ОСТАЛЬНЫХ строк — трата впустую.
+        Карточка остаётся в выдаче с верным `mismatch_count`, просто ещё не
+        проверенные строки честно остаются «не проверено», а не получают
+        выдуманный вердикт — сортировка шага 7 и так ставит `matrix_status
+        != "complete"` ниже точных совпадений, никакого искусственного
+        обрезания пула для этого не нужно."""
         settings = self.step_settings.get("6", {})
         use_cache = settings.get("cache", "yes") != "no"
         checked, rows = self._checked_rows()
         self.feedback_instructions_result = []
 
         todo, settled = [], []
+        disqualified_skipped = 0
         for card in cards:
             if rows and card.get("matrix_status") != "complete" and use_cache:
                 cached = _cache_get("verdict", self._verdict_cache_key(card["id"]))
@@ -1090,10 +1233,13 @@ class Cascade:
                         self._apply_cell(card, rows, index, verdict, reason, "cache")
                     self._recompute_card_summary(card)
                     self.diagnostics["verdict_cache_hits"] += 1
-            (settled if card.get("matrix_status") == "complete" else todo).append(card)
+            already_disqualified = card.get("matrix_status") != "complete" and card.get("mismatch_count", 0) > 0
+            if already_disqualified:
+                disqualified_skipped += 1
+            (settled if card.get("matrix_status") == "complete" or already_disqualified else todo).append(card)
 
-        if todo:
-            self._grade_bounded(todo, checked, rows, settled=settled, use_cache=use_cache)
+        self.diagnostics["step6_skipped_disqualified"] = disqualified_skipped
+        self._grade_bounded(todo, checked, rows, settled=settled, use_cache=use_cache)
 
         if self.feedback_instructions:
             self._classify_feedback(cards, rows)
@@ -1103,6 +1249,8 @@ class Cascade:
         settings = self.step_settings.get("6", {})
         model = _selected_model(settings.get("model"), _AGENT_MODEL)
         parts = []
+        if settings.get("engine") == "jev":
+            parts.append("jev-1.13.0")
         if model != _AGENT_MODEL:
             parts.append(model)
         if self.step_settings.get("5", {}).get("numeric_prefill", "yes") == "no":
@@ -1165,138 +1313,132 @@ class Cascade:
             for index in range(1, len(rows) + 1)
         )
 
-    @staticmethod
-    def _suitable_for_stop(card) -> bool:
-        return (
-            card.get("matrix_status") == "complete"
-            and card.get("mismatch_count", 0) <= 1
-            and card.get("match_count", 0) > 0
-        )
-
-    @staticmethod
-    def _preagent_key(card):
-        price = _decimal(card.get("price"))
-        mismatches = sum(1 for entry in card["matrix"] if entry["verdict"] == "no")
-        matches = sum(1 for entry in card["matrix"] if entry["verdict"] == "yes")
-        return (card.get("relevance", 1), mismatches, -matches, price if price is not None else Decimal("Infinity"))
-
     def _grade_bounded(self, todo, checked, rows, *, settled=(), use_cache=True) -> None:
-        """Ограничивает новые проверки; уже решённые шагом 5/кэшем карточки
-        участвуют в условии остановки. matrix_status — контракт с шагом 7.
-        Полный ответ «m» отличается от пропущенной клетки и может кэшироваться.
-        """
+        """Все карточки без полностью закрытой шагом 5 матрицы получают
+        оценку агента за один проход (пачки внутри — параллельно, см.
+        _grade_grid). matrix_status — контракт с шагом 7. Полный ответ «m»
+        отличается от пропущенной клетки и может кэшироваться."""
         settings = self.step_settings.get("6", {})
-        ranked = sorted(todo, key=self._preagent_key)
-        first = max(1, min(75, int(settings.get("first_batch", os.getenv("CASCADE_STEP6_FIRST", "25")))))
-        ceiling = max(0, min(100, int(settings.get("ceiling", os.getenv("CASCADE_STEP6_CEILING", "75")))))
         model = _selected_model(settings.get("model"), _AGENT_MODEL)
-        suitable = sum(self._suitable_for_stop(card) for card in settled)
-        verified = list(settled)
         diagnostics = {
-            "pool": len(todo), "graded": 0, "batches": 0, "cached": len(settled),
-            "complete": len(settled), "suitable": suitable,
+            "pool": len(todo), "graded": len(todo), "cached": len(settled), "complete": len(settled),
             "code_prefilled_cells": sum(
                 1 for card in (*todo, *settled) for entry in card["matrix"] if entry["source"] == "code"
             ),
-            "wave_size": first, "ai_ceiling": ceiling,
         }
         self.diagnostics["step6"] = diagnostics
-        stop_reason = "exhausted"
-        for offset in range(0, min(len(ranked), ceiling), first):
-            if self._safe_early_stop(verified, ranked[offset:]):
-                break
-            batch = ranked[offset:min(offset + first, ceiling)]
-            # Открытие атрибута с прошлой волны (см. _apply_discovered) может
-            # закрыть карточку кодом ещё ДО того, как до неё дошла очередь —
-            # тогда агента по ней уже не зовём вовсе.
-            need_agent = [card for card in batch if card.get("matrix_status") != "complete"]
-            grids = self._grade_grid(need_agent, rows, model=model, batch_size=3) if need_agent else {}
-            diagnostics["graded"] += len(batch)
-            if need_agent:
-                diagnostics["batches"] += 1
-            for card in batch:
-                cid = str(card["id"])
-                for row_idx, (verdict, reason) in grids.get(cid, {}).items():
-                    self._apply_cell(card, rows, row_idx, verdict, reason, "agent")
-                self._recompute_card_summary(card)
-                if card["matrix_status"] == "complete":
-                    diagnostics["complete"] += 1
-                    suitable += self._suitable_for_stop(card)
-                    verified.append(card)
-                    if use_cache:
-                        _cache_put("verdict", self._verdict_cache_key(cid), {
-                            "grid": {
-                                str(i): [{"yes": "y", "no": "n", "unknown": "m"}.get(entry["verdict"], "m"), entry["reason"]]
-                                for i, entry in enumerate(card["matrix"], 1)
-                            },
-                        })
-            # То, что агент по ходу сопоставил критерию сам (поле "a" в
-            # клетке) — сразу пробуем на карточках следующей волны кодом,
-            # без нового вызова (см. docs, «открытие атрибута»).
-            remaining = ranked[offset + len(batch):]
-            if remaining and self._discovered_attrs:
-                self._apply_discovered(remaining, checked, rows)
-            if need_agent and not grids:
-                stop_reason = "empty_response"
-                break
-        diagnostics["suitable"] = suitable
-        diagnostics["pending"] = len(todo) - diagnostics["graded"]
-        if self._safe_early_stop(verified, ranked[diagnostics["graded"]:]):
-            stop_reason = "enough_suitable"
-        elif stop_reason != "empty_response" and diagnostics["pending"]:
-            stop_reason = "ceiling"
-        diagnostics["stop_reason"] = stop_reason
 
-    def _apply_discovered(self, cards, checked, rows) -> None:
-        """Атрибут, который агент назвал для критерия на прошлой волне —
-        пробуем повторно кодом на карточках, до которых агент ещё не дошёл.
-        Ничего не решает, если атрибута с таким именем на карточке нет."""
-        tolerance = Decimal(str(max(0, min(50, int(self.step_settings.get("5", {}).get("tolerance_percent", 0)))))) / 100
-        for card in cards:
-            changed = False
-            for row_idx, attr_name in self._discovered_attrs.items():
-                if not (1 <= row_idx <= len(checked)) or card["matrix"][row_idx - 1]["source"] != "not_checked":
+        grids = (
+            self._grade_grid_jev(todo, rows, batch_size=3)
+            if todo and settings.get("engine") == "jev"
+            else self._grade_grid(todo, rows, model=model, batch_size=3)
+            if todo else {}
+        )
+        for card in todo:
+            cid = str(card["id"])
+            for row_idx, (verdict, reason) in grids.get(cid, {}).items():
+                self._apply_cell(card, rows, row_idx, verdict, reason, "agent")
+            self._recompute_card_summary(card)
+            if card["matrix_status"] == "complete":
+                diagnostics["complete"] += 1
+                if use_cache:
+                    _cache_put("verdict", self._verdict_cache_key(cid), {
+                        "grid": {
+                            str(i): [{"yes": "y", "no": "n", "unknown": "m"}.get(entry["verdict"], "m"), entry["reason"]]
+                            for i, entry in enumerate(card["matrix"], 1)
+                        },
+                    })
+
+        # Что агент сопоставил критерию сам (поле "a" в клетке) — в словарь
+        # (AttributeConceptHint), чтобы шаг 5 в следующий раз закрыл такой
+        # же критерий сам, без обращения к агенту (см. _learned_attribute_name).
+        for row_idx, attr_name in self._discovered_attrs.items():
+            if 1 <= row_idx <= len(checked):
+                _remember_attribute_hint(checked[row_idx - 1], attr_name)
+
+    def _prefill_composite_axis_groups(self, card, checked, rows, tolerance) -> None:
+        """Несколько критериев одной строки ТЗ (одинаковый source_label —
+        см. шаг 1) — это разные оси ОДНОГО составного значения на карточке
+        («23,5 х 32,5 х 2»). Код не понимает смысла строки — просто
+        перебирает, какая расстановка чисел по уже известным осям не
+        противоречит границам, чистая комбинаторика, без обращения к
+        агенту. "y" всем осям сразу — если нашлась хоть одна непротиворечивая
+        расстановка. "n" — только когда ось не проходит НИ ПРИ какой
+        расстановке, и только у атрибута, чьё имя хоть как-то связано со
+        строкой ТЗ (реже рискуем сказать "нет" не по адресу, чем "да")."""
+        groups: dict[str, list[tuple[int, Criterion]]] = {}
+        for row_idx, crit in enumerate(checked, 1):
+            if crit.num_min is None and crit.num_max is None:
+                continue
+            if card["matrix"][row_idx - 1]["source"] == "code":
+                continue
+            groups.setdefault(crit.source_label or crit.label, []).append((row_idx, crit))
+
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            group_tokens = _meaningful_tokens(
+                " ".join(f"{c.concept} {c.label} {c.source_label}" for _, c in members)
+            )
+            # Границы каждой оси — в мм, если её единица распознана как длина;
+            # иначе как есть (сравнение по _units_compatible, без перевода).
+            bounds_mm = [
+                (row_idx, _length_mm(crit.num_min, crit.unit), _length_mm(crit.num_max, crit.unit))
+                for row_idx, crit in members
+            ]
+            all_length = all(mn is not None or mx is not None for _, mn, mx in bounds_mm)
+            plain_bounds = [(row_idx, crit.num_min, crit.num_max) for row_idx, crit in members]
+            required_unit = members[0][1].unit
+
+            candidates = []
+            for attribute in card.get("attributes") or []:
+                name = _cell(attribute.get("name"))
+                numbers, unit = _split_composite_numbers(attribute.get("value"), name)
+                if len(numbers) < len(members):
                     continue
-                crit = checked[row_idx - 1]
-                number, found_name = _attribute_numeric_value(
-                    card.get("attributes"), set(), crit.unit, discovered_name=attr_name,
-                )
-                if number is None:
-                    continue
-                ok = (
-                    (crit.num_min is None or number >= crit.num_min * (1 - tolerance))
-                    and (crit.num_max is None or number <= crit.num_max * (1 + tolerance))
-                )
-                self._apply_cell(card, rows, row_idx, "y" if ok else "n", f"{found_name}: {number}", "code")
-                changed = True
-            if changed:
-                self._recompute_card_summary(card)
+                name_matched = bool(group_tokens & _attribute_name_tokens(name))
+                if all_length:
+                    converted = [_length_mm(n, unit) for n in numbers]
+                    if any(v is None for v in converted):
+                        continue  # число есть, единица не распознана как длина — не рискуем
+                    candidates.append((name_matched, converted, unit, bounds_mm))
+                elif _units_compatible(required_unit, unit):
+                    candidates.append((name_matched, numbers, unit, plain_bounds))
+            if not candidates:
+                continue
+            candidates.sort(key=lambda c: not c[0])
+            name_matched, numbers, unit, bounds = candidates[0]
 
-    def _safe_early_stop(self, verified, remaining):
-        """Останавливает ИИ, только если оставшиеся не смогут обойти топ-10."""
-        if self.feedback_instructions:
-            return False
-        exact = [
-            card for card in verified
-            if card.get("matrix_status") == "complete"
-            and card.get("mismatch_count", 0) == 0 and card.get("unknown_count", 0) == 0
-        ]
-        if len(exact) < 10:
-            return False
-
-        def key(card):
-            price = _decimal(card.get("price"))
-            return card.get("relevance", 1), price if price is not None else Decimal("Infinity")
-
-        boundary = sorted(key(card) for card in exact)[9]
-        return all(key(card) >= boundary for card in remaining)
+            satisfying = None
+            ever_ok = {row_idx: False for row_idx, _mn, _mx in bounds}
+            for perm in itertools.permutations(numbers, len(bounds)):
+                ok_all = True
+                for (row_idx, num_min, num_max), value in zip(bounds, perm):
+                    ok = (
+                        (num_min is None or value >= num_min * (1 - tolerance))
+                        and (num_max is None or value <= num_max * (1 + tolerance))
+                    )
+                    ever_ok[row_idx] = ever_ok[row_idx] or ok
+                    ok_all = ok_all and ok
+                if ok_all and satisfying is None:
+                    satisfying = perm
+            if satisfying is not None:
+                for (row_idx, _mn, _mx), value in zip(bounds, satisfying):
+                    self._apply_cell(card, rows, row_idx, "y", f"{value} {unit} (из составного значения)", "code")
+            elif name_matched:
+                for row_idx, _mn, _mx in bounds:
+                    if not ever_ok[row_idx]:
+                        self._apply_cell(card, rows, row_idx, "n", "не подходит ни при одном порядке чисел", "code")
 
     def _prefill_card(self, card, checked, rows, tolerance) -> None:
         """Шаг 5: то, что код может решить сам, — цвет/материал по спискам
         поставщика, размерный ряд, ось из названия, любое другое число по
         совпадающей характеристике карточки. Сомневается — оставляет строку
         шагу 6, никогда не подставляет вердикт, которого агент бы не дал."""
+        self._prefill_composite_axis_groups(card, checked, rows, tolerance)
         for row_idx, crit in enumerate(checked, 1):
+            if card["matrix"][row_idx - 1]["source"] == "code":
+                continue  # уже закрыто групповым разбором составного значения
             if crit.maps_to == "color":
                 offered = ", ".join(_cell(v) for v in (card.get("colors") or []) if _cell(v))
                 if offered:
@@ -1324,24 +1466,9 @@ class Cascade:
                 continue
             if crit.num_min is None and crit.num_max is None:
                 continue  # не число и не цвет/материал/размер — решает агент
-            if crit.axis in {"capacity", "volume"}:
-                values = self._card_axis_values(card).get(crit.axis, [])
-                if not values:
-                    continue  # карточка молчит про ось — пусть судит агент
-                fits = [
-                    v for v in values
-                    if (crit.num_min is None or v >= crit.num_min * (1 - tolerance))
-                    and (crit.num_max is None or v <= crit.num_max * (1 + tolerance))
-                ]
-                if fits:
-                    self._apply_cell(card, rows, row_idx, "y", "по варианту", "code")
-                else:
-                    best = max(values) if crit.num_min is not None else min(values)
-                    self._apply_cell(card, rows, row_idx, "n", f"{_axis_short(best, crit.axis)}, нужно {crit.value}", "code")
-                continue
             number, attr_name = _attribute_numeric_value(
                 card.get("attributes"), _meaningful_tokens(f"{crit.concept} {crit.label}"), crit.unit,
-                discovered_name=self._discovered_attrs.get(row_idx, ""),
+                discovered_name=self._discovered_attrs.get(row_idx) or _learned_attribute_name(crit),
             )
             if number is None:
                 continue  # нет совпадающей характеристики — агенту, без гаданий
@@ -1351,21 +1478,6 @@ class Cascade:
             )
             reason = f"{attr_name}: {number}" if attr_name else str(number)
             self._apply_cell(card, rows, row_idx, "y" if ok else "n", reason[:90], "code")
-
-    def _card_axis_values(self, card) -> dict:
-        """{'capacity': [МБ...], 'volume': [мл...]} по названию + всем вариантам."""
-        texts = [f"{card.get('name', '')}"] + [
-            _cell(v.get("size")) for v in (card.get("variants") or []) if isinstance(v, dict) and _cell(v.get("size"))
-        ] + [_cell(s) for s in (card.get("sizes") or [])]
-        caps, vols = [], []
-        for text in texts:
-            mb = _capacity_mb(text)
-            if mb is not None:
-                caps.append(mb)
-            ml = _volume_ml(text)
-            if ml is not None:
-                vols.append(ml)
-        return {"capacity": caps, "volume": vols}
 
     @staticmethod
     def _prefilled_hint(card) -> str:
@@ -1428,6 +1540,84 @@ class Cascade:
                     if attr_name and row not in self._discovered_attrs:
                         self._discovered_attrs[row] = attr_name
 
+        if errors and not cells_by_card:
+            self.error = self.error or errors[0]
+        return cells_by_card
+
+    def _grade_grid_jev(self, cards, rows, *, batch_size) -> dict:
+        """Оценивает открытые клетки матрицы через System One Jev.
+
+        Jev возвращает только вероятность выбора, поэтому не подходит для
+        текстового разбора фидбека или поиска новых атрибутов. Здесь ему
+        передаётся ровно задача шага 6: одна открытая клетка — один вопрос.
+        """
+        if not cards:
+            return {}
+        from .jev import decide_matrix
+
+        batches = [cards[i:i + batch_size] for i in range(0, len(cards), batch_size)]
+        cells_by_card: dict[str, dict[int, tuple]] = {}
+        errors = []
+
+        def run_batch(batch):
+            questions, local, card_text = {}, {}, []
+            for pos, card in enumerate(batch, 1):
+                card_text.append(f"КАРТОЧКА {pos}\n{self._card_brief(card)}")
+                local[pos] = str(card["id"])
+                for row_idx, (label, value) in enumerate(rows, 1):
+                    if card["matrix"][row_idx - 1]["source"] != "not_checked":
+                        continue
+                    questions[f"c{pos}r{row_idx}"] = {
+                        "type": "noul",
+                        "instructions": (
+                            f"Соответствует ли карточка {pos} пункту ТЗ {row_idx}: {label}: {value}? "
+                            "Да — только при явном соответствии. Нет — только при явном противоречии. "
+                            "При недостатке данных оставь вероятность около середины."
+                        ),
+                    }
+            if not questions:
+                return {}, {}, local
+            state = (
+                f"Позиция тендера: {_cell(self.line.get('name'))[:200]}\n"
+                "Оцени каждую пару карточка—пункт ТЗ только по данным карточки.\n\n"
+                + "\n\n".join(card_text)
+            )
+            try:
+                answers, usage = decide_matrix(state, questions, timeout=self._remaining_timeout(60))
+            except Exception as exc:
+                logger.exception("Cascade step 6 Jev batch failed")
+                return {"_error": _cell(exc)[:200]}, {}, local
+            return answers, usage, local
+
+        results = (
+            [run_batch(batches[0])]
+            if len(batches) == 1
+            else list(ThreadPoolExecutor(max_workers=min(12, len(batches))).map(run_batch, batches))
+        )
+        for answers, usage, local in results:
+            if "_error" in answers:
+                errors.append(answers["_error"])
+                continue
+            self._add_usage(usage, "jev-1.13.0")
+            for key, answer in answers.items():
+                match = re.fullmatch(r"c(\d+)r(\d+)", _cell(key))
+                if not match or not isinstance(answer, dict):
+                    continue
+                try:
+                    probability = float(answer.get("noul"))
+                except (TypeError, ValueError):
+                    continue
+                pos, row_idx = (int(value) for value in match.groups())
+                card_id = local.get(pos)
+                if not card_id or not 1 <= row_idx <= len(rows):
+                    continue
+                if probability >= 0.8:
+                    verdict, reason = "y", "Jev: высокая уверенность"
+                elif probability <= 0.2:
+                    verdict, reason = "n", "Jev: низкая вероятность соответствия"
+                else:
+                    verdict, reason = "m", "Jev: недостаточная уверенность"
+                cells_by_card.setdefault(card_id, {})[row_idx] = (verdict, reason)
         if errors and not cells_by_card:
             self.error = self.error or errors[0]
         return cells_by_card

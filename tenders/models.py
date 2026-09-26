@@ -244,6 +244,34 @@ class UnitAlias(models.Model):
         return f"{self.spelling} → {self.canonical}"
 
 
+class AttributeConceptHint(models.Model):
+    """Самообучающийся словарь: какое название атрибута карточки отвечает на
+    какое понятие критерия ТЗ (см. tenders/cascade.py, _learned_attribute_name/
+    _remember_attribute_hint). Ни одно понятие сюда не зашито заранее — строку
+    добавляет код сам, только когда агент шага 6 явно подтвердил соответствие
+    на реальной карточке; при повторном подтверждении растёт счётчик, а не
+    новая строка. Одно и то же понятие («ёмкость памяти», «объём тары»,
+    «плотность ткани» — что угодно) у разных поставщиков может отвечать
+    по-разному — таблица держит все варианты сразу и решает по частоте."""
+
+    concept_key = models.CharField("Ключ понятия", max_length=200, db_index=True)
+    attribute_name = models.CharField("Название атрибута", max_length=120)
+    hits = models.PositiveIntegerField("Подтверждений", default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-hits", "-updated_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["concept_key", "attribute_name"], name="unique_concept_attribute_hint"),
+        ]
+        verbose_name = "Подсказка атрибута (словарь)"
+        verbose_name_plural = "Подсказки атрибутов (словарь)"
+
+    def __str__(self):
+        return f"{self.concept_key} → {self.attribute_name} ({self.hits})"
+
+
 class CatalogSupplier(models.Model):
     code = models.SlugField("Код", max_length=50, unique=True)
     name = models.CharField("Поставщик", max_length=200)
@@ -293,7 +321,6 @@ class CatalogProduct(models.Model):
     group_id = models.CharField("Группа товара", max_length=120, blank=True)
     color_group_id = models.CharField("Группа цвета", max_length=120, blank=True)
     family_key = models.CharField("Нормализованное семейство", max_length=180, blank=True, db_index=True)
-    variant_axes = models.JSONField("Оси варианта", default=dict, blank=True)
     name = models.CharField("Название", max_length=500)
     full_name = models.CharField("Полное название", max_length=1000, blank=True)
     description = models.TextField("Описание", blank=True)

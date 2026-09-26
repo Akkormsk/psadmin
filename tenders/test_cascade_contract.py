@@ -54,3 +54,27 @@ class CascadeContractTests(SimpleTestCase):
 
         self.assertEqual([c.label for c in cascade.tz if c.checked], ["Совместимость", "Материал"])
         self.assertEqual(len(cascade.tz), 3)
+
+    def test_step_1_limit_grows_by_rows_added_through_splitting(self):
+        """Строка ТЗ «Размер, мм: 40 х 50», разбитая на «Длина»+«Ширина», не
+        должна вытеснять соседа лимитом — лишняя строка, появившаяся из
+        разбиения (2 родилось из 1), поднимает лимит на столько же."""
+        cascade = Cascade({"name": "Товар"}, step_settings={"1": {"max_active_requirements": 2}})
+        rows = [
+            {"label": "Цвет", "value": "синий"},
+            {"label": "Размер, мм", "value": "40 х 50"},
+        ]
+        payload = {"criteria": [
+            {"label": "Цвет", "source_label": "Цвет", "raw_value": "синий", "concept": "цвет",
+             "value": "синий", "importance": 90},
+            {"label": "Длина", "source_label": "Размер, мм", "raw_value": "40 х 50", "concept": "длина",
+             "value": "40", "num_min": "40", "importance": 80},
+            {"label": "Ширина", "source_label": "Размер, мм", "raw_value": "40 х 50", "concept": "ширина",
+             "value": "50", "num_min": "50", "importance": 75},
+        ]}
+
+        cascade._load_step1(payload, rows)
+
+        self.assertEqual(len(cascade.tz), 3)
+        self.assertEqual([c.label for c in cascade.tz if c.checked], ["Цвет", "Длина", "Ширина"])
+        self.assertEqual(cascade.diagnostics["active_requirement_limit"], 3)

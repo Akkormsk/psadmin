@@ -36,6 +36,9 @@ _cache: dict = {"at": 0.0, "value": None, "meta": {}}
 # цену (spend_rub → None) — это не значит, что она недоступна, значит только
 # «тариф ещё не занесли». Обновлять по мере расширения консоли Timeweb.
 RATES_RUB_PER_M: dict[str, tuple[float, float]] = {
+    # Jev — отдельный endpoint System One; тариф со снимка консоли Timeweb
+    # пользователя от 2026-09-25.
+    "jev-1.13.0": (6, 6),
     "anthropic/claude-fable-5": (1350, 6750),
     "anthropic/claude-fable-5-1": (1350, 6750),
     "anthropic/claude-haiku-4-5": (135, 1080),

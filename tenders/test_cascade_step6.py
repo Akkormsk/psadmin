@@ -1,4 +1,4 @@
-"""Контракт шага 6: ограничение новых проверок, полнота ответа и кэш."""
+"""Контракт шага 6: полнота ответа, кэш и границы с шагом 5."""
 
 from decimal import Decimal
 from unittest.mock import patch
@@ -8,7 +8,6 @@ from .models import CascadeCache
 from .test_cascade import TestCase, _Gateway, _line, _product
 
 
-@patch.dict("os.environ", {"CASCADE_STEP6_FIRST": "25", "CASCADE_STEP6_CEILING": "75"})
 class CascadeBoundedTests(TestCase):
     def setUp(self):
         super().setUp()
@@ -39,36 +38,13 @@ class CascadeBoundedTests(TestCase):
             self.cascade.step_6_agent_matrix(cards)
         return gateway
 
-    def test_stops_after_first_batch_and_preserves_ungraded_cards(self):
-        cards = self.cards(71)
+    def test_every_card_without_a_step_5_answer_is_graded_in_one_pass(self):
+        cards = self.cards(40)
         gateway = self.grade(cards, [{"id": "*", "cells": {"1": "y", "2": "y"}}])
-        self.assertEqual(gateway.calls["step6"], 9)
-        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 25)
-        self.assertEqual(self.cascade.diagnostics["step6"]["batches"], 1)
-        self.assertEqual(CascadeCache.objects.filter(kind="verdict").count(), 25)
-        self.assertEqual(len(cards), 71)
-        for card in cards[25:]:
-            self.assertEqual(card["matrix_status"], "pending")
-            self.assertEqual(card["unknown_count"], 2)
-            self.assertNotEqual(card["fit"], "exact")
-
-    def test_expands_when_first_batch_has_two_mismatches(self):
-        grid = [{"id": str(i), "cells": {"1": "n", "2": "n"}} for i in range(25)]
-        grid.append({"id": "*", "cells": {"1": "y", "2": "y"}})
-        self.grade(self.cards(71), grid)
-        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 50)
-        self.assertEqual(self.cascade.diagnostics["step6"]["batches"], 2)
-
-    def test_ceiling_truncates_the_last_batch(self):
-        with patch.dict("os.environ", {"CASCADE_STEP6_CEILING": "32"}):
-            self.grade(self.cards(71), [{"id": "*", "cells": {"1": "n", "2": "n"}}])
-        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 32)
-        self.assertEqual(CascadeCache.objects.filter(kind="verdict").count(), 32)
-
-    def test_zero_ceiling_makes_no_calls(self):
-        with patch.dict("os.environ", {"CASCADE_STEP6_CEILING": "0"}):
-            gateway = self.grade(self.cards(71), [])
-        self.assertEqual(gateway.calls["step6"], 0)
+        self.assertEqual(gateway.calls["step6"], 14)  # ceil(40/3) пачек, один проход
+        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 40)
+        self.assertEqual(CascadeCache.objects.filter(kind="verdict").count(), 40)
+        self.assertTrue(all(card["matrix_status"] == "complete" for card in cards))
 
     def test_matrix_keeps_per_criterion_verdict_reason_and_source(self):
         cards = self.cards(1)
@@ -78,17 +54,15 @@ class CascadeBoundedTests(TestCase):
         self.assertTrue(all(cell["criterion"] for cell in cards[0]["matrix"]))
         self.assertTrue(all(cell["source"] == "agent" for cell in cards[0]["matrix"]))
 
-    def test_complete_unknowns_are_cached_but_do_not_stop_expansion(self):
-        self.grade(self.cards(40), [{"id": "*", "cells": {"1": "m", "2": "m"}}])
-        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 40)
-        self.assertEqual(self.cascade.diagnostics["step6"]["suitable"], 0)
-        self.assertEqual(CascadeCache.objects.filter(kind="verdict").count(), 40)
+    def test_complete_unknowns_are_cached(self):
+        self.grade(self.cards(10), [{"id": "*", "cells": {"1": "m", "2": "m"}}])
+        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 10)
+        self.assertEqual(CascadeCache.objects.filter(kind="verdict").count(), 10)
 
     def test_missing_cells_are_not_cached_or_counted_as_complete(self):
-        cards = self.cards(40)
+        cards = self.cards(10)
         self.grade(cards, [{"id": "*", "cells": {"1": "y"}}])
-        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 40)
-        self.assertEqual(self.cascade.diagnostics["step6"]["suitable"], 0)
+        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 10)
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
         self.assertTrue(all(c["matrix_status"] == "incomplete" for c in cards))
 
@@ -99,7 +73,7 @@ class CascadeBoundedTests(TestCase):
         # и не тратит на неё вызов агента.
         self.cascade.tz = [Criterion(
             label="Ёмкость", raw_value="32 ГБ", concept="ёмкость", operator=">=",
-            value="32 ГБ", axis="capacity", num_min=Decimal(32768),
+            value="32 ГБ", unit="ГБ", axis="capacity", num_min=Decimal(32),
         )]
         checked, rows = self.cascade._checked_rows()
         card = {"id": "A", "name": "Флешка 32 ГБ", "price": "100", "relevance": 0}
@@ -115,24 +89,13 @@ class CascadeBoundedTests(TestCase):
         # кэш нужен только чтобы не звать агента повторно.
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
 
-    def test_repeat_uses_cached_suitable_cards_without_grading_the_tail(self):
+    def test_repeat_uses_cached_verdicts_without_calling_the_agent_again(self):
         grid = [{"id": "*", "cells": {"1": "y", "2": "y"}}]
-        self.grade(self.cards(71), grid)
-        gateway = self.grade(self.cards(71), grid)
+        self.grade(self.cards(5), grid)
+        gateway = self.grade(self.cards(5), grid)
         self.assertEqual(gateway.calls["step6"], 0)
-        self.assertEqual(self.cascade.diagnostics["step6"]["cached"], 25)
+        self.assertEqual(self.cascade.diagnostics["step6"]["cached"], 5)
         self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 0)
-
-    def test_cached_cards_contribute_to_stop_but_not_to_new_budget(self):
-        from .cascade import _cache_put
-
-        for i in range(9):
-            _cache_put("verdict", f"bounded-test|{i}", {"grid": {"1": ["y", ""], "2": ["y", ""]}})
-        grid = [{"id": "9", "cells": {"1": "y", "2": "y"}},
-                {"id": "*", "cells": {"1": "n", "2": "n"}}]
-        self.grade(self.cards(71), grid)
-        self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 25)
-        self.assertEqual(self.cascade.diagnostics["step6"]["suitable"], 10)
 
     def test_incomplete_legacy_cache_is_retried(self):
         from .cascade import _cache_put
@@ -141,45 +104,77 @@ class CascadeBoundedTests(TestCase):
         gateway = self.grade(self.cards(1), [{"id": "*", "cells": {"1": "y", "2": "y"}}])
         self.assertEqual(gateway.calls["step6"], 1)
 
-    def test_failed_gateway_stops_without_spending_on_more_batches(self):
-        cards = self.cards(71)
+    def test_failed_gateway_leaves_cards_ungraded_without_caching(self):
+        cards = self.cards(10)
         _checked, rows = self.cascade._checked_rows()
         for card in cards:
             self.cascade._init_unknown(card, rows)
         gateway = _Gateway(step6_error=True)
         with patch("tenders.services._ai_gateway_json", side_effect=gateway):
             self.cascade.step_6_agent_matrix(cards)
-        self.assertEqual(gateway.calls["step6"], 9)
+        self.assertEqual(gateway.calls["step6"], 4)  # ceil(10/3) пачек, все провалились
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
         self.assertTrue(self.cascade.error)
 
-    def test_preagent_key_uses_only_relevance_matrix_verdicts_and_price(self):
-        def matrix(verdict):
-            return [{"criterion": "x", "required": "y", "verdict": verdict, "reason": "", "source": "code"}]
+    def test_jev_grades_only_open_cells_and_keeps_uncertain_cells_unknown(self):
+        cards = self.cards(2)
+        _checked, rows = self.cascade._checked_rows()
+        for card in cards:
+            self.cascade._init_unknown(card, rows)
+        self.cascade._apply_cell(cards[0], rows, 1, "y", "закрыто кодом", "code")
+        self.cascade._recompute_card_summary(cards[0])
+        self.cascade.step_settings = {"6": {"engine": "jev", "cache": "no"}}
 
-        cards = [
-            {"id": "bad", "relevance": 0, "price": "1", "matrix": matrix("no")},
-            {"id": "good", "relevance": 0, "price": "200", "matrix": matrix("yes")},
-            {"id": "silent", "relevance": 0, "price": "2", "matrix": matrix("not_checked")},
-            {"id": "less-relevant", "relevance": 1, "price": "0", "matrix": matrix("yes")},
-        ]
-        ranked = sorted(cards, key=self.cascade._preagent_key)
-        self.assertEqual([c["id"] for c in ranked], ["good", "silent", "bad", "less-relevant"])
+        captured = {}
+
+        def jev(state, questions, **_kwargs):
+            captured["state"], captured["questions"] = state, questions
+            return {
+                "c1r2": {"noul": 0.1},
+                "c2r1": {"noul": 0.9},
+                "c2r2": {"noul": 0.5},
+            }, {"prompt_tokens": 12, "completion_tokens": 3}
+
+        with patch("tenders.jev.decide_matrix", side_effect=jev):
+            self.cascade.step_6_agent_matrix(cards)
+
+        self.assertNotIn("c1r1", captured["questions"])
+        self.assertEqual(set(captured["questions"]), {"c1r2", "c2r1", "c2r2"})
+        self.assertEqual([cell["verdict"] for cell in cards[0]["matrix"]], ["yes", "no"])
+        self.assertEqual([cell["verdict"] for cell in cards[1]["matrix"]], ["yes", "unknown"])
+        self.assertEqual(cards[1]["matrix"][1]["reason"], "Jev: недостаточная уверенность")
+        self.assertEqual(self.cascade.usage_by_model["jev-1.13.0"]["prompt_tokens"], 12)
+
+    def test_jev_failure_leaves_cards_ungraded_without_caching(self):
+        cards = self.cards(1)
+        _checked, rows = self.cascade._checked_rows()
+        self.cascade._init_unknown(cards[0], rows)
+        self.cascade.step_settings = {"6": {"engine": "jev", "cache": "no"}}
+
+        with patch("tenders.jev.decide_matrix", side_effect=RuntimeError("offline")):
+            self.cascade.step_6_agent_matrix(cards)
+
+        self.assertEqual(cards[0]["matrix_status"], "pending")
+        self.assertTrue(self.cascade.error)
+        self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
 
 
 class CascadeBoundedIntegrationTests(TestCase):
     def test_flash_c1_is_first_and_keeps_16gb_variant(self):
         from .services import build_training_hypothesis
 
-        _product("Флеш-карта USB 2.0 32 ГБ Флэш С1", external_id="F32", group_id="C1", price="491")
-        _product("Флеш-карта USB 2.0 16 ГБ Флэш С1", external_id="F16", group_id="C1", price="410")
-        _product("Флеш-карта USB 2.0 8 ГБ", external_id="F8", group_id="other", price="100")
+        _product("Флеш-карта USB 2.0 32 ГБ Флэш С1", external_id="F32", group_id="C1", price="491",
+                  attributes=[{"name": "Объем памяти", "value": "32 ГБ"}])
+        _product("Флеш-карта USB 2.0 16 ГБ Флэш С1", external_id="F16", group_id="C1", price="410",
+                  attributes=[{"name": "Объем памяти", "value": "16 ГБ"}])
+        _product("Флеш-карта USB 2.0 8 ГБ", external_id="F8", group_id="other", price="100",
+                  attributes=[{"name": "Объем памяти", "value": "8 ГБ"}])
         gateway = _Gateway(item="флеш-карта", queries=["флеш-карта", "usb"], criteria=[
-            {"n": 1, "concept": "ёмкость", "operator": ">=", "value": "32 ГБ",
-             "axis": "capacity", "num_min": 32768, "keep": True},
+            {"n": 1, "concept": "объём памяти", "operator": ">=", "value": "32 ГБ",
+             "unit": "ГБ", "axis": "capacity", "num_min": 32, "keep": True},
         ], grid=[{"id": "*", "cells": {"1": "y"}}])
         with patch("tenders.services._ai_gateway_json", side_effect=gateway):
-            result = build_training_hypothesis(_line(rows=[{"label": "Ёмкость", "value": "не менее 32 ГБ"}]))
+            result = build_training_hypothesis(_line(rows=[{"label": "Объём памяти", "value": "не менее 32 ГБ"}]), current={"route": {"steps": ["Закупка готового изделия"], "processes": [{"id": "purchase", "kind": "catalog", "name": "Закупка готового изделия"}]}}, recompute="catalog")
         card = result["catalog_candidates"][0]
         self.assertEqual(card["id"], "F32")
         self.assertIn("F16", card["variant_ids"])

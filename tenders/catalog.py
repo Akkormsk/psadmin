@@ -675,23 +675,13 @@ def _product_from_payload(supplier, raw, category_map, marker):
             "included_branding": raw.get("included_branding"),
         },
     )
-    # Семья и оси варианта — прямо здесь, в потоковом проходе по странице API,
-    # а не отдельным проходом по всей таблице после записи (rebuild_catalog_families):
+    # Семья — прямо здесь, в потоковом проходе по странице API, а не
+    # отдельным проходом по всей таблице после записи (rebuild_catalog_families):
     # для Oasis всё нужное для этого уже есть в самой строке, второй полный
     # проход по ~37 тыс. товаров разом в память (см. историю падения
-    # 14.09.2026 в tenders/scheduler.py) был лишним. Формулы совпадают с
+    # 14.09.2026 в tenders/scheduler.py) был лишним. Формула совпадает с
     # оазис-веткой rebuild_catalog_families — держать в синхроне при правках.
     product.family_key = f"oasis:{group_id or article_base or article or external_id}"
-    axes = {}
-    capacity = _capacity_mb(f"{product.name} {product.full_name} {product.size}")
-    if capacity is not None:
-        axes["capacity_mb"] = str(capacity)
-    label = _variant_size(product)
-    if label:
-        axes["size"] = label
-    if colors:
-        axes["colors"] = colors
-    product.variant_axes = axes
     return product
 
 
@@ -703,15 +693,15 @@ PRODUCT_UPDATE_FIELDS = [
     "sync_marker", "is_active", "raw_data", "synced_at",
 ]
 
-# Oasis-only: family_key/variant_axes are computed inline per row in
-# _product_from_payload (streamed, no second full-table pass — see its
-# docstring comment). Gifts keeps PRODUCT_UPDATE_FIELDS as-is on purpose —
-# its rebuild_catalog_families("gifts") pass still needs the whole table at
-# once (article-prefix matching across rows), and if these two fields were
-# in the shared list, Gifts's own bulk_create would blank them on every
-# sync for the whole window until its trailing rebuild_catalog_families
-# call catches up — a regression this constant must not reintroduce.
-OASIS_PRODUCT_UPDATE_FIELDS = PRODUCT_UPDATE_FIELDS + ["family_key", "variant_axes"]
+# Oasis-only: family_key is computed inline per row in _product_from_payload
+# (streamed, no second full-table pass — see its docstring comment). Gifts
+# keeps PRODUCT_UPDATE_FIELDS as-is on purpose — its rebuild_catalog_families
+# ("gifts") pass still needs the whole table at once (article-prefix matching
+# across rows), and if this field were in the shared list, Gifts's own
+# bulk_create would blank it on every sync for the whole window until its
+# trailing rebuild_catalog_families call catches up — a regression this
+# constant must not reintroduce.
+OASIS_PRODUCT_UPDATE_FIELDS = PRODUCT_UPDATE_FIELDS + ["family_key"]
 
 
 def _sync_categories(client, supplier):
@@ -986,8 +976,6 @@ def _looks_like_variant_size(text):
     value = _text(text, 60).strip()
     if not value:
         return False
-    if _capacity_mb(value) is not None:
-        return True
     if re.search(r"\d\s*[x×х*]\s*\d", value) or re.search(r"\d\s*(?:см|мм|cm|mm)\b", value, re.I):
         return False
     return len(value) <= 8
@@ -1091,7 +1079,7 @@ def _aggregate_color_variants(products, supplier_code="oasis"):
 
 
 def rebuild_catalog_families(supplier_code=None):
-    """Нормализует семейства и оси вариантов без сетевых запросов и LLM."""
+    """Нормализует семейства (family_key) без сетевых запросов и LLM."""
     queryset = CatalogProduct.objects.select_related("supplier").order_by("supplier_id", "pk")
     if supplier_code:
         queryset = queryset.filter(supplier__code=supplier_code)
@@ -1107,21 +1095,11 @@ def rebuild_catalog_families(supplier_code=None):
             family_key = gifts_keys.get(id(product), f"gifts:{product.article or product.external_id}")
         else:
             family_key = f"{product.supplier.code}:{product.group_id or product.article_base or product.article or product.external_id}"
-        label = _variant_size(product)
-        axes = {}
-        capacity = _capacity_mb(f"{product.name} {product.full_name} {product.size}")
-        if capacity is not None:
-            axes["capacity_mb"] = str(capacity)
-        if label:
-            axes["size"] = label
-        if isinstance(product.colors, list) and product.colors:
-            axes["colors"] = product.colors
-        if product.family_key != family_key or product.variant_axes != axes:
+        if product.family_key != family_key:
             product.family_key = family_key
-            product.variant_axes = axes
             changed.append(product)
     if changed:
-        CatalogProduct.objects.bulk_update(changed, ["family_key", "variant_axes"], batch_size=1000)
+        CatalogProduct.objects.bulk_update(changed, ["family_key"], batch_size=1000)
     return {"products": len(products), "updated": len(changed), "families": len({p.family_key for p in products})}
 
 
@@ -1136,26 +1114,6 @@ def _product_variants(product):
         "stock": max(0, product.total_stock),
         "price": str(product.effective_price.quantize(Decimal("0.01"))) if product.effective_price is not None else None,
     }]
-
-
-_CAPACITY_RE = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*(гигабайт|гбайт|гб|gb|терабайт|тбайт|тб|tb|мегабайт|мбайт|мб|mb)(?![а-яa-z])",
-    re.I,
-)
-_CAPACITY_TO_MB = {
-    "мб": 1, "мбайт": 1, "мегабайт": 1, "mb": 1,
-    "гб": 1024, "гбайт": 1024, "гигабайт": 1024, "gb": 1024,
-    "тб": 1048576, "тбайт": 1048576, "терабайт": 1048576, "tb": 1048576,
-}
-def _capacity_mb(text):
-    """Memory capacity of a string ("32 ГБ", "…, 16 Gb, …") in megabytes, or None."""
-    match = _CAPACITY_RE.search(_normalized(text))
-    if not match:
-        return None
-    try:
-        return Decimal(match.group(1).replace(",", ".")) * _CAPACITY_TO_MB[match.group(2).lower()]
-    except (InvalidOperation, KeyError):
-        return None
 
 
 # "Честный Знак" / ЦРПТ marking is a labelling-compliance obligation the

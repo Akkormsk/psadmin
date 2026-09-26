@@ -50,6 +50,7 @@ _ASSISTANT_INFLIGHT_LOCK = threading.Lock()
 atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
 
 _STAGE_LABELS = {
+    "route": "Проектирую маршрут и учитываю ваши замечания…",
     "cases": "Готовлю поиск…",
     "ai": "Убираю лишние слова из названия и подбираю запросы…",
     "catalog": "Ищу товары поставщиков по названию…",
@@ -184,8 +185,6 @@ def _lab_step_settings(request, current=None):
         "step_2_min_phrases": ("2", "min_phrases", 1, 40),
         "step_2_max_phrases": ("2", "max_phrases", 1, 40),
         "step_5_tolerance_percent": ("5", "tolerance_percent", 0, 50),
-        "step_6_first_batch": ("6", "first_batch", 1, 75),
-        "step_6_ceiling": ("6", "ceiling", 0, 100),
     }
     for field, (step, key, minimum, maximum) in fields.items():
         raw = str(request.POST.get(field) or "").strip()
@@ -206,6 +205,7 @@ def _lab_step_settings(request, current=None):
         "step_5_color_filter": ("5", "color_filter", {"family", "off"}),
         "step_5_stock_policy": ("5", "stock_policy", {"available", "enough", "ignore"}),
         "step_5_numeric_prefill": ("5", "numeric_prefill", {"yes", "no"}),
+        "step_6_engine": ("6", "engine", {"llm", "jev"}),
         "step_6_model": ("6", "model", agents),
         "step_6_cache": ("6", "cache", {"yes", "no"}),
         "step_7_matrix_order": ("7", "matrix_order", {"no_then_yes", "yes_then_no"}),
@@ -631,6 +631,7 @@ def production_route_preview(request):
             raise ValueError
     except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({"error": "Сначала заполните позицию и примените требования ТЗ."}, status=400)
+    start_catalog = request.POST.get("start_catalog") == "1"
     position_name = str(line.get("name", ""))[:500]
     running = ProductionTrainingSession.objects.filter(
         created_by=request.user,
@@ -650,6 +651,16 @@ def production_route_preview(request):
 
     def work(session):
         hypothesis = build_training_hypothesis(line, progress_callback=lambda stage: _record_stage(session.pk, stage))
+        if start_catalog:
+            step_id = next(
+                (step.get("id") for step in hypothesis.get("route", {}).get("processes", [])
+                 if step.get("kind") == "catalog"),
+                "",
+            )
+            hypothesis = build_training_hypothesis(
+                line, current=hypothesis, recompute="catalog", step_id=step_id,
+                progress_callback=lambda stage: _record_stage(session.pk, stage),
+            )
         ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
         return hypothesis
 
@@ -684,6 +695,7 @@ def revise_production_hypothesis(request):
         session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
+        question_answers = payload.get("question_answers") if isinstance(payload.get("question_answers"), dict) else None
         # Removing a correction chip resends the reduced instruction list.
         instructions_override = payload.get("instructions") if isinstance(payload.get("instructions"), list) else None
         clear_ranking = bool(payload.get("clear_ranking"))
@@ -695,20 +707,36 @@ def revise_production_hypothesis(request):
         # comment belongs to. "catalog" keeps the route and search plan
         # untouched; anything else is a full rebuild.
         scope = str(payload.get("scope", "all")).strip().lower()
+        learn_for_similar = bool(payload.get("learn_for_similar", not scope.endswith("_current")))
+        if scope.endswith("_current"):
+            scope = scope.removesuffix("_current")
+        step_id = str(payload.get("step_id", "")).strip()
         # "requirements" (the ТЗ-checkbox recompute) is catalog-scoped too —
         # the route and the search plan do not change, only which rows the
         # matcher is allowed to look at.
         recompute = "catalog" if scope in {"catalog", "requirements"} else "all"
-        if len(feedback) > 3000 or not str(line.get("name", "")).strip():
+        if len(feedback) > 3000 or not str(line.get("name", "")).strip() or _number(line.get("quantity")) <= 0:
             raise ValueError
         # A "requirements" recompute carries its change in the line payload
         # (the ТЗ-row `selected` flags); a chip removal carries it in
         # instructions_override or clear_ranking — none need feedback text.
-        if not feedback and instructions_override is None and not clear_ranking and not refresh and scope != "requirements":
+        if not feedback and question_answers is None and instructions_override is None and not clear_ranking and not refresh and scope not in {"requirements", "catalog"}:
             raise ValueError
-    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
+    except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
     prior = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+    if prior.get("status") == "processing":
+        return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+    if scope == "requirements" and not prior.get("catalog_search_started"):
+        prior["requirement_selection"] = line.get("requirements", {}).get("requirements", [])
+        session.current_hypothesis = prior
+        session.save(update_fields=["current_hypothesis", "updated_at"])
+        return JsonResponse({**prior, "session_id": session.pk})
+    if question_answers is not None:
+        allowed = {str(question.get("id")) for question in prior.get("questions", []) if isinstance(question, dict)}
+        answers = {str(key): str(value).strip()[:1000] for key, value in question_answers.items()
+                   if str(key) in allowed and str(value).strip()}
+        prior = {**prior, "question_answers": answers}
 
     def work(session):
         hypothesis = build_training_hypothesis(
@@ -716,6 +744,8 @@ def revise_production_hypothesis(request):
             progress_callback=lambda stage: _record_stage(session.pk, stage),
             instructions_override=instructions_override, recompute=recompute,
             clear_ranking=clear_ranking,
+            learn_for_similar=learn_for_similar,
+            **({"step_id": step_id} if step_id else {}),
         )
         session.position_name = str(line.get("name", ""))[:500]
         session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
@@ -767,6 +797,31 @@ def drop_lesson(request):
 
 @login_required
 @require_POST
+@transaction.atomic
+def drop_route_knowledge(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Менять знания может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        if payload.get("example_id"):
+            example_id = int(payload["example_id"])
+            changed = ProductionTrainingExample.objects.filter(pk=example_id).update(is_active=False)
+            Lesson.objects.filter(session__confirmed_example_id=example_id, scope__in=["route", "production_step"]).update(is_active=False)
+        else:
+            lesson = Lesson.objects.get(pk=int(payload["lesson_id"]), scope__in=["route", "production_step"])
+            lesson.is_active = False
+            lesson.save(update_fields=["is_active"])
+            # The confirmed route also contains this correction; stop recalling both representations.
+            if lesson.session_id and lesson.session.confirmed_example_id:
+                ProductionTrainingExample.objects.filter(pk=lesson.session.confirmed_example_id).update(is_active=False)
+            changed = True
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError, Lesson.DoesNotExist):
+        return JsonResponse({"error": "Не удалось определить сохранённый опыт."}, status=400)
+    return JsonResponse({"dropped": bool(changed)})
+
+
+@login_required
+@require_POST
 def select_catalog_product(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Выбирать товары для обучения может только администратор."}, status=403)
@@ -782,7 +837,14 @@ def select_catalog_product(request):
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось выбрать товар поставщика. Обновите гипотезу."}, status=400)
     try:
-        hypothesis = apply_catalog_candidate(session.current_hypothesis, line, product_id)
+        prior = session.current_hypothesis
+        if prior.get("route", {}).get("schema_version") == 1:
+            from .routes import catalog_step_state, merge_catalog_step
+            step, state = catalog_step_state(prior, str(payload.get("step_id", "")))
+            selected = apply_catalog_candidate({**prior, **state}, line, product_id)
+            hypothesis = merge_catalog_step(prior, selected, line, step["id"])
+        else:
+            hypothesis = apply_catalog_candidate(prior, line, product_id)
         hypothesis["session_id"] = session.pk
         session.current_hypothesis = hypothesis
         session.save(update_fields=["current_hypothesis", "updated_at"])
@@ -981,6 +1043,7 @@ def add_calculation_source(request):
 
 @login_required
 @require_POST
+@transaction.atomic
 def confirm_production_type(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Добавлять учебные примеры может только администратор."}, status=403)
@@ -994,9 +1057,19 @@ def confirm_production_type(request):
             # to the Lesson table, with the context it was learned in. A
             # run with nothing to learn (a product picked, no feedback) is
             # fine — it just closes the session.
-            session = ProductionTrainingSession.objects.get(pk=session_id, created_by=request.user, is_confirmed=False)
+            session = ProductionTrainingSession.objects.select_for_update().get(pk=session_id, created_by=request.user, is_confirmed=False)
             hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-            saved = learn_lessons_from_session(hypothesis, session, request.user)
+            if hypothesis.get("status") in {"processing", "error"}:
+                return JsonResponse({"error": "Дождитесь успешного построения маршрута."}, status=400)
+            saved = 0
+            if hypothesis.get("catalog_steps"):
+                for step_id, state in hypothesis["catalog_steps"].items():
+                    instructions = [entry for entry in hypothesis.get("session_instructions", []) if entry.get("step_id", step_id) == step_id]
+                    saved += learn_lessons_from_session({**state, "session_instructions": instructions}, session, request.user)
+            else:
+                saved = learn_lessons_from_session(hypothesis, session, request.user)
+            from .routes import confirm_route
+            saved += confirm_route(hypothesis, session, request.user)
             # Learn every ТЗ row the admin left unchecked — its label comes
             # pre-unchecked in every future tender (RequirementSkipRule).
             skipped = 0
@@ -1016,8 +1089,9 @@ def confirm_production_type(request):
                     RequirementSkipRule.objects.filter(label_normalized=label_normalized, is_active=False).update(is_active=True)
                 skipped += int(created)
             session.is_confirmed = True
-            session.save(update_fields=["is_confirmed", "updated_at"])
-            parts = ["Расчёт принят."]
+            session.current_hypothesis = {**hypothesis, "is_confirmed": True}
+            session.save(update_fields=["is_confirmed", "current_hypothesis", "updated_at"])
+            parts = ["Маршрут принят и сохранён." if session.confirmed_example_id else "Расчёт принят."]
             parts.append(f"Новых уроков: {saved}." if saved else "Новых уроков нет.")
             if skipped:
                 parts.append(f"Строк ТЗ вынесено из подбора навсегда: {skipped}.")

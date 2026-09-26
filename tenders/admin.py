@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, UnitAlias
+from .models import AttributeConceptHint, CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, UnitAlias
 
 
 class TenderLineInline(admin.TabularInline):
@@ -22,6 +22,13 @@ class UnitAliasAdmin(admin.ModelAdmin):
     list_display = ("spelling", "canonical", "created_at")
     search_fields = ("spelling", "canonical")
     ordering = ("canonical", "spelling")
+
+
+@admin.register(AttributeConceptHint)
+class AttributeConceptHintAdmin(admin.ModelAdmin):
+    list_display = ("concept_key", "attribute_name", "hits", "updated_at")
+    search_fields = ("concept_key", "attribute_name")
+    ordering = ("-hits", "-updated_at")
 
 
 @admin.register(TenderSettings)

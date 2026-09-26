@@ -76,15 +76,15 @@ class TenderTests(TestCase):
 
         response = self.client.get(reverse("tender_home"))
 
-        self.assertContains(response, "frozenRoutePreview(line)")
+        self.assertContains(response, "routePreview(line)")
         self.assertContains(response, "autoStartProductSearch=false")
         self.assertContains(response, "autoRecalculateRequirements=false")
-        self.assertContains(response, "activeProduction=(autoStartProductSearch||manuallyStartedLines.has(line))?info.production:null")
+        self.assertContains(response, "activeProduction=info.production")
         self.assertContains(response, "updateRouteToolbar(body,line,displayProduction)")
         self.assertContains(response, "questionControl.onclick=()=>openRequirements(index)")
         self.assertNotContains(response, "if(shouldAutoCalculate)build.click()")
         self.assertContains(response, "if(autoStartProductSearch&&!activeProduction)build.click()")
-        self.assertContains(response, "Сделать расчёт")
+        self.assertContains(response, "Построить маршрут")
 
     def test_calculation_shows_linked_tender_card_without_repeating_products(self):
         from tender_selection.models import FoundTender
@@ -251,8 +251,8 @@ class TenderTests(TestCase):
         self.client.force_login(self.user)
 
         content = self.client.get(reverse("tender_home")).content.decode()
-        fn = content[content.index("function trainingDialogueHtml"):][:5000]
-        markup = fn[fn.index("return `"):]
+        fn = content[content.index("function trainingDialogueHtml"):content.index("productionHtml=(result,context={})=>")]
+        markup = fn[fn.index('return `<div class="training-dialogue"'):]
 
         # Route block in the rendered markup: reason text, then the steps
         # (each an expand-in-place <details>), then a collapsed "Исправить
@@ -263,8 +263,8 @@ class TenderTests(TestCase):
         self.assertLess(markup.index("training-route__fix"), markup.index("training-dialogue__costs"))
         # Accepted corrections ("Ваши корректировки") sit with the catalog
         # feedback box inside the product step, not in the route block.
-        self.assertIn("${emptyCatalog}${changesHtml}", fn)
-        self.assertIn("Ваши корректировки", fn)
+        self.assertIn("routeCorrectionsHtml(result,'catalog',step.id)", fn)
+        self.assertIn("Ваши корректировки", content)
         # The standalone "add supplier" block is gone while the route is frozen.
         self.assertNotIn("Добавить поставщика или источник", fn)
 
@@ -279,7 +279,7 @@ class TenderTests(TestCase):
         self.assertIn("feedbackWidgetHtml('route'", content)
         self.assertIn("feedbackWidgetHtml('catalog'", content)
         self.assertIn("data-feedback-scope", content)
-        self.assertIn("runRevise({feedback,scope}", content)
+        self.assertIn("runRevise({feedback,scope,step_id:", content)
         # One finalize button on the sticky bar replaces the old trio.
         self.assertIn("data-finalize-training", content)
         self.assertNotIn("data-revise-training", content)
@@ -1156,7 +1156,7 @@ class TenderTests(TestCase):
         self.user.save(update_fields=["is_superuser", "is_staff"])
         session = ProductionTrainingSession.objects.create(
             created_by=self.user, position_name="Жилет", requirements={"requirements": []},
-            current_hypothesis={"stage": "training_dialogue", "route": {"name": "x"}},
+            current_hypothesis={"stage": "training_dialogue", "catalog_search_started": True, "route": {"name": "x"}},
         )
         build.return_value = {"stage": "training_dialogue", "route": {"name": "x"}, "understood_changes": []}
         self.client.force_login(self.user)
@@ -1757,11 +1757,10 @@ class TenderTests(TestCase):
         self.assertEqual(product.product_url, "https://www.oasiscatalog.com/item/1-000032048")
         self.assertTrue(product.is_active)
         self.assertEqual(product.raw_data, {"discount_group_id": None, "included_branding": None})
-        # Семья/оси теперь считаются построчно прямо в синхронизации, без
+        # Семья теперь считается построчно прямо в синхронизации, без
         # отдельного rebuild_catalog_families() после — group_id есть в
         # фикстуре, значит family_key строится из него.
         self.assertEqual(product.family_key, "oasis:100032034")
-        self.assertEqual(product.variant_axes, {"colors": ["белый"]})
 
     def test_failed_oasis_sync_does_not_deactivate_previous_catalog(self):
         supplier = CatalogSupplier.objects.create(code="oasis", name="Oasis", base_url="https://api.oasiscatalog.com")
@@ -2026,15 +2025,8 @@ class TenderTests(TestCase):
         self.assertEqual(result["totals"]["cost_total"], "195000.00")
         self.assertEqual(result["costs"][0]["source_type"], "catalog")
         self.assertEqual(result["costs"][0]["calculation_steps"][-1], "300 шт. × 650.00 ₽/шт. = 195000.00 ₽")
-        # Route stays frozen — picking a product keeps both steps, does not
-        # drop "Нанесение", and does not surface a guessed type/confidence.
-        self.assertEqual(result["route"]["steps"], ["Закупка готового изделия", "Нанесение"])
-        self.assertEqual(result["product_type"], "")
-        self.assertEqual(result["confidence"], 1.0)
-        self.assertEqual(result["questions"], ["Какова цена нанесения?"])
-        self.assertIn("поставщика Oasis", result["route"]["reason"])
-        self.assertEqual(result["sources"][-1]["supplier_name"], "Oasis")
-        self.assertEqual(result["sources"][-1]["price"], "650.00")
+        self.assertEqual(result["route"], hypothesis["route"])
+        self.assertNotIn("Какова цена закупки готовой футболки?", result["questions"])
 
     def test_admin_can_use_partial_catalog_candidate_with_visible_mismatches(self):
         production_type = ProductionType.objects.create(code="catalog-partial", name="Каталожный товар")
@@ -2059,9 +2051,7 @@ class TenderTests(TestCase):
         self.assertEqual(result["catalog_selection"]["selection_mode"], "manual")
         self.assertEqual(result["catalog_selection"]["accepted_mismatches"], ["Плотность ниже требования"])
         self.assertEqual(result["sources"][-1]["supplier_name"], "Другой поставщик")
-        self.assertIn("поставщика Другой поставщик", result["route"]["reason"])
-        # "Нанесение" survives even though the incoming route never listed it.
-        self.assertEqual(result["route"]["steps"], ["Закупка готового изделия", "Нанесение"])
+        self.assertEqual(result["route"], hypothesis["route"])
 
     def test_picking_a_lower_candidate_keeps_the_whole_shortlist_and_moves_it_first(self):
         # Bug: choosing the 3rd of 10 products left only 3 in the list (a
