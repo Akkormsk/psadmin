@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Docker Hub rate-limits anonymous pulls (429); Google's mirror serves the same official image.
+FROM mirror.gcr.io/library/python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 # Modulbank and zakupki.gov.ru use certificates of the Russian Mintsifry CA, absent from Debian's store.
