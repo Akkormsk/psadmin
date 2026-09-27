@@ -5,50 +5,126 @@
 
 {% block content %}
 <div class="container">
-  <a href="{% url 'tender_selection:list' %}" class="back-link">← к канбану</a>
+  <a href="{% url 'tender_selection:list' %}" class="back-link">← к тендерам</a>
   <h1>Архив</h1>
 
   <section class="panel">
     <div class="panel-header">
-      <h2 class="panel-title">Скрытые карточки</h2>
+      <h2 class="panel-title">Скрытые тендеры <small class="ts-count">{{ page_obj.paginator.count }}</small></h2>
     </div>
 
-    <div class="kb-column__cards ts-archive-grid">
-      {% for card in found %}
-      <div class="kb-card">
-        <div class="kb-card__head">
-          <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
-        </div>
-        <div class="kb-card__meta">
-          № {{ card.purchase_number }}
-        </div>
-        <form method="post" action="{% url 'tender_selection:restore' card.pk %}">{% csrf_token %}<button type="submit" class="button-secondary">Восстановить</button></form>
-      </div>
+    <form method="get" class="ts-archive-search">
+      <input type="search" name="q" value="{{ query }}" placeholder="Название, номер закупки, заказчик или ИНН">
+      {% if stage_filter != "all" %}<input type="hidden" name="stage" value="{{ stage_filter }}">{% endif %}
+      {% if law_filter != "all" %}<input type="hidden" name="law" value="{{ law_filter }}">{% endif %}
+      {% if sort != "archived" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+      <button type="submit" class="button-secondary">Найти</button>
+      {% if query %}<a href="#" onclick="tsGo('q','');return false">Сбросить</a>{% endif %}
+    </form>
+
+    <div class="ts-stagetabs" role="tablist" aria-label="Стадия, на которой тендер скрыт">
+      {% for stage in stages %}
+      <button type="button" class="{% if stage_filter == stage.key %}is-active{% endif %}" onclick="tsGo('stage','{% if stage.key != 'all' %}{{ stage.key }}{% endif %}')"{% if stage.hint %} title="{{ stage.hint }}"{% endif %}>
+        {{ stage.label }} · {{ stage.count }}{% if stage.hint %}<small>{{ stage.hint }}</small>{% endif %}
+      </button>
       {% endfor %}
-      {% for card in estimates %}
-      <div class="kb-card">
-        <div class="kb-card__head">
-          <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
-          <span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>
-        </div>
-        <div class="kb-card__meta">№ {{ card.tender_number }}</div>
-        {% if card.badges %}
-        <div class="kb-card__badges">
-          {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}
-        </div>
-        {% endif %}
-        <form method="post" action="{% url 'tender_selection:restore_estimate' card.pk %}">{% csrf_token %}<button type="submit" class="button-secondary">Восстановить</button></form>
-      </div>
-      {% empty %}
-      {% endfor %}
-      {% if not found and not estimates %}
-      <p class="settings-description">Архив пуст.</p>
-      {% endif %}
     </div>
+
+    <div class="ts-controls">
+      <label class="ts-sort">Сортировать
+        <select onchange="tsGo('sort', this.value === 'archived' ? '' : this.value)">
+          <option value="archived" {% if sort == "archived" %}selected{% endif %}>по дате скрытия</option>
+          <option value="price_hi" {% if sort == "price_hi" %}selected{% endif %}>по сумме, крупные</option>
+          <option value="price_lo" {% if sort == "price_lo" %}selected{% endif %}>по сумме, мелкие</option>
+          <option value="published" {% if sort == "published" %}selected{% endif %}>по дате публикации</option>
+        </select>
+      </label>
+      <span class="ts-lawtabs">
+        <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Оба</button>
+        <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ</button>
+        <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ</button>
+      </span>
+    </div>
+
+    {% for row in page_obj.object_list %}
+    {% with tender=row.tender estimate=row.estimate %}
+    <div class="saved-estimate ts-tender">
+      <a class="saved-estimate__main" href="{% url 'tender_selection:detail' tender.pk %}">
+        <span>
+          <span class="ts-tender__title">{{ tender.title|default:tender.object_info }}</span>
+          <small class="ts-tender__meta">
+            <span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span>
+            <span class="ts-stage ts-stage--{{ row.stage }}">{{ row.stage_label }}</span>
+            № {{ tender.purchase_number }}
+            · {% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}
+            {% if tender.org.city or tender.region_label %} · {{ tender.org.city|default:tender.region_label }}{% endif %}
+          </small>
+          {% if estimate and estimate.actual_reduction_percent is not None %}
+          <small class="ts-tender__meta ts-archive-result">
+            факт снижения {{ estimate.actual_reduction_percent }}% при прогнозе {{ estimate.reduction_percent }}%{% if row.participants %} · участников {{ row.participants }}{% endif %}{% if row.ours %} · <strong>наше место: {% if row.ours.rejected %}отклонены{% else %}{{ row.ours.rank }}{% endif %}</strong>{% endif %}
+          </small>
+          {% endif %}
+        </span>
+        <span class="tender-saved-totals">
+          <strong>{{ tender.max_price|rub }}</strong>
+          <small>{% if tender.archived_at %}скрыт {{ tender.archived_at|timezone:"Europe/Moscow"|date:"d.m.Y" }}{% endif %}</small>
+        </span>
+      </a>
+      <div class="ts-row-actions">
+        <form method="post" action="{% url 'tender_selection:restore' tender.pk %}">
+          {% csrf_token %}<button type="submit" class="ts-row-work">Восстановить</button>
+        </form>
+      </div>
+    </div>
+    {% endwith %}
+    {% empty %}
+    <p class="settings-description">{% if query or stage_filter != "all" or law_filter != "all" %}Под фильтр ничего не попало.{% else %}Архив пуст.{% endif %}</p>
+    {% endfor %}
+
+    {% if page_obj.has_other_pages %}
+    <div class="ts-pager">
+      {% if page_obj.has_previous %}<a href="#" onclick="tsGo('page', {{ page_obj.previous_page_number }});return false">← назад</a>{% endif %}
+      <span>стр. {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span>
+      {% if page_obj.has_next %}<a href="#" onclick="tsGo('page', {{ page_obj.next_page_number }});return false">вперёд →</a>{% endif %}
+    </div>
+    {% endif %}
   </section>
 </div>
 
+<script>
+  function tsGo(key, value) {
+    const url = new URL(window.location.href);
+    if (value === '' || value === null) url.searchParams.delete(key); else url.searchParams.set(key, value);
+    if (key !== 'page') url.searchParams.delete('page');
+    window.location.href = url.toString();
+  }
+</script>
+
 <style>
-  .ts-archive-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
+  .ts-archive-search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .ts-archive-search input[type=search] { flex: 1 1 260px; font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
+  .ts-stagetabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .ts-stagetabs button { display: inline-flex; flex-direction: column; align-items: flex-start; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink-2); cursor: pointer; }
+  .ts-stagetabs button small { font-weight: 400; color: var(--ink-3); font-size: 11px; }
+  .ts-stagetabs button.is-active { background: #4c5fd5; border-color: #4c5fd5; color: #fff; }
+  .ts-stagetabs button.is-active small { color: rgba(255,255,255,.8); }
+  .ts-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 4px; font-size: 13px; }
+  .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
+  .ts-lawtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
+  .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--field-bg); color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--field-border); }
+  .ts-lawtabs button:first-child { border-left: 0; }
+  .ts-lawtabs button.is-active { background: #4c5fd5; color: #fff; font-weight: 700; }
+  .ts-tender__meta { color: #6b7280 !important; overflow-wrap: anywhere; }
+  .ts-tender__title { font-weight: 400; color: var(--ink-2); }
+  .ts-archive-result { display: block; margin-top: 2px; }
+  .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
+  .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
+  .ts-stage { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; background: #eef1f4; color: #4b5563; }
+  .ts-stage--lost { background: #fbe9eb; color: #b8434e; }
+  .ts-stage--won { background: #e6f4ea; color: #2e7d32; }
+  .ts-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .ts-row-work { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 13px; font-weight: 600; color: #3366cc; text-decoration: underline; cursor: pointer; white-space: nowrap; }
+  .ts-pager { display: flex; gap: 14px; justify-content: center; margin: 12px 0; font-size: 13px; }
 </style>
 {% endblock %}

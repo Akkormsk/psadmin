@@ -844,7 +844,8 @@ def dismiss_estimate(request, pk):
 @require_POST
 def restore(request, pk):
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
-    tender.status = Tender.NEW
+    # Со стадий расчёта и дальше — обратно на доску, а не во «Входящие».
+    tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
     tender.archived_at = None
     tender.save(update_fields=["status", "archived_at"])
     return redirect("tender_selection:list")
@@ -859,14 +860,101 @@ def restore_estimate(request, pk):
     return restore(request, estimate.tender_id)
 
 
+# Причину скрытия не спрашиваем: её задаёт стадия, на которой тендер ушёл в архив.
+ARCHIVE_STAGES = (
+    ("incoming", "Входящие", "не наш профиль"),
+    ("evaluation", "Оценка", "риски"),
+    ("calculation", "Расчёт", "нерентабельно"),
+    ("bidding", "Торги", "без итога"),
+    ("published", "Итог без нас", "наша заявка не отмечена"),
+    ("lost", "Проиграли", ""),
+    # Пока нет «Исполнения», выигранные тоже уходят сюда.
+    ("won", "Выиграли", ""),
+)
+ARCHIVE_SORTS = {
+    "archived": F("archived_at").desc(nulls_last=True),
+    "price_hi": SORTS["price_hi"],
+    "price_lo": SORTS["price_lo"],
+    "published": SORTS["new"],
+}
+
+
+def _archive_stage(tender, estimate) -> str:
+    from tenders.models import TenderEstimate
+
+    if estimate is None:
+        return "incoming" if tender.review == Tender.UNREVIEWED else "evaluation"
+    return {
+        TenderEstimate.DRAFT: "calculation",
+        TenderEstimate.NOT_PARTICIPATED: "calculation",
+        TenderEstimate.PENDING: "bidding",
+        TenderEstimate.PUBLISHED: "published",
+        TenderEstimate.LOST: "lost",
+        TenderEstimate.WON: "won",
+    }[estimate.status]
+
+
 @superuser_required
 def archive(request):
-    """Единый архив скрытых карточек с возможностью восстановления."""
-    found = [
-        _found_tender_card(t) for t in
-        Tender.objects.filter(status=Tender.DISMISSED).order_by("-archived_at")
+    """Архив скрытых тендеров: поиск, фильтр по стадии скрытия (она же причина),
+    закону и итогу торгов, с возможностью восстановления."""
+    from tenders.models import TenderEstimate
+
+    query = request.GET.get("q", "").strip()
+    stage_filter = request.GET.get("stage") if request.GET.get("stage") in dict((k, 1) for k, *_ in ARCHIVE_STAGES) else "all"
+    law_filter = request.GET.get("law") if request.GET.get("law") in ("fz44", "fz223") else "all"
+    sort = request.GET.get("sort") if request.GET.get("sort") in ARCHIVE_SORTS else "archived"
+
+    tenders = Tender.objects.filter(status=Tender.DISMISSED)
+    if law_filter != "all":
+        tenders = tenders.filter(law=law_filter)
+    tenders = list(tenders.order_by(ARCHIVE_SORTS[sort], "-pk"))
+    orgs = {o.inn: o for o in Organization.objects.filter(inn__in={t.customer_inn for t in tenders if t.customer_inn})}
+    latest_estimate = {}
+    for estimate in TenderEstimate.objects.filter(tender__in=tenders).order_by("updated_at"):
+        latest_estimate[estimate.tender_id] = estimate
+
+    needle = query.casefold()
+    rows = []
+    for tender in tenders:
+        tender.org = orgs.get(tender.customer_inn)
+        haystack = " ".join([
+            tender.title, tender.object_info, tender.purchase_number, tender.customer_inn,
+            tender.org.name if tender.org else "",
+        ]).casefold()
+        if needle and needle not in haystack:
+            continue
+        estimate = latest_estimate.get(tender.pk)
+        rows.append({"tender": tender, "estimate": estimate, "stage": _archive_stage(tender, estimate)})
+
+    stage_counts = {key: 0 for key, *_ in ARCHIVE_STAGES}
+    for row in rows:
+        stage_counts[row["stage"]] += 1
+    stages = [{"key": "all", "label": "Все", "hint": "", "count": len(rows)}] + [
+        {"key": key, "label": label, "hint": hint, "count": stage_counts[key]} for key, label, hint in ARCHIVE_STAGES
     ]
-    return render(request, "tender_selection/archive.html", {"found": found, "estimates": []})
+    if stage_filter != "all":
+        rows = [row for row in rows if row["stage"] == stage_filter]
+
+    page = Paginator(rows, 100).get_page(request.GET.get("page"))
+    stage_labels = {key: label for key, label, _ in ARCHIVE_STAGES}
+    for row in page.object_list:
+        tender, estimate = row["tender"], row["estimate"]
+        tender.region_label = region_name(tender.region) if tender.region else ""
+        tender.law_label = LAW_LABELS.get(tender.law, tender.law)
+        row["stage_label"] = stage_labels[row["stage"]]
+        protocol = (estimate.protocol or {}) if estimate else {}
+        row["ours"] = find_ours(protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price) if protocol else None
+        row["participants"] = len(protocol.get("participants", []))
+
+    return render(request, "tender_selection/archive.html", {
+        "page_obj": page,
+        "stages": stages,
+        "stage_filter": stage_filter,
+        "law_filter": law_filter,
+        "sort": sort,
+        "query": query,
+    })
 
 
 @superuser_required
