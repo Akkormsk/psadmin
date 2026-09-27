@@ -30,10 +30,10 @@ class AccumulatedBadgesTests(TestCase):
     def test_risk_from_evaluation_stays_on_later_stages(self):
         self.assertEqual(self._texts(summary_snapshot={"roi": "25.00"})[:2], ["риск: высокий", "ROI 25.00%"])
 
-    def test_bid_and_result_accumulate_in_stage_order(self):
+    def test_only_risk_roi_and_outcome_accumulate(self):
         texts = self._texts(
             summary_snapshot={"roi": "25.00"}, status=TenderEstimate.LOST, bid_number="ZK-2",
             protocol=PROTOCOL, actual_reduction_percent=Decimal("12.00"), outcome_checked_at=timezone.now(),
             outcome_source=TenderEstimate.OUTCOME_AUTO,
         )
-        self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "заявка ZK-2", "место 2 из 2", "факт: снижение 12.00% (авто)"])
+        self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "Проигран"])

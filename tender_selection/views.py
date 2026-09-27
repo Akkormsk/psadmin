@@ -118,8 +118,7 @@ def _estimate_card(estimate):
     (перенесён из подбора или создан вручную импортом в самих «Тендерах»).
 
     Бейджи накапливаются по мере продвижения, не заменяют друг друга и идут в
-    порядке стадий: риск с «Оценки», ROI с «Расчёта», наша заявка с «Торгов»,
-    место и факт снижения с «Результата»."""
+    порядке стадий: риск с «Оценки», ROI с «Расчёта», «Выигран»/«Проигран» с «Результата»."""
     summary = estimate.summary_snapshot or {}
     badges = []
     if estimate.tender_id and estimate.tender.review != Tender.UNREVIEWED:
@@ -136,19 +135,10 @@ def _estimate_card(estimate):
         except InvalidOperation:
             roi_state = "pending"
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
-    if estimate.bid_number or estimate.bid_price is not None:
-        badges.append({"state": "pending", "text": f"заявка {estimate.bid_number}" if estimate.bid_number else f"заявка {estimate.bid_price:,.0f} ₽".replace(",", " ")})
-    participants = (estimate.protocol or {}).get("participants") or []
-    ours = find_ours(estimate.protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price) if participants else None
-    if ours:
-        place = "отклонена" if ours.get("rejected") else f"место {ours.get('rank')} из {len(participants)}"
-        badges.append({"state": "ok" if ours.get("rank") == 1 and not ours.get("rejected") else "warn", "text": place})
-    if estimate.outcome_checked_at:
-        source_label = "авто" if estimate.outcome_source == estimate.OUTCOME_AUTO else "вручную"
-        if estimate.actual_reduction_percent is not None:
-            badges.append({"state": "pending", "text": f"факт: снижение {estimate.actual_reduction_percent}% ({source_label})"})
-        else:
-            badges.append({"state": "pending", "text": f"итог внесён ({source_label})"})
+    if estimate.status == estimate.WON:
+        badges.append({"state": "ok", "text": "Выигран"})
+    elif estimate.status == estimate.LOST:
+        badges.append({"state": "error", "text": "Проигран"})
     # Карточка ведёт на страницу ТЕНДЕРА (с растущими блоками по стадиям), а не
     # сразу в рабочее пространство расчёта — туда только через кнопку «Перейти
     # в расчёт» внутри блока «Расчёт» на самой странице тендера.
