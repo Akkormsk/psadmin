@@ -62,7 +62,7 @@
   cursor: pointer; list-style: none; user-select: none;
 }
 .ts-menu > summary::-webkit-details-marker { display: none; }
-.ts-menu > summary::after { content: "⌄"; color: var(--ink-3); margin-top: -4px; }
+.ts-chevron, .ts-menu > summary::after { content: ""; display: inline-block; width: 13px; height: 13px; background: var(--ink-3); -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
 .ts-menu--icon > summary { width: 34px; height: 34px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--ink-3); font-size: 18px; }
 .ts-menu--icon > summary::after { content: none; }
 .ts-menu--icon > summary:hover { background: var(--tint-neutral); color: var(--ink); }
@@ -141,6 +141,8 @@
   .ts-row__money, .ts-row__actions { grid-column: 2; }
   .ts-row--nocheck .ts-row__money, .ts-row--nocheck .ts-row__actions { grid-column: 1; }
   .ts-row__title { white-space: normal; }
+  .ts-row { align-items: start; }
+  .ts-row > .ts-check { margin-top: 2px; }
   .ts-seg > a { min-width: 0; padding: 8px 14px; }
   .ts-refresh__params { display: none; }
 }

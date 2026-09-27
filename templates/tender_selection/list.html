@@ -24,7 +24,7 @@
         {% csrf_token %}
         <button type="submit">↻ Обновить</button>
         <span class="ts-refresh__params">от {{ settings.min_price|rub }} · за {{ settings.window_days }} дн.</span>
-        <a href="{% url 'tender_selection:settings' %}" title="Настройки фильтра" aria-label="Настройки фильтра">⌄</a>
+        <a href="{% url 'tender_selection:settings' %}" title="Настройки фильтра" aria-label="Настройки фильтра"><span class="ts-chevron"></span></a>
       </form>
     </div>
 

@@ -42,7 +42,7 @@
     <div class="ts-chips" role="tablist" aria-label="Стадия, на которой тендер скрыт">
       {% for stage in stages %}
       <button type="button" class="{% if stage_filter == stage.key %}is-active{% endif %}" onclick="tsGo('stage','{% if stage.key != 'all' %}{{ stage.key }}{% endif %}')"{% if stage.hint %} title="{{ stage.hint }}"{% endif %}>
-        {{ stage.label }} <small>{{ stage.count }}</small>{% if stage.hint %}<em>{{ stage.hint }}</em>{% endif %}
+        <span>{{ stage.label }} <small>{{ stage.count }}</small></span>{% if stage.hint %}<em>{{ stage.hint }}</em>{% endif %}
       </button>
       {% endfor %}
     </div>
