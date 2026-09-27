@@ -7,6 +7,7 @@ app_name = "tender_selection"
 urlpatterns = [
     path("", views.tender_list, name="list"),
     path("settings/", views.filter_settings, name="settings"),
+    path("evaluation-settings/", views.evaluation_settings, name="evaluation_settings"),
     path("words/", views.save_words, name="save_words"),
     path("pull/", views.pull_now, name="pull"),
     path("<int:pk>/", views.tender_detail, name="detail"),

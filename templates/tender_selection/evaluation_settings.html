@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки оценки тендеров{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'tender_selection:list' %}?view=kanban" class="back-link">← к торгам</a>
+  <h1>Настройки оценки</h1>
+
+  <form method="post" class="content-stack">
+    {% csrf_token %}
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Оценка рисков — сроки</h2>
+        <button type="submit" class="button-success">Сохранить</button>
+      </div>
+      <p class="settings-description">
+        Действуют и на срок всего контракта, и на срок исполнения одной заявки при поставке по заявкам.
+        Срок не больше критического — высокий риск, не больше короткого — средний.
+      </p>
+      <div class="settings-grid">
+        <div class="form-group">
+          <label for="risk_critical_days">Критический срок, дней</label>
+          <input type="number" id="risk_critical_days" name="risk_critical_days" value="{{ form.risk_critical_days }}" min="1" max="365" required>
+        </div>
+        <div class="form-group">
+          <label for="risk_warning_days">Короткий срок, дней</label>
+          <input type="number" id="risk_warning_days" name="risk_warning_days" value="{{ form.risk_warning_days }}" min="1" max="365" required>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">Экономика — светофор ROI</h2></div>
+      <p class="settings-description">
+        Красят ROI в расчёте и на карточках. Из них же считаются ориентиры для торгов:
+        <b>желаемая граница</b> — цена, при которой ROI держится в зелёной зоне,
+        <b>минимальная цена</b> — ниже неё ROI уходит из жёлтой зоны и участвовать невыгодно.
+      </p>
+      <div class="settings-grid">
+        <div class="form-group">
+          <label for="roi_good_percent">Зелёная зона — ROI от, %</label>
+          <input type="text" inputmode="decimal" id="roi_good_percent" name="roi_good_percent" value="{{ form.roi_good_percent }}" required>
+        </div>
+        <div class="form-group">
+          <label for="roi_thin_percent">Жёлтая зона — ROI от, %</label>
+          <input type="text" inputmode="decimal" id="roi_thin_percent" name="roi_thin_percent" value="{{ form.roi_thin_percent }}" required>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">Расчёт</h2></div>
+      <div class="settings-grid">
+        <div class="form-group">
+          <label for="vat_rate">НДС в расчётах, %</label>
+          <input type="text" inputmode="decimal" id="vat_rate" name="vat_rate" value="{{ form.vat_rate }}" required>
+        </div>
+      </div>
+      <p class="settings-description">Применяется к новым и пересохранённым расчётам — тендерным и заказам. Уже сохранённые расчёты хранят свою ставку.</p>
+    </section>
+  </form>
+</div>
+{% endblock %}

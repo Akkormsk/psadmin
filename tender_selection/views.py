@@ -676,11 +676,6 @@ def filter_settings(request):
         settings.exclude_words = request.POST.get("exclude_words", "").strip()
         settings.min_price = request.POST.get("min_price") or 0
         settings.window_days = request.POST.get("window_days") or 7
-        settings.risk_warning_days = int(request.POST.get("risk_warning_days") or 14)
-        settings.risk_critical_days = int(request.POST.get("risk_critical_days") or 7)
-        if settings.risk_critical_days >= settings.risk_warning_days:
-            messages.error(request, "Критический срок должен быть меньше предупреждающего.")
-            return redirect("tender_selection:settings")
         settings.okpd2_codes = request.POST.getlist("okpd2")
         settings.regions = [r for r in request.POST.getlist("region") if r.isdigit()]
         settings.laws = [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"]
@@ -698,6 +693,64 @@ def filter_settings(request):
         "laws": [(code, label, code in chosen_laws) for code, label in Tender.LAW_CHOICES],
         "using_defaults": not settings.okpd2_codes,
     })
+
+
+def _parse_evaluation_settings(post) -> tuple[dict, list[str]]:
+    """Числа из формы «Настройки оценки» и список ошибок; пустой список — можно сохранять."""
+    values, errors = {}, []
+    fields = (
+        ("risk_warning_days", "Короткий срок", int, 1, 365),
+        ("risk_critical_days", "Критический срок", int, 1, 365),
+        ("roi_good_percent", "ROI зелёной зоны", Decimal, 0, 1000),
+        ("roi_thin_percent", "ROI жёлтой зоны", Decimal, 0, 1000),
+        ("vat_rate", "НДС", Decimal, 0, 50),
+    )
+    for name, label, kind, low, high in fields:
+        raw = (post.get(name) or "").strip().replace(",", ".")
+        try:
+            value = kind(raw)
+        except (ValueError, InvalidOperation):
+            errors.append(f"{label}: нужно число.")
+            continue
+        if not low <= value <= high:
+            errors.append(f"{label}: допустимо от {low} до {high}.")
+        values[name] = value
+    if not errors and values["risk_critical_days"] >= values["risk_warning_days"]:
+        errors.append("Критический срок должен быть меньше короткого.")
+    if not errors and values["roi_thin_percent"] >= values["roi_good_percent"]:
+        errors.append("Граница жёлтой зоны ROI должна быть ниже зелёной.")
+    return values, errors
+
+
+@superuser_required
+def evaluation_settings(request):
+    """Все числа, по которым оцениваются тендеры: пороги сроков для рисков,
+    светофор ROI (из него же целевая и минимальная цена на торгах), НДС расчёта."""
+    from tenders.models import TenderSettings
+
+    filters = FilterSettings.load()
+    tender_settings = TenderSettings.objects.get_or_create(pk=1)[0]
+    form = {
+        "risk_warning_days": filters.risk_warning_days, "risk_critical_days": filters.risk_critical_days,
+        "roi_good_percent": tender_settings.roi_good_percent, "roi_thin_percent": tender_settings.roi_thin_percent,
+        "vat_rate": tender_settings.vat_rate,
+    }
+    if request.method == "POST":
+        values, errors = _parse_evaluation_settings(request.POST)
+        if not errors:
+            filters.risk_warning_days = values["risk_warning_days"]
+            filters.risk_critical_days = values["risk_critical_days"]
+            filters.save(update_fields=["risk_warning_days", "risk_critical_days"])
+            tender_settings.roi_good_percent = values["roi_good_percent"]
+            tender_settings.roi_thin_percent = values["roi_thin_percent"]
+            tender_settings.vat_rate = values["vat_rate"]
+            tender_settings.save(update_fields=["roi_good_percent", "roi_thin_percent", "vat_rate"])
+            messages.success(request, "Настройки оценки сохранены.")
+            return redirect("tender_selection:evaluation_settings")
+        for error in errors:
+            messages.error(request, error)
+        form = {name: request.POST.get(name, "") for name in form}
+    return render(request, "tender_selection/evaluation_settings.html", {"form": form})
 
 
 @superuser_required
