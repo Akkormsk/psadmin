@@ -68,6 +68,15 @@ class ProductionTrainingExample(models.Model):
 
 
 class ProcessDefinition(models.Model):
+    """Технологический этап («База производства»).
+
+    `role` — прежнее техническое поле: его по-прежнему читает код маршрута
+    (`routes.py`) и лаборатория каскада при создании нового процесса из
+    предложения ассистента. Пользователю в новом UI «Базы производства» роль
+    не показывается — вместо неё видны `supplies_input`/`performs_production`/
+    `terminal_mode`. Обе группы полей сосуществуют на переходный период,
+    вторая не подменяет первую в коде, который её уже использует."""
+
     ROLE_SUPPLY = "supply"
     ROLE_PRODUCTION = "production"
     ROLE_COMPLETION = "completion"
@@ -77,10 +86,27 @@ class ProcessDefinition(models.Model):
         (ROLE_COMPLETION, "Завершение и логистика"),
     ]
 
+    TERMINAL_ALWAYS = "always"
+    TERMINAL_NEVER = "never"
+    TERMINAL_SOMETIMES = "sometimes"
+    TERMINAL_CHOICES = [
+        (TERMINAL_ALWAYS, "Всегда"),
+        (TERMINAL_NEVER, "Никогда"),
+        (TERMINAL_SOMETIMES, "Иногда"),
+    ]
+
     name = models.CharField("Процесс", max_length=200)
     role = models.CharField("Роль", max_length=20, choices=ROLE_CHOICES)
     description = models.CharField("Когда применяется", max_length=500, blank=True)
     is_active = models.BooleanField("Активен", default=True)
+
+    supplies_input = models.BooleanField("Предоставляет изделие/материал", default=False)
+    performs_production = models.BooleanField("Выполняет производство", default=False)
+    terminal_mode = models.CharField("Завершает маршрут", max_length=10, choices=TERMINAL_CHOICES, default=TERMINAL_SOMETIMES)
+    scope_tags = models.JSONField("Что производим", default=list, blank=True)
+    when_to_use = models.TextField("Когда использовать", blank=True)
+    when_not_to_use = models.TextField("Когда не использовать", blank=True)
+    parameters = models.JSONField("Параметры {required:[], optional:[]}", default=dict, blank=True)
 
     class Meta:
         ordering = ["role", "name"]
@@ -153,6 +179,19 @@ class Lesson(models.Model):
         ("production_step", "Этап производства"),
         ("cost", "Себестоимость"),
     ]
+    SOURCE_MANUAL = "manual"
+    SOURCE_FEEDBACK = "feedback"
+    SOURCE_PROPOSAL = "proposal"
+    SOURCE_IMPORT = "import"
+    SOURCE_PRESET = "preset"
+    SOURCE_CHOICES = [
+        (SOURCE_MANUAL, "Вручную"),
+        (SOURCE_FEEDBACK, "Из фидбэка"),
+        (SOURCE_PROPOSAL, "Подтверждённое предложение"),
+        (SOURCE_IMPORT, "Импорт"),
+        (SOURCE_PRESET, "Стартовый набор"),
+    ]
+
     scope = models.CharField("Область", max_length=32, choices=SCOPE_CHOICES, default="catalog")
     admin_text = models.TextField("Слова администратора")
     summary = models.CharField("Чистая формулировка от ИИ", max_length=300, blank=True)
@@ -160,6 +199,7 @@ class Lesson(models.Model):
     tz_labels = models.JSONField("Метки полей ТЗ", default=list, blank=True)
     production_type = models.CharField("Тип производства", max_length=120, blank=True)
     outcome = models.JSONField("Что вышло в прошлый раз", default=dict, blank=True)
+    source = models.CharField("Источник знания", max_length=16, choices=SOURCE_CHOICES, default=SOURCE_FEEDBACK)
     is_active = models.BooleanField("Активно", default=True)
     session = models.ForeignKey(ProductionTrainingSession, on_delete=models.SET_NULL, null=True, blank=True, related_name="lessons")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="assistant_lessons")
@@ -208,6 +248,14 @@ class TenderKnowledgeSource(models.Model):
     url = models.URLField("Ссылка", max_length=1000, blank=True)
     content_summary = models.TextField("Извлечённые данные", blank=True)
     structured_data = models.JSONField("Структурированные данные", default=dict, blank=True)
+    counterparty = models.ForeignKey("Counterparty", on_delete=models.SET_NULL, null=True, blank=True, related_name="knowledge_sources")
+    # Сам файл (скриншот/переписка) хранится в базе, не на диске контейнера —
+    # диск не переживает пересборку образа. Лимит размера (20 МБ) проверяет
+    # вью при загрузке, не сама модель.
+    raw_file = models.BinaryField("Файл источника", null=True, blank=True)
+    raw_file_name = models.CharField("Имя файла", max_length=255, blank=True)
+    raw_file_content_type = models.CharField("MIME-тип файла", max_length=100, blank=True)
+    superseded_by = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="superseded_sources")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="tender_knowledge_sources")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -651,3 +699,129 @@ class CascadeConfigVersion(models.Model):
 
     def __str__(self):
         return f"{self.name}{' · активна' if self.is_active else ''}"
+
+
+class Counterparty(models.Model):
+    """Контрагент «Базы производства» — тот, кто способен выполнить этап
+    и как получить у него цену. Не имеет собственной роли: она целиком
+    определяется его связями со Stage через StageCounterpartyLink. Может
+    (необязательно) ссылаться на уже существующий автосинк-каталог
+    (Oasis/Gifts) — это тот же контрагент, просто цену подаёт через API,
+    а не скриншотом."""
+
+    name = models.CharField("Название", max_length=200)
+    catalog_supplier = models.ForeignKey(CatalogSupplier, on_delete=models.SET_NULL, null=True, blank=True, related_name="counterparties")
+    notes = models.TextField("Комментарий", blank=True)
+    is_active = models.BooleanField("Активен", default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="counterparties")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Контрагент"
+        verbose_name_plural = "Контрагенты"
+
+    def __str__(self):
+        return self.name
+
+
+class StageCounterpartyLink(models.Model):
+    """Связь этап↔контрагент — своя настройка на каждой паре. Несколько
+    товарных шаблонов одного контрагента (как у FSPrint пакет/папка/каталог)
+    живут внутри `settings`, отдельной таблицей не заводятся, пока не
+    появится их собственный адаптер."""
+
+    SOURCE_INTERNAL_CALCULATOR = "internal_calculator"
+    SOURCE_CATALOG_API = "catalog_api"
+    SOURCE_PRICE_LIST = "price_list"
+    SOURCE_EXTERNAL_CALCULATOR = "external_calculator"
+    SOURCE_EXTERNAL_API = "external_api"
+    SOURCE_MANUAL_QUOTE = "manual_quote"
+    SOURCE_HISTORICAL = "historical"
+    PRICE_SOURCE_CHOICES = [
+        (SOURCE_INTERNAL_CALCULATOR, "Внутренний калькулятор"),
+        (SOURCE_CATALOG_API, "Каталог / API"),
+        (SOURCE_PRICE_LIST, "Прайс-лист"),
+        (SOURCE_EXTERNAL_CALCULATOR, "Внешний калькулятор"),
+        (SOURCE_EXTERNAL_API, "Внешний API"),
+        (SOURCE_MANUAL_QUOTE, "Ручной запрос цены"),
+        (SOURCE_HISTORICAL, "История цен"),
+    ]
+
+    stage = models.ForeignKey(ProcessDefinition, on_delete=models.CASCADE, related_name="counterparty_links")
+    counterparty = models.ForeignKey(Counterparty, on_delete=models.CASCADE, related_name="stage_links")
+    is_active = models.BooleanField("Активна", default=True)
+    priority = models.PositiveIntegerField("Приоритет (меньше — важнее)", default=0)
+    price_source_type = models.CharField("Способ получения цены", max_length=24, choices=PRICE_SOURCE_CHOICES, default=SOURCE_MANUAL_QUOTE)
+    settings = models.JSONField(
+        "Настройки (ограничения, параметры, сроки, минимальный заказ, ссылка на калькулятор…)",
+        default=dict, blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["priority", "counterparty__name"]
+        constraints = [models.UniqueConstraint(fields=["stage", "counterparty"], name="unique_stage_counterparty_link")]
+        verbose_name = "Связь этап ↔ контрагент"
+        verbose_name_plural = "Связи этап ↔ контрагент"
+
+    def __str__(self):
+        return f"{self.stage.name} ↔ {self.counterparty.name}"
+
+
+class Proposal(models.Model):
+    """Предложение глобального изменения «Базы производства». Ничего не
+    меняет само по себе — только после `status=accepted` бэкенд выполняет
+    обычную детерминированную операцию (создать/обновить Stage, создать
+    Counterparty, создать/обновить связь, создать Lesson). Ручные правки
+    внутри «Базы производства» тоже проходят через эту таблицу, сразу со
+    статусом `accepted`, — так вся история глобальных изменений идёт
+    одним путём и `Proposal` заодно служит её журналом."""
+
+    TYPE_CREATE_STAGE = "create_stage"
+    TYPE_UPDATE_STAGE = "update_stage"
+    TYPE_CREATE_COUNTERPARTY = "create_counterparty"
+    TYPE_UPDATE_COUNTERPARTY = "update_counterparty"
+    TYPE_LINK_STAGE_COUNTERPARTY = "link_stage_counterparty"
+    TYPE_CREATE_LESSON = "create_lesson"
+    TYPE_CHOICES = [
+        (TYPE_CREATE_STAGE, "Новый этап"),
+        (TYPE_UPDATE_STAGE, "Изменить этап"),
+        (TYPE_CREATE_COUNTERPARTY, "Новый контрагент"),
+        (TYPE_UPDATE_COUNTERPARTY, "Изменить контрагента"),
+        (TYPE_LINK_STAGE_COUNTERPARTY, "Связать этап и контрагента"),
+        (TYPE_CREATE_LESSON, "Сохранить урок"),
+    ]
+
+    STATUS_PENDING = "pending"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Ожидает подтверждения"),
+        (STATUS_ACCEPTED, "Принято"),
+        (STATUS_REJECTED, "Отклонено"),
+    ]
+
+    batch_id = models.UUIDField("Группа предложений", default=uuid.uuid4)
+    type = models.CharField("Тип", max_length=32, choices=TYPE_CHOICES)
+    payload = models.JSONField("Предлагаемая правка", default=dict, blank=True)
+    summary = models.CharField("Формулировка для карточки", max_length=300)
+    status = models.CharField("Статус", max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    session = models.ForeignKey(ProductionTrainingSession, on_delete=models.SET_NULL, null=True, blank=True, related_name="proposals")
+    source_text = models.TextField("Исходный фидбэк администратора", blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_proposals")
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="decided_proposals")
+    decided_at = models.DateTimeField("Когда решили", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "batch_id"])]
+        verbose_name = "Предложение изменения базы производства"
+        verbose_name_plural = "Предложения изменения базы производства"
+
+    def __str__(self):
+        return self.summary

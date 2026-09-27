@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AttributeConceptHint, CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, UnitAlias
+from .models import AttributeConceptHint, CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSupplier, CatalogSyncRun, Counterparty, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, UnitAlias
 
 
 class TenderLineInline(admin.TabularInline):
@@ -64,8 +64,8 @@ class ProductionTrainingExampleAdmin(admin.ModelAdmin):
 
 @admin.register(ProcessDefinition)
 class ProcessDefinitionAdmin(admin.ModelAdmin):
-    list_display = ("name", "role", "is_active")
-    list_filter = ("role", "is_active")
+    list_display = ("name", "role", "supplies_input", "performs_production", "terminal_mode", "is_active")
+    list_filter = ("role", "terminal_mode", "is_active")
     list_editable = ("is_active",)
     search_fields = ("name", "description")
 
@@ -88,10 +88,13 @@ class ProductionTrainingSessionAdmin(admin.ModelAdmin):
 
 @admin.register(TenderKnowledgeSource)
 class TenderKnowledgeSourceAdmin(admin.ModelAdmin):
-    list_display = ("title", "supplier_name", "source_type", "updated_at", "is_active")
+    list_display = ("title", "supplier_name", "counterparty", "source_type", "updated_at", "is_active")
     list_filter = ("source_type", "is_active", "created_by")
     search_fields = ("title", "supplier_name", "url", "content_summary")
     list_editable = ("is_active",)
+    # BinaryField не рендерится в форме админки — файл виден только через raw_file_name/тип.
+    exclude = ("raw_file",)
+    readonly_fields = ("raw_file_name", "raw_file_content_type")
 
 
 @admin.register(CatalogSupplier)
@@ -138,3 +141,27 @@ class CatalogMatchDecisionAdmin(admin.ModelAdmin):
     list_filter = ("decision", "is_confirmed", "product__supplier", "created_by")
     search_fields = ("product__article", "product__name", "session__position_name", "note")
     readonly_fields = ("session", "product", "decision", "reason_codes", "requirement_signature", "created_by", "is_confirmed", "created_at")
+
+
+@admin.register(Counterparty)
+class CounterpartyAdmin(admin.ModelAdmin):
+    list_display = ("name", "catalog_supplier", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    list_editable = ("is_active",)
+    search_fields = ("name", "notes")
+
+
+@admin.register(StageCounterpartyLink)
+class StageCounterpartyLinkAdmin(admin.ModelAdmin):
+    list_display = ("stage", "counterparty", "price_source_type", "priority", "is_active")
+    list_filter = ("price_source_type", "is_active", "stage")
+    list_editable = ("is_active", "priority")
+    search_fields = ("stage__name", "counterparty__name")
+
+
+@admin.register(Proposal)
+class ProposalAdmin(admin.ModelAdmin):
+    list_display = ("summary", "type", "status", "batch_id", "created_by", "created_at")
+    list_filter = ("type", "status")
+    search_fields = ("summary", "source_text")
+    readonly_fields = ("batch_id", "payload", "session", "source_text", "created_by", "created_at")
