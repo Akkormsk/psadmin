@@ -3,9 +3,10 @@
 {% if risk.degraded %}<p class="ts-warn">⚠ Ограниченный режим: документы закупки недоступны, оценка построена только по данным извещения — менее надёжна, чем по полному тексту контракта.</p>{% endif %}
 <div class="table-wrapper"><table class="table ts-risk-table">
   <tbody>
-    <tr><th>Срок исполнения</th><td>
-      {% if risk.execution_deadline.date %}<strong>{{ risk.execution_deadline.date }}</strong>{% if risk.execution_deadline.assessment %} — {{ risk.execution_deadline.assessment }}{% endif %}{% else %}нет данных{% endif %}
+    <tr><th>Срок контракта</th><td>
+      {% if risk.execution_deadline.date %}<strong>до {{ risk.execution_deadline.date }}</strong>{% if risk.execution_deadline.assessment %} — {{ risk.execution_deadline.assessment }}{% endif %}{% else %}нет данных{% endif %}
     </td></tr>
+    {% if risk.risk_facts.batch_days %}<tr><th>Срок по одной заявке</th><td><strong>{{ risk.risk_facts.batch_days }} дн.</strong> с момента получения заявки заказчика</td></tr>{% endif %}
     <tr><th>Обеспечение заявки</th><td>{{ risk.application_security|default:"нет данных" }}</td></tr>
     <tr><th>Обеспечение контракта</th><td>{{ risk.contract_security|default:"нет данных" }}</td></tr>
     <tr><th>Освобождение по ст. 96 44-ФЗ</th><td>{{ risk.security_exemption|default:"нет данных" }}</td></tr>

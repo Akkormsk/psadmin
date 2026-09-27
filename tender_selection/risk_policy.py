@@ -15,12 +15,16 @@ def classify_risk(facts: dict | None, *, warning_days: int = 14, critical_days: 
     def add(level, code, text):
         factors.append({"level": level, "code": code, "text": text})
 
-    days = facts.get("execution_days")
-    if isinstance(days, int) and days >= 0:
-        if days <= critical_days:
-            add("high", "short_deadline", f"Срок исполнения {days} дн. — критически короткий.")
-        elif days <= warning_days:
-            add("medium", "short_deadline", f"Срок исполнения {days} дн. — короткий.")
+    def check_days(value, code, label):
+        if isinstance(value, int) and value >= 0:
+            if value <= critical_days:
+                add("high", code, f"{label} {value} дн. — критически короткий.")
+            elif value <= warning_days:
+                add("medium", code, f"{label} {value} дн. — короткий.")
+
+    # Поставка по заявкам: контракт длится месяцы, а жмёт срок каждой партии — это два разных срока.
+    check_days(facts.get("execution_days"), "short_deadline", "Срок исполнения всего контракта")
+    check_days(facts.get("batch_days"), "short_batch", "Срок поставки по одной заявке")
 
     national_regime = facts.get("national_regime")
     if national_regime == "blocked":

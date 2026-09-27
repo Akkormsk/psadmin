@@ -19,3 +19,16 @@ class RiskPolicyTests(SimpleTestCase):
         result = classify_risk({"documents_sufficient": True, "execution_days": 10, "delivery_mode": "requests_open_ended"})
         self.assertEqual(result["risk_level"], "high")
         self.assertEqual(len(result["risk_factors"]), 2)
+
+    def test_short_contract_deadline_says_it_is_the_whole_contract(self):
+        result = classify_risk({"documents_sufficient": True, "execution_days": 7})
+        self.assertIn("всего контракта", result["risk_factors"][0]["text"])
+
+    def test_short_per_request_deadline_is_named_as_such(self):
+        result = classify_risk({
+            "documents_sufficient": True, "execution_days": 90, "batch_days": 7, "delivery_mode": "requests_with_end",
+        })
+        batch = next(f for f in result["risk_factors"] if f["code"] == "short_batch")
+        self.assertEqual(batch["level"], "high")
+        self.assertIn("по одной заявке 7 дн.", batch["text"])
+        self.assertNotIn("short_deadline", [f["code"] for f in result["risk_factors"]])
