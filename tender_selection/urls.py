@@ -8,7 +8,6 @@ urlpatterns = [
     path("", views.tender_list, name="list"),
     path("settings/", views.filter_settings, name="settings"),
     path("evaluation-settings/", views.evaluation_settings, name="evaluation_settings"),
-    path("words/", views.save_words, name="save_words"),
     path("word-audit/", views.word_audit_page, name="word_audit"),
     path("word-audit/run/", views.word_audit_run, name="word_audit_run"),
     path("word-audit/apply/", views.word_audit_apply, name="word_audit_apply"),
