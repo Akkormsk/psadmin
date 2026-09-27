@@ -216,7 +216,7 @@
     {% if protocol %}
     <p class="settings-description">
       <a href="{{ protocol.url }}" target="_blank" rel="noopener">{{ protocol.name }}</a>{% if protocol.applications_total %} · подано заявок: {{ protocol.applications_total }}{% endif %}.
-      {% if protocol.ours %}Наша заявка — {% if protocol.ours.rejected %}отклонена{% else %}{{ protocol.ours.rank }}-е место{% endif %}.{% elif estimate.bid_number or estimate.bid_price %}Нашу заявку в протоколе не нашли — проверьте номер и сумму.{% else %}Чтобы отметить нашу заявку, внесите её номер или сумму ниже.{% endif %}
+      {% if protocol.ours %}Наша заявка — {% if protocol.ours.rejected %}отклонена{% else %}{{ protocol.ours.rank }}-е место{% endif %}.{% elif estimate.bid_number or estimate.bid_price %}Нашу заявку в протоколе не нашли — проверьте номер и сумму.{% elif estimate.status == "published" %}Выиграли или нет — система узнает сама, когда в ЕИС появится контракт. Чтобы узнать сразу и увидеть наше место, внесите номер или сумму заявки ниже.{% else %}Чтобы отметить нашу заявку, внесите её номер или сумму ниже.{% endif %}
     </p>
     {% if protocol.failed_reason %}<p class="settings-description">Торги признаны несостоявшимися: {{ protocol.failed_reason }}</p>{% endif %}
     <div class="table-wrapper"><table class="table ts-protocol">

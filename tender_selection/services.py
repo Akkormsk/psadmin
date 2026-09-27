@@ -797,6 +797,10 @@ def fetch_tender_outcome(estimate) -> dict:
     return result
 
 
+# «Итог опубликован» ждёт контракта с ИНН победителя: это дни, чаще проверять незачем.
+CONTRACT_RECHECK = timedelta(hours=6)
+
+
 def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
     """Фоновая попытка забрать факт торгов для просчётов «В ожидании», у которых
     итог ещё не внесён — тот же ГосПлан-запрос, что и ручная кнопка «Забрать итог
@@ -808,7 +812,8 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
 
     attempted = succeeded = 0
     estimates = TenderEstimate.objects.filter(
-        status=TenderEstimate.PENDING, outcome_checked_at__isnull=True,
+        Q(status=TenderEstimate.PENDING, outcome_checked_at__isnull=True)
+        | Q(status=TenderEstimate.PUBLISHED, outcome_checked_at__lt=timezone.now() - CONTRACT_RECHECK),
     ).order_by("updated_at")[:50]
     for estimate in estimates:
         if attempted >= limit:
@@ -818,6 +823,9 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             outcome = fetch_tender_outcome(estimate)
         except Exception:
             logger.exception("Outcome retry failed for estimate %s", estimate.tender_number)
+            continue
+        if estimate.status == TenderEstimate.PUBLISHED:
+            succeeded += _reconcile_published_with_contract(estimate, outcome)
             continue
         if not outcome.get("found"):
             continue
@@ -833,6 +841,27 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             estimate.save(update_fields=["actual_price", "actual_reduction_percent", "outcome_checked_at"])
         succeeded += 1
     return attempted, succeeded
+
+
+def _reconcile_published_with_contract(estimate, outcome: dict) -> bool:
+    """Протокол вышел, но нашу заявку не опознали — решаем по ИНН победителя в контракте.
+    Цену и снижение оставляем из протокола: они уже посчитаны от НМЦК закупки."""
+    from tenders.models import TenderEstimate
+
+    if not outcome.get("auto_status"):
+        estimate.outcome_checked_at = timezone.now()
+        estimate.save(update_fields=["outcome_checked_at"])
+        return False
+    apply_tender_outcome(
+        estimate, status=outcome["auto_status"],
+        price=estimate.actual_price if estimate.actual_price is not None else outcome.get("price"),
+        reduction_percent=(
+            estimate.actual_reduction_percent if estimate.actual_reduction_percent is not None
+            else outcome.get("reduction_percent")
+        ),
+        source=TenderEstimate.OUTCOME_AUTO,
+    )
+    return True
 
 
 def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None, source) -> None:

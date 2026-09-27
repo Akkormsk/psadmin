@@ -219,3 +219,49 @@ class ProtocolCardTests(TestCase):
 
         self.assertEqual(self.estimate.bid_price, Decimal("1070000.00"))
         self.assertEqual(self.estimate.status, TenderEstimate.WON)
+
+
+class ContractWinnerReconciliationTests(TestCase):
+    OUR_INN = "771978661830"
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user("manager")
+        tender = Tender.objects.create(purchase_number="0172200004526000010")
+        self.estimate = TenderEstimate.objects.create(
+            owner=self.user, tender=tender, tender_number=tender.purchase_number, name="Полиграфия",
+            status=TenderEstimate.PUBLISHED, protocol=QUOTATION_PROTOCOL,
+            actual_price=Decimal("1070000.00"), actual_reduction_percent=Decimal("40.60"),
+            outcome_checked_at=timezone.now() - services.CONTRACT_RECHECK - timedelta(minutes=1),
+        )
+
+    def _reconcile(self, contracts):
+        with patch.dict("os.environ", {"COMPANY_INN": self.OUR_INN}), \
+                patch.object(services.gosplan, "fetch_contracts", return_value=contracts) as fetch:
+            services.retry_pending_outcomes()
+        self.estimate.refresh_from_db()
+        return fetch
+
+    def test_contract_with_our_inn_marks_won_and_keeps_protocol_figures(self):
+        self._reconcile([{"price": 1070000, "suppliers": [self.OUR_INN]}])
+
+        self.assertEqual(self.estimate.status, TenderEstimate.WON)
+        self.assertEqual(self.estimate.actual_reduction_percent, Decimal("40.60"))
+
+    def test_contract_with_someone_else_marks_lost(self):
+        self._reconcile([{"price": 1070000, "suppliers": ["7700000000"]}])
+        self.assertEqual(self.estimate.status, TenderEstimate.LOST)
+
+    def test_no_contract_yet_waits_and_postpones_next_check(self):
+        self._reconcile([])
+
+        self.assertEqual(self.estimate.status, TenderEstimate.PUBLISHED)
+        self.assertGreater(self.estimate.outcome_checked_at, timezone.now() - timedelta(minutes=1))
+
+    def test_recently_checked_result_is_not_queried(self):
+        self.estimate.outcome_checked_at = timezone.now()
+        self.estimate.save()
+
+        fetch = self._reconcile([{"price": 1, "suppliers": [self.OUR_INN]}])
+
+        fetch.assert_not_called()
+        self.assertEqual(self.estimate.status, TenderEstimate.PUBLISHED)
