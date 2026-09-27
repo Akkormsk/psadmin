@@ -129,12 +129,16 @@ def _estimate_card(estimate):
 
         from tenders.services import roi_thresholds
 
-        try:
-            good, thin = roi_thresholds()
-            roi_value = Decimal(str(summary["roi"]))
-            roi_state = "ok" if roi_value >= good else "warn" if roi_value >= thin else "error"
-        except InvalidOperation:
+        if summary.get("is_incomplete", True):
+            # Себестоимость ещё не досчитана до конца — ROI не окончательный, не красим.
             roi_state = "pending"
+        else:
+            try:
+                good, thin = roi_thresholds()
+                roi_value = Decimal(str(summary["roi"]))
+                roi_state = "ok" if roi_value >= good else "warn" if roi_value >= thin else "error"
+            except InvalidOperation:
+                roi_state = "pending"
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
     if estimate.status == estimate.WON:
         badges.append({"state": "ok", "text": "Выигран"})

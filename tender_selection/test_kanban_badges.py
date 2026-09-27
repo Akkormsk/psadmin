@@ -62,3 +62,22 @@ class LegacyUnreviewedTenderInCalculationTests(TestCase):
             response = self.client.get(f"/tender-selection/{self.tender.pk}/")
 
         self.assertContains(response, "<p class=\"ts-doc-loading\" data-risk-autostart>")
+
+
+class IncompleteRoiBadgeTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user("manager")
+
+    def test_roi_is_greyed_out_while_calculation_is_incomplete(self):
+        estimate = TenderEstimate.objects.create(
+            owner=self.user, tender_number="1", name="Черновик",
+            summary_snapshot={"roi": "1900.00", "is_incomplete": True},
+        )
+        self.assertEqual(_estimate_card(estimate)["badges"][0], {"state": "pending", "text": "ROI 1900.00%"})
+
+    def test_roi_keeps_its_colour_once_calculation_is_complete(self):
+        estimate = TenderEstimate.objects.create(
+            owner=self.user, tender_number="1", name="Готово",
+            summary_snapshot={"roi": "40.00", "is_incomplete": False},
+        )
+        self.assertEqual(_estimate_card(estimate)["badges"][0]["state"], "ok")
