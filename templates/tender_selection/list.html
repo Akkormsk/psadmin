@@ -95,7 +95,7 @@
         <div class="ts-row__money">
           <span class="ts-row__price">{{ tender.max_price|rub }}</span>
           {% if tender.collecting_finished_at %}
-          <span class="ts-dl{% if tender.deadline_state %} ts-dl--{{ tender.deadline_state }}{% endif %}">до {{ tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК</span>
+          <span class="ts-deadline{% if tender.deadline_state %} ts-deadline--{{ tender.deadline_state }}{% endif %}">до {{ tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК</span>
           {% if tender.days_left is not None %}<span class="ts-row__left">{% if tender.days_left == 0 %}Остался последний день{% else %}Осталось {{ tender.days_left }} дн.{% endif %}</span>{% else %}<span class="ts-row__left">Срок истёк</span>{% endif %}
           {% else %}<span class="ts-row__left">Срок не указан</span>{% endif %}
         </div>

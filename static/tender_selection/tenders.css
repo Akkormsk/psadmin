@@ -108,9 +108,9 @@
 .ts-row__left { color: var(--ink-3); font-size: 12px; }
 .ts-row__actions { display: flex; align-items: center; gap: 6px; }
 
-.ts-dl::before { content: "⏱ "; }
-.ts-dl--urgent { color: var(--negative-ink); font-weight: 600; }
-.ts-dl--soon { color: var(--warning-ink); font-weight: 600; }
+.ts-deadline::before { content: "⏱ "; }
+.ts-deadline--urgent { color: var(--negative-ink); font-weight: 600; }
+.ts-deadline--soon { color: var(--warning-ink); font-weight: 600; }
 
 .ts-law { display: inline-block; padding: 1px 7px; border-radius: 6px; background: var(--tint-neutral); color: var(--ink-2); font-size: 12px; font-weight: 700; }
 .ts-law--fz223 { background: var(--tint-info); color: light-dark(#2f5da8, #8fb4ff); }

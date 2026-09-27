@@ -1588,6 +1588,28 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .tender-production-actions .button-success { min-height:34px; padding:6px 10px; font-size:10px; }
 .tender-production-actions small { color:var(--ink-3); font-size:8px; }
 
+/* Цена и себестоимость рядом не помещаются уже на планшете в горизонтали —
+   ставим их друг под другом, каждый блок сохраняет свою компактную сетку. */
+@media (max-width: 1100px) {
+  .tender-line__columns { grid-template-columns:1fr; gap:8px; }
+}
+
+/* Телефон: две колонки вместо четырёх-пяти. Десктопная сетка расставляет поля
+   явно через nth-child, поэтому здесь каждой ячейке задаётся своё место. */
+@media (max-width: 600px) {
+  .tender-compact-grid--price, .tender-compact-grid--cost { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+  .tender-compact-grid--price > *, .tender-compact-grid--cost > * { grid-column:auto !important; grid-row:auto !important; }
+  .tender-compact-grid--price > label:nth-child(1),
+  .tender-compact-grid--cost > label:nth-of-type(4),
+  .tender-compact-grid--cost > .tender-line-questions,
+  .tender-compact-grid--cost > .tender-expense-error { grid-column:1 / -1 !important; }
+  .tender-compact-grid--price > .tender-line-ai { justify-self:stretch; }
+  .tender-compact-grid--cost > .tender-line__remove { grid-column:auto !important; }
+  .tender-compact-grid label { font-size:11px; }
+  .tender-compact-grid > span small { font-size:10px; }
+  .tender-compact-grid > span strong { font-size:12px; }
+}
+
 @media (max-width: 900px) {
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
   .card { min-height: 180px; }
@@ -1689,10 +1711,6 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
   .tender-line__remove { opacity:1; pointer-events:auto; }
   .tender-line__extra { width:min(430px,70%); }
   .tender-line__columns { grid-template-columns:1fr; gap:10px; }
-  .tender-compact-grid--price, .tender-compact-grid--cost { grid-template-columns:1fr; }
-  /* Десктопная сетка расставляет поля по ячейкам явно через nth-child —
-     на мобильном экране их всех сводим в один столбец, поле за полем. */
-  .tender-compact-grid--price > *, .tender-compact-grid--cost > * { grid-column:1 !important; grid-row:auto !important; }
   .tender-compact-grid input { min-height:34px; font-size:13px; }
   .tender-compact-grid > span { min-height:34px; }
   .tender-table-totals { grid-template-columns:1fr; }
