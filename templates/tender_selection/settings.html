@@ -13,7 +13,10 @@
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">Фильтр по названию</h2>
-        <button type="submit" class="button-success">Сохранить</button>
+        <div class="panel-actions">
+          <a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a>
+          <button type="submit" class="button-success">Сохранить</button>
+        </div>
       </div>
       <p class="settings-description">
         Слова через запятую или с новой строки. Регистр и «ё/е» не важны.

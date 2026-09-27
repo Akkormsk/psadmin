@@ -16,7 +16,6 @@
     <div class="panel-header">
       <h2 class="panel-title">Входящие <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
       <div class="panel-actions">
-        <a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a>
         <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
           {% csrf_token %}
