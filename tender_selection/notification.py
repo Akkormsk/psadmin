@@ -111,7 +111,8 @@ def parse_notification(payload: dict) -> dict:
     common = source.get("commonInfo") or {}
     resp_org = _dig(source, "purchaseResponsibleInfo", "responsibleOrgInfo", default={}) or {}
     resp_info = _dig(source, "purchaseResponsibleInfo", "responsibleInfo", default={}) or {}
-    cr = _dig(source, "notificationInfo", "customerRequirementsInfo", "customerRequirementInfo", default={}) or {}
+    # Совместная закупка: у каждого заказчика свои требования — карточке хватает первого.
+    cr = (_as_list(_dig(source, "notificationInfo", "customerRequirementsInfo", "customerRequirementInfo")) or [{}])[0] or {}
     proc = _dig(source, "notificationInfo", "procedureInfo", default={}) or {}
     contract_conditions = cr.get("contractConditionsInfo") or {}
 

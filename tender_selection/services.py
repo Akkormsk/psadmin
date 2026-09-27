@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Q
 
 import os
 
@@ -355,6 +356,9 @@ def retry_pending_documents(*, limit: int = 5, recent: int = 50) -> tuple[int, i
     return attempted, succeeded
 
 
+NOTIFICATION_RETRY_COOLDOWN = timedelta(hours=2)
+
+
 def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[int, int]:
     """Фоновая догрузка извещений для свежих 44-ФЗ тендеров, у которых ещё не было ни
     одной попытки. Без этого шага notification_for() вызывается только по клику
@@ -364,9 +368,17 @@ def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[
     Идёт мелкими порциями по тому же паттерну, что retry_pending_documents.
 
     Возвращает (сколько тендеров пробовали, сколько удалось)."""
+    now = timezone.now()
+    never_checked = Q(notification_checked_at__isnull=True)
+    # Бесплатный ГосПлан часто отвечает 429 — неудачную попытку повторяем, пока приём заявок открыт.
+    failed_earlier = Q(
+        notification_raw={},
+        notification_checked_at__lt=now - NOTIFICATION_RETRY_COOLDOWN,
+        collecting_finished_at__gte=now,
+    )
     attempted = succeeded = 0
     tenders = (
-        Tender.objects.filter(law="fz44", notification_checked_at__isnull=True)
+        Tender.objects.filter(never_checked | failed_earlier, law="fz44")
         .order_by("-last_pulled_at")[:recent]
     )
     for tender in tenders:
