@@ -790,6 +790,53 @@ def evaluation_settings(request):
 
 
 @superuser_required
+def word_audit_page(request):
+    """Статистика плюс/минус-слов (без ИИ) и последний AI-аудит с галочками для применения."""
+    from . import word_audit
+    from .models import WordAudit
+
+    return render(request, "tender_selection/word_audit.html", {
+        "stats": word_audit.word_stats(),
+        "audit": WordAudit.objects.first(),
+        "settings": FilterSettings.load(),
+    })
+
+
+@superuser_required
+@require_POST
+def word_audit_run(request):
+    from . import word_audit
+    from .ai_gateway import AIGatewayError
+
+    try:
+        audit = word_audit.run_audit(request.user)
+    except AIGatewayError as exc:
+        messages.error(request, f"Аудит не выполнен: {exc}")
+    else:
+        spent = f" Потрачено {audit.spend_rub} ₽." if audit.spend_rub is not None else ""
+        messages.success(request, f"Аудит готов.{spent}")
+    return redirect("tender_selection:word_audit")
+
+
+@superuser_required
+@require_POST
+def word_audit_apply(request):
+    from . import word_audit
+
+    chosen = {kind: [w for w in request.POST.getlist(kind) if w.strip()] for kind in word_audit.SUGGESTION_KINDS}
+    if not any(chosen.values()):
+        messages.info(request, "Ничего не выбрано.")
+        return redirect("tender_selection:word_audit")
+    word_audit.apply_words(**chosen)
+    messages.success(request, "Фильтр обновлён: " + ", ".join(
+        f"{label} {len(chosen[kind])}" for kind, label in (
+            ("add_plus", "+плюс"), ("add_minus", "+минус"), ("remove_plus", "−плюс"), ("remove_minus", "−минус"),
+        ) if chosen[kind]
+    ) + ".")
+    return redirect("tender_selection:word_audit")
+
+
+@superuser_required
 @require_POST
 def save_words(request):
     settings = FilterSettings.load()

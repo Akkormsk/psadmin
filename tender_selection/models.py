@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import models
 
 
@@ -219,3 +220,42 @@ class PullRun(models.Model):
 
     def __str__(self):
         return f"{self.started_at:%d.%m.%Y %H:%M} — {self.records_received} записей"
+
+
+class IncomingTrace(models.Model):
+    """След тендера, удалённого уборкой «Входящих»: сам тендер больше не нужен, а для
+    аудита плюс/минус-слов важно, что он был и что с ним стало (скрыт словами или
+    показан, но в работу не взят)."""
+
+    law = models.CharField("Закон", max_length=8, default="fz44")
+    purchase_number = models.CharField("Номер закупки", max_length=40)
+    title = models.TextField("Название", blank=True)
+    okpd2 = models.JSONField("ОКПД2", default=list, blank=True)
+    max_price = models.DecimalField("НМЦК", max_digits=16, decimal_places=2, null=True, blank=True)
+    plus_hits = models.JSONField("Сработавшие плюс-слова", default=list, blank=True)
+    filtered_out = models.BooleanField("Скрыт словами", default=False)
+    was_opened = models.BooleanField("Открывали", default=False)
+    purged_at = models.DateTimeField("Удалён", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "След удалённого тендера"
+        verbose_name_plural = "Следы удалённых тендеров"
+
+    def __str__(self):
+        return self.purchase_number
+
+
+class WordAudit(models.Model):
+    """Один запуск AI-аудита плюс/минус-слов: предложения ИИ с посчитанными бэкендом последствиями."""
+
+    created_at = models.DateTimeField("Запущен", auto_now_add=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    model = models.CharField("Модель", max_length=80, blank=True)
+    input_counts = models.JSONField("Сколько примеров отправлено", default=dict, blank=True)
+    result = models.JSONField("Предложения", default=dict, blank=True)
+    spend_rub = models.DecimalField("Стоимость, ₽", max_digits=8, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "AI-аудит слов"
+        verbose_name_plural = "AI-аудиты слов"

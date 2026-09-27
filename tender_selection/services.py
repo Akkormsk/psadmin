@@ -460,11 +460,28 @@ def purge_stale() -> dict:
 
     Архив не очищается: скрытые карточки можно восстановить."""
 
+    from .filtering import match_title, parse_terms
+    from .models import IncomingTrace
+
     now = timezone.now()
-    expired_incoming, _ = Tender.objects.filter(
+    settings = FilterSettings.load()
+    expired = Tender.objects.filter(
         status=Tender.NEW, review=Tender.UNREVIEWED,
-        collecting_finished_at__lt=now - timedelta(days=FilterSettings.load().incoming_ttl_days),
-    ).delete()
+        collecting_finished_at__lt=now - timedelta(days=settings.incoming_ttl_days),
+    )
+    include, exclude = parse_terms(settings.include_words), parse_terms(settings.exclude_words)
+    traces = []
+    for tender in expired.only("law", "purchase_number", "title", "object_info", "okpd2", "max_price", "opened_at"):
+        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
+        traces.append(IncomingTrace(
+            law=tender.law, purchase_number=tender.purchase_number, title=tender.title or tender.object_info,
+            okpd2=tender.okpd2, max_price=tender.max_price, plus_hits=hits,
+            filtered_out=not passes, was_opened=tender.opened_at is not None,
+        ))
+    # След — для аудита плюс/минус-слов: без него «не наши» тендеры исчезают бесследно.
+    with transaction.atomic():
+        IncomingTrace.objects.bulk_create(traces)
+        expired_incoming, _ = expired.delete()
     return {
         "expired_incoming": expired_incoming, "archived_found": 0,
         "archived_estimates": 0,

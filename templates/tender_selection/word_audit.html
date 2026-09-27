@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% load tz %}
+
+{% block title %}Аудит плюс/минус-слов{% endblock %}
+
+{% block content %}
+<div class="container">
+  <a href="{% url 'tender_selection:list' %}?view=list" class="back-link">← ко «Входящим»</a>
+  <h1>Аудит плюс/минус-слов</h1>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2 class="panel-title">AI-аудит</h2>
+      <form method="post" action="{% url 'tender_selection:word_audit_run' %}" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='ИИ читает названия… до 2 минут'">
+        {% csrf_token %}<button type="submit" class="button-success">Запустить аудит · ~1–2 ₽</button>
+      </form>
+    </div>
+    <p class="settings-description">
+      ИИ читает названия: взятые в работу ({{ stats.counts.taken }}), скрытые вручную ({{ stats.counts.dismissed }}),
+      показанные, но не взятые ({{ stats.counts.ignored }}), и скрытые фильтром из {{ stats.counts.incoming }} во «Входящих» и удалённых уборкой.
+      Предлагает слова и пропущенные тематики. Цифры последствий под каждым словом считает сервер, не ИИ. Ничего не меняется, пока вы не отметите и не примените.
+    </p>
+
+    {% if audit %}
+    <p class="ts-sub">Последний аудит: {{ audit.created_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% if audit.spend_rub is not None %} · {{ audit.spend_rub }} ₽{% endif %}.</p>
+    <form method="post" action="{% url 'tender_selection:word_audit_apply' %}" class="wa-form">
+      {% csrf_token %}
+      {% with r=audit.result %}
+
+      {% if r.missed_topics %}
+      <h3 class="settings-subtitle">Пропускаемые тематики</h3>
+      {% for topic in r.missed_topics %}
+      <div class="wa-item">
+        <b>{{ topic.topic }}</b> — {{ topic.why }}
+        {% if topic.examples %}<ul class="wa-examples">{% for e in topic.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        {% for w in topic.words %}
+        <label class="wa-check"><input type="checkbox" name="add_plus" value="{{ w.word }}"> плюс-слово <code>{{ w.word }}</code> <small>откроет скрытых: {{ w.effects.opens_hidden }}</small></label>
+        {% endfor %}
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      <h3 class="settings-subtitle">Добавить плюс-слова</h3>
+      {% for s in r.add_plus %}
+      <label class="wa-item wa-check"><input type="checkbox" name="add_plus" value="{{ s.word }}">
+        <span><code>{{ s.word }}</code> — {{ s.why }} <small>откроет скрытых: {{ s.effects.opens_hidden }}; встречается во взятых: {{ s.effects.in_taken }}</small>
+        {% if s.examples %}<ul class="wa-examples">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}</span>
+      </label>
+      {% empty %}<p class="settings-description">Нет предложений.</p>{% endfor %}
+
+      <h3 class="settings-subtitle">Добавить минус-слова</h3>
+      {% for s in r.add_minus %}
+      <label class="wa-item wa-check{% if s.effects.hits_taken %} wa-danger{% endif %}"><input type="checkbox" name="add_minus" value="{{ s.word }}">
+        <span><code>{{ s.word }}</code> — {{ s.why }} <small>скроет проходящих: {{ s.effects.hides_passing }}{% if s.effects.hits_taken %}; <b>задевает взятые в работу: {{ s.effects.hits_taken }}</b>{% endif %}</small>
+        {% if s.examples %}<ul class="wa-examples">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}</span>
+      </label>
+      {% empty %}<p class="settings-description">Нет предложений.</p>{% endfor %}
+
+      <h3 class="settings-subtitle">Убрать слова</h3>
+      {% for s in r.remove_plus %}
+      <label class="wa-item wa-check"><input type="checkbox" name="remove_plus" value="{{ s.word }}"><span>плюс-слово <code>{{ s.word }}</code> — {{ s.why }}</span></label>
+      {% endfor %}
+      {% for s in r.remove_minus %}
+      <label class="wa-item wa-check"><input type="checkbox" name="remove_minus" value="{{ s.word }}"><span>минус-слово <code>{{ s.word }}</code> — {{ s.why }}
+        {% if s.examples %}<ul class="wa-examples">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}</span></label>
+      {% endfor %}
+      {% if not r.remove_plus and not r.remove_minus %}<p class="settings-description">Нет предложений.</p>{% endif %}
+
+      {% endwith %}
+      <button type="submit" class="button-success">Применить отмеченное</button>
+    </form>
+    {% else %}
+    <p class="settings-description">Аудит ещё не запускался.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><h2 class="panel-title">Плюс-слова — что пропустили</h2></div>
+    <p class="settings-description">Без ИИ. «Пропустило» — сколько тендеров из известных прошло фильтр благодаря слову. Слово, которое много пропускает, но его тендеры не берут — кандидат на удаление.</p>
+    <div class="table-wrapper"><table class="table wa-table">
+      <thead><tr><th>Слово</th><th>Пропустило</th><th>Взято</th><th>Скрыто вручную</th><th>Показано, не взято</th></tr></thead>
+      <tbody>{% for row in stats.plus %}<tr{% if not row.passed %} class="wa-dim"{% endif %}><td><code>{{ row.word }}</code></td><td>{{ row.passed }}</td><td>{{ row.taken }}</td><td>{{ row.dismissed }}</td><td>{{ row.ignored }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><h2 class="panel-title">Минус-слова — что скрыли</h2></div>
+    <div class="table-wrapper"><table class="table wa-table">
+      <thead><tr><th>Слово</th><th>Скрыло во «Входящих»</th><th>Встречается во взятых</th></tr></thead>
+      <tbody>{% for row in stats.minus %}<tr{% if not row.hidden %} class="wa-dim"{% endif %}><td><code>{{ row.word }}</code></td><td>{{ row.hidden }}</td><td>{% if row.hits_taken %}<b class="wa-warn">{{ row.hits_taken }}</b>{% else %}0{% endif %}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </section>
+</div>
+
+<style>
+  .wa-form { display: grid; gap: 6px; }
+  .wa-item { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
+  .wa-item small { display: block; color: var(--ink-3); margin-top: 2px; }
+  .wa-check { cursor: pointer; }
+  .wa-check input { margin-top: 3px; }
+  div.wa-item { display: block; }
+  div.wa-item .wa-check { display: flex; gap: 6px; margin-top: 4px; }
+  .wa-danger { border-color: #e3a3aa; }
+  .wa-examples { margin: 4px 0 0 16px; padding: 0; color: var(--ink-2); font-size: 13px; }
+  .wa-table td, .wa-table th { font-size: 13px; }
+  .wa-dim td { color: var(--ink-3); }
+  .wa-warn { color: #b8434e; }
+  .wa-form > button { justify-self: start; margin-top: 8px; }
+</style>
+{% endblock %}

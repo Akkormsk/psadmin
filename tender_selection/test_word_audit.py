@@ -1,0 +1,108 @@
+from datetime import timedelta
+from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.utils import timezone
+
+from . import services, word_audit
+from .models import FilterSettings, IncomingTrace, Tender, WordAudit
+
+
+def _settings(plus="футболк, кружк", minus="медицин"):
+    settings = FilterSettings.load()
+    settings.include_words, settings.exclude_words = plus, minus
+    settings.save()
+    return settings
+
+
+class IncomingTraceTests(TestCase):
+    def test_purge_keeps_a_trace_of_deleted_incoming_tenders(self):
+        _settings()
+        now = timezone.now()
+        Tender.objects.create(purchase_number="1", title="Футболки хлопковые", collecting_finished_at=now - timedelta(days=30))
+        Tender.objects.create(purchase_number="2", title="Медицинские бланки", collecting_finished_at=now - timedelta(days=30))
+
+        services.purge_stale()
+
+        self.assertFalse(Tender.objects.exists())
+        traces = {t.purchase_number: t for t in IncomingTrace.objects.all()}
+        self.assertEqual(traces["1"].title, "Футболки хлопковые")
+        self.assertFalse(traces["1"].filtered_out)
+        self.assertEqual(traces["1"].plus_hits, ["футболк"])
+        self.assertTrue(traces["2"].filtered_out)
+
+
+class WordStatsTests(TestCase):
+    def setUp(self):
+        _settings(plus="футболк, кружк, зонт", minus="медицин")
+        now = timezone.now()
+        Tender.objects.create(purchase_number="t1", title="Футболки с логотипом", review=Tender.INTERESTING)
+        Tender.objects.create(purchase_number="d1", title="Кружки фарфоровые", status=Tender.DISMISSED)
+        IncomingTrace.objects.create(purchase_number="i1", title="Кружки термо", filtered_out=False)
+        Tender.objects.create(purchase_number="h1", title="Медицинские футболки", collecting_finished_at=now + timedelta(days=3))
+        Tender.objects.create(purchase_number="h2", title="Шопперы с печатью", collecting_finished_at=now + timedelta(days=3))
+
+    def test_counts_what_each_word_let_in_and_what_became_of_it(self):
+        stats = word_audit.word_stats()
+        plus = {row["word"]: row for row in stats["plus"]}
+
+        self.assertEqual((plus["футболк"]["taken"], plus["футболк"]["dismissed"]), (1, 0))
+        self.assertEqual((plus["кружк"]["taken"], plus["кружк"]["dismissed"], plus["кружк"]["ignored"]), (0, 1, 1))
+        self.assertEqual(plus["зонт"]["passed"], 0)
+        minus = {row["word"]: row for row in stats["minus"]}
+        self.assertEqual(minus["медицин"]["hidden"], 1)
+
+    def test_effects_of_a_proposed_word_are_computed_by_backend(self):
+        self.assertEqual(word_audit.term_effects("шоппер", minus=False)["opens_hidden"], 1)
+        self.assertEqual(word_audit.term_effects("футболк", minus=False)["opens_hidden"], 0)  # минус-слово сильнее
+        effects = word_audit.term_effects("логотип", minus=True)
+        self.assertEqual(effects["hits_taken"], 1)
+
+
+class AuditRunTests(TestCase):
+    def setUp(self):
+        _settings()
+        self.user = get_user_model().objects.create_superuser("admin", password="x")
+        Tender.objects.create(purchase_number="t1", title="Футболки с логотипом", review=Tender.INTERESTING)
+        Tender.objects.create(purchase_number="h1", title="Поставка шопперов с печатью", collecting_finished_at=timezone.now() + timedelta(days=3))
+
+    def test_run_sends_titles_and_stores_suggestions_with_backend_effects(self):
+        answer = {
+            "data": {
+                "add_plus": [{"word": "шоппер", "why": "сумки с печатью — наш профиль", "examples": ["Поставка шопперов с печатью"]}],
+                "add_minus": [{"word": "логотип", "why": "шум"}],
+                "remove_plus": [], "remove_minus": [], "missed_topics": [],
+            },
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+        }
+        with patch.object(word_audit, "chat_json", return_value=answer) as chat:
+            audit = word_audit.run_audit(self.user)
+
+        prompt = chat.call_args.args[1]
+        self.assertIn("Футболки с логотипом", prompt)
+        self.assertIn("Поставка шопперов с печатью", prompt)
+        self.assertEqual(WordAudit.objects.count(), 1)
+        plus = audit.result["add_plus"][0]
+        self.assertEqual((plus["word"], plus["effects"]["opens_hidden"]), ("шоппер", 1))
+        self.assertEqual(audit.result["add_minus"][0]["effects"]["hits_taken"], 1)
+
+
+class ApplySuggestionsTests(TestCase):
+    def test_apply_adds_and_removes_only_selected_words(self):
+        settings = _settings(plus="футболк, кружк", minus="медицин")
+
+        word_audit.apply_words(add_plus=["шоппер", "Футболк"], add_minus=["бланк"], remove_plus=["кружк"], remove_minus=[])
+        settings.refresh_from_db()
+
+        self.assertEqual(settings.include_words, "футболк\nшоппер")
+        self.assertEqual(settings.exclude_words, "медицин\nбланк")
+
+    def test_audit_page_and_apply_endpoint(self):
+        _settings()
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+
+        self.assertEqual(self.client.get("/tender-selection/word-audit/").status_code, 200)
+        self.client.post("/tender-selection/word-audit/apply/", {"add_plus": ["шоппер"]})
+        self.assertIn("шоппер", FilterSettings.load().include_words)

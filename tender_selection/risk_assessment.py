@@ -13,11 +13,8 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import re
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 MODEL = os.getenv("RISK_ASSESSMENT_MODEL", "openai/gpt-4.1-mini")
 MAX_CONTEXT_CHARS = 150_000  # с запасом выше реально протестированных ~130к символов
@@ -177,52 +174,15 @@ def _user_prompt(context: str) -> str:
     return f"Документы закупки:\n{context}\n\nВерни JSON строго такой структуры:\n{_SCHEMA}"
 
 
-def _json_from_model(content: str) -> dict:
-    content = content.strip()
-    if content.startswith("```"):
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.IGNORECASE)
-    decoder = json.JSONDecoder(strict=False)
-    starts = [i for i, v in enumerate(content) if v in "{["]
-    last_error = None
-    for start in starts or [0]:
-        try:
-            result, _ = decoder.raw_decode(content[start:])
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError as exc:
-            last_error = exc
-    raise RiskAssessmentError("Модель вернула ответ в неожиданном формате.") from last_error
-
-
 def call_gateway(context: str, *, retry_hint: str = "") -> dict:
     """Один HTTP-вызов шлюза. Возвращает {'data': dict, 'usage': dict}."""
-    api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
-    base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
-    if not api_key:
-        raise RiskAssessmentError("AI Gateway не настроен (нет TIMEWEB_AI_API_KEY).")
+    from .ai_gateway import AIGatewayError, chat_json
+
     system = SYSTEM_PROMPT + (f" {retry_hint}" if retry_hint else "")
-    body = {
-        "model": MODEL, "temperature": 0, "max_tokens": 1800,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": _user_prompt(context)}],
-    }
-    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    request = Request(
-        f"{base_url}/chat/completions", data=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST",
-    )
     try:
-        with urlopen(request, timeout=90) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise RiskAssessmentError(f"AI Gateway ответил HTTP {exc.code}.") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise RiskAssessmentError("AI Gateway недоступен.") from exc
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:
-        raise RiskAssessmentError("AI Gateway вернул ответ без содержимого.") from exc
-    parsed = _json_from_model(content)
-    return {"data": parsed, "usage": data.get("usage", {})}
+        return chat_json(system, _user_prompt(context), model=MODEL, max_tokens=1800)
+    except AIGatewayError as exc:
+        raise RiskAssessmentError(str(exc)) from exc
 
 
 def assess(context: str) -> dict:
