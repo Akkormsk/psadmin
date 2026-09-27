@@ -68,6 +68,19 @@ def tender_viewer_required(view):
     return superuser_required(view)
 
 
+def _risk_badge(tender) -> dict:
+    """Светофор по итоговому уровню оценки, а пока её нет — её состояние."""
+    if tender.risk_error:
+        return {"state": "error", "text": "риск: ошибка"}
+    if not tender.risk_checked_at:
+        return {"state": "pending", "text": "риск: ожидает"}
+    return {
+        "low": {"state": "ok", "text": "риск: низкий"},
+        "medium": {"state": "warn", "text": "риск: средний"},
+        "high": {"state": "error", "text": "риск: высокий"},
+    }.get((tender.risk_assessment or {}).get("risk_level"), {"state": "ok", "text": "риск: оценён"})
+
+
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
@@ -79,27 +92,8 @@ def _found_tender_card(tender):
     этой стадии её ещё не считали (расчёт запускается при открытии карточки
     на стадии «Проверка»), нечего показывать раньше времени."""
     reviewed = tender.review != Tender.UNREVIEWED
-    if tender.risk_error:
-        risk_state, status_label, status_key = "error", "Ошибка оценки", "error"
-    elif tender.risk_checked_at:
-        risk_state, status_label, status_key = "ok", "Оценена", "assessed"
-    else:
-        risk_state, status_label, status_key = "pending", "Не оценена", "new"
-    badges = []
-    if reviewed:
-        # Как только оценка реально посчитана, вместо мета-статуса ("оценена/не
-        # оценена") показываем светофор по её итоговому уровню — критерии живут
-        # целиком в самом промпте (risk_assessment.py), тут только раскраска.
-        risk_level = (tender.risk_assessment or {}).get("risk_level") if risk_state == "ok" else None
-        risk_badge = {
-            "low": {"state": "ok", "text": "риск: низкий"},
-            "medium": {"state": "warn", "text": "риск: средний"},
-            "high": {"state": "error", "text": "риск: высокий"},
-        }.get(risk_level)
-        if risk_badge:
-            badges.append(risk_badge)
-        else:
-            badges.append({"state": risk_state, "text": {"ok": "риск: оценён", "error": "риск: ошибка", "pending": "риск: ожидает"}[risk_state]})
+    status_key = "error" if tender.risk_error else "assessed" if tender.risk_checked_at else "new"
+    badges = [_risk_badge(tender)] if reviewed else []
     now = timezone.now()
     is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= now + timedelta(days=1))
     return {
@@ -123,11 +117,13 @@ def _estimate_card(estimate):
     """Карточка «Расчёт»/«Торги»/«Результат» — просчёт, откуда бы он ни пришёл
     (перенесён из подбора или создан вручную импортом в самих «Тендерах»).
 
-    Бейджи накапливаются по мере продвижения, не заменяют друг друга: ROI
-    появляется на «Расчёте» и остаётся видимым дальше; факт торгов появляется
-    только после «Внести итог» на «Торгах» и тоже остаётся на «Результате»."""
+    Бейджи накапливаются по мере продвижения, не заменяют друг друга и идут в
+    порядке стадий: риск с «Оценки», ROI с «Расчёта», наша заявка с «Торгов»,
+    место и факт снижения с «Результата»."""
     summary = estimate.summary_snapshot or {}
     badges = []
+    if estimate.tender_id and estimate.tender.review != Tender.UNREVIEWED:
+        badges.append(_risk_badge(estimate.tender))
     if summary.get("roi") is not None:
         from decimal import Decimal, InvalidOperation
 
@@ -140,6 +136,13 @@ def _estimate_card(estimate):
         except InvalidOperation:
             roi_state = "pending"
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
+    if estimate.bid_number or estimate.bid_price is not None:
+        badges.append({"state": "pending", "text": f"заявка {estimate.bid_number}" if estimate.bid_number else f"заявка {estimate.bid_price:,.0f} ₽".replace(",", " ")})
+    participants = (estimate.protocol or {}).get("participants") or []
+    ours = find_ours(estimate.protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price) if participants else None
+    if ours:
+        place = "отклонена" if ours.get("rejected") else f"место {ours.get('rank')} из {len(participants)}"
+        badges.append({"state": "ok" if ours.get("rank") == 1 and not ours.get("rejected") else "warn", "text": place})
     if estimate.outcome_checked_at:
         source_label = "авто" if estimate.outcome_source == estimate.OUTCOME_AUTO else "вручную"
         if estimate.actual_reduction_percent is not None:
@@ -223,7 +226,7 @@ def kanban(request):
 
     live_estimates = TenderEstimate.objects.filter(
         tender__isnull=False,
-    ).exclude(tender__status=Tender.DISMISSED)
+    ).exclude(tender__status=Tender.DISMISSED).select_related("tender")
     calculation = [
         _estimate_card(e) for e in
         live_estimates.filter(status=TenderEstimate.DRAFT).order_by(*_order("calculation", "updated_at"))
