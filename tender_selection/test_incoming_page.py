@@ -41,15 +41,15 @@ class IncomingPageTests(TestCase):
         self.assertEqual(numbers("спорткомитет"), ["0322000047"])
 
     def test_rows_know_days_left_and_urgency(self):
-        self._tender("1", "Срочно", days=1)
-        self._tender("2", "Скоро", days=2)
-        self._tender("3", "Спокойно", days=3)
+        self._tender("1", "Срочно", days=0)
+        self._tender("2", "Скоро", days=1)
+        self._tender("3", "Спокойно", days=2)
 
         rows = {t.purchase_number: t for t in self._page().context["page_obj"].object_list}
 
-        self.assertEqual((rows["1"].days_left, rows["1"].deadline_state), (1, "urgent"))
-        self.assertEqual((rows["2"].days_left, rows["2"].deadline_state), (2, "soon"))
-        self.assertEqual((rows["3"].days_left, rows["3"].deadline_state), (3, ""))
+        self.assertEqual((rows["1"].days_left, rows["1"].deadline_state), (0, "urgent"))
+        self.assertEqual((rows["2"].days_left, rows["2"].deadline_state), (1, "soon"))
+        self.assertEqual((rows["3"].days_left, rows["3"].deadline_state), (2, ""))
 
     def test_segments_show_incoming_and_board_counts(self):
         self._tender("1", "Входящий", days=3)
