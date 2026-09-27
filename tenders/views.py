@@ -1274,6 +1274,9 @@ def update_estimate_status(request, pk, pipeline=True):
         estimate.archived_at = timezone.now()
         update_fields.append("archived_at")
     estimate.save(update_fields=update_fields)
+    if status == TenderEstimate.NOT_PARTICIPATED and estimate.tender_id:
+        from tender_selection.models import Tender
+        Tender.objects.filter(pk=estimate.tender_id).update(status=Tender.DISMISSED, archived_at=estimate.archived_at)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({
             "status": status,

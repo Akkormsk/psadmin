@@ -21,7 +21,6 @@ import os
 from . import gosplan
 from .documents import DocumentError, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
-from .filtering import match_title, parse_terms
 from .models import ContractStat, FilterSettings, Organization, PullRun, Tender
 
 logger = logging.getLogger(__name__)
@@ -155,15 +154,14 @@ def build_params(*, days: int, stage: int | None, min_price, regions=None, law: 
     return params
 
 
-def _risk_eligible(tender, settings, include, exclude) -> bool:
+def _risk_eligible(tender) -> bool:
+    # Плюс-слова и минимальную цену не проверяем: тендер уже вручную переведён в «Оценку».
     return (
         tender.law == "fz44"
         # риск не считаем, пока тендер не дошёл до «Проверки» — на «Входящих»
         # ещё не решили, что он вообще стоит внимания
         and tender.review != Tender.UNREVIEWED
-        and (not settings.min_price or tender.max_price is None or tender.max_price >= settings.min_price)
         and (tender.collecting_finished_at is None or tender.collecting_finished_at >= timezone.now())
-        and match_title(tender.title or tender.object_info, include, exclude)[0]
     )
 
 
@@ -399,9 +397,6 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     который кто-то review'нул позже второго дня, а по-настоящему бывает
     почти всегда. Само по себе review != unreviewed уже достаточно редкий
     и осознанный фильтр — возрастное ограничение было лишним."""
-    settings = FilterSettings.load()
-    include = parse_terms(settings.include_words)
-    exclude = parse_terms(settings.exclude_words)
     now = timezone.now()
     attempted = succeeded = 0
     tenders = Tender.objects.filter(
@@ -410,7 +405,7 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     for tender in tenders:
         if attempted >= limit:
             break
-        if tender.risk_assessment or not _risk_eligible(tender, settings, include, exclude):
+        if tender.risk_assessment or not _risk_eligible(tender):
             continue
         if (not tender.notification_raw and tender.notification_checked_at and
                 tender.notification_checked_at > now - timedelta(minutes=30)):
