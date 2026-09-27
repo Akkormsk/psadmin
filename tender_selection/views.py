@@ -96,10 +96,13 @@ def _found_tender_card(tender):
     badges = [_risk_badge(tender)] if reviewed else []
     now = timezone.now()
     is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= now + timedelta(days=1))
+    org = getattr(tender, "org", None)
+    customer = (org.name if org and org.name else "") or (f"ИНН {tender.customer_inn}" if tender.customer_inn else "")
     return {
         "kind": "found",
         "pk": tender.pk,
         "title": tender.title or tender.object_info,
+        "customer": customer,
         "law_label": tender.get_law_display(),
         "purchase_number": tender.purchase_number,
         "max_price": tender.max_price,
@@ -212,9 +215,12 @@ def kanban(request):
 
     # «Входящие» больше не колонка канбана — это отдельный список (tender_list);
     # сюда тендер попадает только после «В работу» (review != unreviewed).
+    review_tenders = _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), "review")
+    orgs = {o.inn: o for o in Organization.objects.filter(inn__in={t.customer_inn for t in review_tenders if t.customer_inn})}
+    for t in review_tenders:
+        t.org = orgs.get(t.customer_inn)
     review = [
-        _found_tender_card(t) for t in
-        _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), "review")
+        _found_tender_card(t) for t in review_tenders
     ]
 
     from tenders.models import TenderEstimate

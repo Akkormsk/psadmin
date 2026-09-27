@@ -81,3 +81,35 @@ class IncompleteRoiBadgeTests(TestCase):
             summary_snapshot={"roi": "40.00", "is_incomplete": False},
         )
         self.assertEqual(_estimate_card(estimate)["badges"][0]["state"], "ok")
+
+
+class CustomerOnKanbanCardTests(TestCase):
+    def test_found_card_shows_organization_name_when_known(self):
+        from .models import Organization
+        from .views import _found_tender_card
+
+        Organization.objects.create(inn="7700000001", name="Спорткомитет")
+        tender = Tender.objects.create(purchase_number="1", customer_inn="7700000001")
+        tender.org = Organization.objects.get(inn="7700000001")
+
+        self.assertEqual(_found_tender_card(tender)["customer"], "Спорткомитет")
+
+    def test_found_card_falls_back_to_inn_when_organization_unknown(self):
+        from .views import _found_tender_card
+
+        tender = Tender.objects.create(purchase_number="1", customer_inn="7700000002")
+        tender.org = None
+
+        self.assertEqual(_found_tender_card(tender)["customer"], "ИНН 7700000002")
+
+    def test_kanban_review_cards_carry_customer_name(self):
+        from .models import Organization
+
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+        Organization.objects.create(inn="7700000003", name="Комитет по спорту")
+        Tender.objects.create(purchase_number="1", title="Кружки", customer_inn="7700000003", review=Tender.INTERESTING)
+
+        response = self.client.get("/tender-selection/?view=kanban")
+
+        self.assertContains(response, "Комитет по спорту")
