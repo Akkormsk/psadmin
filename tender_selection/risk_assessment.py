@@ -32,7 +32,7 @@ _RELEVANT_KIND_PATTERNS = [
     re.compile(r"проект\s*контракт", re.I),
     re.compile(r"описани[ея]\s*объект|техническ\w*\s*задани", re.I),
 ]
-_SKIP_EXT = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".zip")
+_SKIP_EXT = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".zip", ".rar", ".7z")
 
 
 class RiskAssessmentError(RuntimeError):
@@ -120,37 +120,13 @@ def preliminary_summary(card: dict) -> dict:
     return result
 
 
-def build_context(tender, card: dict, documents: list[dict], *, fetch) -> tuple[str, list[str]]:
-    """fetch(url, name) -> bytes — внедряется извне (services._fetch_doc_bytes),
-    чтобы этот модуль не тянул сетевые зависимости и легко тестировался моком.
-    Возвращает (полный контекст для промпта, имена реально прочитанных документов).
-
-    Документов мало (MAX_DOCUMENTS=2), но каждый — это поход на ЕИС (SOAP-архив, до
-    20с, плюс прямая ссылка про запас, до 15с), а он у каждого документа свой. Качаем
-    их параллельно потоками, а не по очереди — иначе ожидание складывается."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    from .documents import extract_preview
-
-    def fetch_one(doc):
-        try:
-            return doc, fetch(doc["url"], doc["name"])
-        except Exception:
-            return doc, None
-
-    if len(documents) > 1:
-        with ThreadPoolExecutor(max_workers=len(documents)) as pool:
-            fetched = list(pool.map(fetch_one, documents))
-    else:
-        fetched = [fetch_one(doc) for doc in documents]
-
+def build_context(card: dict, documents: list[dict], htmls: dict[str, str]) -> tuple[str, list[str]]:
+    """htmls — {url: HTML документа} (services.documents_html: кэш, иначе ЕИС).
+    Возвращает (полный контекст для промпта, имена реально прочитанных документов)."""
     parts = [_card_summary(card)] if card else []
     used_names = []
-    for doc, data in fetched:
-        if data is None:
-            continue
-        result = extract_preview(data, doc["name"])
-        html = result.get("html") or ""
+    for doc in documents:
+        html = htmls.get(doc["url"])
         if not html:
             continue
         text = re.sub(r"<[^>]+>", " ", html)

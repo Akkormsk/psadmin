@@ -19,9 +19,9 @@ from django.db.models import Q
 import os
 
 from . import gosplan
-from .documents import DocumentError, fetch_document
+from .documents import DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
-from .models import ContractStat, FilterSettings, Organization, PullRun, Tender
+from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +269,51 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
             raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
 
 
+def _store_preview(url, name, data: bytes) -> str:
+    result = extract_preview(data, name)
+    DocumentPreview.objects.update_or_create(url=url, defaults={
+        "filename": name, "kind": result.get("kind", ""),
+        "html": result.get("html", ""), "error": result.get("error", ""),
+    })
+    return result.get("html", "")
+
+
+def document_html(tender, url, name, **fetch_kwargs) -> str:
+    """Разобранный документ извещения: из кэша предпросмотра, иначе с ЕИС — и сразу в кэш,
+    чтобы следующий просмотр или оценка рисков не ходили в ЕИС повторно.
+    Скачанный, но нечитаемый файл (архив, битый .doc) тоже в кэше — с пустым HTML,
+    повторно за ним не ходим. DocumentError — документ сейчас не получить."""
+    cached = DocumentPreview.objects.filter(url=url).first()
+    if cached:
+        return cached.html
+    return _store_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs))
+
+
+def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, str]:
+    """{url: HTML} для нескольких документов: кэш, остальное с ЕИС параллельно.
+    В потоках только сеть — база читается и пишется в вызывающем потоке."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    htmls = dict(
+        DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", "html")
+    )
+    missing = [doc for doc in documents if doc["url"] not in htmls]
+
+    def fetch_one(doc):
+        try:
+            return doc, _fetch_doc_bytes(tender, doc["url"], doc["name"], **fetch_kwargs)
+        except DocumentError:
+            return doc, None
+
+    if missing:
+        with ThreadPoolExecutor(max_workers=len(missing)) as pool:
+            fetched = list(pool.map(fetch_one, missing))
+        for doc, data in fetched:
+            if data is not None:
+                htmls[doc["url"]] = _store_preview(doc["url"], doc["name"], data)
+    return htmls
+
+
 def notification_for(tender, *, force: bool = False) -> dict | None:
     """Извещение по тендеру: из кэша, иначе один запрос к API. Возвращает сырой payload.
 
@@ -304,53 +349,42 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     return payload
 
 
-def retry_pending_documents(*, limit: int = 5, recent: int = 50) -> tuple[int, int]:
-    """Фоновая попытка докачать документы извещений, ещё не попавшие в кэш предпросмотра.
+DOCUMENT_PREFETCH_PAUSE_SECONDS = 10
 
-    Сеть с прод-сервера до zakupki.gov.ru нестабильна (похоже на плавающую блокировку
-    ТСПУ — то отвечает, то нет), поэтому вместо однократной попытки по клику пробуем
-    периодически, тихо, небольшими порциями. Каждый успех сразу доступен в карточке
-    (клик «Просмотр» видит уже готовый кэш) — без этого фон бесполезен.
 
-    Возвращает (сколько документов пробовали, сколько удалось). Смотрим только среди
-    недавно выгруженных тендеров 44-ФЗ — старые уже не актуальны.
-    """
-    from .documents import DocumentError, extract_preview, fetch_document
-    from .eis_docs import EisDocsError, fetch_document_via_eis
-    from .models import DocumentPreview
+def retry_pending_documents(*, limit: int = 8, pause: float = DOCUMENT_PREFETCH_PAUSE_SECONDS) -> tuple[int, int]:
+    """Фоновая докачка документов, нужных оценке рисков (проект контракта, ТЗ/описание),
+    у тендеров с ещё открытым приёмом заявок — ближайший срок подачи первым. К моменту
+    перевода в «Оценку» документы уже в кэше, и оценка не зависит от того, отвечает ли
+    ЕИС прямо сейчас. Пауза между документами — ЕИС сбрасывает соединения при частых
+    запросах с одного IP.
+
+    Возвращает (сколько документов пробовали, сколько удалось)."""
     from .notification import parse_notification
+    from .risk_assessment import select_documents
 
-    attempted = 0
-    succeeded = 0
     tenders = (
-        Tender.objects.filter(law="fz44")
-        .exclude(notification_raw={})
-        .order_by("-last_pulled_at")[:recent]
+        Tender.objects.filter(law="fz44", collecting_finished_at__gte=timezone.now())
+        .exclude(status=Tender.DISMISSED).exclude(notification_raw={})
+        .order_by("collecting_finished_at")
     )
-    for tender in tenders:
-        if attempted >= limit:
-            break
-        card = parse_notification(tender.notification_raw)
-        for doc in card.get("documents", []):
+    attempted = succeeded = 0
+    for tender in tenders.iterator():
+        docs = [
+            doc for doc in select_documents(parse_notification(tender.notification_raw).get("documents", []))
+            if doc.get("url") and not DocumentPreview.objects.filter(url=doc["url"]).exists()
+        ]
+        for doc in docs:
             if attempted >= limit:
-                break
-            url, name = doc.get("url", ""), doc.get("name", "")
-            if not url or DocumentPreview.objects.filter(url=url).exists():
-                continue
+                return attempted, succeeded
+            if attempted:
+                time.sleep(pause)
             attempted += 1
             try:
-                data = fetch_document_via_eis(tender.purchase_number, name)
-            except EisDocsError:
-                try:
-                    data = fetch_document(url, timeout=15)
-                except DocumentError:
-                    continue  # сетевой сбой — не кэшируем, попробуем в следующий тик
-            result = extract_preview(data, name)
-            DocumentPreview.objects.update_or_create(url=url, defaults={
-                "filename": name, "kind": result.get("kind", ""),
-                "html": result.get("html", ""), "error": result.get("error", ""),
-            })
-            succeeded += 1
+                document_html(tender, doc["url"], doc["name"])
+                succeeded += 1
+            except DocumentError:
+                continue  # сетевой сбой — не кэшируем, попробуем в следующий тик
     return attempted, succeeded
 
 
@@ -487,6 +521,18 @@ def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
     return clar, comp
 
 
+def _documents_sufficient(assessment) -> bool:
+    return str(((assessment or {}).get("risk_facts") or {}).get("documents_sufficient")).lower() == "true"
+
+
+def _keeps_previous_assessment(tender, new_data) -> bool:
+    """Повторная оценка, у которой ЕИС не отдал документы, не должна затирать полную."""
+    if _documents_sufficient(tender.risk_assessment) and not _documents_sufficient(new_data):
+        logger.warning("risk: %s — новая оценка без документов, оставлена прежняя полная", tender.purchase_number)
+        return True
+    return False
+
+
 def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     """Оценка рисков тендера по вложенным документам (см. risk_assessment.py):
     срок исполнения, обеспечение, ст.96 44-ФЗ, штрафы, нацрежим, образцы + свободный текст.
@@ -517,10 +563,8 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     # Короткий таймаут (5с на попытку — ЕИС либо отвечает сразу, либо не отвечает вовсе):
     # автооценке важнее быстро понять, что документы недоступны, и уйти в аварийный
     # режим, чем ждать десятки секунд по умолчанию (как в интерактивном просмотре).
-    context, used_names = build_context(
-        tender, card, documents,
-        fetch=lambda url, name: _fetch_doc_bytes(tender, url, name, timeout=5, archive_timeout=5, direct_timeout=5),
-    )
+    htmls = documents_html(tender, documents, timeout=5, archive_timeout=5, direct_timeout=5)
+    context, used_names = build_context(card, documents, htmls)
     if not used_names:
         # Документы не прочитались (типично — локальная сеть не видит ЕИС, только
         # прод) — аварийный режим: контекст всё равно не пуст (build_context кладёт
@@ -543,6 +587,8 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
             critical_days=FilterSettings.load().risk_critical_days,
         ))
         data["degraded"] = True
+        if _keeps_previous_assessment(tender, data):
+            return tender.risk_assessment
         tender.risk_assessment = data
         tender.risk_assessment_docs = []
         tender.risk_checked_at = timezone.now()
@@ -568,6 +614,8 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         critical_days=settings.risk_critical_days,
     )
     data.update(policy)
+    if _keeps_previous_assessment(tender, data):
+        return tender.risk_assessment
     tender.risk_assessment = data
     tender.risk_assessment_docs = used_names
     tender.risk_checked_at = timezone.now()
