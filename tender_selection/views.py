@@ -255,11 +255,11 @@ def kanban(request):
 
 
 def _deadline_urgency(deadline, now) -> tuple[int | None, str]:
-    """(полных дней до окончания подачи, 'urgent' ≤2 дн. | 'soon' ≤4 дн. | '')."""
+    """(полных дней до окончания подачи, 'urgent' ≤1 дн. | 'soon' ≤2 дн. | '')."""
     if deadline is None or deadline < now:
         return None, ""
     days = (deadline - now).days
-    return days, "urgent" if days <= 2 else "soon" if days <= 4 else ""
+    return days, "urgent" if days <= 1 else "soon" if days <= 2 else ""
 
 
 def _incoming_count(settings) -> int:
