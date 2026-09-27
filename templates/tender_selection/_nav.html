@@ -1,0 +1,7 @@
+{# Сегменты раздела «Тендеры». Третий пункт («Заказы») добавляется сюда же, когда раздел появится. #}
+<nav class="ts-nav" aria-label="Раздел тендеров">
+  <div class="ts-seg">
+    <a href="{% url 'tender_selection:list' %}?view=list"{% if active == "incoming" %} class="is-active" aria-current="page"{% endif %}>Входящие{% if nav_counts %} <small>{{ nav_counts.incoming }}</small>{% endif %}</a>
+    <a href="{% url 'tender_selection:list' %}?view=kanban"{% if active == "board" %} class="is-active" aria-current="page"{% endif %}>Торги{% if nav_counts %} <small>{{ nav_counts.board }}</small>{% endif %}</a>
+  </div>
+</nav>

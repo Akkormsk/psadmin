@@ -1,85 +1,82 @@
 {% extends "base.html" %}
-{% load tz tender_selection_extras %}
+{% load static tz tender_selection_extras %}
 
 {% block title %}Архив тендеров{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">{% endblock %}
 
 {% block content %}
 <div class="container">
-  <a href="{% url 'tender_selection:list' %}" class="back-link">← к тендерам</a>
-  <h1>Архив</h1>
+  <a href="{% url 'tender_selection:list' %}?view=kanban" class="back-link">← к торгам</a>
+  <h1>Тендеры</h1>
+  {% include "tender_selection/_nav.html" with active="" %}
 
-  <section class="panel">
-    <div class="panel-header">
-      <h2 class="panel-title">Скрытые тендеры <small class="ts-count">{{ page_obj.paginator.count }}</small></h2>
+  <section class="panel ts-sheet">
+    <div class="ts-head">
+      <div>
+        <h2 class="ts-head__title">Архив <span class="ts-count-pill">{{ page_obj.paginator.count }}</span></h2>
+        <p class="ts-head__stats"><span>причина скрытия — стадия, на которой тендер ушёл в архив</span></p>
+      </div>
     </div>
 
-    <form method="get" class="ts-archive-search">
-      <input type="search" name="q" value="{{ query }}" placeholder="Название, номер закупки, заказчик или ИНН">
-      {% if stage_filter != "all" %}<input type="hidden" name="stage" value="{{ stage_filter }}">{% endif %}
-      {% if law_filter != "all" %}<input type="hidden" name="law" value="{{ law_filter }}">{% endif %}
-      {% if sort != "archived" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
-      <button type="submit" class="button-secondary">Найти</button>
-      {% if query %}<a href="#" onclick="tsGo('q','');return false">Сбросить</a>{% endif %}
-    </form>
+    <div class="ts-toolbar">
+      <form method="get" class="ts-search" role="search">
+        {% if stage_filter != "all" %}<input type="hidden" name="stage" value="{{ stage_filter }}">{% endif %}
+        {% if law_filter != "all" %}<input type="hidden" name="law" value="{{ law_filter }}">{% endif %}
+        {% if sort != "archived" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+        <input type="search" name="q" value="{{ query }}" id="ts-search" placeholder="Поиск по названию, заказчику, № закупки, ИНН…" autocomplete="off">
+        <kbd>Ctrl K</kbd>
+      </form>
+      <select class="ts-select" aria-label="Сортировка" onchange="tsGo('sort', this.value === 'archived' ? '' : this.value)">
+        <option value="archived" {% if sort == "archived" %}selected{% endif %}>По дате скрытия</option>
+        <option value="price_hi" {% if sort == "price_hi" %}selected{% endif %}>По сумме, крупные</option>
+        <option value="price_lo" {% if sort == "price_lo" %}selected{% endif %}>По сумме, мелкие</option>
+        <option value="published" {% if sort == "published" %}selected{% endif %}>По дате публикации</option>
+      </select>
+      <div class="ts-seg ts-seg--sm" role="group" aria-label="Закон">
+        <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Все</button>
+        <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ</button>
+        <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ</button>
+      </div>
+    </div>
 
-    <div class="ts-stagetabs" role="tablist" aria-label="Стадия, на которой тендер скрыт">
+    <div class="ts-chips" role="tablist" aria-label="Стадия, на которой тендер скрыт">
       {% for stage in stages %}
       <button type="button" class="{% if stage_filter == stage.key %}is-active{% endif %}" onclick="tsGo('stage','{% if stage.key != 'all' %}{{ stage.key }}{% endif %}')"{% if stage.hint %} title="{{ stage.hint }}"{% endif %}>
-        {{ stage.label }} · {{ stage.count }}{% if stage.hint %}<small>{{ stage.hint }}</small>{% endif %}
+        {{ stage.label }} <small>{{ stage.count }}</small>{% if stage.hint %}<em>{{ stage.hint }}</em>{% endif %}
       </button>
       {% endfor %}
     </div>
 
-    <div class="ts-controls">
-      <label class="ts-sort">Сортировать
-        <select onchange="tsGo('sort', this.value === 'archived' ? '' : this.value)">
-          <option value="archived" {% if sort == "archived" %}selected{% endif %}>по дате скрытия</option>
-          <option value="price_hi" {% if sort == "price_hi" %}selected{% endif %}>по сумме, крупные</option>
-          <option value="price_lo" {% if sort == "price_lo" %}selected{% endif %}>по сумме, мелкие</option>
-          <option value="published" {% if sort == "published" %}selected{% endif %}>по дате публикации</option>
-        </select>
-      </label>
-      <span class="ts-lawtabs">
-        <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Оба</button>
-        <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ</button>
-        <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ</button>
-      </span>
-    </div>
-
-    {% for row in page_obj.object_list %}
-    {% with tender=row.tender estimate=row.estimate %}
-    <div class="saved-estimate ts-tender">
-      <a class="saved-estimate__main" href="{% url 'tender_selection:detail' tender.pk %}">
-        <span>
-          <span class="ts-tender__title">{{ tender.title|default:tender.object_info }}</span>
-          <small class="ts-tender__meta">
-            <span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span>
-            <span class="ts-stage ts-stage--{{ row.stage }}">{{ row.stage_label }}</span>
-            № {{ tender.purchase_number }}
-            · {% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}
-            {% if tender.org.city or tender.region_label %} · {{ tender.org.city|default:tender.region_label }}{% endif %}
-          </small>
-          {% if estimate and estimate.actual_reduction_percent is not None %}
-          <small class="ts-tender__meta ts-archive-result">
-            факт снижения {{ estimate.actual_reduction_percent }}% при прогнозе {{ estimate.reduction_percent }}%{% if row.participants %} · участников {{ row.participants }}{% endif %}{% if row.ours %} · <strong>наше место: {% if row.ours.rejected %}отклонены{% else %}{{ row.ours.rank }}{% endif %}</strong>{% endif %}
-          </small>
-          {% endif %}
-        </span>
-        <span class="tender-saved-totals">
-          <strong>{{ tender.max_price|rub }}</strong>
-          <small>{% if tender.archived_at %}скрыт {{ tender.archived_at|timezone:"Europe/Moscow"|date:"d.m.Y" }}{% endif %}</small>
-        </span>
-      </a>
-      <div class="ts-row-actions">
-        <form method="post" action="{% url 'tender_selection:restore' tender.pk %}">
-          {% csrf_token %}<button type="submit" class="ts-row-work">Восстановить</button>
-        </form>
-      </div>
-    </div>
-    {% endwith %}
-    {% empty %}
-    <p class="settings-description">{% if query or stage_filter != "all" or law_filter != "all" %}Под фильтр ничего не попало.{% else %}Архив пуст.{% endif %}</p>
-    {% endfor %}
+    <ul class="ts-rows">
+      {% for row in page_obj.object_list %}
+      {% with tender=row.tender estimate=row.estimate %}
+      <li class="ts-row ts-row--nocheck">
+        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}">
+          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>
+          <span class="ts-row__meta">
+            <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span> <span class="ts-stage ts-stage--{{ row.stage }}">{{ row.stage_label }}</span> № {{ tender.purchase_number }}</span>
+            <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
+          </span>
+          <span class="ts-row__sub">
+            {% if tender.org.city or tender.region_label %}<span>{{ tender.org.city|default:tender.region_label }}</span>{% endif %}
+            {% if estimate and estimate.actual_reduction_percent is not None %}<span>факт снижения {{ estimate.actual_reduction_percent }}% при прогнозе {{ estimate.reduction_percent }}%</span>{% endif %}
+            {% if row.participants %}<span>участников {{ row.participants }}</span>{% endif %}
+            {% if row.ours %}<span><b>наше место: {% if row.ours.rejected %}отклонены{% else %}{{ row.ours.rank }}{% endif %}</b></span>{% endif %}
+          </span>
+        </a>
+        <div class="ts-row__money">
+          <span class="ts-row__price">{{ tender.max_price|rub }}</span>
+          <span class="ts-row__left">{% if tender.archived_at %}скрыт {{ tender.archived_at|timezone:"Europe/Moscow"|date:"d.m.Y" }}{% else %}дата скрытия неизвестна{% endif %}</span>
+        </div>
+        <div class="ts-row__actions">
+          <form method="post" action="{% url 'tender_selection:restore' tender.pk %}">{% csrf_token %}<button type="submit" class="ts-quiet">Восстановить</button></form>
+        </div>
+      </li>
+      {% endwith %}
+      {% empty %}
+      <li class="ts-empty">{% if query or stage_filter != "all" or law_filter != "all" %}Под фильтр ничего не попало.{% else %}Архив пуст.{% endif %}</li>
+      {% endfor %}
+    </ul>
 
     {% if page_obj.has_other_pages %}
     <div class="ts-pager">
@@ -91,40 +88,26 @@
   </section>
 </div>
 
+<style>
+  .ts-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .ts-chips button { display: inline-flex; flex-direction: column; align-items: flex-start; padding: 6px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .ts-chips button small { color: var(--ink-3); font-weight: 500; }
+  .ts-chips button em { color: var(--ink-3); font-size: 11px; font-style: normal; font-weight: 400; }
+  .ts-chips button.is-active { border-color: var(--ink); background: var(--ink); color: var(--surface); }
+  .ts-chips button.is-active small, .ts-chips button.is-active em { color: var(--surface); opacity: .75; }
+  .ts-stage { display: inline-block; padding: 1px 7px; border-radius: 6px; background: var(--tint-neutral); color: var(--ink-2); font-size: 12px; font-weight: 700; }
+  .ts-stage--lost { background: var(--tint-negative); color: var(--negative-ink); }
+  .ts-stage--won { background: var(--tint-positive); color: var(--positive-ink); }
+</style>
 <script>
   function tsGo(key, value) {
-    const url = new URL(window.location.href);
+    var url = new URL(window.location.href);
     if (value === '' || value === null) url.searchParams.delete(key); else url.searchParams.set(key, value);
     if (key !== 'page') url.searchParams.delete('page');
     window.location.href = url.toString();
   }
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); document.getElementById("ts-search").focus(); }
+  });
 </script>
-
-<style>
-  .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
-  .ts-archive-search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-  .ts-archive-search input[type=search] { flex: 1 1 260px; font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
-  .ts-stagetabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .ts-stagetabs button { display: inline-flex; flex-direction: column; align-items: flex-start; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink-2); cursor: pointer; }
-  .ts-stagetabs button small { font-weight: 400; color: var(--ink-3); font-size: 11px; }
-  .ts-stagetabs button.is-active { background: #4c5fd5; border-color: #4c5fd5; color: #fff; }
-  .ts-stagetabs button.is-active small { color: rgba(255,255,255,.8); }
-  .ts-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 4px; font-size: 13px; }
-  .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
-  .ts-lawtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
-  .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--field-bg); color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--field-border); }
-  .ts-lawtabs button:first-child { border-left: 0; }
-  .ts-lawtabs button.is-active { background: #4c5fd5; color: #fff; font-weight: 700; }
-  .ts-tender__meta { color: #6b7280 !important; overflow-wrap: anywhere; }
-  .ts-tender__title { font-weight: 400; color: var(--ink-2); }
-  .ts-archive-result { display: block; margin-top: 2px; }
-  .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
-  .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
-  .ts-stage { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; background: #eef1f4; color: #4b5563; }
-  .ts-stage--lost { background: #fbe9eb; color: #b8434e; }
-  .ts-stage--won { background: #e6f4ea; color: #2e7d32; }
-  .ts-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-  .ts-row-work { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 13px; font-weight: 600; color: #3366cc; text-decoration: underline; cursor: pointer; white-space: nowrap; }
-  .ts-pager { display: flex; gap: 14px; justify-content: center; margin: 12px 0; font-size: 13px; }
-</style>
 {% endblock %}

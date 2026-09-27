@@ -1,86 +1,123 @@
 {% extends "base.html" %}
-{% load tz tender_selection_extras %}
+{% load static tz tender_selection_extras %}
 
 {% block title %}Тендеры{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">{% endblock %}
 
 {% block content %}
 <div class="container">
   <a href="/" class="back-link">← На главную</a>
   <h1>Тендеры</h1>
-  <nav class="kb-viewtabs" aria-label="Раздел тендеров">
-    <a href="?view=list" class="is-active">Входящие</a>
-    <a href="?view=kanban">Торги</a>
-  </nav>
+  {% include "tender_selection/_nav.html" with active="incoming" %}
 
-  <section class="panel">
-    <div class="panel-header">
-      <h2 class="panel-title">Входящие <small class="ts-count">{{ shown_count }}{% if hidden_count %} · скрыто {{ hidden_count }}{% endif %}</small></h2>
-      <div class="panel-actions">
-        <a href="{% url 'tender_selection:settings' %}" class="button-secondary">Настройки фильтра</a>
-        <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
-          {% csrf_token %}
-          <button type="submit" class="button-success">Обновить · от&nbsp;{{ settings.min_price|rub }}, за&nbsp;{{ settings.window_days }}&nbsp;дн.</button>
-        </form>
+  <section class="panel ts-sheet">
+    <div class="ts-head">
+      <div>
+        <h2 class="ts-head__title">Входящие <span class="ts-count-pill">{{ shown_count }}</span></h2>
+        <p class="ts-head__stats">
+          <span>{% if query %}найдено {{ shown_count }}{% else %}{{ shown_count }} подходят{% endif %}</span>
+          {% if hidden_count %}<span>{{ hidden_count }} скрыто фильтрами</span>{% endif %}
+          {% if expired_count %}<span>{{ expired_count }} срок истёк</span>{% endif %}
+        </p>
       </div>
-    </div>
-    <div class="ts-controls">
-      <label class="ts-sort">Сортировать
-        <select onchange="tsGo('sort', this.value)">
-          <option value="deadline" {% if sort == "deadline" %}selected{% endif %}>по сроку подачи</option>
-          <option value="deadline_far" {% if sort == "deadline_far" %}selected{% endif %}>по сроку подачи, поздние</option>
-          <option value="price_hi" {% if sort == "price_hi" %}selected{% endif %}>по сумме, крупные</option>
-          <option value="price_lo" {% if sort == "price_lo" %}selected{% endif %}>по сумме, мелкие</option>
-          <option value="new" {% if sort == "new" %}selected{% endif %}>по дате публикации</option>
-        </select>
-      </label>
-      <span class="ts-lawtabs">
-        <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Оба · {{ law_counts.all }}</button>
-        <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ · {{ law_counts.fz44 }}</button>
-        <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ · {{ law_counts.fz223 }}</button>
-      </span>
-      <span class="ts-controls__note">
-        {% if show_all %}
-          <a href="#" onclick="tsGo('all','');return false">← только актуальные и подходящие</a> · серым — скрытые
-        {% elif hidden_count or expired_count %}
-          <a href="#" onclick="tsGo('all','1');return false">Показать все ({% if hidden_count %}скрыто фильтром {{ hidden_count }}{% endif %}{% if hidden_count and expired_count %}, {% endif %}{% if expired_count %}срок истёк у {{ expired_count }}{% endif %})</a>
-        {% endif %}
-      </span>
+      <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form" class="ts-refresh">
+        {% csrf_token %}
+        <button type="submit">↻ Обновить</button>
+        <span class="ts-refresh__params">от {{ settings.min_price|rub }} · за {{ settings.window_days }} дн.</span>
+        <a href="{% url 'tender_selection:settings' %}" title="Настройки фильтра" aria-label="Настройки фильтра">⌄</a>
+      </form>
     </div>
 
-    {% for tender in page_obj.object_list %}
-    <div class="saved-estimate ts-tender{% if tender.filtered_out %} is-dim{% endif %}{% if not tender.opened_at %} is-unread{% endif %}">
-      <a class="saved-estimate__main" href="{% url 'tender_selection:detail' tender.pk %}">
-        <span>
-          <span class="ts-tender__title">{{ tender.title|default:tender.object_info }}</span>
-          <small class="ts-tender__meta">
-            <span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span>
-            {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠&nbsp;нет данных</span>{% endif %}
-            {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠&nbsp;жалоба</span>{% endif %}
-            № {{ tender.purchase_number }}
-            · {% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}
-            {% if tender.org.city or tender.region_label %} · {{ tender.org.city|default:tender.region_label }}{% endif %}
-            {% if tender.match_hits %} · <span class="ts-hits">{{ tender.match_hits|join:", " }}</span>{% endif %}
-          </small>
-        </span>
-        <span class="tender-saved-totals">
-          <strong>{{ tender.max_price|rub }}</strong>
-          <small{% if tender.is_soon %} class="ts-soon-label"{% endif %}>{% if tender.collecting_finished_at %}{% if tender.is_soon %}⏰ {% endif %}до {{ tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% else %}срок не указан{% endif %}</small>
-        </span>
-      </a>
-      <div class="ts-row-actions">
-        <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
-          {% csrf_token %}<input type="hidden" name="review" value="interesting">
-          <button type="submit" class="ts-row-work">В работу →</button>
-        </form>
-        <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
-        </form>
+    <div class="ts-toolbar">
+      <form method="get" class="ts-search" role="search">
+        <input type="hidden" name="view" value="list">
+        {% if sort != "deadline" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+        {% if law_filter != "all" %}<input type="hidden" name="law" value="{{ law_filter }}">{% endif %}
+        {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+        <input type="search" name="q" value="{{ query }}" id="ts-search" placeholder="Поиск по названию, заказчику, № закупки, ИНН…" autocomplete="off">
+        <kbd>Ctrl K</kbd>
+      </form>
+      <select class="ts-select" aria-label="Сортировка" onchange="tsGo('sort', this.value === 'deadline' ? '' : this.value)">
+        <option value="deadline" {% if sort == "deadline" %}selected{% endif %}>По сроку подачи</option>
+        <option value="deadline_far" {% if sort == "deadline_far" %}selected{% endif %}>По сроку, поздние</option>
+        <option value="price_hi" {% if sort == "price_hi" %}selected{% endif %}>По сумме, крупные</option>
+        <option value="price_lo" {% if sort == "price_lo" %}selected{% endif %}>По сумме, мелкие</option>
+        <option value="new" {% if sort == "new" %}selected{% endif %}>По дате публикации</option>
+      </select>
+      <div class="ts-seg ts-seg--sm" role="group" aria-label="Закон">
+        <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Все <small>{{ law_counts.all }}</small></button>
+        <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ <small>{{ law_counts.fz44 }}</small></button>
+        <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ <small>{{ law_counts.fz223 }}</small></button>
+      </div>
+      <details class="ts-menu">
+        <summary>Фильтры</summary>
+        <div class="ts-menu__list">
+          {% if show_all %}
+          <a href="#" onclick="tsGo('all','');return false">Только подходящие и актуальные</a>
+          {% else %}
+          <a href="#" onclick="tsGo('all','1');return false">Показать все<small>включая скрытые словами{% if hidden_count %} ({{ hidden_count }}){% endif %} и с истёкшим сроком{% if expired_count %} ({{ expired_count }}){% endif %}</small></a>
+          {% endif %}
+          <a href="{% url 'tender_selection:settings' %}">Настройки фильтра<small>слова, категории, регионы, цена</small></a>
+        </div>
+      </details>
+    </div>
+
+    <div class="ts-bulkbar" data-bulk-bar>
+      <input type="checkbox" class="ts-check" data-bulk-all aria-label="Выбрать все на странице">
+      <span>Выбрано <b data-bulk-count>0</b></span>
+      <div class="ts-bulkbar__actions">
+        <button type="button" class="is-primary" data-bulk-action="work" disabled>В работу</button>
+        <button type="button" data-bulk-action="dismiss" disabled>Скрыть</button>
       </div>
     </div>
-    {% empty %}
-    <p class="settings-description">Ничего не подходит под фильтр. Нажмите «Обновить» или ослабьте плюс/минус-слова в настройках.</p>
-    {% endfor %}
+
+    <ul class="ts-rows">
+      {% for tender in page_obj.object_list %}
+      <li class="ts-row{% if tender.filtered_out %} is-dim{% endif %}{% if not tender.opened_at %} is-unread{% endif %}">
+        <input type="checkbox" class="ts-check" data-bulk-select
+               data-review-url="{% url 'tender_selection:review' tender.pk %}" data-dismiss-url="{% url 'tender_selection:dismiss' tender.pk %}"
+               aria-label="Выбрать тендер {{ tender.purchase_number }}">
+        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}">
+          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>
+          <span class="ts-row__meta">
+            <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span> № {{ tender.purchase_number }}</span>
+            <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
+            {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠ нет данных</span>{% endif %}
+            {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠ жалоба</span>{% endif %}
+          </span>
+          {% if tender.org.city or tender.region_label or tender.match_hits %}
+          <span class="ts-row__sub">
+            {% if tender.org.city or tender.region_label %}<span>{{ tender.org.city|default:tender.region_label }}</span>{% endif %}
+            {% if tender.match_hits %}<span class="ts-hits">{{ tender.match_hits|join:", " }}</span>{% endif %}
+          </span>
+          {% endif %}
+        </a>
+        <div class="ts-row__money">
+          <span class="ts-row__price">{{ tender.max_price|rub }}</span>
+          {% if tender.collecting_finished_at %}
+          <span class="ts-dl{% if tender.deadline_state %} ts-dl--{{ tender.deadline_state }}{% endif %}">до {{ tender.collecting_finished_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК</span>
+          {% if tender.days_left is not None %}<span class="ts-row__left">{% if tender.days_left == 0 %}Остался последний день{% else %}Осталось {{ tender.days_left }} дн.{% endif %}</span>{% else %}<span class="ts-row__left">Срок истёк</span>{% endif %}
+          {% else %}<span class="ts-row__left">Срок не указан</span>{% endif %}
+        </div>
+        <div class="ts-row__actions">
+          <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
+            {% csrf_token %}<input type="hidden" name="review" value="interesting">
+            <button type="submit" class="ts-work">В работу →</button>
+          </form>
+          <details class="ts-menu ts-menu--icon">
+            <summary aria-label="Ещё действия">⋮</summary>
+            <div class="ts-menu__list">
+              <a href="{% url 'tender_selection:detail' tender.pk %}">Открыть тендер</a>
+              {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
+              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<button type="submit" class="is-danger">Скрыть в архив</button></form>
+            </div>
+          </details>
+        </div>
+      </li>
+      {% empty %}
+      <li class="ts-empty">{% if query %}По запросу «{{ query }}» ничего не найдено.{% else %}Ничего не подходит под фильтр. Нажмите «Обновить» или ослабьте фильтр в настройках.{% endif %}</li>
+      {% endfor %}
+    </ul>
 
     {% if page_obj.has_other_pages %}
     <div class="ts-pager">
@@ -91,7 +128,7 @@
     {% endif %}
 
     {% if last_run %}
-    <p class="settings-description ts-lastrun">
+    <p class="ts-footnote">
       Последняя выгрузка {{ last_run.started_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}:
       {{ last_run.records_received }} записей, {{ last_run.created_count }} новых, за {{ last_run.duration_seconds }} с{% if not last_run.ok %} · <span class="ts-warn">{{ last_run.error }}</span>{% endif %}.
     </p>
@@ -105,53 +142,21 @@
     <div>Обновляю список…<br><small>Запросы идут с паузами, чтобы не упереться в лимит сервиса. Это может занять до 2&nbsp;минут — страница обновится сама.</small></div>
   </div>
 </div>
+{% csrf_token %}
 
 <style>
-  .kb-viewtabs { display: flex; width: 100%; max-width: 420px; margin: 4px auto 14px; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
-  .kb-viewtabs a { flex: 1 1 0; text-align: center; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-decoration: none; border-left: 1px solid var(--field-border); }
-  .kb-viewtabs a:first-child { border-left: 0; }
-  .kb-viewtabs a.is-active { background: var(--accent); color: #fff; }
-  .ts-count { color: #7a8492; font-size: 12px; font-weight: 500; }
-  .ts-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 4px; font-size: 13px; }
-  .ts-sort select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
-  .ts-lawtabs { display: inline-flex; border: 1px solid var(--field-border); border-radius: 8px; overflow: hidden; }
-  .ts-lawtabs button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--field-bg); color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--field-border); }
-  .ts-lawtabs button:first-child { border-left: 0; }
-  .ts-lawtabs button.is-active { background: #4c5fd5; color: #fff; font-weight: 700; }
-  .ts-controls__note { color: #6b7280; }
-  .ts-tender__meta { color: #6b7280 !important; overflow-wrap: anywhere; }
-  .ts-hits { color: #2e7d32; }
-  .ts-tender.is-dim { opacity: .45; }
-  .ts-tender__title { font-weight: 400; color: var(--ink-2); }
-  .ts-tender.is-unread .ts-tender__title { font-weight: 700; color: var(--ink); }
-  .ts-tender .tender-saved-totals small { white-space: nowrap; }
-  .ts-soon-label { color: #b8434e !important; font-weight: 600; }
-  .ts-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-  .ts-row-work { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 13px; font-weight: 600;
-                 color: #3366cc; text-decoration: underline; cursor: pointer; white-space: nowrap; }
-  .ts-row-work:hover { color: #1a4fb0; }
-  .ts-law { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: #eef1f4; color: #6b7280; }
-  .ts-law--fz223 { background: #f2ece3; color: #8a6d3b; }
-  .ts-flag { color: #b8434e; font-weight: 700; font-size: 11px; }
-  .ts-flag--data { color: var(--warning-ink); }
-  .ts-warn { color: #b26a00; }
-  .ts-lastrun { margin-top: 16px; font-size: 12px; }
-  .ts-pager { display: flex; gap: 12px; align-items: center; margin-top: 14px; font-size: 13px; }
   #ts-overlay { position: fixed; inset: 0; background: var(--overlay-scrim); z-index: 1000; display: none; align-items: center; justify-content: center; }
   #ts-overlay:not([hidden]) { display: flex; }
-  .ts-overlay__box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; max-width: 380px; text-align: center; box-shadow: var(--shadow-pop); font-size: 14px; }
+  .ts-overlay__box { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px 28px; max-width: 380px; text-align: center; box-shadow: var(--shadow-pop); font-size: 14px; }
   .ts-overlay__box small { color: var(--ink-2); }
   .ts-spinner { width: 34px; height: 34px; margin: 0 auto 14px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: ts-spin .8s linear infinite; }
   @keyframes ts-spin { to { transform: rotate(360deg); } }
-  @media (max-width: 768px) {
-    .ts-tender { flex-wrap: wrap; }
-    .ts-row-actions { flex: 1 1 100%; justify-content: flex-end; }
-  }
 </style>
 <script>
   function tsGo(key, val) {
     var p = new URLSearchParams(location.search);
     if (val) p.set(key, val); else p.delete(key);
+    p.set("view", "list");
     p.delete("page");
     location.search = p.toString();
   }
@@ -165,5 +170,56 @@
     document.getElementById("ts-overlay").hidden = false;
   });
 
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      document.getElementById("ts-search").focus();
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    document.querySelectorAll("details.ts-menu[open]").forEach(function (menu) {
+      if (!menu.contains(e.target)) menu.open = false;
+    });
+  });
+
+  (function () {
+    var boxes = Array.from(document.querySelectorAll("[data-bulk-select]"));
+    var all = document.querySelector("[data-bulk-all]");
+    var count = document.querySelector("[data-bulk-count]");
+    var actions = document.querySelectorAll("[data-bulk-action]");
+    var csrf = document.querySelector("[name=csrfmiddlewaretoken]").value;
+
+    function selected() { return boxes.filter(function (b) { return b.checked; }); }
+    function sync() {
+      var n = selected().length;
+      count.textContent = n;
+      all.checked = n > 0 && n === boxes.length;
+      all.indeterminate = n > 0 && n < boxes.length;
+      actions.forEach(function (b) { b.disabled = n === 0; });
+    }
+    boxes.forEach(function (b) { b.addEventListener("change", sync); });
+    all.addEventListener("change", function () { boxes.forEach(function (b) { b.checked = all.checked; }); sync(); });
+
+    actions.forEach(function (button) {
+      button.addEventListener("click", async function () {
+        var rows = selected(), work = button.dataset.bulkAction === "work";
+        var question = work
+          ? "Перевести в работу: " + rows.length + ". Для каждого запустится оценка рисков ИИ (~2 ₽ за тендер)."
+          : "Скрыть в архив: " + rows.length + ".";
+        if (!confirm(question)) return;
+        actions.forEach(function (b) { b.disabled = true; });
+        for (var box of rows) {
+          var body = new FormData();
+          body.append("csrfmiddlewaretoken", csrf);
+          if (work) body.append("review", "interesting");
+          await fetch(work ? box.dataset.reviewUrl : box.dataset.dismissUrl, {
+            method: "POST", body: body, headers: {"X-Requested-With": "XMLHttpRequest"},
+          });
+        }
+        location.reload();
+      });
+    });
+  })();
 </script>
 {% endblock %}

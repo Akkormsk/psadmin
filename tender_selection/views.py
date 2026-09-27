@@ -250,7 +250,38 @@ def kanban(request):
     archived_count = (
         Tender.objects.filter(status=Tender.DISMISSED).count()
     )
-    return render(request, "tender_selection/kanban.html", {"columns": columns, "archived_count": archived_count, "settings": settings})
+    return render(request, "tender_selection/kanban.html", {
+        "columns": columns, "archived_count": archived_count, "settings": settings,
+        "nav_counts": {"incoming": _incoming_count(settings), "board": sum(len(c["cards"]) for c in columns)},
+    })
+
+
+def _deadline_urgency(deadline, now) -> tuple[int | None, str]:
+    """(полных дней до окончания подачи, 'urgent' ≤2 дн. | 'soon' ≤4 дн. | '')."""
+    if deadline is None or deadline < now:
+        return None, ""
+    days = (deadline - now).days
+    return days, "urgent" if days <= 2 else "soon" if days <= 4 else ""
+
+
+def _incoming_count(settings) -> int:
+    rows, _hidden, _expired = _visible_found_tenders(
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED), min_price=settings.min_price,
+        include_words=settings.include_words, exclude_words=settings.exclude_words,
+    )
+    return len(rows)
+
+
+def _board_count(settings) -> int:
+    """Столько же карточек, сколько на доске «Торги» (см. kanban)."""
+    from tenders.models import TenderEstimate
+
+    review, _hidden, _expired = _visible_found_tenders(
+        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), min_price=settings.min_price,
+        include_words=settings.include_words, exclude_words=settings.exclude_words,
+    )
+    estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).count()
+    return len(review) + estimates
 
 
 def _visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False):
@@ -297,8 +328,8 @@ def tender_list(request):
     show_all = request.GET.get("all") == "1"
     sort = request.GET.get("sort") if request.GET.get("sort") in SORTS else DEFAULT_SORT
     law_filter = request.GET.get("law") if request.GET.get("law") in ("fz44", "fz223") else "all"
+    query = request.GET.get("q", "").strip()
     now = timezone.now()
-    soon_cutoff = now + timedelta(days=1)
 
     queryset = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
     if law_filter != "all":
@@ -310,15 +341,20 @@ def tender_list(request):
         exclude_words=settings.exclude_words, show_all=show_all,
     )
 
-    page = Paginator(rows, 100).get_page(request.GET.get("page"))
-    orgs = {o.inn: o for o in Organization.objects.filter(
-        inn__in=[t.customer_inn for t in page.object_list if t.customer_inn]
-    )}
-    for tender in page.object_list:
+    orgs = {o.inn: o for o in Organization.objects.filter(inn__in={t.customer_inn for t in rows if t.customer_inn})}
+    for tender in rows:
         tender.org = orgs.get(tender.customer_inn)
+    if query:
+        needle = query.casefold()
+        rows = [t for t in rows if needle in " ".join([
+            t.title, t.object_info, t.purchase_number, t.customer_inn, t.org.name if t.org else "",
+        ]).casefold()]
+
+    page = Paginator(rows, 100).get_page(request.GET.get("page"))
+    for tender in page.object_list:
         tender.region_label = region_name(tender.region) if tender.region else ""
         tender.law_label = LAW_LABELS.get(tender.law, tender.law)
-        tender.is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= soon_cutoff)
+        tender.days_left, tender.deadline_state = _deadline_urgency(tender.collecting_finished_at, now)
         tender.has_complaint = bool(tender.complaints_raw)
         # 223-ФЗ не имеет разобранного извещения по конструкции источника — это не
         # ошибка. У 44-ФЗ пустой notification_raw значит запрос ещё не удался — но
@@ -345,6 +381,8 @@ def tender_list(request):
         "law_counts": {"all": sum(counts.values()), "fz44": counts.get("fz44", 0), "fz223": counts.get("fz223", 0)},
         "settings": settings,
         "last_run": PullRun.objects.first(),
+        "query": query,
+        "nav_counts": {"incoming": _incoming_count(settings), "board": _board_count(settings)},
     })
 
 
@@ -1019,6 +1057,7 @@ def archive(request):
     law_filter = request.GET.get("law") if request.GET.get("law") in ("fz44", "fz223") else "all"
     sort = request.GET.get("sort") if request.GET.get("sort") in ARCHIVE_SORTS else "archived"
 
+    selection_settings = FilterSettings.load()
     tenders = Tender.objects.filter(status=Tender.DISMISSED)
     if law_filter != "all":
         tenders = tenders.filter(law=law_filter)
@@ -1068,6 +1107,7 @@ def archive(request):
         "law_filter": law_filter,
         "sort": sort,
         "query": query,
+        "nav_counts": {"incoming": _incoming_count(selection_settings), "board": _board_count(selection_settings)},
     })
 
 
