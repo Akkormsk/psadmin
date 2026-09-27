@@ -201,8 +201,6 @@ def collect_price_stats(
 
 # --- Витрина: подсказка по снижению для карточки тендера ----------------------
 
-_TARGET_COUNT = 10        # сколько похожих закупок стараемся набрать
-_MIN_SAMPLES = 3          # меньше — раздел не показываем, это не статистика
 
 # служебные слова из названий закупок — в ключевые не берём
 _SUBJECT_STOP = {
@@ -278,7 +276,7 @@ def price_stats_for(tender, card=None) -> dict | None:
     Похожесть = совпадение значимых слов в названии/товарных позициях, без
     баллов и весов. Сначала берём свои прошлые тендеры (знаем не только
     общее название закупки, но и реальные товарные позиции) — если не
-    набралось ``_TARGET_COUNT`` — добираем из открытой истории похожих
+    набралось ``stats_target_count`` (Настройки оценки) — добираем из открытой истории похожих
     закупок. При равном совпадении слов вперёд идёт тот же регион, затем —
     более свежая запись.
     """
@@ -290,6 +288,8 @@ def price_stats_for(tender, card=None) -> dict | None:
 
     from tenders.models import TenderEstimate
 
+    settings = FilterSettings.load()
+    target_count = settings.stats_target_count
     own_pool = (
         TenderEstimate.objects.exclude(actual_reduction_percent=None)
         .select_related("tender")
@@ -306,7 +306,7 @@ def price_stats_for(tender, card=None) -> dict | None:
     ))
 
     chosen = []
-    for _, est in own_scored[:_TARGET_COUNT]:
+    for _, est in own_scored[:target_count]:
         nmck = (est.summary_snapshot or {}).get("nmck_total")
         chosen.append({
             "source": "own",
@@ -319,7 +319,7 @@ def price_stats_for(tender, card=None) -> dict | None:
         })
     own_count = len(chosen)
 
-    remaining = _TARGET_COUNT - own_count
+    remaining = target_count - own_count
     if remaining > 0:
         cats = tender_categories(tender, card)
         market_pool = ContractStat.objects.filter(law="fz44", shared_purchase=False, discount_pct__isnull=False)
@@ -347,7 +347,7 @@ def price_stats_for(tender, card=None) -> dict | None:
             })
     market_count = len(chosen) - own_count
 
-    if len(chosen) < _MIN_SAMPLES:
+    if len(chosen) < settings.stats_min_samples:
         return None
 
     discounts = sorted(float(row["discount_pct"]) for row in chosen)
@@ -360,7 +360,7 @@ def price_stats_for(tender, card=None) -> dict | None:
         "median": round(median),
         "range_lo": round(discounts[0]),
         "range_hi": round(discounts[-1]),
-        "suggested_reduction": max(5, min(60, round(median))),
+        "suggested_reduction": max(settings.reduction_hint_min, min(settings.reduction_hint_max, round(median))),
         "same_region": sum(1 for row in chosen if tender.region and row["region"] == tender.region),
         "categories": sorted(tender_categories(tender, card)),
         "examples": chosen,

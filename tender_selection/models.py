@@ -19,6 +19,13 @@ class FilterSettings(models.Model):
     window_days = models.PositiveSmallIntegerField("Окно по дате публикации, дней", default=7)
     risk_warning_days = models.PositiveSmallIntegerField("Риск: короткий срок, дней", default=14)
     risk_critical_days = models.PositiveSmallIntegerField("Риск: критический срок, дней", default=7)
+    # {фактор: low|medium|high}; чего нет — берётся risk_policy.DEFAULT_FACTOR_LEVELS.
+    risk_factor_levels = models.JSONField("Риск: уровни факторов", default=dict, blank=True)
+    stats_target_count = models.PositiveSmallIntegerField("Прогноз снижения: похожих закупок", default=10)
+    stats_min_samples = models.PositiveSmallIntegerField("Прогноз снижения: минимум для показа", default=3)
+    reduction_hint_min = models.PositiveSmallIntegerField("Прогноз снижения: подсказка не меньше, %", default=5)
+    reduction_hint_max = models.PositiveSmallIntegerField("Прогноз снижения: подсказка не больше, %", default=60)
+    incoming_ttl_days = models.PositiveSmallIntegerField("Уборка «Входящих»: дней после окончания подачи", default=7)
     okpd2_codes = models.JSONField("Категории ОКПД2", default=list, blank=True)
     regions = models.JSONField("Регионы (коды)", default=list, blank=True)
     laws = models.JSONField("Источники", default=list, blank=True)

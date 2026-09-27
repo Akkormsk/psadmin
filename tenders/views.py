@@ -1090,7 +1090,7 @@ def _persist_tender_estimate(request, estimate, settings, *, pipeline=False):
     try:
         tender_number = request.POST.get("tender_number", "").strip()
         name = request.POST.get("name", "").strip()
-        reduction_percent = _number(request.POST.get("reduction_percent"), "30")
+        reduction_percent = _number(request.POST.get("reduction_percent"), str(settings.default_reduction_percent))
         russia_delivery = _number(request.POST.get("russia_delivery"))
         if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
             raise ValueError
@@ -1152,7 +1152,7 @@ def home(request, pk=None, pipeline=False):
     form_state = {
         "tender_number": estimate.tender_number if estimate else "",
         "name": estimate.name if estimate else "",
-        "reduction_percent": estimate.reduction_percent if estimate else Decimal("30.00"),
+        "reduction_percent": estimate.reduction_percent if estimate else settings.default_reduction_percent,
         "russia_delivery": estimate.russia_delivery if estimate else Decimal("0.00"),
         "result_notes": estimate.result_notes if estimate else "",
         "owner_id": estimate.owner_id if estimate else request.user.id,
@@ -1161,7 +1161,7 @@ def home(request, pk=None, pipeline=False):
         form_state = {
             "tender_number": request.POST.get("tender_number", ""),
             "name": request.POST.get("name", ""),
-            "reduction_percent": request.POST.get("reduction_percent", "30"),
+            "reduction_percent": request.POST.get("reduction_percent", str(settings.default_reduction_percent)),
             "russia_delivery": request.POST.get("russia_delivery", "0"),
             "result_notes": request.POST.get("result_notes", ""),
             "owner_id": request.POST.get("owner_id") or request.user.id,

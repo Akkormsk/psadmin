@@ -695,17 +695,35 @@ def filter_settings(request):
     })
 
 
+RISK_FACTOR_LABELS = (
+    ("samples_required", "Требуются образцы или испытания"),
+    ("samples_impossible", "Образцы нужны в нереальный срок"),
+    ("national_confirmation", "Нацрежим: нужно подтвердить происхождение"),
+    ("national_blocked", "Нацрежим: подтверждение недоступно"),
+    ("delivery_requests", "Поставка по заявкам заказчика"),
+    ("delivery_open_ended", "Поставка по заявкам без ясного срока или объёма"),
+)
+RISK_LEVEL_CHOICES = (("low", "низкий"), ("medium", "средний"), ("high", "высокий"))
+EVALUATION_NUMBERS = (
+    ("risk_warning_days", "Короткий срок", int, 1, 365),
+    ("risk_critical_days", "Критический срок", int, 1, 365),
+    ("roi_good_percent", "ROI зелёной зоны", Decimal, 0, 1000),
+    ("roi_thin_percent", "ROI жёлтой зоны", Decimal, 0, 1000),
+    ("vat_rate", "НДС", Decimal, 0, 50),
+    ("default_reduction_percent", "Снижение по умолчанию", Decimal, 0, 100),
+    ("stats_target_count", "Похожих закупок для прогноза", int, 1, 100),
+    ("stats_min_samples", "Минимум закупок для прогноза", int, 1, 100),
+    ("reduction_hint_min", "Подсказка снижения не меньше", int, 0, 100),
+    ("reduction_hint_max", "Подсказка снижения не больше", int, 0, 100),
+    ("incoming_ttl_days", "Хранить просроченные «Входящие»", int, 1, 365),
+)
+_TENDER_SETTINGS_FIELDS = ("roi_good_percent", "roi_thin_percent", "vat_rate", "default_reduction_percent")
+
+
 def _parse_evaluation_settings(post) -> tuple[dict, list[str]]:
-    """Числа из формы «Настройки оценки» и список ошибок; пустой список — можно сохранять."""
+    """Значения формы «Настройки оценки» и список ошибок; пустой список — можно сохранять."""
     values, errors = {}, []
-    fields = (
-        ("risk_warning_days", "Короткий срок", int, 1, 365),
-        ("risk_critical_days", "Критический срок", int, 1, 365),
-        ("roi_good_percent", "ROI зелёной зоны", Decimal, 0, 1000),
-        ("roi_thin_percent", "ROI жёлтой зоны", Decimal, 0, 1000),
-        ("vat_rate", "НДС", Decimal, 0, 50),
-    )
-    for name, label, kind, low, high in fields:
+    for name, label, kind, low, high in EVALUATION_NUMBERS:
         raw = (post.get(name) or "").strip().replace(",", ".")
         try:
             value = kind(raw)
@@ -715,42 +733,60 @@ def _parse_evaluation_settings(post) -> tuple[dict, list[str]]:
         if not low <= value <= high:
             errors.append(f"{label}: допустимо от {low} до {high}.")
         values[name] = value
-    if not errors and values["risk_critical_days"] >= values["risk_warning_days"]:
+    levels = {}
+    for key, label in RISK_FACTOR_LABELS:
+        level = post.get(f"level_{key}", "")
+        if level not in dict(RISK_LEVEL_CHOICES):
+            errors.append(f"{label}: выберите уровень риска.")
+        levels[key] = level
+    values["risk_factor_levels"] = levels
+    if errors:
+        return values, errors
+    if values["risk_critical_days"] >= values["risk_warning_days"]:
         errors.append("Критический срок должен быть меньше короткого.")
-    if not errors and values["roi_thin_percent"] >= values["roi_good_percent"]:
+    if values["roi_thin_percent"] >= values["roi_good_percent"]:
         errors.append("Граница жёлтой зоны ROI должна быть ниже зелёной.")
+    if values["stats_min_samples"] > values["stats_target_count"]:
+        errors.append("Минимум закупок для прогноза не может быть больше их целевого числа.")
+    if values["reduction_hint_min"] >= values["reduction_hint_max"]:
+        errors.append("Нижняя граница подсказки снижения должна быть меньше верхней.")
     return values, errors
 
 
 @superuser_required
 def evaluation_settings(request):
-    """Все числа, по которым оцениваются тендеры: пороги сроков для рисков,
-    светофор ROI (из него же целевая и минимальная цена на торгах), НДС расчёта."""
+    """Все числа, по которым оцениваются тендеры: пороги сроков и уровни факторов
+    риска, светофор ROI (из него же целевая и минимальная цена на торгах), НДС и
+    снижение по умолчанию для расчёта, прогноз снижения, срок хранения «Входящих»."""
     from tenders.models import TenderSettings
+
+    from .risk_policy import DEFAULT_FACTOR_LEVELS
 
     filters = FilterSettings.load()
     tender_settings = TenderSettings.objects.get_or_create(pk=1)[0]
     form = {
-        "risk_warning_days": filters.risk_warning_days, "risk_critical_days": filters.risk_critical_days,
-        "roi_good_percent": tender_settings.roi_good_percent, "roi_thin_percent": tender_settings.roi_thin_percent,
-        "vat_rate": tender_settings.vat_rate,
+        name: getattr(tender_settings if name in _TENDER_SETTINGS_FIELDS else filters, name)
+        for name, *_ in EVALUATION_NUMBERS
     }
+    levels = {**DEFAULT_FACTOR_LEVELS, **(filters.risk_factor_levels or {})}
     if request.method == "POST":
         values, errors = _parse_evaluation_settings(request.POST)
         if not errors:
-            filters.risk_warning_days = values["risk_warning_days"]
-            filters.risk_critical_days = values["risk_critical_days"]
-            filters.save(update_fields=["risk_warning_days", "risk_critical_days"])
-            tender_settings.roi_good_percent = values["roi_good_percent"]
-            tender_settings.roi_thin_percent = values["roi_thin_percent"]
-            tender_settings.vat_rate = values["vat_rate"]
-            tender_settings.save(update_fields=["roi_good_percent", "roi_thin_percent", "vat_rate"])
+            for name, value in values.items():
+                setattr(tender_settings if name in _TENDER_SETTINGS_FIELDS else filters, name, value)
+            filters.save()
+            tender_settings.save()
             messages.success(request, "Настройки оценки сохранены.")
             return redirect("tender_selection:evaluation_settings")
         for error in errors:
             messages.error(request, error)
         form = {name: request.POST.get(name, "") for name in form}
-    return render(request, "tender_selection/evaluation_settings.html", {"form": form})
+        levels = values["risk_factor_levels"]
+    return render(request, "tender_selection/evaluation_settings.html", {
+        "form": form,
+        "factor_levels": [(key, label, levels.get(key, "")) for key, label in RISK_FACTOR_LABELS],
+        "level_choices": RISK_LEVEL_CHOICES,
+    })
 
 
 @superuser_required

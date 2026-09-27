@@ -12,11 +12,11 @@
 
     <section class="panel">
       <div class="panel-header">
-        <h2 class="panel-title">Оценка рисков — сроки</h2>
+        <h2 class="panel-title">Оценка рисков</h2>
         <button type="submit" class="button-success">Сохранить</button>
       </div>
       <p class="settings-description">
-        Действуют и на срок всего контракта, и на срок исполнения одной заявки при поставке по заявкам.
+        Сроки действуют и на срок всего контракта, и на срок исполнения одной заявки при поставке по заявкам.
         Срок не больше критического — высокий риск, не больше короткого — средний.
       </p>
       <div class="settings-grid">
@@ -28,6 +28,19 @@
           <label for="risk_warning_days">Короткий срок, дней</label>
           <input type="number" id="risk_warning_days" name="risk_warning_days" value="{{ form.risk_warning_days }}" min="1" max="365" required>
         </div>
+      </div>
+
+      <h3 class="settings-subtitle">Уровень риска за каждый фактор</h3>
+      <p class="settings-description">ИИ только находит факторы в документах. Какой уровень риска за каждый из них ставить — решают эти настройки. Итог по тендеру — самый высокий из найденных.</p>
+      <div class="ts-levels">
+        {% for key, label, current in factor_levels %}
+        <label class="ts-level-row">
+          <span>{{ label }}</span>
+          <select name="level_{{ key }}">
+            {% for value, title in level_choices %}<option value="{{ value }}"{% if value == current %} selected{% endif %}>{{ title }}</option>{% endfor %}
+          </select>
+        </label>
+        {% endfor %}
       </div>
     </section>
 
@@ -51,15 +64,56 @@
     </section>
 
     <section class="panel">
-      <div class="panel-header"><h2 class="panel-title">Расчёт</h2></div>
+      <div class="panel-header"><h2 class="panel-title">Прогноз снижения</h2></div>
+      <p class="settings-description">
+        Подсказка снижения в карточке тендера — медиана по похожим закупкам: сначала наши прошлые тендеры, затем открытая история ЕИС.
+        Для тендера без прогноза новый расчёт получает снижение по умолчанию.
+      </p>
+      <div class="settings-grid settings-grid--three">
+        <div class="form-group">
+          <label for="default_reduction_percent">Снижение по умолчанию, %</label>
+          <input type="text" inputmode="decimal" id="default_reduction_percent" name="default_reduction_percent" value="{{ form.default_reduction_percent }}" required>
+        </div>
+        <div class="form-group">
+          <label for="stats_target_count">Сколько похожих закупок брать</label>
+          <input type="number" id="stats_target_count" name="stats_target_count" value="{{ form.stats_target_count }}" min="1" max="100" required>
+        </div>
+        <div class="form-group">
+          <label for="stats_min_samples">Минимум, чтобы показать прогноз</label>
+          <input type="number" id="stats_min_samples" name="stats_min_samples" value="{{ form.stats_min_samples }}" min="1" max="100" required>
+        </div>
+        <div class="form-group">
+          <label for="reduction_hint_min">Подсказка не меньше, %</label>
+          <input type="number" id="reduction_hint_min" name="reduction_hint_min" value="{{ form.reduction_hint_min }}" min="0" max="100" required>
+        </div>
+        <div class="form-group">
+          <label for="reduction_hint_max">Подсказка не больше, %</label>
+          <input type="number" id="reduction_hint_max" name="reduction_hint_max" value="{{ form.reduction_hint_max }}" min="0" max="100" required>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2 class="panel-title">Расчёт и «Входящие»</h2></div>
       <div class="settings-grid">
         <div class="form-group">
           <label for="vat_rate">НДС в расчётах, %</label>
           <input type="text" inputmode="decimal" id="vat_rate" name="vat_rate" value="{{ form.vat_rate }}" required>
+          <small>Для новых и пересохранённых расчётов — тендерных и заказов. Сохранённые хранят свою ставку.</small>
+        </div>
+        <div class="form-group">
+          <label for="incoming_ttl_days">Удалять неоткрытые «Входящие» через, дней</label>
+          <input type="number" id="incoming_ttl_days" name="incoming_ttl_days" value="{{ form.incoming_ttl_days }}" min="1" max="365" required>
+          <small>Считается от окончания подачи заявок. Открытые, взятые в работу и архив не удаляются.</small>
         </div>
       </div>
-      <p class="settings-description">Применяется к новым и пересохранённым расчётам — тендерным и заказам. Уже сохранённые расчёты хранят свою ставку.</p>
     </section>
   </form>
 </div>
+
+<style>
+  .ts-levels { display: grid; gap: 8px; max-width: 640px; }
+  .ts-level-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; }
+  .ts-level-row select { font: inherit; padding: 4px 8px; border: 1px solid var(--field-border); border-radius: 8px; background: var(--field-bg); color: var(--ink); }
+</style>
 {% endblock %}

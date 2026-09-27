@@ -11,6 +11,12 @@ URL = "/tender-selection/evaluation-settings/"
 VALID = {
     "risk_warning_days": "10", "risk_critical_days": "5",
     "roi_good_percent": "35", "roi_thin_percent": "20", "vat_rate": "7",
+    "level_samples_required": "high", "level_samples_impossible": "high",
+    "level_national_confirmation": "low", "level_national_blocked": "high",
+    "level_delivery_requests": "medium", "level_delivery_open_ended": "high",
+    "default_reduction_percent": "25",
+    "stats_target_count": "15", "stats_min_samples": "2", "reduction_hint_min": "3", "reduction_hint_max": "50",
+    "incoming_ttl_days": "10",
 }
 
 
@@ -36,9 +42,20 @@ class EvaluationSettingsTests(TestCase):
         self.assertEqual((filters.risk_warning_days, filters.risk_critical_days), (10, 5))
         self.assertEqual((tender_settings.roi_good_percent, tender_settings.roi_thin_percent), (Decimal("35"), Decimal("20")))
         self.assertEqual(tender_settings.vat_rate, Decimal("7"))
+        self.assertEqual(tender_settings.default_reduction_percent, Decimal("25"))
+        self.assertEqual(filters.risk_factor_levels["samples_required"], "high")
+        self.assertEqual(filters.risk_factor_levels["national_confirmation"], "low")
+        self.assertEqual(
+            (filters.stats_target_count, filters.stats_min_samples, filters.reduction_hint_min, filters.reduction_hint_max),
+            (15, 2, 3, 50),
+        )
+        self.assertEqual(filters.incoming_ttl_days, 10)
 
     def test_inconsistent_thresholds_are_rejected(self):
-        for broken in ({"risk_critical_days": "10"}, {"roi_thin_percent": "35"}, {"vat_rate": "abc"}):
+        for broken in (
+            {"risk_critical_days": "10"}, {"roi_thin_percent": "35"}, {"vat_rate": "abc"},
+            {"level_samples_required": "purple"}, {"reduction_hint_min": "70"}, {"stats_min_samples": "20"},
+        ):
             response = self.client.post(URL, {**VALID, **broken})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(FilterSettings.load().risk_warning_days, 14)
@@ -53,3 +70,67 @@ class EvaluationSettingsTests(TestCase):
 
         filters.refresh_from_db()
         self.assertEqual((filters.risk_warning_days, filters.risk_critical_days), (20, 9))
+
+
+class ConfiguredBehaviourTests(TestCase):
+    def test_factor_levels_come_from_settings(self):
+        from .risk_policy import classify_risk
+
+        facts = {"documents_sufficient": True, "samples": "required", "national_regime": "confirmation_required"}
+        result = classify_risk(facts, levels={"samples_required": "high", "national_confirmation": "low"})
+
+        self.assertEqual(result["risk_level"], "high")
+        self.assertEqual({f["code"]: f["level"] for f in result["risk_factors"]}, {"samples": "high", "national_regime": "low"})
+
+    def test_incoming_ttl_comes_from_settings(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from . import services
+        from .models import Tender
+
+        filters = FilterSettings.load()
+        filters.incoming_ttl_days = 3
+        filters.save()
+        Tender.objects.create(purchase_number="old", collecting_finished_at=timezone.now() - timedelta(days=4))
+        Tender.objects.create(purchase_number="fresh", collecting_finished_at=timezone.now() - timedelta(days=2))
+
+        services.purge_stale()
+
+        self.assertEqual(list(Tender.objects.values_list("purchase_number", flat=True)), ["fresh"])
+
+    def test_forecast_uses_configured_sample_size_and_hint_bounds(self):
+        from tenders.models import TenderEstimate
+
+        from .models import Tender
+        from .stats import price_stats_for
+
+        user = get_user_model().objects.create_user("manager")
+        TenderEstimate.objects.create(
+            owner=user, tender_number="1", name="Футболки хлопковые", status=TenderEstimate.LOST,
+            actual_reduction_percent=Decimal("70"),
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples, filters.reduction_hint_max = 1, 50
+        filters.save()
+
+        stats = price_stats_for(Tender(purchase_number="2", title="Поставка футболки хлопковые"))
+
+        self.assertEqual(stats["count"], 1)
+        self.assertEqual(stats["suggested_reduction"], 50)
+
+    def test_new_estimate_without_forecast_uses_default_reduction(self):
+        from .models import Tender
+        from .services import push_to_estimate
+
+        tender_settings = TenderSettings.objects.get_or_create(pk=1)[0]
+        tender_settings.default_reduction_percent = Decimal("22")
+        tender_settings.save()
+        user = get_user_model().objects.create_user("manager")
+        tender = Tender.objects.create(purchase_number="1", title="Кружки")
+
+        from tenders.models import TenderEstimate
+
+        estimate = TenderEstimate.objects.get(pk=push_to_estimate(tender, user))
+        self.assertEqual(estimate.reduction_percent, Decimal("22.00"))

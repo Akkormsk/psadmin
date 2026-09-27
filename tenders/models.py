@@ -14,6 +14,9 @@ class TenderSettings(models.Model):
     # без своих копий; правит админ здесь, без деплоя.
     roi_good_percent = models.DecimalField("ROI — зелёная зона, от %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     roi_thin_percent = models.DecimalField("ROI — жёлтая зона, от %", max_digits=5, decimal_places=2, default=Decimal("15.00"))
+    default_reduction_percent = models.DecimalField(
+        "Снижение по умолчанию для нового расчёта, %", max_digits=5, decimal_places=2, default=Decimal("30.00"),
+    )
 
     class Meta:
         verbose_name = "Настройки тендеров"

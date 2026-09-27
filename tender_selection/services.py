@@ -453,7 +453,6 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     return attempted, succeeded
 
 
-_EXPIRED_INCOMING_TTL = timedelta(days=7)
 def purge_stale() -> dict:
     """Фоновая уборка «Входящих» — навсегда удаляет:
     - просроченные «Входящие» (срок подачи истёк более недели назад, тендер
@@ -464,7 +463,7 @@ def purge_stale() -> dict:
     now = timezone.now()
     expired_incoming, _ = Tender.objects.filter(
         status=Tender.NEW, review=Tender.UNREVIEWED,
-        collecting_finished_at__lt=now - _EXPIRED_INCOMING_TTL,
+        collecting_finished_at__lt=now - timedelta(days=FilterSettings.load().incoming_ttl_days),
     ).delete()
     return {
         "expired_incoming": expired_incoming, "archived_found": 0,
@@ -519,6 +518,16 @@ def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
         tender.extras_checked_at = now
         tender.save(update_fields=["clarifications_raw", "complaints_raw", "extras_checked_at"])
     return clar, comp
+
+
+def _classify(facts) -> dict:
+    from .risk_policy import classify_risk
+
+    settings = FilterSettings.load()
+    return classify_risk(
+        facts, warning_days=settings.risk_warning_days, critical_days=settings.risk_critical_days,
+        levels=settings.risk_factor_levels,
+    )
 
 
 def _documents_sufficient(assessment) -> bool:
@@ -581,11 +590,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         data = dict(result["data"])
         from .risk_policy import classify_risk
 
-        data.update(classify_risk(
-            data.get("risk_facts"),
-            warning_days=FilterSettings.load().risk_warning_days,
-            critical_days=FilterSettings.load().risk_critical_days,
-        ))
+        data.update(_classify(data.get("risk_facts")))
         data["degraded"] = True
         if _keeps_previous_assessment(tender, data):
             return tender.risk_assessment
@@ -608,11 +613,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
 
     data = dict(result["data"])
     settings = FilterSettings.load()
-    policy = classify_risk(
-        data.get("risk_facts"),
-        warning_days=settings.risk_warning_days,
-        critical_days=settings.risk_critical_days,
-    )
+    policy = _classify(data.get("risk_facts"))
     data.update(policy)
     if _keeps_previous_assessment(tender, data):
         return tender.risk_assessment
@@ -673,7 +674,12 @@ def push_to_estimate(tender, user):
         or (f"ИНН {tender.customer_inn}" if tender.customer_inn else "заказчик не распознан")
 
     stats = price_stats_for(tender, card)
-    reduction = _D(f"{stats['suggested_reduction']}.00") if stats else _D("30.00")
+    from tenders.models import TenderSettings
+
+    reduction = (
+        _D(f"{stats['suggested_reduction']}.00") if stats
+        else TenderSettings.objects.get_or_create(pk=1)[0].default_reduction_percent
+    )
     snapshot = {"is_incomplete": True}
     if stats:
         snapshot["price_stats"] = {
