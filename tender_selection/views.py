@@ -20,10 +20,11 @@ from .models import DocumentPreview, FilterSettings, Organization, PullRun, Tend
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
-    CATEGORY_GROUPS, _fetch_doc_bytes, apply_tender_outcome, effective_laws, effective_okpd2,
-    enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
-    risk_assessment_for, run_pull, start_risk_assessment_in_background,
+    CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, apply_tender_outcome, check_protocol, effective_laws,
+    effective_okpd2, enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
+    risk_assessment_for, run_pull, set_our_bid, start_risk_assessment_in_background,
 )
+from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
 
 SORTS = {
@@ -445,6 +446,7 @@ def tender_detail(request, pk):
         "lifecycle": lifecycle,
         "active_stage": active_stage,
         "estimate": estimate,
+        "protocol": _protocol_view(estimate),
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
@@ -453,6 +455,25 @@ def tender_detail(request, pk):
         "risk_error": risk_error,
         "risk_docs": [] if risk_needs_fetch else tender.risk_assessment_docs,
     })
+
+
+def _protocol_view(estimate):
+    """Таблица участников итогового протокола; наша заявка отмечена, если опознана."""
+    protocol = (estimate.protocol or {}) if estimate else {}
+    if not protocol:
+        return None
+    nmck = protocol.get("nmck") or (estimate.tender.max_price if estimate.tender_id else None)
+    ours = find_ours(protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price)
+    rows = []
+    for participant in sorted(protocol.get("participants", []), key=lambda p: (p.get("rank") is None, p.get("rank") or 0)):
+        price = Decimal(participant["price"]) if participant.get("price") else None
+        rows.append({
+            **participant,
+            "price": price,
+            "reduction": reduction_percent_from(nmck, price) if price is not None else None,
+            "is_ours": participant is ours,
+        })
+    return {**protocol, "rows": rows, "ours": ours}
 
 
 def _tender_lifecycle(tender, estimate):
@@ -746,6 +767,15 @@ def enter_outcome(request, pk):
         )
         messages.success(request, f"Итог внесён вручную: {estimate.get_status_display()}.")
     else:
+        try:
+            protocol_found = check_protocol(estimate)
+        except ProtocolError as exc:
+            protocol_found = False
+            messages.warning(request, f"ЕИС сейчас не ответил ({exc}) — проверю протокол позже автоматически.")
+        if protocol_found:
+            estimate.refresh_from_db()
+            messages.success(request, f"Итоговый протокол загружен из ЕИС: {estimate.get_status_display()}.")
+            return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
         outcome = fetch_tender_outcome(estimate)
         if not outcome.get("found"):
             messages.warning(request, "Контракт по этому номеру закупки в реестре пока не найден — попробуйте позже или внесите итог вручную.")
@@ -761,6 +791,26 @@ def enter_outcome(request, pk):
             estimate.outcome_checked_at = timezone.now()
             estimate.save(update_fields=["actual_price", "actual_reduction_percent", "outcome_checked_at"])
             messages.info(request, "Цена контракта найдена, но выиграли мы или нет — решите сами кнопками ниже (свой ИНН не настроен).")
+    return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+
+
+@superuser_required
+@require_POST
+def save_bid(request, pk):
+    """Номер и/или сумма нашей заявки — по ним находим себя в протоколе."""
+    from tenders.models import TenderEstimate
+
+    estimate = get_object_or_404(TenderEstimate, pk=pk)
+    raw_price = request.POST.get("bid_price", "").replace(" ", "").replace(" ", "").replace(",", ".")
+    try:
+        bid_price = Decimal(raw_price) if raw_price else None
+        if bid_price is not None and bid_price <= 0:
+            raise InvalidOperation
+    except InvalidOperation:
+        messages.error(request, "Сумма заявки должна быть положительным числом.")
+        return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+    set_our_bid(estimate, bid_number=request.POST.get("bid_number", ""), bid_price=bid_price)
+    messages.success(request, "Данные нашей заявки сохранены.")
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
 

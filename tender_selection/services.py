@@ -862,3 +862,105 @@ def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None
                 "is_ours": True, "contract_date": timezone.now().date(),
             },
         )
+
+
+PROTOCOL_RECHECK = timedelta(minutes=30)
+# Уже завершённые (итог внесён вручную) — дозаполняем протоколом для статистики, но не чаще раза в сутки.
+PROTOCOL_BACKFILL_RECHECK = timedelta(days=1)
+PROTOCOL_PAUSE_SECONDS = 20
+
+
+def reduction_percent_from(nmck, price):
+    try:
+        return ((Decimal(str(nmck)) - price) / Decimal(str(nmck)) * 100).quantize(Decimal("0.01"))
+    except (InvalidOperation, ZeroDivisionError, TypeError):
+        return None
+
+
+def _decide_status_from_protocol(estimate) -> None:
+    """Опознали свою заявку — «Выигран»/«Проигран», нет — «Итог опубликован».
+    Решения, принятые вручную, и «Не участвовали» не трогаем."""
+    from tenders.models import TenderEstimate
+
+    from . import protocols
+
+    decidable = estimate.status in (TenderEstimate.PENDING, TenderEstimate.PUBLISHED) or (
+        estimate.status in (TenderEstimate.WON, TenderEstimate.LOST)
+        and estimate.outcome_source == TenderEstimate.OUTCOME_AUTO
+    )
+    if not decidable or not estimate.protocol:
+        return
+    ours = protocols.find_ours(estimate.protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price)
+    if ours:
+        status = TenderEstimate.WON if ours.get("rank") == 1 and not ours.get("rejected") else TenderEstimate.LOST
+    else:
+        status = TenderEstimate.PUBLISHED
+    apply_tender_outcome(
+        estimate, status=status, price=estimate.actual_price,
+        reduction_percent=estimate.actual_reduction_percent, source=TenderEstimate.OUTCOME_AUTO,
+    )
+
+
+def check_protocol(estimate) -> bool:
+    """Забрать итоговый протокол из ЕИС и применить к расчёту. False — протокола ещё нет.
+    ProtocolError (сеть/ЕИС) пробрасывается: вызывающий решает, продолжать ли."""
+    from . import protocols
+
+    estimate.protocol_checked_at = timezone.now()
+    protocol = protocols.fetch_protocol(estimate.tender.eis_url if estimate.tender_id else "")
+    if not protocol:
+        estimate.save(update_fields=["protocol_checked_at"])
+        return False
+    estimate.protocol = protocol
+    update_fields = ["protocol", "protocol_checked_at"]
+    win = protocols.winner(protocol)
+    if win and win.get("price"):
+        price = Decimal(win["price"])
+        nmck = protocol.get("nmck") or (estimate.tender.max_price if estimate.tender_id else None)
+        estimate.actual_price = price
+        estimate.actual_reduction_percent = reduction_percent_from(nmck, price)
+        update_fields += ["actual_price", "actual_reduction_percent"]
+    estimate.save(update_fields=update_fields)
+    _decide_status_from_protocol(estimate)
+    return True
+
+
+def set_our_bid(estimate, *, bid_number: str, bid_price) -> None:
+    estimate.bid_number = (bid_number or "").strip()[:40]
+    estimate.bid_price = bid_price
+    estimate.save(update_fields=["bid_number", "bid_price"])
+    _decide_status_from_protocol(estimate)
+
+
+def retry_pending_protocols(*, limit: int = 3, pause: float = PROTOCOL_PAUSE_SECONDS) -> tuple[int, int]:
+    """Фоновая проверка протоколов: «Торги» после окончания подачи заявок — каждые
+    полчаса; уже завершённые без протокола — раз в сутки (для статистики снижения).
+    На первом же сбое ЕИС останавливаемся до следующего тика — частые запросы с
+    одного IP ЕИС наказывает сбросом соединений для всего сервера."""
+    from tenders.models import TenderEstimate
+
+    from .protocols import ProtocolError
+
+    now = timezone.now()
+    base = TenderEstimate.objects.filter(protocol={}, tender__law="fz44").select_related("tender")
+    bidding = base.filter(
+        Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_RECHECK),
+        status=TenderEstimate.PENDING, tender__collecting_finished_at__lt=now,
+    ).order_by("tender__collecting_finished_at")
+    finished = base.filter(
+        Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_BACKFILL_RECHECK),
+        status__in=(TenderEstimate.WON, TenderEstimate.LOST, TenderEstimate.NOT_PARTICIPATED),
+    ).order_by("-updated_at")
+    estimates = (list(bidding[:limit]) + list(finished[:limit]))[:limit]
+
+    attempted = succeeded = 0
+    for estimate in estimates:
+        if attempted:
+            time.sleep(pause)
+        attempted += 1
+        try:
+            succeeded += check_protocol(estimate)
+        except ProtocolError as exc:
+            logger.warning("protocols: ЕИС не ответил по %s (%s) — продолжим в следующий тик", estimate.tender_number, exc)
+            break
+    return attempted, succeeded

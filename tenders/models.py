@@ -430,12 +430,15 @@ class TenderEstimate(models.Model):
     NOT_PARTICIPATED = "not_participated"
     LOST = "lost"
     WON = "won"
+    PUBLISHED = "published"
     STATUS_CHOICES = (
         (DRAFT, "Черновик"),
         (PENDING, "В ожидании"),
         (NOT_PARTICIPATED, "Не участвовали"),
         (LOST, "Проигран"),
         (WON, "Выигран"),
+        # Протокол вышел, но нашей заявки в нём пока не опознали (не внесены номер/сумма).
+        (PUBLISHED, "Итог опубликован"),
     )
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
@@ -455,6 +458,10 @@ class TenderEstimate(models.Model):
     actual_reduction_percent = models.DecimalField("Фактическое снижение, %", max_digits=5, decimal_places=2, null=True, blank=True)
     outcome_checked_at = models.DateTimeField("Итог внесён", null=True, blank=True)
     outcome_source = models.CharField("Источник итога", max_length=8, choices=OUTCOME_SOURCE_CHOICES, blank=True)
+    bid_number = models.CharField("Номер нашей заявки", max_length=40, blank=True)
+    bid_price = models.DecimalField("Сумма нашей заявки", max_digits=16, decimal_places=2, null=True, blank=True)
+    protocol = models.JSONField("Итоговый протокол (ЕИС)", default=dict, blank=True)
+    protocol_checked_at = models.DateTimeField("Протокол проверен", null=True, blank=True)
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
@@ -508,7 +515,8 @@ class OrderEstimate(models.Model):
     NOT_PARTICIPATED = "not_participated"
     LOST = "lost"
     WON = "won"
-    STATUS_CHOICES = TenderEstimate.STATUS_CHOICES
+    # Протоколов ЕИС у заказов нет — статус «Итог опубликован» только тендерный.
+    STATUS_CHOICES = tuple(choice for choice in TenderEstimate.STATUS_CHOICES if choice[0] != TenderEstimate.PUBLISHED)
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="order_estimates", verbose_name="Ответственный")
     legacy_calculation_id = models.PositiveBigIntegerField(

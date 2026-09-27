@@ -89,6 +89,15 @@ def _run_once(tick: int) -> None:
 
     close_old_connections()
     try:
+        from .services import retry_pending_protocols
+        attempted, succeeded = retry_pending_protocols()
+        if attempted:
+            logger.warning("autopull: протоколы — %d/%d найдено в ЕИС", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_protocols failed")
+
+    close_old_connections()
+    try:
         from .services import retry_pending_risks
         attempted, succeeded = retry_pending_risks()
         if attempted:

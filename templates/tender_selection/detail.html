@@ -211,23 +211,53 @@
 
   {% if estimate and estimate.status != "draft" %}
   <details class="panel panel--separated" {% if active_stage == "bidding" or active_stage == "result" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">{% if estimate.status == "pending" %}Торги{% else %}Результат{% endif %}</h2><small class="ts-stage-summary">{% if estimate.status == "pending" %}ожидаем результат{% else %}{{ estimate.get_status_display }}{% if estimate.actual_reduction_percent is not None %} · снижение {{ estimate.actual_reduction_percent }}%{% endif %}{% endif %}</small></summary>
-    {% if estimate.outcome_checked_at %}
+    <summary class="panel-header"><h2 class="panel-title">{% if estimate.status == "pending" %}Торги{% else %}Результат{% endif %}</h2><small class="ts-stage-summary">{% if estimate.status == "pending" %}ожидаем протокол{% else %}{{ estimate.get_status_display }}{% if estimate.actual_reduction_percent is not None %} · снижение {{ estimate.actual_reduction_percent }}%{% endif %}{% endif %}</small></summary>
+
+    {% if protocol %}
+    <p class="settings-description">
+      <a href="{{ protocol.url }}" target="_blank" rel="noopener">{{ protocol.name }}</a>{% if protocol.applications_total %} · подано заявок: {{ protocol.applications_total }}{% endif %}.
+      {% if protocol.ours %}Наша заявка — {% if protocol.ours.rejected %}отклонена{% else %}{{ protocol.ours.rank }}-е место{% endif %}.{% elif estimate.bid_number or estimate.bid_price %}Нашу заявку в протоколе не нашли — проверьте номер и сумму.{% else %}Чтобы отметить нашу заявку, внесите её номер или сумму ниже.{% endif %}
+    </p>
+    {% if protocol.failed_reason %}<p class="settings-description">Торги признаны несостоявшимися: {{ protocol.failed_reason }}</p>{% endif %}
+    <div class="table-wrapper"><table class="table ts-protocol">
+      <thead><tr><th>Место</th><th>Заявка</th><th>Цена</th><th>Снижение</th><th>Решение комиссии</th></tr></thead>
+      <tbody>
+      {% for row in protocol.rows %}
+        <tr{% if row.is_ours %} class="ts-protocol__ours"{% endif %}>
+          <td>{% if row.rank %}{{ row.rank }}{% else %}—{% endif %}</td>
+          <td>{{ row.id }}{% if row.is_ours %} · мы{% endif %}</td>
+          <td>{% if row.price is not None %}{{ row.price|floatformat:2 }} ₽{% else %}—{% endif %}</td>
+          <td>{% if row.reduction is not None %}{{ row.reduction }}%{% else %}—{% endif %}</td>
+          <td>{% if row.rejected %}Отклонена: {{ row.reject_reason }}{% else %}{{ row.result|default:"—" }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% if estimate.actual_reduction_percent is not None %}<p class="settings-description">Фактическое снижение {{ estimate.actual_reduction_percent }}% при нашем прогнозе {{ estimate.reduction_percent }}%.</p>{% endif %}
+    {% elif estimate.status == "pending" %}
+    <p class="settings-description">Протокол проверяется в ЕИС автоматически каждые 30 минут после окончания подачи заявок{% if estimate.protocol_checked_at %} (последняя проверка {{ estimate.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m H:i" }}){% endif %}. Как только он выйдет, карточка перейдёт в «Результат».</p>
+    {% elif estimate.outcome_checked_at %}
     <p class="settings-description">
       Данные результата обновлены {% if estimate.outcome_source == "auto" %}из ЕИС{% else %}вручную{% endif %}, {{ estimate.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}: статус «{{ estimate.get_status_display }}»{% if estimate.actual_price %}, цена контракта {{ estimate.actual_price|floatformat:2 }} ₽{% endif %}{% if estimate.actual_reduction_percent is not None %}, фактическое снижение {{ estimate.actual_reduction_percent }}% (прогноз был {{ estimate.reduction_percent }}%){% endif %}.
     </p>
-    {% endif %}
-    {% if estimate.status == "pending" %}
-    {% if not estimate.outcome_checked_at %}
-    <p class="settings-description">Итог пока не получен — торги ещё не завершены, или проверка не запускалась.</p>
     {% else %}
-    <p class="settings-description">Контракт найден, но итог участия ещё нужно подтвердить вручную.</p>
+    <p class="settings-description">Итог зафиксирован ранее: статус «{{ estimate.get_status_display }}». Протокол в ЕИС ещё не найден.</p>
     {% endif %}
+
+    <form method="post" action="{% url 'tender_selection:save_bid' estimate.pk %}" class="ts-bid-form">
+      {% csrf_token %}
+      <label>Номер нашей заявки <input type="text" name="bid_number" maxlength="40" value="{{ estimate.bid_number }}" placeholder="например, 127 или ZK-420728"></label>
+      <label>Сумма нашей заявки, ₽ <input type="text" name="bid_price" inputmode="decimal" value="{{ estimate.bid_price|default_if_none:'' }}" placeholder="1 070 000,00"></label>
+      <button type="submit" class="button-secondary">Сохранить</button>
+      <small>Необязательно. По номеру или сумме система найдёт нас в протоколе и сама поставит «Выигран» или «Проигран».</small>
+    </form>
+
     <div class="tender-outcome__actions">
       <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
         {% csrf_token %}
-        <button type="submit" class="button-success">Загрузить результат из ЕИС</button>
+        <button type="submit" class="{% if estimate.status == 'pending' %}button-success{% else %}button-secondary{% endif %}">{% if protocol %}Обновить из ЕИС{% else %}Проверить протокол в ЕИС{% endif %}</button>
       </form>
+      {% if estimate.status == "pending" or estimate.status == "published" %}
       <details class="tender-outcome__manual">
         <summary class="button-secondary">Внести вручную</summary>
         <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__manual-options">
@@ -237,16 +267,8 @@
           <button type="submit" name="status" value="lost" class="button-secondary">Проиграли</button>
         </form>
       </details>
+      {% endif %}
     </div>
-    {% else %}
-    {% if not estimate.outcome_checked_at %}
-    <p class="settings-description">Итог зафиксирован ранее: статус «{{ estimate.get_status_display }}». Подробные данные по торгам не были сохранены.</p>
-    {% endif %}
-    <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
-      {% csrf_token %}
-      <button type="submit" class="button-secondary">Обновить данные из ЕИС</button>
-    </form>
-    {% endif %}
   </details>
   {% endif %}
 
@@ -341,6 +363,12 @@
   .ts-lifecycle__stage--done { color:var(--positive-ink); }
   .ts-lifecycle__stage--current { color:var(--accent); font-weight:700; }
   .ts-stage-summary { margin-left:auto; color:var(--ink-3); font-size:11px; font-weight:400; text-align:right; }
+  .ts-protocol td, .ts-protocol th { vertical-align:top; }
+  .ts-protocol td:nth-child(3), .ts-protocol td:nth-child(4) { white-space:nowrap; }
+  .ts-protocol__ours td { font-weight:700; }
+  .ts-bid-form { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin:14px 0 4px; }
+  .ts-bid-form label { display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  .ts-bid-form small { flex-basis:100%; color:var(--ink-3); }
   .tender-auction-guide { width:min(620px,100%); margin:14px 0; border-collapse:collapse; font-size:13px; }
   .tender-auction-guide caption { margin-bottom:6px; text-align:left; color:var(--ink-2); font-weight:700; }
   .tender-auction-guide th, .tender-auction-guide td { padding:7px 10px; border-top:1px solid var(--border); text-align:left; }

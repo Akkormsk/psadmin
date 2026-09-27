@@ -21,6 +21,7 @@ urlpatterns = [
     path("<int:pk>/restore/", views.restore, name="restore"),
     path("archive/", views.archive, name="archive"),
     path("estimate/<int:pk>/outcome/", views.enter_outcome, name="enter_outcome"),
+    path("estimate/<int:pk>/bid/", views.save_bid, name="save_bid"),
     path("estimate/<int:pk>/dismiss/", views.dismiss_estimate, name="dismiss_estimate"),
     path("estimate/<int:pk>/restore/", views.restore_estimate, name="restore_estimate"),
 ]
