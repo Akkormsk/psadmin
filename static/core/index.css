@@ -654,6 +654,28 @@ h1 {
   background: var(--surface);
 }
 
+/* ---------- native select ---------- */
+/* Списки, которые скрипт custom-select не заменяет (data-customized="true" — с ними работает
+   свой JS), оформляем тем же видом средствами CSS. :where — нулевая специфичность, чтобы
+   локальные стили страниц (например, лаборатории каскада) оставались сильнее. */
+:where(select[data-customized="true"]) {
+  min-height: 36px; box-sizing: border-box; padding: 6px 34px 6px 12px;
+  border: 1px solid var(--field-border); border-radius: 10px; background-color: var(--surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8a8e' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 11px center; background-size: 13px;
+  color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; appearance: none; -webkit-appearance: none;
+}
+:where(select[data-customized="true"]):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+:where(select[data-customized="true"]):disabled { opacity: .55; cursor: default; }
+
+/* Статус сохранённого расчёта — цветная плашка по текущему статусу формы. */
+.saved-estimate__status-form select { min-height: 30px; padding: 4px 30px 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background-position: right 10px center; background-size: 12px; }
+.saved-estimate__status-form.is-won select { border-color: var(--border-positive); background-color: var(--tint-positive); color: var(--positive-ink); }
+.saved-estimate__status-form.is-lost select { border-color: var(--border-negative); background-color: var(--tint-negative); color: var(--negative-ink); }
+.saved-estimate__status-form.is-pending select,
+.saved-estimate__status-form.is-published select { border-color: var(--border-warning); background-color: var(--tint-warning); color: var(--warning-ink); }
+.saved-estimate__status-form.is-draft select,
+.saved-estimate__status-form.is-not_participated select { border-color: var(--border); background-color: var(--tint-neutral); color: var(--ink-2); }
+
 /* ---------- custom select ---------- */
 
 .custom-select {
