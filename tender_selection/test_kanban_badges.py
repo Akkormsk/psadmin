@@ -37,3 +37,28 @@ class AccumulatedBadgesTests(TestCase):
             outcome_source=TenderEstimate.OUTCOME_AUTO,
         )
         self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "Проигран"])
+
+
+class LegacyUnreviewedTenderInCalculationTests(TestCase):
+    """Тендеры, перенесённые в расчёт по старой схеме без отметки «в работу»."""
+
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.tender = Tender.objects.create(
+            purchase_number="1", review=Tender.UNREVIEWED, status=Tender.PUSHED,
+            notification_raw={"source": {}}, risk_checked_at=timezone.now(), risk_assessment={"preliminary": True},
+        )
+        self.estimate = TenderEstimate.objects.create(owner=self.admin, tender=self.tender, tender_number="1", name="Расчёт")
+
+    def test_board_card_shows_risk_badge(self):
+        self.assertEqual(_estimate_card(self.estimate)["badges"][0]["text"], "риск: ожидает")
+
+    def test_card_runs_full_assessment_instead_of_preliminary(self):
+        from unittest.mock import patch
+
+        self.client.force_login(self.admin)
+        with patch("tender_selection.views.notification_for", return_value={"source": {}}), \
+                patch("tender_selection.views.extras_for", return_value=([], [])):
+            response = self.client.get(f"/tender-selection/{self.tender.pk}/")
+
+        self.assertContains(response, "<p class=\"ts-doc-loading\" data-risk-autostart>")

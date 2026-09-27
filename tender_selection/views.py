@@ -72,7 +72,7 @@ def _risk_badge(tender) -> dict:
     """Светофор по итоговому уровню оценки, а пока её нет — её состояние."""
     if tender.risk_error:
         return {"state": "error", "text": "риск: ошибка"}
-    if not tender.risk_checked_at:
+    if not tender.risk_checked_at or "risk_factors" not in (tender.risk_assessment or {}):
         return {"state": "pending", "text": "риск: ожидает"}
     return {
         "low": {"state": "ok", "text": "риск: низкий"},
@@ -121,7 +121,8 @@ def _estimate_card(estimate):
     порядке стадий: риск с «Оценки», ROI с «Расчёта», «Выигран»/«Проигран» с «Результата»."""
     summary = estimate.summary_snapshot or {}
     badges = []
-    if estimate.tender_id and estimate.tender.review != Tender.UNREVIEWED:
+    # Расчёт есть — «Оценка» пройдена, даже если тендер перенесён по старой схеме без отметки «в работу».
+    if estimate.tender_id:
         badges.append(_risk_badge(estimate.tender))
     if summary.get("roi") is not None:
         from decimal import Decimal, InvalidOperation
@@ -428,7 +429,7 @@ def tender_detail(request, pk):
         risk_needs_fetch = False
         risk = None
         risk_error = ""
-    elif tender.review == Tender.UNREVIEWED:
+    elif tender.review == Tender.UNREVIEWED and estimate is None:
         # «Входящие» — ещё рано на настоящую (платную) оценку, но бесплатную
         # предварительную сводку по уже разобранному извещению показываем
         # всегда: та же форма таблицы, без документов и без ИИ (см.

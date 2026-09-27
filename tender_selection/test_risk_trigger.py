@@ -41,7 +41,7 @@ class RiskTriggerTests(TestCase):
                 patch("tender_selection.views.extras_for", return_value=([], [])):
             response = self.client.get(f"/tender-selection/{tender.pk}/")
 
-        self.assertContains(response, "data-risk-autostart")
+        self.assertContains(response, "<p class=\"ts-doc-loading\" data-risk-autostart>")
         self.assertNotContains(response, "data-risk-start>")
 
 
