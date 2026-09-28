@@ -253,6 +253,101 @@ def run_pull(
     return run
 
 
+def run_keyword_pull(
+    *, days=None, min_price=None, regions=None, max_requests: int = 16,
+    per_word_requests: int = 3, pause: float = None,
+) -> PullRun:
+    """Дополнительный обход — не по категориям ОКПД2 (`classifier` у Госплана
+    молча не находит часть кодов, см. CATEGORY_GROUPS, а часть тендеров и
+    вовсе без категории), а по тем же плюс-словам, что уже используются для
+    показа/скрытия «Входящих» (`object_info` — текстовый поиск Госплана по
+    названию, отдельный параметр от `classifier`).
+
+    Слов обычно на порядок больше, чем укладывается в один цикл, — курсор
+    (`FilterSettings.keyword_pull_cursor`) просто запоминает, на каком слове
+    остановились, и следующий вызов продолжает оттуда по кругу. Тендер висит
+    днями, так что полный круг за несколько циклов — не проблема.
+
+    ``max_requests`` здесь — сколько слов пробуем за один вызов (не сырых
+    HTTP-запросов: у каждого слова своя небольшая пагинация, ``per_word_requests``)."""
+    from .filtering import parse_terms
+
+    if pause is None:
+        pause = gosplan.THROTTLE_SECONDS
+    settings = FilterSettings.load()
+    if days is None:
+        days = settings.window_days
+    if min_price is None:
+        min_price = settings.min_price
+    if regions is None:
+        regions = settings.regions
+
+    seen_words: set[str] = set()
+    words: list[str] = []
+    for entry in parse_terms(settings.include_words):
+        word = entry[0] if entry else ""
+        if word and word not in seen_words:
+            seen_words.add(word)
+            words.append(word)
+
+    run = PullRun.objects.create(
+        started_at=timezone.now(),
+        params={"mode": "keyword", "days": days, "min_price": float(min_price or 0), "words_total": len(words)},
+    )
+    if not words:
+        run.ok = True
+        run.finished_at = timezone.now()
+        run.duration_seconds = 0.0
+        run.save()
+        return run
+
+    base = build_params(days=days, stage=1, min_price=min_price, regions=regions, law="fz44")
+    stats = {"requests": 0, "records": 0}
+
+    def _on_request(_request_no, got):
+        stats["requests"] += 1
+        stats["records"] += got
+
+    cursor = settings.keyword_pull_cursor % len(words)
+    created = updated = words_done = 0
+    try:
+        for offset in range(min(max_requests, len(words))):
+            if offset:
+                time.sleep(pause)
+            word = words[(cursor + offset) % len(words)]
+            params = {**base, "object_info": word}
+            for record in gosplan.iter_purchases(
+                params=params, law="fz44", max_requests=per_word_requests, on_request=_on_request
+            ):
+                number = (record.get("purchase_number") or "").strip()
+                if not number:
+                    continue
+                with transaction.atomic():
+                    tender, is_created = Tender.objects.update_or_create(
+                        law="fz44", purchase_number=number,
+                        defaults={**_record_to_fields(record, run.started_at, "fz44"), "source": Tender.EIS},
+                    )
+                created += int(is_created)
+                updated += int(not is_created)
+            words_done += 1
+        run.ok = True
+    except gosplan.GosplanError as exc:
+        run.error = str(exc)
+        run.ok = False
+
+    settings.keyword_pull_cursor = (cursor + words_done) % len(words)
+    settings.save(update_fields=["keyword_pull_cursor"])
+
+    run.finished_at = timezone.now()
+    run.requests_made = stats["requests"]
+    run.records_received = stats["records"]
+    run.created_count = created
+    run.updated_count = updated
+    run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
+    run.save()
+    return run
+
+
 def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, direct_timeout=15):
     """Официальный канал ЕИС первым (сеть с сервера есть), прямая ссылка — подстраховка
     на случай проблем с токеном/лимитом. Общее для просмотра, захода внутрь архива и

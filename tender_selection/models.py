@@ -30,6 +30,10 @@ class FilterSettings(models.Model):
     okpd2_codes = models.JSONField("Категории ОКПД2", default=list, blank=True)
     regions = models.JSONField("Регионы (коды)", default=list, blank=True)
     laws = models.JSONField("Источники", default=list, blank=True)
+    # Позиция в списке плюс-слов для run_keyword_pull — обход по кругу растянут
+    # на несколько циклов сбора, курсор просто запоминает, с какого слова
+    # продолжить в следующий раз.
+    keyword_pull_cursor = models.PositiveIntegerField(default=0)
 
     class Meta:
         verbose_name = "Настройки подбора"
