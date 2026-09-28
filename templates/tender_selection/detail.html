@@ -372,8 +372,16 @@
   .ts-protocol td:nth-child(3), .ts-protocol td:nth-child(4) { white-space:nowrap; }
   .ts-protocol__ours td { font-weight:700; }
   .ts-bid-form { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin:14px 0 4px; }
-  .ts-bid-form label { display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  .ts-bid-form label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--ink-2); }
   .ts-bid-form small { flex-basis:100%; color:var(--ink-3); }
+  .ts-bid-form input, .tender-outcome__manual-options input {
+    min-height:40px; box-sizing:border-box; padding:8px 12px; border:1px solid var(--field-border);
+    border-radius:10px; background:var(--field-bg); color:var(--ink); font:inherit; font-size:14px;
+  }
+  .ts-bid-form input:focus, .tender-outcome__manual-options input:focus {
+    outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring);
+  }
+  .tender-outcome__manual-options label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--ink-2); }
   .tender-auction-guide { width:min(620px,100%); margin:14px 0; border-collapse:collapse; font-size:13px; }
   .tender-auction-guide caption { margin-bottom:6px; text-align:left; color:var(--ink-2); font-weight:700; }
   .tender-auction-guide th, .tender-auction-guide td { padding:7px 10px; border-top:1px solid var(--border); text-align:left; }
