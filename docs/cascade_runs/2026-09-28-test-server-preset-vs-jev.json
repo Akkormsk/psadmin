@@ -1,0 +1,14 @@
+{
+  "note": "Прогнано на тест-сервере (test.admin.psodin.ru), боевой кэш прода не тронут. Активный конфиг теста на момент прогона приведён к тому же пресету, что на рабочей машине: gemini-3.1-flash-lite на шагах 1/2/4, gpt-5.4-mini + engine=jev на шаге 6, max_active_requirements=5, max_cost_rub=20, max_seconds=30. 'active_config' = этот пресет как есть (уже с обычным Джевом по клеткам — это и есть текущее боевое поведение). 'jev_ladder' = тот же пресет + большой Джев-триаж между шагом 5 и 6. Второй прогон почти целиком лёг из кэша первого (кэш пережил переразвёртывание) — суммарно потрачено 19.33 ₽ за оба прогона на двух позициях.",
+  "1099": {
+    "name": "Блокнот", "quantity": "288.00",
+    "active_config": {"cost_rub": 0, "elapsed_s": 6.6, "step6_pool": 0, "triage_dropped": null},
+    "jev_ladder": {"cost_rub": 0.74, "elapsed_s": 10.1, "step6_pool": 2, "triage_checked": 98, "triage_dropped": 0, "jev_prefilled_cells": 7}
+  },
+  "1100": {
+    "name": "Значок", "quantity": "173.00",
+    "active_config": {"cost_rub": 0, "elapsed_s": 2.4, "step6_pool": 0, "triage_dropped": null},
+    "jev_ladder": {"cost_rub": 0.024, "elapsed_s": 2.5, "step6_pool": 0, "triage_checked": 6, "triage_dropped": 0, "jev_prefilled_cells": 0}
+  },
+  "full_run_output": "см. вывод команды в истории сессии — итоговые top3 идентичны между active_config и jev_ladder на обеих позициях"
+}
