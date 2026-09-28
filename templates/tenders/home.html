@@ -7,14 +7,12 @@
 <form method="post" id="tender-form" class="content-stack">{% csrf_token %}<input type="hidden" name="lines_json" id="tender-lines-json"><input type="hidden" name="document_analysis_json" id="tender-document-analysis-json">
 <section class="panel"><div class="panel-header"><h2 class="panel-title">Расчёт</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span>{% if shell != "pipeline" %}<button type="button" class="button-secondary" id="new-tender">Новый расчёт</button>{% endif %}<button type="button" class="button-success" id="save-tender"{% if estimate %} hidden{% endif %}>Сохранить</button></div></div>
 <div class="tender-meta">
-{% if pipeline %}<div class="tender-meta__readonly"><strong>№ {{ form_state.tender_number }}</strong><span>{{ form_state.name }}</span></div><input type="hidden" name="tender_number" value="{{ form_state.tender_number }}"><input type="hidden" name="name" value="{{ form_state.name }}">{% else %}
+{% if pipeline %}<div class="tender-meta__readonly"><strong>{{ source_tender.title|default:source_tender.object_info|default:form_state.name }}</strong><div class="tender-meta__readonly-facts"><span>№ {{ form_state.tender_number }}</span>{% if form_state.name %}<span>{{ form_state.name }}</span>{% endif %}</div></div><input type="hidden" name="tender_number" value="{{ form_state.tender_number }}"><input type="hidden" name="name" value="{{ form_state.name }}">{% else %}
 <label>Номер тендера<input required maxlength="100" name="tender_number" value="{{ form_state.tender_number }}" placeholder="Например, 03731000123"></label>
 <label class="tender-meta__name">Название / комментарий<input required maxlength="300" name="name" value="{{ form_state.name }}" placeholder="Короткое название просчёта"></label>
 {% endif %}
 {% if request.user.is_superuser %}<label>Ответственный<select name="owner_id" data-customized="true">{% for user in users %}<option value="{{ user.pk }}" {% if form_state.owner_id == user.pk %}selected{% endif %}>{{ user.get_full_name|default:user.username }}</option>{% endfor %}</select></label>{% endif %}
 </div></section>
-
-{% if risk_summary %}<section class="panel panel--separated"><div class="panel-header"><h2 class="panel-title">Важное для расчёта</h2></div><dl class="tender-risk-summary">{% if risk_summary.execution_deadline %}<div><dt>Срок исполнения</dt><dd>{{ risk_summary.execution_deadline }}</dd></div>{% endif %}{% if risk_summary.batch_days %}<div><dt>Срок на одну заявку</dt><dd>{{ risk_summary.batch_days }} дн.</dd></div>{% endif %}{% if risk_summary.delivery_mode %}<div><dt>Условия поставки</dt><dd>{{ risk_summary.delivery_mode }}</dd></div>{% endif %}{% if risk_summary.sample_requirements %}<div><dt>Образцы/испытания</dt><dd>{{ risk_summary.sample_requirements }}</dd></div>{% endif %}{% if risk_summary.national_regime %}<div><dt>Нацрежим</dt><dd>{{ risk_summary.national_regime }}</dd></div>{% endif %}</dl></section>{% elif shell == "worklist" %}<section class="panel panel--separated"><div class="panel-header"><h2 class="panel-title">Важное для расчёта</h2></div><p class="settings-description">Оценка риска по этому тендеру ещё не проводилась.</p></section>{% endif %}
 
 <section class="panel panel--separated"><div class="panel-header"><div><h2 class="panel-title">Товары <small id="tender-progress"></small></h2><p class="settings-description tender-hint">НМЦК добавляет позиции и цены, ТЗ — подробные технические требования. Можно загрузить любой из документов отдельно.</p></div><div class="panel-actions"><button type="button" class="button-secondary" id="add-tender-line">+ Добавить товар</button></div></div><div class="tender-document-strip"><button type="button" id="import-tender-lines"><span>Excel вручную</span><strong>Без расхода токенов</strong></button><button type="button" id="ai-import-tender-lines"><span>Загрузить документы</span><strong id="tender-nmck-document-status">НМЦК и/или ТЗ</strong></button></div><div class="tender-lines" id="tender-lines"></div><div class="tender-table-totals" id="tender-table-totals"></div></section>
 
@@ -38,10 +36,12 @@
 </div>
 {% endif %}
 
-{% if not source_tender and saved_estimates %}
+{% if risk_summary %}<section class="panel panel--separated tender-risk-panel"><div class="panel-header"><h2 class="panel-title">Важное для расчёта</h2></div><dl class="tender-risk-summary"><div><dt>Подача заявки</dt><dd>{% if risk_summary.submission_deadline %}{{ risk_summary.submission_deadline|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% else %}не указана{% endif %}</dd></div>{% if risk_summary.execution %}<div><dt>Исполнение</dt><dd>{{ risk_summary.execution }}</dd></div>{% endif %}{% if risk_summary.delivery_mode %}<div><dt>Поставка</dt><dd>{{ risk_summary.delivery_mode }}</dd></div>{% endif %}{% if risk_summary.sample_requirements %}<div><dt>Образцы</dt><dd>{{ risk_summary.sample_requirements }}</dd></div>{% endif %}{% if risk_summary.national_regime %}<div><dt>Нацрежим</dt><dd>{{ risk_summary.national_regime }}</dd></div>{% endif %}{% if not risk_summary.execution and not risk_summary.delivery_mode and not risk_summary.sample_requirements and not risk_summary.national_regime %}<div><dt>Оценка риска</dt><dd>ещё не проводилась</dd></div>{% endif %}</dl></section>{% endif %}
+
+{% if shell != "pipeline" and saved_estimates %}
 <section class="panel panel--separated">
   <div class="panel-header">
-    <h2 class="panel-title">Сохранённые расчёты</h2>
+    <h2 class="panel-title">Актуальные расчёты</h2>
     <div class="panel-actions">
       <nav class="ts-seg" aria-label="Фильтр расчётов">
         <a class="ts-seg__item{% if kind_filter == "" %} is-active{% endif %}" href="?kind=">Все</a>

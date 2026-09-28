@@ -1289,15 +1289,23 @@ def _saved_estimates_for(request):
 
 
 def _risk_summary_for(tender):
-    """Сжатая выжимка из оценки риска тендера — для менеджера, у которого нет
-    доступа к самой карточке тендера. ``None``, если оценки ещё не было."""
-    if not tender or not tender.risk_assessment:
+    """Сжатая выжимка для менеджера, у которого нет доступа к самой карточке
+    тендера: срок подачи заявки — всегда (это базовый факт тендера, не часть
+    оценки), остальное — из оценки риска, если она уже была. ``None`` только
+    если тендер не найден (расчёт остался без своей записи)."""
+    if not tender:
         return None
-    risk = tender.risk_assessment
+    risk = tender.risk_assessment or {}
     facts = risk.get("risk_facts") or {}
+    execution = (risk.get("execution_deadline") or {}).get("date")
+    batch_days = facts.get("batch_days")
+    if execution and batch_days:
+        execution = f"{execution} (по одной заявке — {batch_days} дн.)"
+    elif not execution and batch_days:
+        execution = f"{batch_days} дн. на одну заявку"
     return {
-        "execution_deadline": (risk.get("execution_deadline") or {}).get("date"),
-        "batch_days": facts.get("batch_days"),
+        "submission_deadline": tender.collecting_finished_at,
+        "execution": execution,
         "delivery_mode": risk.get("delivery_mode"),
         "sample_requirements": risk.get("sample_requirements"),
         "national_regime": risk.get("national_regime"),
@@ -1355,7 +1363,7 @@ def home(request, pk=None, pipeline=False, minimal=False):
     if request.user.is_superuser:
         knowledge_sources = list(TenderKnowledgeSource.objects.filter(is_active=True).values("id", "title", "supplier_name", "source_type", "url")[:100])
     source_tender = estimate.tender if pipeline and estimate else None
-    saved_estimates, kind_filter, worklist_filter = _saved_estimates_for(request) if not pipeline else ([], "tender", "active")
+    saved_estimates, kind_filter, worklist_filter = _saved_estimates_for(request) if shell != "pipeline" else ([], "tender", "active")
 
     risk_summary = _risk_summary_for(source_tender) if shell == "worklist" else None
     return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})

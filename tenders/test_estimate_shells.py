@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from tender_selection.models import Tender
 
@@ -17,7 +20,8 @@ class EstimateShellTests(TestCase):
         self.client.force_login(self.user)
 
     def _tender(self, **fields):
-        return Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер", **fields)
+        fields.setdefault("purchase_number", "1")
+        return Tender.objects.create(law="fz44", object_info="Тендер", **fields)
 
     def test_pipeline_shell_hides_rename_new_calc_and_risk_block(self):
         tender = self._tender(risk_assessment={"delivery_mode": "разовая поставка"})
@@ -92,3 +96,46 @@ class EstimateShellTests(TestCase):
         response = self.client.get(reverse("tender_home"), {"kind": "tender", "worklist": ""})
 
         self.assertContains(response, reverse("tender_worklist_estimate", args=[estimate.pk]))
+
+    def test_header_shows_title_customer_and_number(self):
+        """Название задаёт тендер, «имя» расчёта по договорённости хранит
+        заказчика (см. push_to_estimate) — обе шапки-обёртки показывают все три."""
+        tender = self._tender(title="Печать открыток")
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="0139", name="ДКС Кузбасса")
+
+        for shell_name in ("tender_pipeline_estimate", "tender_worklist_estimate"):
+            response = self.client.get(reverse(shell_name, args=[estimate.pk]))
+            self.assertContains(response, "Печать открыток")
+            self.assertContains(response, "ДКС Кузбасса")
+            self.assertContains(response, "0139")
+
+    def test_risk_block_shows_submission_deadline_even_without_assessment(self):
+        deadline = timezone.now() + timedelta(days=5)
+        tender = self._tender(collecting_finished_at=deadline)
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, "Подача заявки")
+        self.assertContains(response, deadline.strftime("%d.%m.%Y"))
+
+    def test_worklist_shell_still_shows_the_saved_list_below(self):
+        """«Не плодить ссылки» — тот же список видим и когда открыт конкретный
+        расчёт, просто форма сверху уже заполнена."""
+        tender = self._tender()
+        mine = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+        other_tender = self._tender(purchase_number="2")
+        other = TenderEstimate.objects.create(owner=self.user, tender=other_tender, tender_number="2", name="Другое")
+
+        response = self.client.get(reverse("tender_worklist_estimate", args=[mine.pk]))
+
+        self.assertContains(response, "Актуальные расчёты")
+        self.assertContains(response, other.name)
+
+    def test_pipeline_shell_never_shows_the_saved_list(self):
+        tender = self._tender()
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_pipeline_estimate", args=[estimate.pk]))
+
+        self.assertNotContains(response, "Актуальные расчёты")
