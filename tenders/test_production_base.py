@@ -1,3 +1,6 @@
+import json
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import TestCase
@@ -113,6 +116,68 @@ class ProposalTests(TestCase):
             type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY, payload={}, summary="Подтвердить связь с FSPrint", created_by=self.user, batch_id=batch_id,
         )
         self.assertEqual(Proposal.objects.filter(batch_id=batch_id).count(), 3)
+
+
+class CounterpartyDraftFlowTests(TestCase):
+    """Полный путь добавления контрагента: текст → черновик (сохраняет
+    только сырой источник) → подтверждение (создаёт Counterparty и связи
+    через Proposal, одним batch)."""
+
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser(username="admin", password="password")
+        self.manager = get_user_model().objects.create_user(username="manager", password="password")
+        self.stage = ProcessDefinition.objects.create(
+            name="Универсальная типография (драфт-тест)", role=ProcessDefinition.ROLE_PRODUCTION, performs_production=True,
+        )
+        self.client.force_login(self.admin)
+
+    def test_ordinary_manager_cannot_draft(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(reverse("tender_production_counterparty_draft"), {"text": "FSPrint печатает пакеты"})
+        self.assertEqual(response.status_code, 403)
+
+    @patch("tenders.gateway_budget.preflight")
+    @patch("tenders.services._ai_gateway_json")
+    def test_draft_saves_raw_source_but_not_the_counterparty_yet(self, mock_ai, mock_preflight):
+        mock_ai.return_value = (
+            {"name": "FSPrint", "notes": "Печатает пакеты и папки под ключ.", "suggested_stage_names": [self.stage.name]},
+            {},
+        )
+        response = self.client.post(reverse("tender_production_counterparty_draft"), {"text": "FSPrint печатает пакеты и папки под ключ, минимальный тираж 100 шт."})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["name"], "FSPrint")
+        self.assertEqual(data["suggested_stage_names"], [self.stage.name])
+        self.assertFalse(Counterparty.objects.exists())
+        source = TenderKnowledgeSource.objects.get(pk=data["source_id"])
+        self.assertIsNone(source.counterparty)
+        self.assertEqual(source.source_type, "text")
+
+    def test_confirm_creates_counterparty_and_links_selected_stages(self):
+        source = TenderKnowledgeSource.objects.create(title="FSPrint", source_type="text", content_summary="...", created_by=self.admin)
+        payload = {"name": "FSPrint", "notes": "Печатает под ключ.", "stage_ids": [self.stage.pk], "source_id": source.pk}
+        response = self.client.post(reverse("tender_production_counterparty_confirm"), {"payload": json.dumps(payload)})
+        self.assertEqual(response.status_code, 200)
+        counterparty = Counterparty.objects.get(name="FSPrint")
+        self.assertEqual(response.json()["stage_names"], [self.stage.name])
+        self.assertTrue(StageCounterpartyLink.objects.filter(stage=self.stage, counterparty=counterparty).exists())
+        source.refresh_from_db()
+        self.assertEqual(source.counterparty, counterparty)
+        self.assertEqual(Proposal.objects.filter(status=Proposal.STATUS_ACCEPTED).count(), 2)
+
+    def test_confirm_without_stages_still_creates_the_counterparty(self):
+        """Пользователь прямо просил: контрагента без источника цены/связей
+        заводить можно — калькулятор и связи придут отдельным шагом."""
+        payload = {"name": "FSPrint", "notes": "", "stage_ids": []}
+        response = self.client.post(reverse("tender_production_counterparty_confirm"), {"payload": json.dumps(payload)})
+        self.assertEqual(response.status_code, 200)
+        counterparty = Counterparty.objects.get(name="FSPrint")
+        self.assertEqual(list(counterparty.stage_links.all()), [])
+
+    def test_confirm_rejects_empty_name(self):
+        response = self.client.post(reverse("tender_production_counterparty_confirm"), {"payload": json.dumps({"name": "  "})})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Counterparty.objects.exists())
 
 
 class ProductionBaseDataViewTests(TestCase):

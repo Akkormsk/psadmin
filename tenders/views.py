@@ -26,12 +26,13 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .proposals import apply_proposal
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
-from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, recognize_tender_items, refresh_training_example_embedding
+from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, recognize_tender_items, refresh_training_example_embedding
 
 
 logger = logging.getLogger(__name__)
@@ -802,6 +803,88 @@ def production_base_data(request):
             "price_sources": sorted({link.get_price_source_type_display() for link in links}),
         })
     return JsonResponse({"stages": stages, "counterparties": counterparties})
+
+
+@login_required
+@require_POST
+def production_counterparty_draft(request):
+    """Первый шаг добавления контрагента (§13 промпта): текст, ссылка или
+    скриншот → черновик название+сводка+предложенные этапы. Сырой источник
+    сохраняется сразу (это только улика, не решение — как и у существующих
+    источников расчёта), а сам Counterparty — только на подтверждении."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Добавлять контрагентов может только администратор."}, status=403)
+    text = request.POST.get("text", "")
+    url = request.POST.get("url", "")
+    upload = request.FILES.get("file")
+    if upload is not None:
+        if Path(upload.name).suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+            return JsonResponse({"error": "Пока принимаем скриншот (PNG/JPG), текст или ссылку — без PDF/Excel."}, status=400)
+        if upload.size > 20 * 1024 * 1024:
+            return JsonResponse({"error": "Файл больше 20 МБ."}, status=400)
+    try:
+        source = extract_calculation_source(source_text=text, source_url=url, upload=upload)
+        active_stages = list(ProcessDefinition.objects.filter(is_active=True).values("id", "name"))
+        draft = parse_counterparty_draft(source["content"], [stage["name"] for stage in active_stages])
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    raw_file, raw_file_name, raw_file_content_type = None, "", ""
+    if upload is not None:
+        upload.seek(0)
+        raw_file, raw_file_name, raw_file_content_type = upload.read(), upload.name[:255], (upload.content_type or "")[:100]
+    knowledge_source = TenderKnowledgeSource.objects.create(
+        title=draft["name"][:300], source_type=source["source_type"], url=source["url"],
+        content_summary=source["content"][:4000], structured_data=source["structured_data"],
+        raw_file=raw_file, raw_file_name=raw_file_name, raw_file_content_type=raw_file_content_type,
+        created_by=request.user,
+    )
+    return JsonResponse({
+        "source_id": knowledge_source.pk, "name": draft["name"], "notes": draft["notes"],
+        "suggested_stage_names": draft["suggested_stage_names"], "active_stages": active_stages,
+    })
+
+
+@login_required
+@require_POST
+@transaction.atomic
+def production_counterparty_confirm(request):
+    """Второй шаг: администратор проверил/поправил черновик и подтвердил —
+    только теперь создаётся Counterparty и связи с выбранными этапами, оба
+    через Proposal (см. tenders/proposals.py), одним batch на карточку."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Добавлять контрагентов может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        name = str(payload.get("name", "")).strip()[:200]
+        if not name:
+            raise ValueError
+        notes = str(payload.get("notes", ""))[:2000]
+        stage_ids = [int(value) for value in payload.get("stage_ids", []) if str(value).isdigit()]
+        source_id = payload.get("source_id")
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return JsonResponse({"error": "Не удалось прочитать форму контрагента."}, status=400)
+
+    counterparty_proposal = Proposal.objects.create(
+        type=Proposal.TYPE_CREATE_COUNTERPARTY, payload={"name": name, "notes": notes},
+        summary=f"Новый контрагент «{name}»", created_by=request.user,
+    )
+    apply_proposal(counterparty_proposal, request.user)
+    counterparty = Counterparty.objects.get(name=name)
+    stages = {stage.pk: stage for stage in ProcessDefinition.objects.filter(pk__in=stage_ids)}
+    for stage_id in stage_ids:
+        stage = stages.get(stage_id)
+        if stage is None:
+            continue
+        link_proposal = Proposal.objects.create(
+            type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY, batch_id=counterparty_proposal.batch_id,
+            payload={"stage_id": stage.pk, "counterparty_id": counterparty.pk},
+            summary=f"Связать «{stage.name}» и «{name}»", created_by=request.user,
+        )
+        apply_proposal(link_proposal, request.user)
+    if source_id:
+        TenderKnowledgeSource.objects.filter(pk=source_id, counterparty__isnull=True).update(counterparty=counterparty)
+    linked_stage_names = list(counterparty.stage_links.select_related("stage").values_list("stage__name", flat=True))
+    return JsonResponse({"id": counterparty.pk, "name": counterparty.name, "stage_names": linked_stage_names})
 
 
 @login_required
