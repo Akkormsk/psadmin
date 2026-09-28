@@ -1,3 +1,4 @@
+import copy
 import json
 import time
 
@@ -5,12 +6,25 @@ from django.core.management.base import BaseCommand, CommandError
 
 from tenders.cascade import Cascade
 from tenders.gateway_budget import spend_rub
-from tenders.models import TenderLine
+from tenders.models import CascadeConfigVersion, TenderLine
 
-CONFIGS = {
-    "baseline": {},
+# Накладываются НА активный CascadeConfigVersion, не вместо него — иначе
+# «baseline» сравнивается с гипотетическим прогоном на дефолтных (обычно
+# более дорогих) моделях, которого в проде никогда не было. Ровно так
+# получилось 28.09.2026 (см. docs/cascade_runs/README.md, «Главная
+# оговорка») — исправлено здесь, чтобы не повторилось.
+OVERLAYS = {
+    "active_config": {},
     "jev_ladder": {"6": {"engine": "jev_agent"}, "triage": {"engine": "jev", "no_below": 0.2}},
 }
+
+
+def _merged_steps(overlay):
+    active = CascadeConfigVersion.objects.filter(is_active=True).first()
+    steps = copy.deepcopy(active.settings.get("steps", {})) if active and isinstance(active.settings, dict) else {}
+    for step, patch in overlay.items():
+        steps.setdefault(step, {}).update(patch)
+    return steps
 
 
 class Command(BaseCommand):
@@ -26,12 +40,19 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("line_ids", nargs="+", type=int)
         parser.add_argument("--out", default="cascade_compare_result.json")
-        parser.add_argument("--configs", nargs="+", choices=list(CONFIGS), default=list(CONFIGS))
+        parser.add_argument("--configs", nargs="+", choices=list(OVERLAYS), default=list(OVERLAYS))
         parser.add_argument("--max-cost-rub", type=float, default=0, help="Потолок расхода на один прогон (0 — без потолка).")
         parser.add_argument("--stop-if-balance-below", type=float, default=0, help="Прервать серию, если остаток на счёте упал ниже этого значения.")
 
     def handle(self, *args, **options):
         from tenders.gateway_budget import account_balance
+
+        max_cost_rub = options["max_cost_rub"]
+        if not max_cost_rub:
+            active = CascadeConfigVersion.objects.filter(is_active=True).first()
+            max_cost_rub = float((active.settings if active and isinstance(active.settings, dict) else {}).get("max_cost_rub", 0) or 0)
+            if max_cost_rub:
+                self.stdout.write(f"Потолок расхода не задан явно — беру из активного конфига: {max_cost_rub:g} ₽/прогон.")
 
         output = {}
         for line_id in options["line_ids"]:
@@ -53,7 +74,7 @@ class Command(BaseCommand):
                             json.dump(output, handle, ensure_ascii=False, indent=2)
                         return
                 self.stdout.write(f"{line_id} {line.name} · {config_name}…")
-                output[str(line_id)]["runs"][config_name] = self._run_one(payload, CONFIGS[config_name], options["max_cost_rub"])
+                output[str(line_id)]["runs"][config_name] = self._run_one(payload, _merged_steps(OVERLAYS[config_name]), max_cost_rub)
 
         with open(options["out"], "w", encoding="utf-8") as handle:
             json.dump(output, handle, ensure_ascii=False, indent=2)
