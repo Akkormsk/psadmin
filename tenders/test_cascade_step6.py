@@ -97,6 +97,27 @@ class CascadeBoundedTests(TestCase):
         self.assertEqual(self.cascade.diagnostics["step6"]["cached"], 5)
         self.assertEqual(self.cascade.diagnostics["step6"]["graded"], 0)
 
+    def test_agent_cache_is_not_reused_by_the_jev_agent_ladder(self):
+        # Баг, найденный живым прогоном 2026-09-28 (cascade_compare_result.json):
+        # без отдельного тега в ключе кэша второй прогон с engine="jev_agent"
+        # молча читал вердикты, посчитанные обычным агентом, и лесенка ни разу
+        # реально не отрабатывала на закэшированных карточках.
+        grid = [{"id": "*", "cells": {"1": "y", "2": "y"}}]
+        self.grade(self.cards(3), grid)  # обычный агент — кладёт кэш под свой ключ
+
+        cards = self.cards(3)
+        _checked, rows = self.cascade._checked_rows()
+        for card in cards:
+            self.cascade._init_unknown(card, rows)
+        self.cascade.step_settings = {"6": {"engine": "jev_agent", "cache": "yes"}}
+
+        with patch("tenders.jev.decide_matrix", return_value=({}, {})) as mock_jev, \
+             patch("tenders.services._ai_gateway_json") as mock_agent:
+            mock_agent.return_value = ({"grid": [{"c": 1, "r": 1, "v": "y"}, {"c": 1, "r": 2, "v": "y"}]}, {})
+            self.cascade.step_6_agent_matrix(cards)
+
+        mock_jev.assert_called()  # не взято из кэша обычного агента
+
     def test_incomplete_legacy_cache_is_retried(self):
         from .cascade import _cache_put
 
@@ -145,6 +166,47 @@ class CascadeBoundedTests(TestCase):
         self.assertEqual(cards[1]["matrix"][1]["reason"], "Jev: недостаточная уверенность")
         self.assertEqual(self.cascade.usage_by_model["jev-1.13.0"]["prompt_tokens"], 12)
 
+    def test_jev_agent_ladder_only_sends_the_agent_what_jev_was_unsure_about(self):
+        # Строка 1 — Джев уверен («y»), строка 2 — Джев не уверен («m»,
+        # вероятность около середины). Ожидание: строка 1 закрывается
+        # Джевом и остаётся такой, даже если агент (мок) тоже прислал по
+        # ней ответ — агент реально нужен только для строки 2.
+        cards = self.cards(1)
+        _checked, rows = self.cascade._checked_rows()
+        self.cascade._init_unknown(cards[0], rows)
+        self.cascade.step_settings = {"6": {"engine": "jev_agent", "cache": "no"}}
+
+        def jev(state, questions, **_kwargs):
+            return {"c1r1": {"noul": 0.95}, "c1r2": {"noul": 0.5}}, {"prompt_tokens": 4, "completion_tokens": 1}
+
+        gateway = _Gateway(grid=[{"id": "*", "cells": {"1": "n", "2": "y"}}])
+        with patch("tenders.jev.decide_matrix", side_effect=jev), patch("tenders.services._ai_gateway_json", side_effect=gateway):
+            self.cascade.step_6_agent_matrix(cards)
+
+        self.assertEqual(cards[0]["matrix"][0]["source"], "jev")
+        self.assertEqual(cards[0]["matrix"][0]["verdict"], "yes")  # Джев сказал "y" — агентовский "n" не применился
+        self.assertEqual(cards[0]["matrix"][1]["source"], "agent")
+        self.assertEqual(cards[0]["matrix"][1]["verdict"], "yes")
+        self.assertEqual(self.cascade.diagnostics["step6"]["jev_prefilled_cells"], 1)
+        self.assertEqual(gateway.calls["step6"], 1)
+
+    def test_jev_agent_ladder_skips_the_agent_entirely_when_jev_is_sure_about_everything(self):
+        cards = self.cards(1)
+        _checked, rows = self.cascade._checked_rows()
+        self.cascade._init_unknown(cards[0], rows)
+        self.cascade.step_settings = {"6": {"engine": "jev_agent", "cache": "no"}}
+
+        def jev(state, questions, **_kwargs):
+            return {"c1r1": {"noul": 0.9}, "c1r2": {"noul": 0.1}}, {"prompt_tokens": 4, "completion_tokens": 1}
+
+        gateway = _Gateway(grid=[])
+        with patch("tenders.jev.decide_matrix", side_effect=jev), patch("tenders.services._ai_gateway_json", side_effect=gateway):
+            self.cascade.step_6_agent_matrix(cards)
+
+        self.assertTrue(all(cell["source"] == "jev" for cell in cards[0]["matrix"]))
+        self.assertEqual(cards[0]["matrix_status"], "complete")
+        self.assertEqual(gateway.calls["step6"], 0)  # агент не вызывается вовсе — Джев закрыл все клетки сам
+
     def test_jev_failure_leaves_cards_ungraded_without_caching(self):
         cards = self.cards(1)
         _checked, rows = self.cascade._checked_rows()
@@ -157,6 +219,75 @@ class CascadeBoundedTests(TestCase):
         self.assertEqual(cards[0]["matrix_status"], "pending")
         self.assertTrue(self.cascade.error)
         self.assertFalse(CascadeCache.objects.filter(kind="verdict").exists())
+
+
+class CascadeJevTriageTests(TestCase):
+    """Большой Джев (`_jev_triage`) — отдельный переключатель между шагом 5
+    и шагом 6, не часть настроек шага 6. Смотри вопрос-на-карточку, не
+    вопрос-на-клетку: он никогда не проставляет вердикты по параметрам,
+    только решает, идёт ли карточка в шаг 6 вообще."""
+
+    def setUp(self):
+        self.cascade = Cascade(_line())
+        self.cascade._tz_hash = "triage-test"
+        self.cascade.tz = [Criterion(label="Свойство А", raw_value="да", concept="Свойство А", operator="~", value="да")]
+
+    def card(self, card_id="A"):
+        card = {"id": card_id, "name": f"Товар {card_id}", "price": "100", "relevance": 0}
+        _checked, rows = self.cascade._checked_rows()
+        self.cascade._init_unknown(card, rows)
+        return card
+
+    def test_off_by_default_does_not_call_jev_at_all(self):
+        cards = [self.card()]
+        with patch("tenders.jev.decide_matrix") as mock_jev:
+            result = self.cascade._jev_triage(cards)
+        mock_jev.assert_not_called()
+        self.assertIs(result, cards)
+        self.assertFalse(cards[0].get("_removed"))
+
+    def test_confident_no_removes_the_card_before_step_6(self):
+        cards = [self.card("A"), self.card("B")]
+        with patch("tenders.jev.decide_matrix", return_value=({"c1": {"noul": 0.05}, "c2": {"noul": 0.9}}, {})):
+            self.cascade.step_settings = {"triage": {"engine": "jev"}}
+            self.cascade._jev_triage(cards)
+        self.assertTrue(cards[0]["_removed"])
+        self.assertIn("Джев-триаж", cards[0]["_removed_reason"])
+        self.assertFalse(cards[1].get("_removed"))
+        self.assertEqual(self.cascade.diagnostics["jev_triage"], {"checked": 2, "dropped": 1})
+
+    def test_confident_yes_and_unsure_never_get_a_fabricated_verdict(self):
+        # Ключевой инвариант (см. docs/assistant_protocol.md §10.4): триаж
+        # никогда не заполняет матрицу сам, даже при полной уверенности "да".
+        cards = [self.card("A"), self.card("B")]
+        with patch("tenders.jev.decide_matrix", return_value=({"c1": {"noul": 0.95}, "c2": {"noul": 0.5}}, {})):
+            self.cascade.step_settings = {"triage": {"engine": "jev"}}
+            self.cascade._jev_triage(cards)
+        for card in cards:
+            self.assertFalse(card.get("_removed"))
+            self.assertTrue(all(cell["source"] == "not_checked" for cell in card["matrix"]))
+
+    def test_dropped_card_is_skipped_by_step_6_entirely(self):
+        cards = [self.card("A")]
+        self.cascade.step_settings = {"triage": {"engine": "jev"}, "6": {"cache": "no"}}
+        with patch("tenders.jev.decide_matrix", return_value=({"c1": {"noul": 0.01}}, {})):
+            self.cascade._jev_triage(cards)
+        gateway = _Gateway(grid=[{"id": "*", "cells": {"1": "y"}}])
+        with patch("tenders.services._ai_gateway_json", side_effect=gateway):
+            self.cascade.step_6_agent_matrix(cards)
+        self.assertEqual(gateway.calls["step6"], 0)
+        self.assertTrue(cards[0]["_removed"])
+
+    def test_already_disqualified_or_complete_cards_are_not_asked_about(self):
+        settled_by_code = self.card("A")
+        _checked, rows = self.cascade._checked_rows()
+        self.cascade._apply_cell(settled_by_code, rows, 1, "n", "код уже решил", "code")
+        self.cascade._recompute_card_summary(settled_by_code)
+        cards = [settled_by_code]
+        with patch("tenders.jev.decide_matrix") as mock_jev:
+            self.cascade.step_settings = {"triage": {"engine": "jev"}}
+            self.cascade._jev_triage(cards)
+        mock_jev.assert_not_called()
 
 
 class CascadeBoundedIntegrationTests(TestCase):

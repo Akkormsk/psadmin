@@ -579,6 +579,7 @@ class Cascade:
         pool = self.step_3_search_by_name(phrases)
         pool = self.step_4_name_filter(pool)
         cards = self.step_5_hard_gates_and_collapse(pool)
+        cards = self._jev_triage(cards)
         self._ping("shortlist")
         graded = self.step_6_agent_matrix(cards)
         ranked = self.step_7_collapse_and_sort(graded)
@@ -1199,6 +1200,89 @@ class Cascade:
             "colors": [_text(v, 120) for v in (face.colors if isinstance(face.colors, list) else []) if _text(v, 120)],
         }
 
+    # -- большой Джев: необязательный триаж между шагом 5 и шагом 6 ---- #
+    def _jev_triage(self, cards) -> list[dict]:
+        """Не часть восьмишаговой цепочки (см. `tenders.test_cascade_contract`
+        про фиксированный порядок `step_N_*`) — отдельный переключатель,
+        живёт вне настроек шага 6 (`self.step_settings["triage"]`), выключен
+        по умолчанию. Задача одна: по каждой карточке, которую код после
+        шага 5 ни подтвердил, ни отклонил, задать ОДИН обобщённый вопрос
+        («в целом, по всем пунктам сразу — похожа на нужный товар?»), не по
+        параметрам — это работа малого Джева на шаге 6.
+
+        Уверенно «нет» — карточка помечается `_removed` и в шаг 6 не попадает
+        вовсе (экономия на агенте и на малом Джеве). Уверенно «да» и «не
+        уверен» — идут в шаг 6 как обычно, без изменений: большой Джев
+        никогда не подставляет и не имитирует вердикт по параметрам —
+        непроверенная карточка не должна выглядеть подтверждённой (см.
+        docs/assistant_protocol.md §10.4, о том, почему это уже один раз
+        было настоящей ошибкой)."""
+        settings = self.step_settings.get("triage", {})
+        if settings.get("engine") != "jev" or not cards:
+            return cards
+        from .jev import decide_matrix
+
+        _checked, rows = self._checked_rows()
+        candidates = [
+            card for card in cards
+            if not card.get("_removed") and card.get("matrix_status") != "complete" and card.get("mismatch_count", 0) == 0
+        ]
+        if not candidates or not rows:
+            return cards
+        no_threshold = float(settings.get("no_below", 0.2))
+        batch_size = int(settings.get("batch_size", 6))
+        batches = [candidates[i:i + batch_size] for i in range(0, len(candidates), batch_size)]
+
+        def run_batch(batch):
+            questions, local = {}, {}
+            for pos, card in enumerate(batch, 1):
+                local[pos] = str(card["id"])
+                questions[f"c{pos}"] = {
+                    "type": "noul",
+                    "instructions": (
+                        f"С учётом ВСЕХ пунктов ТЗ сразу — похожа ли карточка {pos} на нужный товар? "
+                        "Да — только если нет явных противоречий. Нет — только при явном несоответствии "
+                        "(не тот тип товара, явно не тот материал/цвет/размер и т.п.). При недостатке "
+                        "данных или частичном совпадении оставь вероятность около середины."
+                    ),
+                }
+            state = (
+                f"Позиция тендера: {_cell(self.line.get('name'))[:200]}\n"
+                "Оцени каждую карточку целиком, по всем пунктам ТЗ сразу, не по отдельности.\n\n"
+                + "\n\n".join(f"КАРТОЧКА {pos}\n{self._card_brief(card)}" for pos, card in enumerate(batch, 1))
+            )
+            try:
+                answers, usage = decide_matrix(state, questions, timeout=self._remaining_timeout(45))
+            except Exception:
+                logger.exception("Cascade Jev triage batch failed")
+                return {}, {}, local
+            return answers, usage, local
+
+        results = (
+            [run_batch(batches[0])] if len(batches) == 1
+            else list(ThreadPoolExecutor(max_workers=min(8, len(batches))).map(run_batch, batches))
+        )
+        by_id = {str(card["id"]): card for card in cards}
+        dropped = 0
+        for answers, usage, local in results:
+            if usage:
+                self._add_usage(usage, "jev-1.13.0")
+            for key, answer in answers.items():
+                match = re.fullmatch(r"c(\d+)", _cell(key))
+                if not match or not isinstance(answer, dict):
+                    continue
+                try:
+                    probability = float(answer.get("noul"))
+                except (TypeError, ValueError):
+                    continue
+                card = by_id.get(local.get(int(match.group(1))))
+                if card is not None and probability <= no_threshold:
+                    card["_removed"] = True
+                    card["_removed_reason"] = f"Джев-триаж: явно не подходит ({probability:.0%})"
+                    dropped += 1
+        self.diagnostics["jev_triage"] = {"checked": len(candidates), "dropped": dropped}
+        return cards
+
     # -- шаг 6: умный агент — только по строкам, не закрытым шагом 5 --- #
     def step_6_agent_matrix(self, cards) -> list[dict]:
         """Шаг 5 уже решил кодом то, что мог; сюда попадают только строки с
@@ -1220,6 +1304,11 @@ class Cascade:
         todo, settled = [], []
         disqualified_skipped = 0
         for card in cards:
+            if card.get("_removed"):
+                # Уже отсеяна большим Джевом (_jev_triage, между шагом 5 и
+                # шагом 6) — ни агент, ни малый Джев на неё не тратятся.
+                settled.append(card)
+                continue
             if rows and card.get("matrix_status") != "complete" and use_cache:
                 cached = _cache_get("verdict", self._verdict_cache_key(card["id"]))
                 raw_grid = cached.get("grid", {}) if isinstance(cached, dict) else {}
@@ -1251,6 +1340,11 @@ class Cascade:
         parts = []
         if settings.get("engine") == "jev":
             parts.append("jev-1.13.0")
+        elif settings.get("engine") == "jev_agent":
+            # Иначе кэш от обычного агента (или наоборот) читался бы как
+            # будто это уже посчитано лесенкой — конкретно это и обесценило
+            # первое живое сравнение (see cascade_compare_result.json).
+            parts.append("jev-agent-ladder")
         if model != _AGENT_MODEL:
             parts.append(model)
         if self.step_settings.get("5", {}).get("numeric_prefill", "yes") == "no":
@@ -1270,12 +1364,16 @@ class Cascade:
     def _apply_cell(card, rows, row_idx, verdict, reason, source) -> None:
         """Одна клетка. Код никогда не переписывает уже решённую им клетку —
         ни агент, ни кэш её не перебивают (см. docs, «последнее слово за
-        кодом»). Итоги (`matches`/счётчики/`matrix_status`) не пересчитывает —
-        это делает `_recompute_card_summary` один раз после пачки правок."""
+        кодом»). То же для клетки, которую уже уверенно закрыл малый Джев
+        (лесенка «Джев → агент», engine="jev_agent" на шаге 6) — агент видит
+        её в подсказке «уже проверено» и не должен её касаться, но если всё
+        же вернёт клетку — не перезаписываем. Итоги (`matches`/счётчики/
+        `matrix_status`) не пересчитывает — это делает `_recompute_card_summary`
+        один раз после пачки правок."""
         if not (1 <= row_idx <= len(rows)):
             return
         entry = card["matrix"][row_idx - 1]
-        if entry["source"] == "code":
+        if entry["source"] in ("code", "jev"):
             return
         entry["verdict"] = {"y": "yes", "n": "no", "m": "unknown"}.get(verdict, "not_checked")
         entry["reason"] = reason or ("Нет данных в карточке" if verdict == "m" else "")
@@ -1328,11 +1426,34 @@ class Cascade:
         }
         self.diagnostics["step6"] = diagnostics
 
+        engine = settings.get("engine")
+        jev_prefilled = 0
+        if engine == "jev_agent" and todo:
+            # Малый Джев (лесенка): сначала дёшево через Jev — уверенные
+            # клетки закрывает сам (source="jev", агент их не увидит: см.
+            # _prefilled_hint/_apply_cell); неуверенные ("m") оставляет
+            # not_checked — их по-настоящему разбирает агент следующим
+            # проходом. Экономия там, где Jev и так уверен, а не там, где
+            # действительно нужен человеческий уровень понимания.
+            jev_grid = self._grade_grid_jev(todo, rows, batch_size=3)
+            for card in todo:
+                cid = str(card["id"])
+                for row_idx, (verdict, reason) in jev_grid.get(cid, {}).items():
+                    if verdict in ("y", "n"):
+                        self._apply_cell(card, rows, row_idx, verdict, reason, "jev")
+                        jev_prefilled += 1
+        diagnostics["jev_prefilled_cells"] = jev_prefilled
+
+        # В лесенке «Джев → агент» карточка могла оказаться полностью закрыта
+        # уже Джевом — тогда агенту её показывать незачем (для остальных
+        # режимов это no-op: в `todo` и так только карточки с открытой
+        # клеткой, см. docstring выше).
+        still_open = [card for card in todo if any(entry["source"] == "not_checked" for entry in card["matrix"])]
         grids = (
             self._grade_grid_jev(todo, rows, batch_size=3)
-            if todo and settings.get("engine") == "jev"
-            else self._grade_grid(todo, rows, model=model, batch_size=3)
-            if todo else {}
+            if todo and engine == "jev"
+            else self._grade_grid(still_open, rows, model=model, batch_size=3)
+            if still_open else {}
         )
         for card in todo:
             cid = str(card["id"])

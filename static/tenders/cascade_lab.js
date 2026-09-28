@@ -367,6 +367,8 @@
         "6": {engine: value("step_6_engine"), model: value("step_6_model"), cache: value("step_6_cache")},
         "7": {matrix_order: value("step_7_matrix_order"), price_order: value("step_7_price_order")},
         "8": {live_prices: value("step_8_live_prices")},
+        // Триаж между шагом 5 и 6 — не настройка шага 6, отдельный переключатель.
+        triage: {engine: value("triage_engine"), no_below: Number(value("triage_no_below") || 0.2)},
       },
       top: integer("step_8_top", 10),
       max_cost_rub: Number(value("max_cost_rub") || 10),
@@ -384,6 +386,7 @@
       step_5_color_filter: ["5", "color_filter"], step_5_stock_policy: ["5", "stock_policy"], step_5_tolerance_percent: ["5", "tolerance_percent"], step_5_numeric_prefill: ["5", "numeric_prefill"],
       step_6_engine: ["6", "engine"], step_6_model: ["6", "model"], step_6_cache: ["6", "cache"],
       step_7_matrix_order: ["7", "matrix_order"], step_7_price_order: ["7", "price_order"], step_8_live_prices: ["8", "live_prices"],
+      triage_engine: ["triage", "engine"], triage_no_below: ["triage", "no_below"],
     };
     Object.entries(map).forEach(([field, [step, key]]) => {
       const control = form.elements.namedItem(field);

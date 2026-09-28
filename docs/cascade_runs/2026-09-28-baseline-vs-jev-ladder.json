@@ -1,0 +1,577 @@
+{
+  "1809": {
+    "name": "Флеш-накопитель сувенирный",
+    "quantity": "80.00",
+    "runs": {
+      "baseline_no_jev": {
+        "elapsed_seconds": 83.0,
+        "candidates_shown": 10,
+        "candidates_exact": 2,
+        "removed_by_triage": 0,
+        "diagnostics": {
+          "verdict_cache_hits": 0,
+          "query_phrases": [
+            "флешка",
+            "флеш-накопитель",
+            "usb флешка",
+            "usb накопитель",
+            "usb флеш-накопитель",
+            "флеш накопитель",
+            "флеш-накопитель сувенирный",
+            "флешка сувенирная",
+            "usb флешка сувенирная",
+            "usb флеш-накопитель сувенирный",
+            "флешка с логотипом",
+            "флешка рекламная",
+            "флешка брендированная",
+            "флешка корпоративная",
+            "флешка подарочная",
+            "флешка именная",
+            "флешка с гравировкой",
+            "флешка с надписью",
+            "флешка с рисунком",
+            "флешка с символикой",
+            "флешка с принтом",
+            "флешка с изображением",
+            "флешка с оформлением"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 23,
+            "minimum_met": true
+          },
+          "pool_after_search": 1012,
+          "name_filter_removed": 755,
+          "groups": 209,
+          "step6_skipped_disqualified": 0,
+          "step6": {
+            "pool": 209,
+            "graded": 209,
+            "cached": 0,
+            "complete": 209,
+            "code_prefilled_cells": 0,
+            "jev_prefilled_cells": 0
+          }
+        },
+        "usage_by_model": {
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 150185,
+            "completion_tokens": 39278
+          },
+          "openai/gpt-4.1-mini": {
+            "prompt_tokens": 24565,
+            "completion_tokens": 1724
+          }
+        },
+        "estimated_cost_rub": 142.062,
+        "top3": [
+          {
+            "name": "Флешка 3.0 овальной формы, колпачок с магнитом, 32 Гб, коричневый",
+            "fit": "exact",
+            "match": 4,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "988.50"
+          },
+          {
+            "name": "Флешка 3.0 промо поворотный механизм, 32 Гб, коричневый",
+            "fit": "exact",
+            "match": 4,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "988.50"
+          },
+          {
+            "name": "USB 3.0-флешка на 32 Гб с мини чипом, компактный дизайн, стильное отве",
+            "fit": "partial",
+            "match": 2,
+            "mismatch": 0,
+            "unknown": 2,
+            "price": "1068.89"
+          }
+        ],
+        "error": ""
+      },
+      "jev_ladder_plus_triage": {
+        "elapsed_seconds": 53.8,
+        "candidates_shown": 10,
+        "candidates_exact": 2,
+        "removed_by_triage": 15,
+        "diagnostics": {
+          "verdict_cache_hits": 194,
+          "tz_cache_hit": true,
+          "search_plan_cache_hit": true,
+          "query_phrases": [
+            "флешка",
+            "флеш-накопитель",
+            "usb флешка",
+            "usb накопитель",
+            "usb флеш-накопитель",
+            "флеш накопитель",
+            "флеш-накопитель сувенирный",
+            "флешка сувенирная",
+            "usb флешка сувенирная",
+            "usb флеш-накопитель сувенирный",
+            "флешка с логотипом",
+            "флешка рекламная",
+            "флешка брендированная",
+            "флешка корпоративная",
+            "флешка подарочная",
+            "флешка именная",
+            "флешка с гравировкой",
+            "флешка с надписью",
+            "флешка с рисунком",
+            "флешка с символикой",
+            "флешка с принтом",
+            "флешка с изображением",
+            "флешка с оформлением"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 23,
+            "minimum_met": true
+          },
+          "pool_after_search": 1012,
+          "name_filter": "cache",
+          "name_filter_removed": 755,
+          "groups": 209,
+          "jev_triage": {
+            "checked": 209,
+            "dropped": 15
+          },
+          "step6_skipped_disqualified": 0,
+          "step6": {
+            "pool": 0,
+            "graded": 0,
+            "cached": 209,
+            "complete": 209,
+            "code_prefilled_cells": 0,
+            "jev_prefilled_cells": 0
+          }
+        },
+        "usage_by_model": {
+          "jev-1.13.0": {
+            "prompt_tokens": 156285,
+            "completion_tokens": 3481
+          }
+        },
+        "estimated_cost_rub": 0.959,
+        "top3": [
+          {
+            "name": "Флешка 3.0 овальной формы, колпачок с магнитом, 32 Гб, коричневый",
+            "fit": "exact",
+            "match": 4,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "988.50"
+          },
+          {
+            "name": "Флешка 3.0 промо поворотный механизм, 32 Гб, коричневый",
+            "fit": "exact",
+            "match": 4,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "988.50"
+          },
+          {
+            "name": "USB 3.0-флешка на 32 Гб с мини чипом, компактный дизайн, стильное отве",
+            "fit": "partial",
+            "match": 2,
+            "mismatch": 0,
+            "unknown": 2,
+            "price": "1068.89"
+          }
+        ],
+        "error": ""
+      }
+    }
+  },
+  "1774": {
+    "name": "Ручка канцелярская",
+    "quantity": "600.00",
+    "runs": {
+      "baseline_no_jev": {
+        "elapsed_seconds": 230.5,
+        "candidates_shown": 10,
+        "candidates_exact": 10,
+        "removed_by_triage": 0,
+        "diagnostics": {
+          "verdict_cache_hits": 0,
+          "query_phrases": [
+            "ручка",
+            "ручка шариковая",
+            "шариковая ручка",
+            "пишущая ручка",
+            "письменная ручка",
+            "ручка для письма",
+            "ручка для письма шариковая",
+            "ручка офисная",
+            "ручка для офиса",
+            "ручка для школы",
+            "ручка для записей",
+            "ручка для заметок",
+            "ручка шариковая офисная",
+            "ручка шариковая простая",
+            "ручка шариковая стандартная",
+            "ручка шариковая для письма",
+            "ручка шариковая для записей",
+            "ручка шариковая для школы",
+            "ручка шариковая для офиса",
+            "ручка шариковая повседневная",
+            "ручка шариковая недорогая",
+            "ручка шариковая качественная",
+            "ручка шариковая удобная",
+            "ручка шариковая популярная"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 24,
+            "minimum_met": true
+          },
+          "pool_after_search": 5125,
+          "name_filter_removed": 3832,
+          "groups": 1222,
+          "step6_skipped_disqualified": 671,
+          "step6": {
+            "pool": 551,
+            "graded": 551,
+            "cached": 671,
+            "complete": 1222,
+            "code_prefilled_cells": 1050,
+            "jev_prefilled_cells": 0
+          }
+        },
+        "usage_by_model": {
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 400035,
+            "completion_tokens": 189790
+          },
+          "openai/gpt-4.1-mini": {
+            "prompt_tokens": 108697,
+            "completion_tokens": 7942
+          }
+        },
+        "estimated_cost_rub": 553.924,
+        "top3": [
+          {
+            "name": "Металлическая шариковая ручка с флеш-картой на 8 Гб \"Jobs\", серебриста",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "475.78"
+          },
+          {
+            "name": "Ручка шариковая Pierre Cardin коллекция «БРИЗ | EASY». Корпус - латунь",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "858.40"
+          },
+          {
+            "name": "Ручка шариковая Pierre Cardin коллекция «НЕЖНОСТЬ | TENDRESSE», цвет -",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "1591.00"
+          }
+        ],
+        "error": ""
+      },
+      "jev_ladder_plus_triage": {
+        "elapsed_seconds": 71.9,
+        "candidates_shown": 10,
+        "candidates_exact": 10,
+        "removed_by_triage": 18,
+        "diagnostics": {
+          "verdict_cache_hits": 533,
+          "tz_cache_hit": true,
+          "search_plan_cache_hit": true,
+          "query_phrases": [
+            "ручка",
+            "ручка шариковая",
+            "шариковая ручка",
+            "пишущая ручка",
+            "письменная ручка",
+            "ручка для письма",
+            "ручка для письма шариковая",
+            "ручка офисная",
+            "ручка для офиса",
+            "ручка для школы",
+            "ручка для записей",
+            "ручка для заметок",
+            "ручка шариковая офисная",
+            "ручка шариковая простая",
+            "ручка шариковая стандартная",
+            "ручка шариковая для письма",
+            "ручка шариковая для записей",
+            "ручка шариковая для школы",
+            "ручка шариковая для офиса",
+            "ручка шариковая повседневная",
+            "ручка шариковая недорогая",
+            "ручка шариковая качественная",
+            "ручка шариковая удобная",
+            "ручка шариковая популярная"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 24,
+            "minimum_met": true
+          },
+          "pool_after_search": 5125,
+          "name_filter": "cache",
+          "name_filter_removed": 3832,
+          "groups": 1222,
+          "jev_triage": {
+            "checked": 551,
+            "dropped": 18
+          },
+          "step6_skipped_disqualified": 671,
+          "step6": {
+            "pool": 0,
+            "graded": 0,
+            "cached": 1222,
+            "complete": 1222,
+            "code_prefilled_cells": 1050,
+            "jev_prefilled_cells": 0
+          }
+        },
+        "usage_by_model": {
+          "jev-1.13.0": {
+            "prompt_tokens": 434848,
+            "completion_tokens": 8887
+          }
+        },
+        "estimated_cost_rub": 2.662,
+        "top3": [
+          {
+            "name": "Металлическая шариковая ручка с флеш-картой на 8 Гб \"Jobs\", серебриста",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "475.78"
+          },
+          {
+            "name": "Ручка шариковая Pierre Cardin коллекция «БРИЗ | EASY». Корпус - латунь",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "858.40"
+          },
+          {
+            "name": "Ручка шариковая Pierre Cardin коллекция «НЕЖНОСТЬ | TENDRESSE», цвет -",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "1591.00"
+          }
+        ],
+        "error": ""
+      }
+    }
+  },
+  "1431": {
+    "name": "Термокружка",
+    "quantity": "192.00",
+    "runs": {
+      "baseline_no_jev": {
+        "elapsed_seconds": 53.9,
+        "candidates_shown": 10,
+        "candidates_exact": 10,
+        "removed_by_triage": 0,
+        "diagnostics": {
+          "verdict_cache_hits": 0,
+          "query_phrases": [
+            "термокружка",
+            "термос-кружка",
+            "кружка термос",
+            "термокружка для напитков",
+            "термокружка с крышкой",
+            "термокружка дорожная",
+            "термокружка вакуумная",
+            "термокружка металлическая",
+            "термокружка с поилкой",
+            "термокружка с клапаном",
+            "термокружка с крышечкой",
+            "термокружка с крышкой и клапаном",
+            "термокружка с двойными стенками",
+            "термокружка с термоизоляцией",
+            "термокружка для кофе",
+            "термокружка для чая",
+            "термокружка для горячих напитков",
+            "термокружка для холодных напитков",
+            "термокружка с герметичной крышкой",
+            "термокружка с защитой от протекания",
+            "термокружка с кнопкой открывания",
+            "термокружка с крышкой на защёлке",
+            "термокружка с крышкой на резьбе",
+            "термокружка с силиконовым уплотнителем"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 24,
+            "minimum_met": true
+          },
+          "pool_after_search": 5808,
+          "name_filter_removed": 5308,
+          "groups": 125,
+          "step6_skipped_disqualified": 4,
+          "step6": {
+            "pool": 100,
+            "graded": 100,
+            "cached": 25,
+            "complete": 118,
+            "code_prefilled_cells": 80,
+            "jev_prefilled_cells": 0
+          }
+        },
+        "usage_by_model": {
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 70987,
+            "completion_tokens": 14311
+          },
+          "openai/gpt-4.1-mini": {
+            "prompt_tokens": 121851,
+            "completion_tokens": 10968
+          }
+        },
+        "estimated_cost_rub": 66.678,
+        "top3": [
+          {
+            "name": "Термокружка \"Jar\" 250 мл, красный (P)",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "168.27"
+          },
+          {
+            "name": "Термокружка Pot 330мл, красный",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "389.79"
+          },
+          {
+            "name": "Термокружка SALAK из нержавеющей стали 310 мл, красный",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "410.70"
+          }
+        ],
+        "error": ""
+      },
+      "jev_ladder_plus_triage": {
+        "elapsed_seconds": 15.5,
+        "candidates_shown": 10,
+        "candidates_exact": 10,
+        "removed_by_triage": 13,
+        "diagnostics": {
+          "verdict_cache_hits": 81,
+          "tz_cache_hit": true,
+          "search_plan_cache_hit": true,
+          "query_phrases": [
+            "термокружка",
+            "термос-кружка",
+            "кружка термос",
+            "термокружка для напитков",
+            "термокружка с крышкой",
+            "термокружка дорожная",
+            "термокружка вакуумная",
+            "термокружка металлическая",
+            "термокружка с поилкой",
+            "термокружка с клапаном",
+            "термокружка с крышечкой",
+            "термокружка с крышкой и клапаном",
+            "термокружка с двойными стенками",
+            "термокружка с термоизоляцией",
+            "термокружка для кофе",
+            "термокружка для чая",
+            "термокружка для горячих напитков",
+            "термокружка для холодных напитков",
+            "термокружка с герметичной крышкой",
+            "термокружка с защитой от протекания",
+            "термокружка с кнопкой открывания",
+            "термокружка с крышкой на защёлке",
+            "термокружка с крышкой на резьбе",
+            "термокружка с силиконовым уплотнителем"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 24,
+            "minimum_met": true
+          },
+          "pool_after_search": 5808,
+          "name_filter": "cache",
+          "name_filter_removed": 5308,
+          "groups": 125,
+          "jev_triage": {
+            "checked": 100,
+            "dropped": 13
+          },
+          "step6_skipped_disqualified": 4,
+          "step6": {
+            "pool": 6,
+            "graded": 6,
+            "cached": 119,
+            "complete": 125,
+            "code_prefilled_cells": 80,
+            "jev_prefilled_cells": 15
+          }
+        },
+        "usage_by_model": {
+          "jev-1.13.0": {
+            "prompt_tokens": 98258,
+            "completion_tokens": 2080
+          },
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 1122,
+            "completion_tokens": 68
+          }
+        },
+        "estimated_cost_rub": 1.194,
+        "top3": [
+          {
+            "name": "Термокружка \"Jar\" 250 мл, красный (P)",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "168.27"
+          },
+          {
+            "name": "Термокружка Pot 330мл, красный",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "389.79"
+          },
+          {
+            "name": "Термокружка SALAK из нержавеющей стали 310 мл, красный",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "410.70"
+          }
+        ],
+        "error": ""
+      }
+    }
+  }
+}
