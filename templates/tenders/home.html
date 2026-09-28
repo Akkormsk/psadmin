@@ -194,11 +194,58 @@ function renderProductionBase(body,data,activeTab,line){
   const terminalLabel={always:'Всегда завершает',never:'Никогда не завершает',sometimes:'Иногда завершает'};
   const stageCards=data.stages.map(stage=>`<article class="production-base-card"><header><strong>${escapeHtml(stage.name)}</strong>${stage.is_active?'':'<small class="is-warning">Скрыт</small>'}</header><div class="production-base-card__badges">${stage.supplies_input?'<span class="production-base-chip">Поставка</span>':''}${stage.performs_production?'<span class="production-base-chip">Производство</span>':''}<span class="production-base-chip production-base-chip--muted">${terminalLabel[stage.terminal_mode]||''}</span></div>${stage.scope_tags.length?`<p class="production-base-card__scope">${stage.scope_tags.map(escapeHtml).join(', ')}</p>`:''}<small>${stage.counterparty_count} контраг.</small></article>`).join('')||'<p class="production-base-empty">Пока нет ни одного этапа.</p>';
   const counterpartyCards=data.counterparties.map(cp=>`<article class="production-base-card"><header><strong>${escapeHtml(cp.name)}</strong>${cp.is_active?'':'<small class="is-warning">Скрыт</small>'}</header><p class="production-base-card__scope">${cp.stage_names.length?cp.stage_names.map(escapeHtml).join(', '):'Не связан с этапами'}</p>${cp.price_sources.length?`<small>${cp.price_sources.map(escapeHtml).join(', ')}</small>`:''}</article>`).join('')||'<p class="production-base-empty">Пока нет ни одного контрагента.</p>';
-  body.innerHTML=`<div class="production-base"><button type="button" class="button-secondary production-base-back" data-back-to-route>← К расчёту</button><div class="production-base-tabs"><button type="button" data-base-tab="stages" class="${activeTab==='stages'?'is-active':''}">Этапы</button><button type="button" data-base-tab="counterparties" class="${activeTab==='counterparties'?'is-active':''}">Контрагенты</button></div><input type="search" class="production-base-search" placeholder="Поиск…" data-base-search><div class="production-base-list" data-base-list="stages" ${activeTab==='stages'?'':'hidden'}>${stageCards}</div><div class="production-base-list" data-base-list="counterparties" ${activeTab==='counterparties'?'':'hidden'}>${counterpartyCards}</div></div>`;
+  body.innerHTML=`<div class="production-base"><button type="button" class="button-secondary production-base-back" data-back-to-route>← К расчёту</button><div class="production-base-toolbar"><div class="production-base-tabs"><button type="button" data-base-tab="stages" class="${activeTab==='stages'?'is-active':''}">Этапы</button><button type="button" data-base-tab="counterparties" class="${activeTab==='counterparties'?'is-active':''}">Контрагенты</button></div>${activeTab==='counterparties'?'<button type="button" class="button-success production-base-add" data-add-counterparty>+ Новый контрагент</button>':''}</div><div data-cp-form-slot></div><input type="search" class="production-base-search" placeholder="Поиск…" data-base-search><div class="production-base-list" data-base-list="stages" ${activeTab==='stages'?'':'hidden'}>${stageCards}</div><div class="production-base-list" data-base-list="counterparties" ${activeTab==='counterparties'?'':'hidden'}>${counterpartyCards}</div></div>`;
   body.querySelector('[data-back-to-route]').onclick=()=>openRequirements(lines.indexOf(line));
   body.querySelectorAll('[data-base-tab]').forEach(tab=>tab.onclick=()=>renderProductionBase(body,data,tab.dataset.baseTab,line));
   const search=body.querySelector('[data-base-search]');
   search.oninput=()=>{const query=search.value.trim().toLowerCase();body.querySelector(`[data-base-list="${activeTab}"]`)?.querySelectorAll('.production-base-card').forEach(card=>card.hidden=Boolean(query)&&!card.textContent.toLowerCase().includes(query))};
+  const addButton=body.querySelector('[data-add-counterparty]');
+  if(addButton)addButton.onclick=()=>openCounterpartyCaptureForm(body,data,line);
+}
+function openCounterpartyCaptureForm(body,data,line){
+  const slot=body.querySelector('[data-cp-form-slot]');
+  slot.innerHTML=`<div class="production-base-add-form"><textarea data-cp-text rows="3" placeholder="Вставьте текст или описание контрагента…"></textarea><input type="url" data-cp-url placeholder="Ссылка на сайт/калькулятор"><input type="file" data-cp-file accept=".png,.jpg,.jpeg,.webp"><div class="production-base-add-form__row"><button type="button" class="button-success" data-cp-parse>Разобрать</button><button type="button" class="button-secondary" data-cp-manual>Заполнить вручную</button><button type="button" class="button-secondary" data-cp-cancel>Отмена</button><small data-cp-status></small></div><p class="form-error" data-cp-error></p></div>`;
+  slot.querySelector('[data-cp-cancel]').onclick=()=>slot.innerHTML='';
+  slot.querySelector('[data-cp-manual]').onclick=()=>openCounterpartyReviewForm(body,data,line,{name:'',notes:'',suggested_stage_names:[],source_id:null});
+  slot.querySelector('[data-cp-parse]').onclick=async()=>{
+    const text=slot.querySelector('[data-cp-text]').value.trim(),url=slot.querySelector('[data-cp-url]').value.trim(),file=slot.querySelector('[data-cp-file]').files[0],error=slot.querySelector('[data-cp-error]'),status=slot.querySelector('[data-cp-status]'),button=slot.querySelector('[data-cp-parse]');
+    error.textContent='';
+    if(!text&&!url&&!file){error.textContent='Добавьте текст, ссылку или файл.';return}
+    button.disabled=true;status.textContent='Разбираю…';
+    const form=new FormData();
+    if(text)form.append('text',text);
+    if(url)form.append('url',url);
+    if(file)form.append('file',file);
+    try{
+      const response=await fetch('{% url "tender_production_counterparty_draft" %}',{method:'POST',headers:{'X-CSRFToken':document.querySelector('#tender-form [name="csrfmiddlewaretoken"]').value},body:form});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.error||'Не удалось разобрать источник.');
+      openCounterpartyReviewForm(body,data,line,result);
+    }catch(parseError){error.textContent=parseError.message}finally{button.disabled=false;status.textContent=''}
+  };
+}
+function openCounterpartyReviewForm(body,data,line,draft){
+  const slot=body.querySelector('[data-cp-form-slot]');
+  const stages=draft.active_stages||data.stages.map(stage=>({id:stage.id,name:stage.name}));
+  const stagesHtml=stages.length?stages.map(stage=>`<label><input type="checkbox" value="${stage.id}" ${(draft.suggested_stage_names||[]).includes(stage.name)?'checked':''}> ${escapeHtml(stage.name)}</label>`).join(''):'<small>Активных этапов ещё нет.</small>';
+  slot.innerHTML=`<div class="production-base-add-form"><input type="text" data-cp-name value="${escapeHtml(draft.name||'')}" placeholder="Название контрагента"><textarea data-cp-notes rows="3" placeholder="Комментарий">${escapeHtml(draft.notes||'')}</textarea><div class="production-base-add-form__stages">${stagesHtml}</div><div class="production-base-add-form__row"><button type="button" class="button-success" data-cp-confirm>Подтвердить</button><button type="button" class="button-secondary" data-cp-cancel>Отмена</button><small data-cp-status></small></div><p class="form-error" data-cp-error></p></div>`;
+  slot.querySelector('[data-cp-cancel]').onclick=()=>slot.innerHTML='';
+  slot.querySelector('[data-cp-confirm]').onclick=async()=>{
+    const name=slot.querySelector('[data-cp-name]').value.trim(),notes=slot.querySelector('[data-cp-notes]').value.trim(),error=slot.querySelector('[data-cp-error]'),status=slot.querySelector('[data-cp-status]'),button=slot.querySelector('[data-cp-confirm]');
+    const stageIds=[...slot.querySelectorAll('.production-base-add-form__stages input:checked')].map(input=>+input.value);
+    error.textContent='';
+    if(!name){error.textContent='Укажите название контрагента.';return}
+    button.disabled=true;status.textContent='Сохраняю…';
+    const payload={name,notes,stage_ids:stageIds,source_id:draft.source_id||null};
+    const form=new FormData();form.append('payload',JSON.stringify(payload));
+    try{
+      const response=await fetch('{% url "tender_production_counterparty_confirm" %}',{method:'POST',headers:{'X-CSRFToken':document.querySelector('#tender-form [name="csrfmiddlewaretoken"]').value},body:form});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.error||'Не удалось сохранить контрагента.');
+      const fresh=await(await fetch('{% url "tender_production_base" %}')).json();
+      renderProductionBase(body,fresh,'counterparties',line);
+    }catch(confirmError){error.textContent=confirmError.message;button.disabled=false;status.textContent=''}
+  };
 }
 function feedbackWidgetHtml(scope,placeholder,stepId=''){const learning=['route','production_step'].includes(scope)?`<select aria-label="Где применить правку" onchange="this.form.dataset.feedbackScope=this.value==='current'?'${scope}_current':'${scope}'"><option value="similar">Запомнить для похожих</option><option value="current">Только этот заказ</option></select>`:'';return `<form class="training-feedback" data-feedback-scope="${scope}" data-feedback-step="${escapeHtml(stepId)}"><textarea data-feedback-input rows="3" placeholder="${escapeHtml(placeholder)}"></textarea><div class="training-feedback__row">${learning}<button type="button" class="button-secondary" data-feedback-apply>Учесть и пересчитать</button><small data-feedback-status></small></div></form>`}
 function routeCorrectionsHtml(result,scope,stepId=''){

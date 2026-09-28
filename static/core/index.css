@@ -1565,6 +1565,17 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .production-base-card__scope { margin:6px 0 0; color:var(--ink-2); font-size:11px; line-height:1.4; }
 .production-base-card small { display:block; margin-top:5px; color:var(--ink-3); font-size:10px; }
 .production-base-empty { color:var(--ink-3); font-size:12px; }
+.production-base-toolbar { display:flex; align-items:center; gap:8px; }
+.production-base-toolbar .production-base-tabs { flex:1; }
+.production-base-add { padding:6px 12px; font-size:11px; white-space:nowrap; }
+.production-base-add-form { display:grid; gap:8px; padding:12px; border:1px solid var(--border-positive); border-radius:var(--radius-sm); background:var(--tint-positive); }
+.production-base-add-form input[type="text"], .production-base-add-form input[type="url"], .production-base-add-form textarea { width:100%; box-sizing:border-box; padding:8px 11px; border:1px solid var(--field-border); border-radius:var(--radius-sm); background:var(--field-bg); color:var(--ink); font-size:12px; font-family:inherit; }
+.production-base-add-form input[type="file"] { font-size:11px; color:var(--ink-2); }
+.production-base-add-form__row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.production-base-add-form__row button { font-size:11px; padding:6px 12px; }
+.production-base-add-form__stages { display:grid; gap:5px; max-height:140px; overflow-y:auto; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
+.production-base-add-form__stages label { display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--ink); cursor:pointer; }
+.production-base-add-form__stages small { color:var(--ink-3); font-size:11px; }
 .training-catalog-removed { margin:6px 0 0; font-size:10px; color:var(--ink-3); }
 .training-catalog-removed summary { cursor:pointer; }
 .training-catalog-removed ul { margin:4px 0 0; padding-left:16px; }
