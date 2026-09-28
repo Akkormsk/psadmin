@@ -51,7 +51,7 @@ class EstimateShellTests(TestCase):
         self.assertNotContains(response, "Применить и вернуться к тендеру")
         self.assertContains(response, "Важное для расчёта")
         self.assertContains(response, "поставка по заявкам")
-        self.assertContains(response, "10 дн.")
+        self.assertContains(response, "10 календарных дн.")
 
     def test_worklist_shell_degrades_gracefully_without_risk_assessment(self):
         tender = self._tender()
@@ -108,6 +108,26 @@ class EstimateShellTests(TestCase):
             self.assertContains(response, "Печать открыток")
             self.assertContains(response, "ДКС Кузбасса")
             self.assertContains(response, "0139")
+
+    def test_risk_block_shows_traffic_light_and_legal_risks_note(self):
+        tender = self._tender(
+            risk_checked_at=timezone.now(),
+            risk_assessment={
+                "risk_level": "medium",
+                "risk_factors": [],
+                "risk_facts": {"batch_days": 7},
+                "delivery_mode": "поставка по заявкам, 5 рабочих дней на партию",
+                "legal_risks": "Штрафы за просрочку прописаны жёстко, обеспечение контракта повышенное.",
+            },
+        )
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, "kb-badge--warn")
+        self.assertContains(response, "риск: средний")
+        self.assertContains(response, "Штрафы за просрочку")
+        self.assertContains(response, "7 календарных дн.")
 
     def test_risk_block_shows_submission_deadline_even_without_assessment(self):
         deadline = timezone.now() + timedelta(days=5)

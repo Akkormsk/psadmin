@@ -1295,20 +1295,27 @@ def _risk_summary_for(tender):
     если тендер не найден (расчёт остался без своей записи)."""
     if not tender:
         return None
+    from tender_selection.views import _risk_badge
+
     risk = tender.risk_assessment or {}
     facts = risk.get("risk_facts") or {}
     execution = (risk.get("execution_deadline") or {}).get("date")
     batch_days = facts.get("batch_days")
+    # risk_facts.batch_days — уже переведённые в календарные дни (см. промпт
+    # оценки), а delivery_mode ниже цитирует контракт как есть, обычно в
+    # рабочих — числа расходятся не из-за ошибки, оговариваем явно.
     if execution and batch_days:
-        execution = f"{execution} (по одной заявке — {batch_days} дн.)"
+        execution = f"{execution} (по одной заявке — {batch_days} календарных дн.)"
     elif not execution and batch_days:
-        execution = f"{batch_days} дн. на одну заявку"
+        execution = f"{batch_days} календарных дн. на одну заявку"
     return {
+        "risk_badge": _risk_badge(tender),
         "submission_deadline": tender.collecting_finished_at,
         "execution": execution,
         "delivery_mode": risk.get("delivery_mode"),
         "sample_requirements": risk.get("sample_requirements"),
         "national_regime": risk.get("national_regime"),
+        "legal_risks": risk.get("legal_risks"),
     }
 
 
