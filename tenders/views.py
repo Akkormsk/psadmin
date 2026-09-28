@@ -1298,20 +1298,14 @@ def _risk_summary_for(tender):
     from tender_selection.views import _risk_badge
 
     risk = tender.risk_assessment or {}
-    facts = risk.get("risk_facts") or {}
-    execution = (risk.get("execution_deadline") or {}).get("date")
-    batch_days = facts.get("batch_days")
-    # risk_facts.batch_days — уже переведённые в календарные дни (см. промпт
-    # оценки), а delivery_mode ниже цитирует контракт как есть, обычно в
-    # рабочих — числа расходятся не из-за ошибки, оговариваем явно.
-    if execution and batch_days:
-        execution = f"{execution} (по одной заявке — {batch_days} календарных дн.)"
-    elif not execution and batch_days:
-        execution = f"{batch_days} календарных дн. на одну заявку"
+    # risk_facts.batch_days дублирует то, что уже написано в delivery_mode
+    # словами («5 рабочих дней после получения заявки») — не показываем оба,
+    # чтобы не выглядело как два разных срока. Разбор срока — забота оценки
+    # риска (tender_selection), сюда просто переносим готовые поля как есть.
     return {
         "risk_badge": _risk_badge(tender),
         "submission_deadline": tender.collecting_finished_at,
-        "execution": execution,
+        "execution": (risk.get("execution_deadline") or {}).get("date"),
         "delivery_mode": risk.get("delivery_mode"),
         "sample_requirements": risk.get("sample_requirements"),
         "national_regime": risk.get("national_regime"),

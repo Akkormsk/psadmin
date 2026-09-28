@@ -36,11 +36,12 @@ class EstimateShellTests(TestCase):
 
     def test_worklist_shell_shows_risk_block_and_hides_rename(self):
         tender = self._tender(risk_assessment={
-            "delivery_mode": "поставка по заявкам",
+            "delivery_mode": "поставка по заявкам, 5 рабочих дней на партию",
             "sample_requirements": "образцы не требуются",
             "national_regime": "признаков не найдено",
             "execution_deadline": {"date": "01.01.2027"},
-            "risk_facts": {"batch_days": 10},
+            # risk_facts.batch_days намеренно не в фикстуре — на этой странице
+            # его не показываем, он дублировал бы delivery_mode.
         })
         estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
 
@@ -50,8 +51,8 @@ class EstimateShellTests(TestCase):
         self.assertNotContains(response, "Исходный тендер")
         self.assertNotContains(response, "Применить и вернуться к тендеру")
         self.assertContains(response, "Важное для расчёта")
-        self.assertContains(response, "поставка по заявкам")
-        self.assertContains(response, "10 календарных дн.")
+        self.assertContains(response, "01.01.2027")
+        self.assertContains(response, "поставка по заявкам, 5 рабочих дней на партию")
 
     def test_worklist_shell_degrades_gracefully_without_risk_assessment(self):
         tender = self._tender()
@@ -109,6 +110,23 @@ class EstimateShellTests(TestCase):
             self.assertContains(response, "ДКС Кузбасса")
             self.assertContains(response, "0139")
 
+    def test_header_links_to_eis_when_known(self):
+        tender = self._tender(eis_url="https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=1")
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, 'class="ts-linkchip"')
+        self.assertContains(response, "zakupki.gov.ru")
+
+    def test_header_has_no_eis_link_when_unknown(self):
+        tender = self._tender()
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
+
+        self.assertNotContains(response, "ts-linkchip")
+
     def test_risk_block_shows_traffic_light_and_legal_risks_note(self):
         tender = self._tender(
             risk_checked_at=timezone.now(),
@@ -127,7 +145,10 @@ class EstimateShellTests(TestCase):
         self.assertContains(response, "kb-badge--warn")
         self.assertContains(response, "риск: средний")
         self.assertContains(response, "Штрафы за просрочку")
-        self.assertContains(response, "7 календарных дн.")
+        # risk_facts.batch_days не выводим отдельно — delivery_mode уже
+        # называет тот же срок словами, дублировать его числом не нужно.
+        self.assertNotContains(response, "7 дн.")
+        self.assertNotContains(response, "7 календарных")
 
     def test_risk_block_shows_submission_deadline_even_without_assessment(self):
         deadline = timezone.now() + timedelta(days=5)

@@ -146,3 +146,8 @@
   .ts-seg > a { min-width: 0; padding: 8px 14px; }
   .ts-refresh__params { display: none; }
 }
+
+/* Ссылка-чип на внешнюю страницу (ЕИС, печатная форма) — используется и в
+   карточке тендера (detail.html, свой инлайн-стиль), и в шапке расчёта. */
+.ts-linkchip { display: inline-flex; padding: 4px 10px; border-radius: 8px; background: var(--tint-neutral); color: var(--ink-2); font-size: 13px; font-weight: 600; text-decoration: none; }
+.ts-linkchip:hover { color: var(--ink); background: var(--tint-cool); }
