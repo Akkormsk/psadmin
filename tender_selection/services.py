@@ -48,7 +48,13 @@ _ORG_ABBR = [
 # берём широкие группы, лучше поймать лишнее, чем упустить нужное.
 # (code, человекочитаемая метка) — метки показываются галочками в настройках.
 CATEGORY_GROUPS = [
-    ("18.1", "Полиграфия и печать"),
+    # 18.1 и 14.1 ниже раньше стояли группой (4 символа: "18.1"/"14.1"), а не
+    # классом (5 символов) — Госплан такой код молча не находит вообще (0
+    # результатов всегда), хотя в своём же коде мы матчим их как префикс.
+    # Разбито на реальные классы того же уровня, что и остальной список.
+    ("18.12", "Полиграфия и печать (прочая печатная продукция, бланки)"),
+    ("18.13", "Полиграфия: допечатная подготовка"),
+    ("18.14", "Полиграфия: брошюровка, переплёт, отделка"),
     ("58.19", "Печатная продукция (открытки, календари, бланки)"),
     ("17.23", "Канцелярия бумажная"),
     ("32.99", "Прочие изделия (ручки, зонты, брелоки, флешки)"),
@@ -60,7 +66,7 @@ CATEGORY_GROUPS = [
     ("25.99", "Металлоизделия (фляги, сувениры)"),
     ("13.92", "Готовый текстиль (бельё, шторы, флаги)"),
     ("13.99", "Прочий текстиль"),
-    ("14.1", "Одежда (футболки, поло, рубашки)"),
+    ("14.13", "Одежда (футболки, поло, рубашки)"),
     ("14.19", "Аксессуары одежды (кепки, шарфы, перчатки)"),
     ("14.39", "Трикотаж (джемперы, свитшоты)"),
     ("15.12", "Сумки, чемоданы"),
@@ -450,6 +456,45 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
                 succeeded += bool(risk_assessment_for(tender))
         except Exception:
             logger.exception("Risk assessment retry failed for tender %s", tender.purchase_number)
+    return attempted, succeeded
+
+
+def retry_pending_deadlines(*, limit: int = 10, pause: float = None) -> tuple[int, int]:
+    """Тендер, выпавший из окна публикации (window_days у сбора), больше никогда
+    не запрашивается обычным run_pull — продление срока подачи заказчиком
+    иначе остаётся незамеченным навсегда, и тендер тихо пропадает из
+    «Входящих» (список прячет всё с истёкшим сроком) и потом из архива
+    (purge_stale, через incoming_ttl_days). Один контрольный запрос по
+    номеру перед этим — вдруг заказчик продлил приём заявок.
+
+    Возвращает (сколько тендеров проверили, у скольких срок и правда продлён)."""
+    if pause is None:
+        pause = gosplan.THROTTLE_SECONDS
+    now = timezone.now()
+    settings = FilterSettings.load()
+    tenders = Tender.objects.filter(
+        law="fz44", status=Tender.NEW, review=Tender.UNREVIEWED,
+        collecting_finished_at__lt=now,
+        collecting_finished_at__gte=now - timedelta(days=settings.incoming_ttl_days),
+    ).order_by("-collecting_finished_at")[:limit]
+
+    attempted = succeeded = 0
+    for tender in tenders:
+        if attempted:
+            time.sleep(pause)
+        attempted += 1
+        try:
+            payload = gosplan.fetch_purchase(tender.purchase_number)
+        except gosplan.GosplanError:
+            logger.exception("Deadline recheck failed for tender %s", tender.purchase_number)
+            continue
+        if not payload:
+            continue
+        new_deadline = _record_to_fields(payload, now, "fz44")["collecting_finished_at"]
+        if new_deadline and new_deadline > tender.collecting_finished_at:
+            tender.collecting_finished_at = new_deadline
+            tender.save(update_fields=["collecting_finished_at"])
+            succeeded += 1
     return attempted, succeeded
 
 

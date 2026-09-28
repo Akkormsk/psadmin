@@ -107,6 +107,15 @@ def _run_once(tick: int) -> None:
 
     close_old_connections()
     try:
+        from .services import retry_pending_deadlines
+        attempted, succeeded = retry_pending_deadlines()
+        if succeeded:
+            logger.warning("autopull: сроки — %d/%d продлены заказчиком, дата обновлена", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_deadlines failed")
+
+    close_old_connections()
+    try:
         from .services import purge_stale
         purged = purge_stale()
         if any(purged.values()):
