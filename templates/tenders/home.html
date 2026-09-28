@@ -65,10 +65,12 @@
     {% else %}
     <form class="saved-estimate__status-form is-{{ saved.status }}" data-estimate-status-form data-estimate-id="{{ saved.pk }}" data-status="{{ saved.status }}" method="post" action="{% url 'order_estimate_status' saved.pk %}">{% csrf_token %}<select data-customized="true" class="saved-estimate__status" name="status" aria-label="Статус расчёта № {{ saved.tender_number }}">{% for value, label in saved.STATUS_CHOICES %}<option value="{{ value }}" {% if saved.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></form>
     {% endif %}
+    {% if not saved.is_tender_estimate %}
     <span class="hover-actions">
       <form method="post" action="{{ saved.duplicate_url }}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать расчёт" aria-label="Копировать расчёт {{ saved.name }}">⧉</button></form>
       <form method="post" action="{{ saved.delete_url }}" onsubmit="return confirm('Удалить расчёт «{{ saved.name|escapejs }}»?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить расчёт" aria-label="Удалить расчёт {{ saved.name }}">×</button></form>
     </span>
+    {% endif %}
   </div>
   {% endfor %}
 </section>

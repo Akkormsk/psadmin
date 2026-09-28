@@ -130,3 +130,22 @@ class ManagerWorklistTests(TestCase):
 
         self.assertContains(response, '<span class="saved-estimate__kind">Тендер</span>')
         self.assertContains(response, '<span class="saved-estimate__kind">Заказ</span>')
+
+    def test_tender_estimate_row_has_no_hide_or_duplicate_actions(self):
+        """Расчёт тендера скрывается/дублируется только через сам тендер
+        (раздел «Тендеры»), не жёстким удалением со страницы расчёта."""
+        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_home"), {"kind": "tender", "worklist": ""})
+
+        self.assertNotContains(response, reverse("tender_pipeline_estimate_delete", args=[estimate.pk]))
+        self.assertNotContains(response, reverse("tender_pipeline_estimate_duplicate", args=[estimate.pk]))
+
+    def test_order_estimate_row_keeps_its_hide_and_duplicate_actions(self):
+        estimate = OrderEstimate.objects.create(owner=self.user, order_number="1", name="Самостоятельный")
+
+        response = self.client.get(reverse("tender_home"), {"kind": "order"})
+
+        self.assertContains(response, reverse("tender_estimate_delete", args=[estimate.pk]))
+        self.assertContains(response, reverse("tender_estimate_duplicate", args=[estimate.pk]))
