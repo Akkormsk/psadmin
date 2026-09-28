@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.urls import reverse
 
 from .models import Counterparty, ProcessDefinition, Proposal, StageCounterpartyLink, TenderKnowledgeSource
 
@@ -112,3 +113,29 @@ class ProposalTests(TestCase):
             type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY, payload={}, summary="Подтвердить связь с FSPrint", created_by=self.user, batch_id=batch_id,
         )
         self.assertEqual(Proposal.objects.filter(batch_id=batch_id).count(), 3)
+
+
+class ProductionBaseDataViewTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser(username="admin", password="password")
+        self.manager = get_user_model().objects.create_user(username="manager", password="password")
+
+    def test_ordinary_manager_is_refused(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("tender_production_base"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_sees_stages_and_linked_counterparties(self):
+        stage = ProcessDefinition.objects.create(
+            name="УФ-печать (вью-тест)", role=ProcessDefinition.ROLE_PRODUCTION,
+            performs_production=True, scope_tags=["сувениры"],
+        )
+        counterparty = Counterparty.objects.create(name="Типография Вью", created_by=self.admin)
+        StageCounterpartyLink.objects.create(stage=stage, counterparty=counterparty, price_source_type="manual_quote")
+        self.client.force_login(self.admin)
+        data = self.client.get(reverse("tender_production_base")).json()
+        stage_row = next(row for row in data["stages"] if row["name"] == "УФ-печать (вью-тест)")
+        self.assertEqual(stage_row["counterparty_count"], 1)
+        self.assertEqual(stage_row["scope_tags"], ["сувениры"])
+        counterparty_row = next(row for row in data["counterparties"] if row["name"] == "Типография Вью")
+        self.assertEqual(counterparty_row["stage_names"], ["УФ-печать (вью-тест)"])

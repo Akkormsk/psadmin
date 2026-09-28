@@ -26,7 +26,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
@@ -777,6 +777,31 @@ def drop_requirement_skip_rule(request):
         return JsonResponse({"error": "Не удалось определить строку ТЗ."}, status=400)
     removed = RequirementSkipRule.objects.filter(label_normalized=label_normalized).update(is_active=False)
     return JsonResponse({"dropped": bool(removed)})
+
+
+@login_required
+@require_GET
+def production_base_data(request):
+    """Список этапов и контрагентов для экрана «База производства» внутри
+    выдвижной панели ассистента — только чтение; создание и правка этапов/
+    контрагентов идут отдельным шагом."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "База производства доступна только администратору."}, status=403)
+    stages = [{
+        "id": stage.pk, "name": stage.name, "supplies_input": stage.supplies_input,
+        "performs_production": stage.performs_production, "terminal_mode": stage.terminal_mode,
+        "scope_tags": stage.scope_tags, "is_active": stage.is_active,
+        "counterparty_count": stage.counterparty_links.count(),
+    } for stage in ProcessDefinition.objects.order_by("name")]
+    counterparties = []
+    for counterparty in Counterparty.objects.prefetch_related("stage_links__stage").order_by("name"):
+        links = list(counterparty.stage_links.all())
+        counterparties.append({
+            "id": counterparty.pk, "name": counterparty.name, "is_active": counterparty.is_active,
+            "stage_names": [link.stage.name for link in links],
+            "price_sources": sorted({link.get_price_source_type_display() for link in links}),
+        })
+    return JsonResponse({"stages": stages, "counterparties": counterparties})
 
 
 @login_required

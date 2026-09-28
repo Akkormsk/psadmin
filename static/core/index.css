@@ -1543,6 +1543,28 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .training-rule-scope { font-style:normal; font-size:8.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--positive-ink); background:var(--tint-positive); padding:1px 4px; border-radius:4px; white-space:nowrap; }
 .training-block-changes li button { min-height:0; padding:0; width:15px; height:15px; border:0; border-radius:50%; background:var(--tint-cool); color:var(--ink-2); font-size:11px; line-height:1; cursor:pointer; flex:none; margin-top:1px; }
 .training-block-changes li button:hover { background:var(--tint-negative); color:var(--negative-ink); }
+
+/* База производства: тот же drawer переключается в отдельный режим —
+   вход небольшой ненавязчивой ссылкой из шапки блока «Технологический
+   маршрут» (см. docs/claude-production-base-prompt.md §8). */
+.production-base-open { margin-left:auto; padding:2px 8px; border:1px solid var(--border-positive); border-radius:999px; background:transparent; color:var(--ink-3); font-size:9px; font-weight:650; cursor:pointer; white-space:nowrap; }
+.production-base-open:hover { background:var(--tint-positive); color:var(--positive-ink); }
+.production-base { display:grid; gap:12px; }
+.production-base-back { justify-self:start; padding:5px 11px; font-size:11px; }
+.production-base-tabs { display:flex; gap:4px; padding:3px; border-radius:var(--radius-sm); background:var(--tint-neutral); }
+.production-base-tabs button { flex:1; padding:6px 10px; border:0; border-radius:8px; background:transparent; color:var(--ink-2); font-size:12px; font-weight:600; cursor:pointer; }
+.production-base-tabs button.is-active { background:var(--surface); color:var(--ink); box-shadow:var(--shadow-card); }
+.production-base-search { width:100%; box-sizing:border-box; padding:8px 11px; border:1px solid var(--field-border); border-radius:var(--radius-sm); background:var(--field-bg); color:var(--ink); font-size:12px; }
+.production-base-list { display:grid; gap:8px; }
+.production-base-card { padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface); }
+.production-base-card header { display:flex; align-items:center; gap:8px; }
+.production-base-card header strong { font-size:12.5px; color:var(--ink); }
+.production-base-card__badges { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+.production-base-chip { padding:2px 7px; border-radius:999px; background:var(--tint-positive); color:var(--positive-ink); font-size:9.5px; font-weight:650; }
+.production-base-chip--muted { background:var(--tint-neutral); color:var(--ink-2); }
+.production-base-card__scope { margin:6px 0 0; color:var(--ink-2); font-size:11px; line-height:1.4; }
+.production-base-card small { display:block; margin-top:5px; color:var(--ink-3); font-size:10px; }
+.production-base-empty { color:var(--ink-3); font-size:12px; }
 .training-catalog-removed { margin:6px 0 0; font-size:10px; color:var(--ink-3); }
 .training-catalog-removed summary { cursor:pointer; }
 .training-catalog-removed ul { margin:4px 0 0; padding-left:16px; }

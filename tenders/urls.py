@@ -25,6 +25,7 @@ urlpatterns = [
     path("production/source/", views.add_calculation_source, name="tender_add_calculation_source"),
     path("production/confirm/", views.confirm_production_type, name="tender_confirm_production_type"),
     path("production/requirement-skip/drop/", views.drop_requirement_skip_rule, name="tender_drop_requirement_skip_rule"),
+    path("production/base/", views.production_base_data, name="tender_production_base"),
     path("production/lesson/drop/", views.drop_lesson, name="tender_drop_lesson"),
     path("production/route-knowledge/drop/", views.drop_route_knowledge, name="tender_drop_route_knowledge"),
     path("production/knowledge/", views.calculator_knowledge_proposal, name="tender_calculator_knowledge_proposal"),
