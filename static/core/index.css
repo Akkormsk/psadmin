@@ -676,6 +676,20 @@ h1 {
 .saved-estimate__status-form.is-draft select,
 .saved-estimate__status-form.is-not_participated select { border-color: var(--border); background-color: var(--tint-neutral); color: var(--ink-2); }
 
+/* Тендерный расчёт: статус меняется только из пайплайна тендера, поэтому вместо
+   выпадающего списка — read-only плашка того же вида. */
+.saved-estimate__status-pill { min-height: 30px; box-sizing: border-box; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--ink-2); background-color: var(--tint-neutral); white-space: nowrap; }
+.saved-estimate__status-pill.is-won { border-color: var(--border-positive); background-color: var(--tint-positive); color: var(--positive-ink); }
+.saved-estimate__status-pill.is-lost { border-color: var(--border-negative); background-color: var(--tint-negative); color: var(--negative-ink); }
+.saved-estimate__status-pill.is-pending,
+.saved-estimate__status-pill.is-published { border-color: var(--border-warning); background-color: var(--tint-warning); color: var(--warning-ink); }
+
+/* ---------- фильтр-вкладки над списком сохранённых расчётов ---------- */
+.ts-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--tint-neutral); }
+.ts-seg__item { padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--ink-3); text-decoration: none; }
+.ts-seg__item.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+.ts-seg__item:hover { color: var(--ink); }
+
 /* ---------- custom select ---------- */
 
 .custom-select {

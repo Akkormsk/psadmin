@@ -511,7 +511,7 @@ class TenderEstimate(models.Model):
     PUBLISHED = "published"
     STATUS_CHOICES = (
         (DRAFT, "Черновик"),
-        (PENDING, "В ожидании"),
+        (PENDING, "На торгах"),
         (NOT_PARTICIPATED, "Не участвовали"),
         (LOST, "Проигран"),
         (WON, "Выигран"),
@@ -556,6 +556,17 @@ class TenderEstimate(models.Model):
 
     def __str__(self):
         return f"{self.tender_number} — {self.name}"
+
+    def display_status(self):
+        """Черновик/Готово — не хранимые статусы, а вид черновика по полноте
+        расчёта; статус в базе при этом остаётся DRAFT до переноса в пайплайн."""
+        if self.status == self.DRAFT:
+            return "Готово" if not self.summary_snapshot.get("is_incomplete", True) else "Черновик"
+        return self.get_status_display()
+
+    def is_active_task(self):
+        """Расчёт ждёт действия менеджера, а не исхода: черновик и ещё не заполнен."""
+        return self.status == self.DRAFT and self.summary_snapshot.get("is_incomplete", True)
 
 
 class TenderLine(models.Model):
@@ -640,6 +651,10 @@ class OrderEstimate(models.Model):
     @result_notes.setter
     def result_notes(self, value):
         self.notes = value
+
+    def is_active_task(self):
+        """Расчёт ждёт действия менеджера, а не исхода: черновик и ещё не заполнен."""
+        return self.status == self.DRAFT and self.summary_snapshot.get("is_incomplete", True)
 
 
 class OrderLine(models.Model):

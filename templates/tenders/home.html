@@ -36,20 +36,38 @@
 
 {% if not source_tender and saved_estimates %}
 <section class="panel panel--separated">
-  <div class="panel-header"><h2 class="panel-title">Сохранённые расчёты</h2></div>
+  <div class="panel-header">
+    <h2 class="panel-title">Сохранённые расчёты</h2>
+    <div class="panel-actions">
+      <nav class="ts-seg" aria-label="Фильтр расчётов">
+        <a class="ts-seg__item{% if not request.GET.kind %} is-active{% endif %}" href="?kind=">Все</a>
+        <a class="ts-seg__item{% if request.GET.kind == 'tender' %} is-active{% endif %}" href="?kind=tender">Тендеры</a>
+        <a class="ts-seg__item{% if request.GET.kind == 'order' %} is-active{% endif %}" href="?kind=order">Самостоятельные</a>
+      </nav>
+      <nav class="ts-seg" aria-label="Активные или готовые">
+        <a class="ts-seg__item{% if not request.GET.worklist %} is-active{% endif %}" href="?worklist=">Все</a>
+        <a class="ts-seg__item{% if request.GET.worklist == 'active' %} is-active{% endif %}" href="?worklist=active">В работе</a>
+        <a class="ts-seg__item{% if request.GET.worklist == 'ready' %} is-active{% endif %}" href="?worklist=ready">Готово</a>
+      </nav>
+    </div>
+  </div>
   {% for saved in saved_estimates %}
   <div class="saved-estimate tender-saved-estimate">
-    <a class="saved-estimate__main" href="{% url 'tender_estimate' saved.pk %}">
+    <a class="saved-estimate__main" href="{{ saved.row_url }}">
       <span>
         <strong>№ {{ saved.tender_number }} — {{ saved.name }}</strong>
         <small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=saved.owner %}<span>{{ saved.owner.get_full_name|default:"Имя не указано" }} · {{ saved.updated_at|date:"d.m.Y H:i" }}</span></small>
       </span>
       <span class="tender-saved-totals"><strong>{% if saved.summary_snapshot.net_profit %}{{ saved.summary_snapshot.net_profit|floatformat:2|intcomma }} ₽{% else %}—{% endif %}</strong><small>ROI {{ saved.summary_snapshot.roi|default:""|floatformat:2 }}%</small></span>
     </a>
+    {% if saved.is_tender_estimate %}
+    <span class="saved-estimate__status-pill is-{{ saved.status }}">{{ saved.display_status }}</span>
+    {% else %}
     <form class="saved-estimate__status-form is-{{ saved.status }}" data-estimate-status-form data-estimate-id="{{ saved.pk }}" data-status="{{ saved.status }}" method="post" action="{% url 'order_estimate_status' saved.pk %}">{% csrf_token %}<select data-customized="true" class="saved-estimate__status" name="status" aria-label="Статус расчёта № {{ saved.tender_number }}">{% for value, label in saved.STATUS_CHOICES %}<option value="{{ value }}" {% if saved.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></form>
+    {% endif %}
     <span class="hover-actions">
-      <form method="post" action="{% url 'tender_estimate_duplicate' saved.pk %}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать расчёт" aria-label="Копировать расчёт {{ saved.name }}">⧉</button></form>
-      <form method="post" action="{% url 'tender_estimate_delete' saved.pk %}" onsubmit="return confirm('Удалить расчёт «{{ saved.name|escapejs }}»?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить расчёт" aria-label="Удалить расчёт {{ saved.name }}">×</button></form>
+      <form method="post" action="{{ saved.duplicate_url }}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать расчёт" aria-label="Копировать расчёт {{ saved.name }}">⧉</button></form>
+      <form method="post" action="{{ saved.delete_url }}" onsubmit="return confirm('Удалить расчёт «{{ saved.name|escapejs }}»?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить расчёт" aria-label="Удалить расчёт {{ saved.name }}">×</button></form>
     </span>
   </div>
   {% endfor %}

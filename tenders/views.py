@@ -1241,6 +1241,43 @@ def _persist_tender_estimate(request, estimate, settings, *, pipeline=False):
     return estimate, None, meta
 
 
+def _saved_estimates_for(request):
+    """Список «Расчёты»: свои OrderEstimate и TenderEstimate в одной ленте.
+
+    Каждой строке нужен свой набор маршрутов (order/* против pipeline/*),
+    поэтому они дописываются на объект — шаблон видит один однородный список.
+    """
+    order_qs = OrderEstimate.objects.all()
+    tender_qs = TenderEstimate.objects.all()
+    if not request.user.is_superuser:
+        order_qs = order_qs.filter(owner=request.user)
+        tender_qs = tender_qs.filter(owner=request.user)
+
+    kind = request.GET.get("kind")
+    if kind == "order":
+        tender_qs = TenderEstimate.objects.none()
+    elif kind == "tender":
+        order_qs = OrderEstimate.objects.none()
+
+    combined = list(order_qs) + list(tender_qs)
+    for estimate in combined:
+        is_tender = isinstance(estimate, TenderEstimate)
+        route_prefix = "tender_pipeline_estimate" if is_tender else "tender_estimate"
+        estimate.is_tender_estimate = is_tender
+        estimate.row_url = reverse(route_prefix, args=[estimate.pk])
+        estimate.duplicate_url = reverse(f"{route_prefix}_duplicate", args=[estimate.pk])
+        estimate.delete_url = reverse(f"{route_prefix}_delete", args=[estimate.pk])
+
+    worklist = request.GET.get("worklist")
+    if worklist == "active":
+        combined = [e for e in combined if e.is_active_task()]
+    elif worklist == "ready":
+        combined = [e for e in combined if not e.is_active_task()]
+
+    combined.sort(key=lambda e: e.updated_at, reverse=True)
+    return combined[:12]
+
+
 @login_required
 def home(request, pk=None, pipeline=False):
     model = TenderEstimate if pipeline else OrderEstimate
@@ -1285,10 +1322,7 @@ def home(request, pk=None, pipeline=False):
     if request.user.is_superuser:
         knowledge_sources = list(TenderKnowledgeSource.objects.filter(is_active=True).values("id", "title", "supplier_name", "source_type", "url")[:100])
     source_tender = estimate.tender if pipeline and estimate else None
-    saved_estimates = OrderEstimate.objects.all() if not pipeline else OrderEstimate.objects.none()
-    if not request.user.is_superuser:
-        saved_estimates = saved_estimates.filter(owner=request.user)
-    saved_estimates = saved_estimates.order_by("-updated_at")[:12]
+    saved_estimates = _saved_estimates_for(request) if not pipeline else []
 
     route_prefix = "tender_pipeline_estimate" if pipeline else "tender_estimate"
     return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "saved_estimates": saved_estimates, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
