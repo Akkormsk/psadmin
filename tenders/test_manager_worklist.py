@@ -38,7 +38,7 @@ class ManagerWorklistTests(TestCase):
     def test_order_estimate_row_keeps_its_editable_status_selector(self):
         OrderEstimate.objects.create(owner=self.user, order_number="1", name="Самостоятельный")
 
-        response = self.client.get(reverse("tender_home"))
+        response = self.client.get(reverse("tender_home"), {"kind": "order"})
 
         self.assertContains(response, "data-estimate-status-form")
 
@@ -102,3 +102,31 @@ class ManagerWorklistTests(TestCase):
         orders_only = self.client.get(reverse("tender_home"), {"kind": "order"})
         self.assertNotContains(orders_only, "Тендерный")
         self.assertContains(orders_only, "Самостоятельный")
+
+    def test_page_opens_on_active_tenders_by_default(self):
+        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        active_tender = TenderEstimate.objects.create(
+            owner=self.user, tender=tender, tender_number="1", name="В работе",
+            summary_snapshot={"is_incomplete": True},
+        )
+        ready_tender = TenderEstimate.objects.create(
+            owner=self.user, tender=tender, tender_number="2", name="Готовый тендер",
+            summary_snapshot={"is_incomplete": False},
+        )
+        OrderEstimate.objects.create(owner=self.user, order_number="1", name="Самостоятельный")
+
+        response = self.client.get(reverse("tender_home"))
+
+        self.assertContains(response, active_tender.name)
+        self.assertNotContains(response, ready_tender.name)
+        self.assertNotContains(response, "Самостоятельный")
+
+    def test_row_shows_an_unobtrusive_kind_label(self):
+        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Тендерный")
+        OrderEstimate.objects.create(owner=self.user, order_number="1", name="Самостоятельный")
+
+        response = self.client.get(reverse("tender_home"), {"kind": "", "worklist": ""})
+
+        self.assertContains(response, '<span class="saved-estimate__kind">Тендер</span>')
+        self.assertContains(response, '<span class="saved-estimate__kind">Заказ</span>')

@@ -684,6 +684,9 @@ h1 {
 .saved-estimate__status-pill.is-pending,
 .saved-estimate__status-pill.is-published { border-color: var(--border-warning); background-color: var(--tint-warning); color: var(--warning-ink); }
 
+/* Ненавязчивая пометка вида расчёта — тендерный или самостоятельный. */
+.saved-estimate__kind { font-size: 11px; font-weight: 500; color: var(--ink-3); text-transform: none; }
+
 /* ---------- фильтр-вкладки над списком сохранённых расчётов ---------- */
 .ts-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--tint-neutral); }
 .ts-seg__item { padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--ink-3); text-decoration: none; }

@@ -40,14 +40,14 @@
     <h2 class="panel-title">Сохранённые расчёты</h2>
     <div class="panel-actions">
       <nav class="ts-seg" aria-label="Фильтр расчётов">
-        <a class="ts-seg__item{% if not request.GET.kind %} is-active{% endif %}" href="?kind=">Все</a>
-        <a class="ts-seg__item{% if request.GET.kind == 'tender' %} is-active{% endif %}" href="?kind=tender">Тендеры</a>
-        <a class="ts-seg__item{% if request.GET.kind == 'order' %} is-active{% endif %}" href="?kind=order">Самостоятельные</a>
+        <a class="ts-seg__item{% if kind_filter == "" %} is-active{% endif %}" href="?kind=">Все</a>
+        <a class="ts-seg__item{% if kind_filter == "tender" %} is-active{% endif %}" href="?kind=tender">Тендеры</a>
+        <a class="ts-seg__item{% if kind_filter == "order" %} is-active{% endif %}" href="?kind=order">Самостоятельные</a>
       </nav>
       <nav class="ts-seg" aria-label="Активные или готовые">
-        <a class="ts-seg__item{% if not request.GET.worklist %} is-active{% endif %}" href="?worklist=">Все</a>
-        <a class="ts-seg__item{% if request.GET.worklist == 'active' %} is-active{% endif %}" href="?worklist=active">В работе</a>
-        <a class="ts-seg__item{% if request.GET.worklist == 'ready' %} is-active{% endif %}" href="?worklist=ready">Готово</a>
+        <a class="ts-seg__item{% if worklist_filter == "" %} is-active{% endif %}" href="?worklist=">Все</a>
+        <a class="ts-seg__item{% if worklist_filter == "active" %} is-active{% endif %}" href="?worklist=active">В работе</a>
+        <a class="ts-seg__item{% if worklist_filter == "ready" %} is-active{% endif %}" href="?worklist=ready">Готово</a>
       </nav>
     </div>
   </div>
@@ -55,7 +55,7 @@
   <div class="saved-estimate tender-saved-estimate">
     <a class="saved-estimate__main" href="{{ saved.row_url }}">
       <span>
-        <strong>№ {{ saved.tender_number }} — {{ saved.name }}</strong>
+        <strong>№ {{ saved.tender_number }} — {{ saved.name }} <span class="saved-estimate__kind">{% if saved.is_tender_estimate %}Тендер{% else %}Заказ{% endif %}</span></strong>
         <small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=saved.owner %}<span>{{ saved.owner.get_full_name|default:"Имя не указано" }} · {{ saved.updated_at|date:"d.m.Y H:i" }}</span></small>
       </span>
       <span class="tender-saved-totals"><strong>{% if saved.summary_snapshot.net_profit %}{{ saved.summary_snapshot.net_profit|floatformat:2|intcomma }} ₽{% else %}—{% endif %}</strong><small>ROI {{ saved.summary_snapshot.roi|default:""|floatformat:2 }}%</small></span>
