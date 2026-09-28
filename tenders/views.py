@@ -1264,11 +1264,15 @@ def _saved_estimates_for(request):
     combined = list(order_qs) + list(tender_qs)
     for estimate in combined:
         is_tender = isinstance(estimate, TenderEstimate)
-        route_prefix = "tender_pipeline_estimate" if is_tender else "tender_estimate"
         estimate.is_tender_estimate = is_tender
-        estimate.row_url = reverse(route_prefix, args=[estimate.pk])
-        estimate.duplicate_url = reverse(f"{route_prefix}_duplicate", args=[estimate.pk])
-        estimate.delete_url = reverse(f"{route_prefix}_delete", args=[estimate.pk])
+        if is_tender:
+            # Тендерный расчёт нельзя переименовать/скопировать/удалить со
+            # страницы расчёта — только row_url, без duplicate/delete.
+            estimate.row_url = reverse("tender_worklist_estimate", args=[estimate.pk])
+        else:
+            estimate.row_url = reverse("tender_estimate", args=[estimate.pk])
+            estimate.duplicate_url = reverse("tender_estimate_duplicate", args=[estimate.pk])
+            estimate.delete_url = reverse("tender_estimate_delete", args=[estimate.pk])
 
     worklist = request.GET.get("worklist") if "worklist" in request.GET else "active"
     if worklist == "active":
@@ -1280,8 +1284,31 @@ def _saved_estimates_for(request):
     return combined[:12], kind, worklist
 
 
+def _risk_summary_for(tender):
+    """Сжатая выжимка из оценки риска тендера — для менеджера, у которого нет
+    доступа к самой карточке тендера. ``None``, если оценки ещё не было."""
+    if not tender or not tender.risk_assessment:
+        return None
+    risk = tender.risk_assessment
+    facts = risk.get("risk_facts") or {}
+    return {
+        "execution_deadline": (risk.get("execution_deadline") or {}).get("date"),
+        "batch_days": facts.get("batch_days"),
+        "delivery_mode": risk.get("delivery_mode"),
+        "sample_requirements": risk.get("sample_requirements"),
+        "national_regime": risk.get("national_regime"),
+    }
+
+
 @login_required
-def home(request, pk=None, pipeline=False):
+def home(request, pk=None, pipeline=False, minimal=False):
+    """Одно и то же ядро (таблица + калькулятор) в трёх средах:
+    ``order`` — самостоятельный расчёт, ``pipeline`` — минимальный вид из
+    карточки тендера (только счёт и «применить и вернуться»), ``worklist`` —
+    тот же TenderEstimate, но открытый из списка «Расчёты» (с блоком рисков,
+    без прямой ссылки на карточку тендера, которая менеджеру недоступна)."""
+    shell = "order" if not pipeline else ("pipeline" if minimal else "worklist")
+    route_prefix = {"order": "tender_estimate", "pipeline": "tender_pipeline_estimate", "worklist": "tender_worklist_estimate"}[shell]
     model = TenderEstimate if pipeline else OrderEstimate
     estimate = _estimate_for_user(request, pk, model) if pk else None
     settings = TenderSettings.objects.get_or_create(pk=1)[0]
@@ -1311,7 +1338,7 @@ def home(request, pk=None, pipeline=False):
             messages.error(request, error)
         else:
             messages.success(request, "Черновик просчёта сохранён." if meta["incomplete"] else "Просчёт тендера сохранён.")
-            return redirect("tender_pipeline_estimate" if pipeline else "tender_estimate", pk=estimate.pk)
+            return redirect(route_prefix, pk=estimate.pk)
 
     initial_lines = []
     if posted_lines is not None:
@@ -1326,8 +1353,8 @@ def home(request, pk=None, pipeline=False):
     source_tender = estimate.tender if pipeline and estimate else None
     saved_estimates, kind_filter, worklist_filter = _saved_estimates_for(request) if not pipeline else ([], "tender", "active")
 
-    route_prefix = "tender_pipeline_estimate" if pipeline else "tender_estimate"
-    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
+    risk_summary = _risk_summary_for(source_tender) if shell == "worklist" else None
+    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
 
 
 @login_required

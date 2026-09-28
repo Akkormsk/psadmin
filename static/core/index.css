@@ -1150,15 +1150,15 @@ h1 {
 .kb-badge--pending { background:var(--tint-neutral); color:var(--ink-2); }
 .kb-badge--warn { background:var(--tint-warning); color:var(--warning-ink); }
 .kb-badge--error { background:var(--tint-negative); color:var(--negative-ink); }
-.tender-source-card { display:grid; gap:10px; margin-top:14px; padding:13px 16px; border:1px solid var(--border); border-radius:11px; background:var(--tint-cool); }
-.tender-source-card header { display:flex; align-items:start; justify-content:space-between; gap:18px; }
-.tender-source-card header > div { display:grid; gap:3px; min-width:0; }
-.tender-source-card header small { color:var(--ink-3); font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
-.tender-source-card header strong { overflow:hidden; color:var(--ink); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
-.tender-source-card header a { flex:none; color:var(--accent); font-size:11px; font-weight:700; }
-.tender-source-card__facts { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--ink-2); font-size:11px; }
-.tender-source-card__facts span { white-space:nowrap; }
 .tender-apply-return { display:flex; justify-content:flex-end; margin-top:12px; }
+/* Шапка тендерного расчёта — только просмотр, номер и название задаёт тендер. */
+.tender-meta__readonly { display:grid; gap:2px; grid-column:span 2; }
+.tender-meta__readonly strong { font-size:14px; color:var(--ink); }
+.tender-meta__readonly span { color:var(--ink-2); font-size:13px; }
+/* «Важное для расчёта» — сжатая выжимка оценки риска для менеджера без доступа к карточке тендера. */
+.tender-risk-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px 20px; margin:0; }
+.tender-risk-summary dt { color:var(--ink-3); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-bottom:2px; }
+.tender-risk-summary dd { margin:0; color:var(--ink); font-size:13px; }
 .tender-saved-totals { display:grid; gap:3px; text-align:right; }
 .tender-saved-totals small { color:var(--ink-3); }
 

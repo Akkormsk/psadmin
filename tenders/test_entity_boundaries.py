@@ -47,8 +47,12 @@ class EstimateEntityBoundaryTests(TestCase):
         self.assertEqual(TenderEstimate.objects.count(), 0)
 
     def test_pipeline_calculation_remains_bound_to_its_tender(self):
+        """Минимальный вид (переход из карточки тендера) не ссылается на саму
+        карточку — только считает и возвращает результат «Применить»."""
         tender = Tender.objects.create(law="fz44", purchase_number="pipeline-1", object_info="Тестовый тендер")
         estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="pipeline-1", name="Заказчик")
         response = self.client.get(reverse("tender_pipeline_estimate", args=[estimate.pk]))
-        self.assertContains(response, "Вернуться к тендеру")
-        self.assertContains(response, "Исходный тендер")
+        self.assertContains(response, "Применить и вернуться к тендеру")
+        self.assertNotContains(response, "Исходный тендер")
+        estimate.refresh_from_db()
+        self.assertEqual(estimate.tender_id, tender.id)
