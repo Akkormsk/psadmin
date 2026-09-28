@@ -27,8 +27,12 @@ class Command(BaseCommand):
         parser.add_argument("line_ids", nargs="+", type=int)
         parser.add_argument("--out", default="cascade_compare_result.json")
         parser.add_argument("--configs", nargs="+", choices=list(CONFIGS), default=list(CONFIGS))
+        parser.add_argument("--max-cost-rub", type=float, default=0, help="Потолок расхода на один прогон (0 — без потолка).")
+        parser.add_argument("--stop-if-balance-below", type=float, default=0, help="Прервать серию, если остаток на счёте упал ниже этого значения.")
 
     def handle(self, *args, **options):
+        from tenders.gateway_budget import account_balance
+
         output = {}
         for line_id in options["line_ids"]:
             try:
@@ -41,16 +45,23 @@ class Command(BaseCommand):
             }
             output[str(line_id)] = {"name": line.name, "quantity": str(line.quantity), "runs": {}}
             for config_name in options["configs"]:
+                if options["stop_if_balance_below"]:
+                    balance, _ = account_balance(force=True)
+                    if balance is not None and balance < options["stop_if_balance_below"]:
+                        self.stdout.write(self.style.WARNING(f"Остаток {balance:.2f} ₽ ниже порога — останавливаюсь."))
+                        with open(options["out"], "w", encoding="utf-8") as handle:
+                            json.dump(output, handle, ensure_ascii=False, indent=2)
+                        return
                 self.stdout.write(f"{line_id} {line.name} · {config_name}…")
-                output[str(line_id)]["runs"][config_name] = self._run_one(payload, CONFIGS[config_name])
+                output[str(line_id)]["runs"][config_name] = self._run_one(payload, CONFIGS[config_name], options["max_cost_rub"])
 
         with open(options["out"], "w", encoding="utf-8") as handle:
             json.dump(output, handle, ensure_ascii=False, indent=2)
         self.stdout.write(self.style.SUCCESS(f"Сохранено: {options['out']}"))
 
     @staticmethod
-    def _run_one(line, step_settings):
-        cascade = Cascade(line, top=10, step_settings=step_settings)
+    def _run_one(line, step_settings, max_cost_rub=0):
+        cascade = Cascade(line, top=10, step_settings=step_settings, max_cost_rub=max_cost_rub)
         started = time.perf_counter()
         result = cascade.run()
         elapsed = time.perf_counter() - started

@@ -1,0 +1,313 @@
+{
+  "1431": {
+    "name": "Термокружка",
+    "quantity": "192.00",
+    "runs": {
+      "jev_ladder": {
+        "elapsed_seconds": 22.5,
+        "candidates_shown": 10,
+        "candidates_exact": 10,
+        "removed_by_triage": 15,
+        "diagnostics": {
+          "verdict_cache_hits": 0,
+          "tz_cache_hit": true,
+          "search_plan_cache_hit": true,
+          "query_phrases": [
+            "термокружка",
+            "термос-кружка",
+            "кружка термос",
+            "термокружка для напитков",
+            "термокружка с крышкой",
+            "термокружка дорожная",
+            "термокружка вакуумная",
+            "термокружка металлическая",
+            "термокружка с поилкой",
+            "термокружка с клапаном",
+            "термокружка с крышечкой",
+            "термокружка с крышкой и клапаном",
+            "термокружка с двойными стенками",
+            "термокружка с термоизоляцией",
+            "термокружка для кофе",
+            "термокружка для чая",
+            "термокружка для горячих напитков",
+            "термокружка для холодных напитков",
+            "термокружка с герметичной крышкой",
+            "термокружка с защитой от протекания",
+            "термокружка с кнопкой открывания",
+            "термокружка с крышкой на защёлке",
+            "термокружка с крышкой на резьбе",
+            "термокружка с силиконовым уплотнителем"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 24,
+            "minimum_met": true
+          },
+          "pool_after_search": 5808,
+          "name_filter": "cache",
+          "name_filter_removed": 5308,
+          "groups": 125,
+          "jev_triage": {
+            "checked": 100,
+            "dropped": 15
+          },
+          "step6_skipped_disqualified": 4,
+          "step6": {
+            "pool": 85,
+            "graded": 85,
+            "cached": 40,
+            "complete": 125,
+            "code_prefilled_cells": 80,
+            "jev_prefilled_cells": 201
+          }
+        },
+        "usage_by_model": {
+          "jev-1.13.0": {
+            "prompt_tokens": 199188,
+            "completion_tokens": 6577
+          },
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 31245,
+            "completion_tokens": 2520
+          }
+        },
+        "estimated_cost_rub": 18.992,
+        "top3": [
+          {
+            "name": "Термокружка \"Jar\" 250 мл, красный (P)",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "168.27"
+          },
+          {
+            "name": "Термокружка Pot 330мл, красный",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "389.79"
+          },
+          {
+            "name": "Термокружка SALAK из нержавеющей стали 310 мл, красный",
+            "fit": "exact",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "410.70"
+          }
+        ],
+        "error": ""
+      }
+    }
+  },
+  "1809": {
+    "name": "Флеш-накопитель сувенирный",
+    "quantity": "80.00",
+    "runs": {
+      "jev_ladder": {
+        "elapsed_seconds": 67.4,
+        "candidates_shown": 10,
+        "candidates_exact": 1,
+        "removed_by_triage": 15,
+        "diagnostics": {
+          "verdict_cache_hits": 0,
+          "tz_cache_hit": true,
+          "search_plan_cache_hit": true,
+          "query_phrases": [
+            "флешка",
+            "флеш-накопитель",
+            "usb флешка",
+            "usb накопитель",
+            "usb флеш-накопитель",
+            "флеш накопитель",
+            "флеш-накопитель сувенирный",
+            "флешка сувенирная",
+            "usb флешка сувенирная",
+            "usb флеш-накопитель сувенирный",
+            "флешка с логотипом",
+            "флешка рекламная",
+            "флешка брендированная",
+            "флешка корпоративная",
+            "флешка подарочная",
+            "флешка именная",
+            "флешка с гравировкой",
+            "флешка с надписью",
+            "флешка с рисунком",
+            "флешка с символикой",
+            "флешка с принтом",
+            "флешка с изображением",
+            "флешка с оформлением"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 23,
+            "minimum_met": true
+          },
+          "pool_after_search": 1012,
+          "name_filter": "cache",
+          "name_filter_removed": 755,
+          "groups": 209,
+          "jev_triage": {
+            "checked": 209,
+            "dropped": 15
+          },
+          "step6_skipped_disqualified": 0,
+          "step6": {
+            "pool": 194,
+            "graded": 194,
+            "cached": 15,
+            "complete": 199,
+            "code_prefilled_cells": 0,
+            "jev_prefilled_cells": 520
+          }
+        },
+        "usage_by_model": {
+          "jev-1.13.0": {
+            "prompt_tokens": 391009,
+            "completion_tokens": 18359
+          },
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 131743,
+            "completion_tokens": 11779
+          }
+        },
+        "estimated_cost_rub": 79.665,
+        "top3": [
+          {
+            "name": "Флешка 3.0 овальной формы, колпачок с магнитом, 32 Гб, коричневый",
+            "fit": "exact",
+            "match": 4,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "988.50"
+          },
+          {
+            "name": "Флешка 3.0 промо поворотный механизм, 32 Гб, коричневый",
+            "fit": "partial",
+            "match": 3,
+            "mismatch": 0,
+            "unknown": 1,
+            "price": "988.50"
+          },
+          {
+            "name": "Флеш-карта USB 2.0 16 Gb «Woody» с магнитным колпачком, натуральный",
+            "fit": "partial",
+            "match": 3,
+            "mismatch": 1,
+            "unknown": 0,
+            "price": "384.56"
+          }
+        ],
+        "error": ""
+      }
+    }
+  },
+  "1774": {
+    "name": "Ручка канцелярская",
+    "quantity": "600.00",
+    "runs": {
+      "jev_ladder": {
+        "elapsed_seconds": 108.7,
+        "candidates_shown": 10,
+        "candidates_exact": 7,
+        "removed_by_triage": 17,
+        "diagnostics": {
+          "verdict_cache_hits": 0,
+          "tz_cache_hit": true,
+          "search_plan_cache_hit": true,
+          "query_phrases": [
+            "ручка",
+            "ручка шариковая",
+            "шариковая ручка",
+            "пишущая ручка",
+            "письменная ручка",
+            "ручка для письма",
+            "ручка для письма шариковая",
+            "ручка офисная",
+            "ручка для офиса",
+            "ручка для школы",
+            "ручка для записей",
+            "ручка для заметок",
+            "ручка шариковая офисная",
+            "ручка шариковая простая",
+            "ручка шариковая стандартная",
+            "ручка шариковая для письма",
+            "ручка шариковая для записей",
+            "ручка шариковая для школы",
+            "ручка шариковая для офиса",
+            "ручка шариковая повседневная",
+            "ручка шариковая недорогая",
+            "ручка шариковая качественная",
+            "ручка шариковая удобная",
+            "ручка шариковая популярная"
+          ],
+          "query_phrase_limits": {
+            "minimum": 12,
+            "maximum": 24,
+            "actual": 24,
+            "minimum_met": true
+          },
+          "pool_after_search": 5125,
+          "name_filter": "cache",
+          "name_filter_removed": 3832,
+          "groups": 1222,
+          "jev_triage": {
+            "checked": 551,
+            "dropped": 17
+          },
+          "step6_skipped_disqualified": 671,
+          "step6": {
+            "pool": 534,
+            "graded": 534,
+            "cached": 688,
+            "complete": 1215,
+            "code_prefilled_cells": 1050,
+            "jev_prefilled_cells": 2707
+          }
+        },
+        "usage_by_model": {
+          "jev-1.13.0": {
+            "prompt_tokens": 1343007,
+            "completion_tokens": 81222
+          },
+          "anthropic/claude-sonnet-4-5": {
+            "prompt_tokens": 386377,
+            "completion_tokens": 51049
+          }
+        },
+        "estimated_cost_rub": 268.402,
+        "top3": [
+          {
+            "name": "Металлическая шариковая ручка с флеш-картой на 8 Гб \"Jobs\", серебриста",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "358.16"
+          },
+          {
+            "name": "Металлическая шариковая ручка с флеш-картой на 8 Гб \"Jobs\", серебриста",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "475.78"
+          },
+          {
+            "name": "Шариковая ручка Parker Jotter K160, цвет: Blue/GT, стержень: M, цвет ч",
+            "fit": "exact",
+            "match": 7,
+            "mismatch": 0,
+            "unknown": 0,
+            "price": "1981.95"
+          }
+        ],
+        "error": ""
+      }
+    }
+  }
+}

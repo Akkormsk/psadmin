@@ -549,13 +549,23 @@ class Cascade:
             raise TimeoutError("Достигнут лимит времени прогона")
         return max(1, min(default, remaining))
 
+    def _check_budget(self, prompt_len, completion_tokens, model) -> None:
+        """Общая проверка для ЛЮБОГО платного вызова — умного агента
+        (`_call_ai`) и Джева (`_grade_grid_jev`/`_jev_triage`) одинаково.
+        Раньше лимит стоял только в `_call_ai` — на живом сравнении
+        28.09.2026 (docs/cascade_runs/) это позволило Джеву на большом
+        пуле («Ручка», 551 карточка) потратить ~300 ₽ мимо потолка,
+        выставленного для прогона."""
+        if not self.max_cost_rub:
+            return
+        from .gateway_budget import spend_rub
+        spent = sum(spend_rub(usage, used_model) or 0 for used_model, usage in self.usage_by_model.items())
+        estimate = spend_rub({"prompt_tokens": max(1, prompt_len // 3), "completion_tokens": completion_tokens}, model) or 0
+        if spent + estimate > self.max_cost_rub:
+            raise RuntimeError(f"Следующий вызов может превысить лимит {self.max_cost_rub:g} ₽")
+
     def _call_ai(self, prompt, *, max_tokens, timeout, model, images=None):
-        if self.max_cost_rub:
-            from .gateway_budget import spend_rub
-            spent = sum(spend_rub(usage, used_model) or 0 for used_model, usage in self.usage_by_model.items())
-            estimate = spend_rub({"prompt_tokens": max(1, len(prompt) // 3), "completion_tokens": max_tokens}, model) or 0
-            if spent + estimate > self.max_cost_rub:
-                raise RuntimeError(f"Следующий вызов может превысить лимит {self.max_cost_rub:g} ₽")
+        self._check_budget(len(prompt), max_tokens, model)
         try:
             return _ai_json(
                 prompt, max_tokens=max_tokens, timeout=self._remaining_timeout(timeout), model=model, images=images,
@@ -1252,6 +1262,7 @@ class Cascade:
                 + "\n\n".join(f"КАРТОЧКА {pos}\n{self._card_brief(card)}" for pos, card in enumerate(batch, 1))
             )
             try:
+                self._check_budget(len(state), 20 * len(questions), "jev-1.13.0")
                 answers, usage = decide_matrix(state, questions, timeout=self._remaining_timeout(45))
             except Exception:
                 logger.exception("Cascade Jev triage batch failed")
@@ -1704,6 +1715,7 @@ class Cascade:
                 + "\n\n".join(card_text)
             )
             try:
+                self._check_budget(len(state), 20 * len(questions), "jev-1.13.0")
                 answers, usage = decide_matrix(state, questions, timeout=self._remaining_timeout(60))
             except Exception as exc:
                 logger.exception("Cascade step 6 Jev batch failed")
