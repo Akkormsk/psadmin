@@ -1298,18 +1298,21 @@ def _risk_summary_for(tender):
     from tender_selection.views import _risk_badge
 
     risk = tender.risk_assessment or {}
-    # risk_facts.batch_days дублирует то, что уже написано в delivery_mode
-    # словами («5 рабочих дней после получения заявки») — не показываем оба,
-    # чтобы не выглядело как два разных срока. Разбор срока — забота оценки
-    # риска (tender_selection), сюда просто переносим готовые поля как есть.
+    delivery_mode = risk.get("delivery_mode")
+    batch_days = (risk.get("risk_facts") or {}).get("batch_days")
+    # Срок на одну заявку — деталь именно способа поставки, не срока
+    # исполнения контракта целиком, поэтому идёт тут, а не в "execution".
+    if delivery_mode and batch_days:
+        delivery_mode = f"{delivery_mode} (по одной заявке — {batch_days} дн.)"
     return {
         "risk_badge": _risk_badge(tender),
         "submission_deadline": tender.collecting_finished_at,
         "execution": (risk.get("execution_deadline") or {}).get("date"),
-        "delivery_mode": risk.get("delivery_mode"),
+        "delivery_mode": delivery_mode,
         "sample_requirements": risk.get("sample_requirements"),
         "national_regime": risk.get("national_regime"),
-        "legal_risks": risk.get("legal_risks"),
+        "risk_factors": risk.get("risk_factors"),
+        "risk_level": risk.get("risk_level"),
     }
 
 

@@ -110,29 +110,35 @@ class EstimateShellTests(TestCase):
             self.assertContains(response, "ДКС Кузбасса")
             self.assertContains(response, "0139")
 
-    def test_header_links_to_eis_when_known(self):
+    def test_header_number_links_to_eis_when_known(self):
         tender = self._tender(eis_url="https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=1")
         estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
 
         response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
 
-        self.assertContains(response, 'class="ts-linkchip"')
+        self.assertContains(response, 'class="tender-meta__number-link"')
         self.assertContains(response, "zakupki.gov.ru")
 
-    def test_header_has_no_eis_link_when_unknown(self):
+    def test_header_number_is_plain_text_when_eis_url_unknown(self):
         tender = self._tender()
         estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
 
         response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
 
-        self.assertNotContains(response, "ts-linkchip")
+        self.assertNotContains(response, "tender-meta__number-link")
+        self.assertContains(response, 'class="tender-meta__number"')
 
-    def test_risk_block_shows_traffic_light_and_legal_risks_note(self):
+    def test_risk_block_shows_traffic_light_and_spelled_out_factors(self):
+        """Как на карточке тендера — не текст-сводка, а список факторов с
+        итоговым уровнем через светофор в заголовке блока."""
         tender = self._tender(
             risk_checked_at=timezone.now(),
             risk_assessment={
                 "risk_level": "medium",
-                "risk_factors": [],
+                "risk_factors": [
+                    {"code": "short_batch", "level": "medium", "text": "Срок поставки по одной заявке короткий."},
+                    {"code": "samples", "level": "high", "text": "Требуются образцы или испытания."},
+                ],
                 "risk_facts": {"batch_days": 7},
                 "delivery_mode": "поставка по заявкам, 5 рабочих дней на партию",
                 "legal_risks": "Штрафы за просрочку прописаны жёстко, обеспечение контракта повышенное.",
@@ -144,11 +150,13 @@ class EstimateShellTests(TestCase):
 
         self.assertContains(response, "kb-badge--warn")
         self.assertContains(response, "риск: средний")
-        self.assertContains(response, "Штрафы за просрочку")
-        # risk_facts.batch_days не выводим отдельно — delivery_mode уже
-        # называет тот же срок словами, дублировать его числом не нужно.
-        self.assertNotContains(response, "7 дн.")
-        self.assertNotContains(response, "7 календарных")
+        self.assertContains(response, "Факторы оценки")
+        self.assertContains(response, "Срок поставки по одной заявке короткий.")
+        self.assertContains(response, "ts-risk-factor--high")
+        # Текст-сводку (legal_risks) больше не показываем — только факторы.
+        self.assertNotContains(response, "Штрафы за просрочку")
+        # Срок на заявку — деталь способа поставки, показываем внутри «Поставка».
+        self.assertContains(response, "поставка по заявкам, 5 рабочих дней на партию (по одной заявке — 7 дн.)")
 
     def test_risk_block_shows_submission_deadline_even_without_assessment(self):
         deadline = timezone.now() + timedelta(days=5)
@@ -172,6 +180,18 @@ class EstimateShellTests(TestCase):
 
         self.assertContains(response, "Актуальные расчёты")
         self.assertContains(response, other.name)
+
+    def test_worklist_back_link_goes_to_main_menu_not_an_empty_form(self):
+        """«Назад» не должен вести на пустой новый расчёт — это создавало
+        ложное ощущение вложенности; переключаться между тендерами — через
+        список внизу, а не через «назад»."""
+        tender = self._tender()
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+
+        response = self.client.get(reverse("tender_worklist_estimate", args=[estimate.pk]))
+
+        self.assertContains(response, reverse("index"))
+        self.assertNotContains(response, f'href="{reverse("tender_home")}"')
 
     def test_pipeline_shell_never_shows_the_saved_list(self):
         tender = self._tender()
