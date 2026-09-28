@@ -106,3 +106,22 @@ class ApplySuggestionsTests(TestCase):
         self.assertEqual(self.client.get("/tender-selection/word-audit/").status_code, 200)
         self.client.post("/tender-selection/word-audit/apply/", {"add_plus": ["шоппер"]})
         self.assertIn("шоппер", FilterSettings.load().include_words)
+
+    def test_applied_suggestion_disappears_from_the_pending_audit(self):
+        """Принятое предложение больше не должно всплывать при следующем
+        открытии страницы — иначе можно применить его повторно."""
+        _settings()
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+        WordAudit.objects.create(result={
+            "add_plus": [{"word": "шоппер", "why": "часто встречается", "examples": []}],
+            "add_minus": [{"word": "бланк", "why": "мусор", "examples": []}],
+            "remove_plus": [], "remove_minus": [],
+        })
+
+        response = self.client.post("/tender-selection/word-audit/apply/", {"add_plus": ["шоппер"]}, follow=True)
+
+        self.assertNotContains(response, 'value="шоппер"')
+        audit = WordAudit.objects.first()
+        self.assertEqual(audit.result["add_plus"], [])
+        self.assertEqual(len(audit.result["add_minus"]), 1)

@@ -239,3 +239,25 @@ def apply_words(*, add_plus, add_minus, remove_plus, remove_minus) -> None:
     settings.include_words = _merge(settings.include_words, add_plus, remove_plus)
     settings.exclude_words = _merge(settings.exclude_words, add_minus, remove_minus)
     settings.save(update_fields=["include_words", "exclude_words"])
+    _drop_applied(add_plus=add_plus, add_minus=add_minus, remove_plus=remove_plus, remove_minus=remove_minus)
+
+
+def _drop_applied(**chosen: list[str]) -> None:
+    """Принятые предложения убираются из последнего аудита — иначе страница
+    показывает их снова и позволяет применить повторно."""
+    audit = WordAudit.objects.first()
+    if not audit:
+        return
+    result = audit.result or {}
+    changed = False
+    for kind, words in chosen.items():
+        wanted = {w.strip().lower() for w in words}
+        if not wanted or not result.get(kind):
+            continue
+        kept = [item for item in result[kind] if str(item.get("word", "")).strip().lower() not in wanted]
+        if len(kept) != len(result[kind]):
+            result[kind] = kept
+            changed = True
+    if changed:
+        audit.result = result
+        audit.save(update_fields=["result"])
