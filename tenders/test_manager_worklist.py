@@ -121,6 +121,21 @@ class ManagerWorklistTests(TestCase):
         self.assertNotContains(response, ready_tender.name)
         self.assertNotContains(response, "Самостоятельный")
 
+    def test_archived_tender_disappears_from_the_list_like_it_does_from_kanban(self):
+        """То же условие, что и на канбане (tender.status == DISMISSED) —
+        как только тендер архивирован, его расчёт пропадает и оттуда, и отсюда."""
+        live_tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        archived_tender = Tender.objects.create(
+            law="fz44", purchase_number="2", object_info="Архивный", status=Tender.DISMISSED,
+        )
+        live = TenderEstimate.objects.create(owner=self.user, tender=live_tender, tender_number="1", name="Живой")
+        TenderEstimate.objects.create(owner=self.user, tender=archived_tender, tender_number="2", name="Архивный расчёт")
+
+        response = self.client.get(reverse("tender_home"), {"kind": "tender", "worklist": ""})
+
+        self.assertContains(response, live.name)
+        self.assertNotContains(response, "Архивный расчёт")
+
     def test_row_shows_an_unobtrusive_kind_label(self):
         tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
         TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Тендерный")

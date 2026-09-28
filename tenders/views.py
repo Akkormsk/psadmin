@@ -1247,8 +1247,12 @@ def _saved_estimates_for(request):
     Каждой строке нужен свой набор маршрутов (order/* против pipeline/*),
     поэтому они дописываются на объект — шаблон видит один однородный список.
     """
+    from tender_selection.models import Tender
+
     order_qs = OrderEstimate.objects.all()
-    tender_qs = TenderEstimate.objects.all()
+    # Тот же критерий, что и на канбане: тендер виден, пока не архивирован
+    # («Расчёт» → «Торги» → «Результат»); архивный — пропадает отовсюду разом.
+    tender_qs = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED)
     if not request.user.is_superuser:
         order_qs = order_qs.filter(owner=request.user)
         tender_qs = tender_qs.filter(owner=request.user)
