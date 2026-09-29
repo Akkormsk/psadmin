@@ -26,7 +26,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, RequirementSkipRule, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
@@ -1233,6 +1233,11 @@ def _persist_tender_estimate(request, estimate, settings, *, pipeline=False):
     estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
     estimate.summary_snapshot["is_incomplete"] = not calculation_complete
     estimate.document_analysis = meta["posted_analysis"] or {}
+    if not pipeline and not estimate.order_id:
+        estimate.order = Order.objects.create(name=estimate.name)
+    elif not pipeline:
+        estimate.order.name = estimate.name
+        estimate.order.save(update_fields=["name", "updated_at"])
     estimate.save()
     estimate.lines.all().delete()
     line_model = TenderLine if pipeline else OrderLine
@@ -1401,11 +1406,12 @@ def duplicate_estimate(request, pk, pipeline=False):
     line_model = TenderLine if pipeline else OrderLine
     original = _estimate_for_user(request, pk, model)
     lines = list(original.lines.all())
+    name = f"{original.name} (копия)"[:300]
     copy = model.objects.create(
         owner=request.user,
-        **({"tender": original.tender, "status": TenderEstimate.DRAFT} if pipeline else {}),
+        **({"tender": original.tender} if pipeline else {"order": Order.objects.create(name=name)}),
         tender_number=original.tender_number,
-        name=f"{original.name} (копия)"[:300],
+        name=name,
         reduction_percent=original.reduction_percent,
         russia_delivery=original.russia_delivery,
         result_notes="",
@@ -1438,34 +1444,31 @@ def delete_estimate(request, pk, pipeline=False):
 @login_required
 @require_POST
 def update_estimate_status(request, pk, pipeline=True):
+    from tender_selection.models import Tender
+
     estimate = _estimate_for_user(request, pk, TenderEstimate)
     status = request.POST.get("status", "")
-    if status not in dict(TenderEstimate.STATUS_CHOICES):
+    if status not in dict(Tender.OUTCOME_STATUS_CHOICES) or not estimate.tender_id:
         return HttpResponse(status=400)
-    estimate.status = status
-    update_fields = ["status"]
+    tender = estimate.tender
+    tender.outcome_status = status
+    update_fields = ["outcome_status"]
     # «Архивировать — невыгодно» — тоже терминальное решение по этому тендеру
     # (участвовать не будем), уходит в архив сразу же, как и настоящий факт
     # торгов (см. apply_tender_outcome) — не нужно отдельно жать «Скрыть».
-    if status == TenderEstimate.NOT_PARTICIPATED:
-        from django.utils import timezone
-        estimate.archived_at = timezone.now()
-        update_fields.append("archived_at")
-    estimate.save(update_fields=update_fields)
-    if status == TenderEstimate.NOT_PARTICIPATED and estimate.tender_id:
-        from tender_selection.models import Tender
-        Tender.objects.filter(pk=estimate.tender_id).update(status=Tender.DISMISSED, archived_at=estimate.archived_at)
+    if status == Tender.OUTCOME_NOT_PARTICIPATED:
+        tender.status = Tender.DISMISSED
+        tender.archived_at = timezone.now()
+        update_fields += ["status", "archived_at"]
+    tender.save(update_fields=update_fields)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({
             "status": status,
-            "label": estimate.get_status_display(),
-            "requires_result": status in {TenderEstimate.LOST, TenderEstimate.WON},
+            "label": tender.get_outcome_status_display(),
+            "requires_result": status in {Tender.OUTCOME_LOST, Tender.OUTCOME_WON},
         })
-    # Кнопка теперь живёт на странице тендера (не здесь) — туда и возвращаем,
-    # если у просчёта есть исходный найденный тендер; иначе больше некуда.
-    if estimate.tender_id:
-        return redirect("tender_selection:detail", pk=estimate.tender_id)
-    return redirect("tender_pipeline_estimate", pk=estimate.pk)
+    # Кнопка теперь живёт на странице тендера (не здесь) — туда и возвращаем.
+    return redirect("tender_selection:detail", pk=estimate.tender_id)
 
 
 @login_required
@@ -1473,10 +1476,14 @@ def update_estimate_status(request, pk, pipeline=True):
 def update_order_status(request, pk):
     estimate = _estimate_for_user(request, pk, OrderEstimate)
     status = request.POST.get("status", "")
-    if status not in dict(OrderEstimate.STATUS_CHOICES):
+    if status not in dict(Order.STATUS_CHOICES):
         return HttpResponse(status=400)
-    estimate.status = status
-    estimate.save(update_fields=["status", "updated_at"])
+    if not estimate.order_id:
+        estimate.order = Order.objects.create(name=estimate.name)
+        estimate.save(update_fields=["order"])
+    order = estimate.order
+    order.status = status
+    order.save(update_fields=["status", "updated_at"])
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({"status": status, "label": estimate.get_status_display()})
+        return JsonResponse({"status": status, "label": order.get_status_display()})
     return redirect("tender_home")

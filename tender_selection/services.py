@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
@@ -107,6 +107,16 @@ def _parse_dt(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _parse_date(value):
+    """Контракт отдаёт даты без времени ("2026-05-28")."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_price(value):
@@ -977,8 +987,6 @@ def fetch_tender_outcome(estimate) -> dict:
     auto_status; если нет — возвращает найденную цену/снижение, а решение
     «выиграли/проиграли» остаётся за администратором (см. enter_outcome).
     """
-    from tenders.models import TenderEstimate
-
     try:
         rows = gosplan.fetch_contracts({"purchase_number": estimate.tender_number, "limit": 5})
     except gosplan.GosplanError:
@@ -987,7 +995,12 @@ def fetch_tender_outcome(estimate) -> dict:
         return {"found": False}
     row = rows[0]
     price = row.get("price")
-    result: dict = {"found": True, "price": price, "suppliers": [str(s) for s in (row.get("suppliers") or [])]}
+    result: dict = {
+        "found": True, "price": price, "suppliers": [str(s) for s in (row.get("suppliers") or [])],
+        "reg_num": row.get("reg_num") or "",
+        "exe_start": _parse_date(row.get("exe_start")),
+        "exe_end": _parse_date(row.get("exe_end")),
+    }
 
     nmck_total = (estimate.summary_snapshot or {}).get("nmck_total")
     if price is not None and nmck_total:
@@ -999,7 +1012,7 @@ def fetch_tender_outcome(estimate) -> dict:
 
     company_inn = os.getenv("COMPANY_INN", "").strip()
     if company_inn and price is not None:
-        result["auto_status"] = TenderEstimate.WON if company_inn in result["suppliers"] else TenderEstimate.LOST
+        result["auto_status"] = Tender.OUTCOME_WON if company_inn in result["suppliers"] else Tender.OUTCOME_LOST
     return result
 
 
@@ -1008,7 +1021,7 @@ CONTRACT_RECHECK = timedelta(hours=6)
 
 
 def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
-    """Фоновая попытка забрать факт торгов для просчётов «В ожидании», у которых
+    """Фоновая попытка забрать факт торгов для тендеров «На торгах», у которых
     итог ещё не внесён — тот же ГосПлан-запрос, что и ручная кнопка «Забрать итог
     автоматически» на странице тендера, просто без захода туда. Сама решает
     выиграли/проиграли только если настроен COMPANY_INN (см. fetch_tender_outcome) —
@@ -1018,9 +1031,10 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
 
     attempted = succeeded = 0
     estimates = TenderEstimate.objects.filter(
-        Q(status=TenderEstimate.PENDING, outcome_checked_at__isnull=True)
-        | Q(status=TenderEstimate.PUBLISHED, outcome_checked_at__lt=timezone.now() - CONTRACT_RECHECK),
-    ).order_by("updated_at")[:50]
+        Q(tender__outcome_status=Tender.OUTCOME_PENDING, tender__outcome_checked_at__isnull=True)
+        | Q(tender__outcome_status=Tender.OUTCOME_PUBLISHED, tender__outcome_checked_at__lt=timezone.now() - CONTRACT_RECHECK),
+        tender__isnull=False,
+    ).select_related("tender").order_by("updated_at")[:50]
     for estimate in estimates:
         if attempted >= limit:
             break
@@ -1030,7 +1044,7 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
         except Exception:
             logger.exception("Outcome retry failed for estimate %s", estimate.tender_number)
             continue
-        if estimate.status == TenderEstimate.PUBLISHED:
+        if estimate.tender.outcome_status == Tender.OUTCOME_PUBLISHED:
             succeeded += _reconcile_published_with_contract(estimate, outcome)
             continue
         if not outcome.get("found"):
@@ -1038,13 +1052,15 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
         if outcome.get("auto_status"):
             apply_tender_outcome(
                 estimate, status=outcome["auto_status"], price=outcome.get("price"),
-                reduction_percent=outcome.get("reduction_percent"), source=TenderEstimate.OUTCOME_AUTO,
+                reduction_percent=outcome.get("reduction_percent"), source=Tender.OUTCOME_AUTO,
+                reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
             )
         else:
-            estimate.actual_price = outcome.get("price")
-            estimate.actual_reduction_percent = outcome.get("reduction_percent")
-            estimate.outcome_checked_at = timezone.now()
-            estimate.save(update_fields=["actual_price", "actual_reduction_percent", "outcome_checked_at"])
+            tender = estimate.tender
+            tender.contract_price = outcome.get("price")
+            tender.contract_reduction_percent = outcome.get("reduction_percent")
+            tender.outcome_checked_at = timezone.now()
+            tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
         succeeded += 1
     return attempted, succeeded
 
@@ -1052,44 +1068,52 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
 def _reconcile_published_with_contract(estimate, outcome: dict) -> bool:
     """Протокол вышел, но нашу заявку не опознали — решаем по ИНН победителя в контракте.
     Цену и снижение оставляем из протокола: они уже посчитаны от НМЦК закупки."""
-    from tenders.models import TenderEstimate
-
+    tender = estimate.tender
     if not outcome.get("auto_status"):
-        estimate.outcome_checked_at = timezone.now()
-        estimate.save(update_fields=["outcome_checked_at"])
+        tender.outcome_checked_at = timezone.now()
+        tender.save(update_fields=["outcome_checked_at"])
         return False
     apply_tender_outcome(
         estimate, status=outcome["auto_status"],
-        price=estimate.actual_price if estimate.actual_price is not None else outcome.get("price"),
+        price=tender.contract_price if tender.contract_price is not None else outcome.get("price"),
         reduction_percent=(
-            estimate.actual_reduction_percent if estimate.actual_reduction_percent is not None
+            tender.contract_reduction_percent if tender.contract_reduction_percent is not None
             else outcome.get("reduction_percent")
         ),
-        source=TenderEstimate.OUTCOME_AUTO,
+        reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
+        source=Tender.OUTCOME_AUTO,
     )
     return True
 
 
-def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None, source) -> None:
-    """Записать факт торгов на просчёт; при победе — отметить в ContractStat.is_ours,
-    чтобы своя история наконец начала накапливаться (поле раньше нигде не писалось).
+def apply_tender_outcome(estimate, *, status, price=None, reduction_percent=None, source, reg_num=None, exe_start=None, exe_end=None) -> None:
+    """Записать факт торгов на ТЕНДЕР (не на расчёт — расчёт можно пересчитать
+    или удалить, а то, что случилось с тендером, должно остаться и после
+    архивации); при победе — отметить в ContractStat.is_ours, чтобы своя
+    история наконец начала накапливаться (поле раньше нигде не писалось).
 
     «Результат» фиксирует итог торгов. Карточка остаётся на этой стадии,
     пока пользователь явно не скроет её в архив."""
-    from tenders.models import TenderEstimate
-
-    estimate.status = status
+    tender = estimate.tender
+    tender.outcome_status = status
     if price is not None:
-        estimate.actual_price = price
+        tender.contract_price = price
     if reduction_percent is not None:
-        estimate.actual_reduction_percent = reduction_percent
-    estimate.outcome_checked_at = timezone.now()
-    estimate.outcome_source = source
-    estimate.save(update_fields=[
-        "status", "actual_price", "actual_reduction_percent", "outcome_checked_at", "outcome_source",
+        tender.contract_reduction_percent = reduction_percent
+    if reg_num:
+        tender.contract_reg_num = reg_num
+    if exe_start:
+        tender.contract_exe_start = exe_start
+    if exe_end:
+        tender.contract_exe_end = exe_end
+    tender.outcome_checked_at = timezone.now()
+    tender.outcome_source = source
+    tender.save(update_fields=[
+        "outcome_status", "contract_price", "contract_reduction_percent", "contract_reg_num",
+        "contract_exe_start", "contract_exe_end", "outcome_checked_at", "outcome_source",
     ])
 
-    if status == TenderEstimate.WON:
+    if status == Tender.OUTCOME_WON:
         ContractStat.objects.update_or_create(
             law="fz44", purchase_number=estimate.tender_number,
             defaults={
@@ -1115,55 +1139,56 @@ def reduction_percent_from(nmck, price):
 def _decide_status_from_protocol(estimate) -> None:
     """Опознали свою заявку — «Выигран»/«Проигран», нет — «Итог опубликован».
     Решения, принятые вручную, и «Не участвовали» не трогаем."""
-    from tenders.models import TenderEstimate
-
     from . import protocols
 
-    decidable = estimate.status in (TenderEstimate.PENDING, TenderEstimate.PUBLISHED) or (
-        estimate.status in (TenderEstimate.WON, TenderEstimate.LOST)
-        and estimate.outcome_source == TenderEstimate.OUTCOME_AUTO
+    tender = estimate.tender
+    decidable = tender.outcome_status in (Tender.OUTCOME_PENDING, Tender.OUTCOME_PUBLISHED) or (
+        tender.outcome_status in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST)
+        and tender.outcome_source == Tender.OUTCOME_AUTO
     )
-    if not decidable or not estimate.protocol:
+    if not decidable or not tender.protocol:
         return
-    ours = protocols.find_ours(estimate.protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price)
+    ours = protocols.find_ours(tender.protocol, bid_number=tender.bid_number, bid_price=tender.bid_price)
     if ours:
-        status = TenderEstimate.WON if ours.get("rank") == 1 and not ours.get("rejected") else TenderEstimate.LOST
+        status = Tender.OUTCOME_WON if ours.get("rank") == 1 and not ours.get("rejected") else Tender.OUTCOME_LOST
     else:
-        status = TenderEstimate.PUBLISHED
+        status = Tender.OUTCOME_PUBLISHED
     apply_tender_outcome(
-        estimate, status=status, price=estimate.actual_price,
-        reduction_percent=estimate.actual_reduction_percent, source=TenderEstimate.OUTCOME_AUTO,
+        estimate, status=status, price=tender.contract_price,
+        reduction_percent=tender.contract_reduction_percent, source=Tender.OUTCOME_AUTO,
     )
 
 
 def check_protocol(estimate) -> bool:
-    """Забрать итоговый протокол из ЕИС и применить к расчёту. False — протокола ещё нет.
+    """Забрать итоговый протокол из ЕИС и применить к тендеру. False — протокола ещё нет.
     ProtocolError (сеть/ЕИС) пробрасывается: вызывающий решает, продолжать ли."""
     from . import protocols
 
-    estimate.protocol_checked_at = timezone.now()
-    protocol = protocols.fetch_protocol(estimate.tender.eis_url if estimate.tender_id else "")
+    tender = estimate.tender
+    tender.protocol_checked_at = timezone.now()
+    protocol = protocols.fetch_protocol(tender.eis_url if tender else "")
     if not protocol:
-        estimate.save(update_fields=["protocol_checked_at"])
+        tender.save(update_fields=["protocol_checked_at"])
         return False
-    estimate.protocol = protocol
+    tender.protocol = protocol
     update_fields = ["protocol", "protocol_checked_at"]
     win = protocols.winner(protocol)
     if win and win.get("price"):
         price = Decimal(win["price"])
-        nmck = protocol.get("nmck") or (estimate.tender.max_price if estimate.tender_id else None)
-        estimate.actual_price = price
-        estimate.actual_reduction_percent = reduction_percent_from(nmck, price)
-        update_fields += ["actual_price", "actual_reduction_percent"]
-    estimate.save(update_fields=update_fields)
+        nmck = protocol.get("nmck") or (tender.max_price if tender else None)
+        tender.contract_price = price
+        tender.contract_reduction_percent = reduction_percent_from(nmck, price)
+        update_fields += ["contract_price", "contract_reduction_percent"]
+    tender.save(update_fields=update_fields)
     _decide_status_from_protocol(estimate)
     return True
 
 
 def set_our_bid(estimate, *, bid_number: str, bid_price) -> None:
-    estimate.bid_number = (bid_number or "").strip()[:40]
-    estimate.bid_price = bid_price
-    estimate.save(update_fields=["bid_number", "bid_price"])
+    tender = estimate.tender
+    tender.bid_number = (bid_number or "").strip()[:40]
+    tender.bid_price = bid_price
+    tender.save(update_fields=["bid_number", "bid_price"])
     _decide_status_from_protocol(estimate)
 
 
@@ -1177,14 +1202,14 @@ def retry_pending_protocols(*, limit: int = 3, pause: float = PROTOCOL_PAUSE_SEC
     from .protocols import ProtocolError
 
     now = timezone.now()
-    base = TenderEstimate.objects.filter(protocol={}, tender__law="fz44").select_related("tender")
+    base = TenderEstimate.objects.filter(tender__protocol={}, tender__law="fz44").select_related("tender")
     bidding = base.filter(
-        Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_RECHECK),
-        status=TenderEstimate.PENDING, tender__collecting_finished_at__lt=now,
+        Q(tender__protocol_checked_at__isnull=True) | Q(tender__protocol_checked_at__lt=now - PROTOCOL_RECHECK),
+        tender__outcome_status=Tender.OUTCOME_PENDING, tender__collecting_finished_at__lt=now,
     ).order_by("tender__collecting_finished_at")
     finished = base.filter(
-        Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_BACKFILL_RECHECK),
-        status__in=(TenderEstimate.WON, TenderEstimate.LOST, TenderEstimate.NOT_PARTICIPATED),
+        Q(tender__protocol_checked_at__isnull=True) | Q(tender__protocol_checked_at__lt=now - PROTOCOL_BACKFILL_RECHECK),
+        tender__outcome_status__in=(Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED),
     ).order_by("-updated_at")
     estimates = (list(bidding[:limit]) + list(finished[:limit]))[:limit]
 

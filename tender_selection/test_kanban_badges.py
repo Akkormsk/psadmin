@@ -23,7 +23,11 @@ class AccumulatedBadgesTests(TestCase):
             risk_assessment={"risk_level": "high", "risk_factors": []}, risk_checked_at=timezone.now(),
         )
 
-    def _texts(self, **fields):
+    def _texts(self, *, tender_fields=None, **fields):
+        if tender_fields:
+            for key, value in tender_fields.items():
+                setattr(self.tender, key, value)
+            self.tender.save()
         estimate = TenderEstimate.objects.create(owner=self.user, tender=self.tender, tender_number="1", name="Расчёт", **fields)
         return [badge["text"] for badge in _estimate_card(estimate)["badges"]]
 
@@ -32,9 +36,12 @@ class AccumulatedBadgesTests(TestCase):
 
     def test_only_risk_roi_and_outcome_accumulate(self):
         texts = self._texts(
-            summary_snapshot={"roi": "25.00"}, status=TenderEstimate.LOST, bid_number="ZK-2",
-            protocol=PROTOCOL, actual_reduction_percent=Decimal("12.00"), outcome_checked_at=timezone.now(),
-            outcome_source=TenderEstimate.OUTCOME_AUTO,
+            summary_snapshot={"roi": "25.00"},
+            tender_fields={
+                "outcome_status": Tender.OUTCOME_LOST, "bid_number": "ZK-2", "protocol": PROTOCOL,
+                "contract_reduction_percent": Decimal("12.00"), "outcome_checked_at": timezone.now(),
+                "outcome_source": Tender.OUTCOME_AUTO,
+            },
         )
         self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "Проигран"])
 

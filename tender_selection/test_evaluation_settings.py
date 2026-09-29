@@ -107,10 +107,10 @@ class ConfiguredBehaviourTests(TestCase):
         from .stats import price_stats_for
 
         user = get_user_model().objects.create_user("manager")
-        TenderEstimate.objects.create(
-            owner=user, tender_number="1", name="Футболки хлопковые", status=TenderEstimate.LOST,
-            actual_reduction_percent=Decimal("70"),
+        own_tender = Tender.objects.create(
+            purchase_number="1", outcome_status=Tender.OUTCOME_LOST, contract_reduction_percent=Decimal("70"),
         )
+        TenderEstimate.objects.create(owner=user, tender=own_tender, tender_number="1", name="Футболки хлопковые")
         filters = FilterSettings.load()
         filters.stats_min_samples, filters.reduction_hint_max = 1, 50
         filters.save()

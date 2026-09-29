@@ -503,21 +503,11 @@ class CatalogMatchDecision(models.Model):
 
 
 class TenderEstimate(models.Model):
-    DRAFT = "draft"
-    PENDING = "pending"
-    NOT_PARTICIPATED = "not_participated"
-    LOST = "lost"
-    WON = "won"
-    PUBLISHED = "published"
-    STATUS_CHOICES = (
-        (DRAFT, "Черновик"),
-        (PENDING, "На торгах"),
-        (NOT_PARTICIPATED, "Не участвовали"),
-        (LOST, "Проигран"),
-        (WON, "Выигран"),
-        # Протокол вышел, но нашей заявки в нём пока не опознали (не внесены номер/сумма).
-        (PUBLISHED, "Итог опубликован"),
-    )
+    """Расчёт цены для Tender — просто экономика: строки, свод, наша цена.
+    Стадия сделки (черновик/на торгах/выигран/проигран), протокол и итог
+    контракта — на Tender (estimate.tender), не здесь: расчёт можно
+    пересчитать или удалить, а факт того, что случилось с тендером, должен
+    остаться."""
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
     tender = models.ForeignKey(
@@ -526,26 +516,12 @@ class TenderEstimate(models.Model):
     )
     tender_number = models.CharField("Номер тендера", max_length=100)
     name = models.CharField("Название / комментарий", max_length=300)
-    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
-    result_notes = models.TextField("Результат торгов", blank=True)
-
-    OUTCOME_AUTO = "auto"
-    OUTCOME_MANUAL = "manual"
-    OUTCOME_SOURCE_CHOICES = ((OUTCOME_AUTO, "Автоматически"), (OUTCOME_MANUAL, "Вручную"))
-    actual_price = models.DecimalField("Фактическая цена контракта", max_digits=16, decimal_places=2, null=True, blank=True)
-    actual_reduction_percent = models.DecimalField("Фактическое снижение, %", max_digits=5, decimal_places=2, null=True, blank=True)
-    outcome_checked_at = models.DateTimeField("Итог внесён", null=True, blank=True)
-    outcome_source = models.CharField("Источник итога", max_length=8, choices=OUTCOME_SOURCE_CHOICES, blank=True)
-    bid_number = models.CharField("Номер нашей заявки", max_length=40, blank=True)
-    bid_price = models.DecimalField("Сумма нашей заявки", max_digits=16, decimal_places=2, null=True, blank=True)
-    protocol = models.JSONField("Итоговый протокол (ЕИС)", default=dict, blank=True)
-    protocol_checked_at = models.DateTimeField("Протокол проверен", null=True, blank=True)
+    result_notes = models.TextField("Комментарий", blank=True)
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
     summary_snapshot = models.JSONField(default=dict, blank=True)
     document_analysis = models.JSONField("Анализ документов", default=dict, blank=True)
-    archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -558,15 +534,23 @@ class TenderEstimate(models.Model):
         return f"{self.tender_number} — {self.name}"
 
     def display_status(self):
-        """Черновик/Готово — не хранимые статусы, а вид черновика по полноте
-        расчёта; статус в базе при этом остаётся DRAFT до переноса в пайплайн."""
-        if self.status == self.DRAFT:
-            return "Готово" if not self.summary_snapshot.get("is_incomplete", True) else "Черновик"
-        return self.get_status_display()
+        """Черновик/Готово — не хранимый статус, а вид по полноте ЭТОГО расчёта
+        (тендер может иметь несколько просчётов); дальше стадия сделки — общая
+        для тендера, берём с него."""
+        from tender_selection.models import Tender
+
+        if self.tender_id and self.tender.outcome_status != Tender.OUTCOME_DRAFT:
+            return self.tender.get_outcome_status_display()
+        return "Готово" if not self.summary_snapshot.get("is_incomplete", True) else "Черновик"
 
     def is_active_task(self):
         """Расчёт ждёт действия менеджера, а не исхода: черновик и ещё не заполнен."""
-        return self.status == self.DRAFT and self.summary_snapshot.get("is_incomplete", True)
+        from tender_selection.models import Tender
+
+        incomplete = self.summary_snapshot.get("is_incomplete", True)
+        if not self.tender_id:
+            return incomplete
+        return self.tender.outcome_status == Tender.OUTCOME_DRAFT and incomplete
 
 
 class TenderLine(models.Model):
@@ -591,29 +575,57 @@ class TenderLine(models.Model):
         return self.name
 
 
-class OrderEstimate(models.Model):
-    """Самостоятельный расчёт заказа вне тендерного пайплайна.
-
-    Поля пока совпадают с переходным интерфейсом старого расчёта тендера.
-    Это сохраняет историю и экран менеджера; тендерная связь здесь намеренно
-    отсутствует.
-    """
+class Order(models.Model):
+    """Заказ вне тендерного пайплайна — тот же жизненный цикл, что у Tender
+    (стадия сделки живёт здесь, не на расчёте), но без ЕИС-машинерии: заказ
+    создаётся вручную, а не приходит извне."""
 
     DRAFT = "draft"
     PENDING = "pending"
     NOT_PARTICIPATED = "not_participated"
     LOST = "lost"
     WON = "won"
-    # Протоколов ЕИС у заказов нет — статус «Итог опубликован» только тендерный.
-    STATUS_CHOICES = tuple(choice for choice in TenderEstimate.STATUS_CHOICES if choice[0] != TenderEstimate.PUBLISHED)
+    # Тот же набор, что у Tender.OUTCOME_STATUS_CHOICES, без "Итог опубликован" —
+    # протоколов ЕИС у заказов нет. Не импортируем Tender (другое приложение,
+    # цикл импорта) — набор простой, дублировать безопаснее.
+    STATUS_CHOICES = (
+        (DRAFT, "Черновик"),
+        (PENDING, "На торгах"),
+        (NOT_PARTICIPATED, "Не участвовали"),
+        (LOST, "Проигран"),
+        (WON, "Выигран"),
+    )
+
+    name = models.CharField("Название", max_length=300)
+    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
+    archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "Заказ"
+        verbose_name_plural = "Заказы"
+
+    def __str__(self):
+        return self.name
+
+    def is_active_task(self):
+        return self.status == self.DRAFT
+
+
+class OrderEstimate(models.Model):
+    """Расчёт цены для Order — пусть просто экономика: строки, свод, наша
+    цена. Стадия сделки (черновик/на торгах/выигран/проигран) — на Order,
+    не здесь, ровно как у TenderEstimate она теперь на Tender."""
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="order_estimates", verbose_name="Ответственный")
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="estimates", verbose_name="Заказ", null=True, blank=True)
     legacy_calculation_id = models.PositiveBigIntegerField(
         "Старый ID расчёта", null=True, blank=True, unique=True,
     )
     order_number = models.CharField("Номер расчёта", max_length=100)
     name = models.CharField("Название / комментарий", max_length=300)
-    status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
@@ -654,7 +666,16 @@ class OrderEstimate(models.Model):
 
     def is_active_task(self):
         """Расчёт ждёт действия менеджера, а не исхода: черновик и ещё не заполнен."""
-        return self.status == self.DRAFT and self.summary_snapshot.get("is_incomplete", True)
+        incomplete = self.summary_snapshot.get("is_incomplete", True)
+        if not self.order_id:
+            return incomplete
+        return self.order.status == Order.DRAFT and incomplete
+
+    def display_status(self):
+        """Делегирует стадию сделки заказу — своего статуса у расчёта нет."""
+        if self.order_id:
+            return self.order.get_status_display()
+        return "Готово" if not self.summary_snapshot.get("is_incomplete", True) else "Черновик"
 
 
 class OrderLine(models.Model):

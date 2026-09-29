@@ -291,7 +291,8 @@ def price_stats_for(tender, card=None) -> dict | None:
     settings = FilterSettings.load()
     target_count = settings.stats_target_count
     own_pool = (
-        TenderEstimate.objects.exclude(actual_reduction_percent=None)
+        TenderEstimate.objects.filter(tender__isnull=False)
+        .exclude(tender__contract_reduction_percent=None)
         .select_related("tender")
         .prefetch_related("lines")
     )
@@ -302,7 +303,7 @@ def price_stats_for(tender, card=None) -> dict | None:
     own_scored.sort(key=lambda pair: (
         -pair[0],
         0 if (tender.region and _region_of_estimate(pair[1]) == tender.region) else 1,
-        -(pair[1].outcome_checked_at.toordinal() if pair[1].outcome_checked_at else 0),
+        -(pair[1].tender.outcome_checked_at.toordinal() if pair[1].tender.outcome_checked_at else 0),
     ))
 
     chosen = []
@@ -313,9 +314,9 @@ def price_stats_for(tender, card=None) -> dict | None:
             "subject": est.name,
             "region": _region_of_estimate(est),
             "nmck": Decimal(str(nmck)) if nmck else None,
-            "final_price": est.actual_price,
-            "discount_pct": est.actual_reduction_percent,
-            "contract_date": est.outcome_checked_at.date() if est.outcome_checked_at else None,
+            "final_price": est.tender.contract_price,
+            "discount_pct": est.tender.contract_reduction_percent,
+            "contract_date": est.tender.outcome_checked_at.date() if est.tender.outcome_checked_at else None,
         })
     own_count = len(chosen)
 

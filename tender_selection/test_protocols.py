@@ -86,6 +86,10 @@ class FindOursTests(SimpleTestCase):
 
 
 class ApplyProtocolTests(TestCase):
+    """Исход торгов и протокол теперь живут на Tender, не на TenderEstimate —
+    расчёт можно пересчитать/удалить, а факт того, что случилось с тендером,
+    должен остаться."""
+
     def setUp(self):
         self.user = get_user_model().objects.create_user("manager")
         self.tender = Tender.objects.create(
@@ -93,12 +97,17 @@ class ApplyProtocolTests(TestCase):
             eis_url="https://zakupki.gov.ru/epz/order/notice/zk44/view/common-info.html?regNumber=0172200004526000010",
             collecting_finished_at=timezone.now() - timedelta(days=1),
             max_price=Decimal("1801340.00"),
+            outcome_status=Tender.OUTCOME_PENDING,
         )
 
-    def _estimate(self, status=TenderEstimate.PENDING, **fields):
+    def _estimate(self, status=None, bid_number="", bid_price=None):
+        if status is not None:
+            self.tender.outcome_status = status
+        self.tender.bid_number = bid_number
+        self.tender.bid_price = bid_price
+        self.tender.save()
         return TenderEstimate.objects.create(
-            owner=self.user, tender=self.tender, tender_number=self.tender.purchase_number,
-            name="Полиграфия", status=status, **fields,
+            owner=self.user, tender=self.tender, tender_number=self.tender.purchase_number, name="Полиграфия",
         )
 
     def _check(self, estimate):
@@ -108,66 +117,68 @@ class ApplyProtocolTests(TestCase):
     def test_identified_winner_becomes_won(self):
         estimate = self._estimate(bid_number="ZK-420728")
         self.assertTrue(self._check(estimate))
-        estimate.refresh_from_db()
+        self.tender.refresh_from_db()
 
-        self.assertEqual(estimate.status, TenderEstimate.WON)
-        self.assertEqual(estimate.actual_price, Decimal("1070000.00"))
-        self.assertEqual(estimate.actual_reduction_percent, Decimal("40.60"))
-        self.assertEqual(estimate.outcome_source, TenderEstimate.OUTCOME_AUTO)
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_WON)
+        self.assertEqual(self.tender.contract_price, Decimal("1070000.00"))
+        self.assertEqual(self.tender.contract_reduction_percent, Decimal("40.60"))
+        self.assertEqual(self.tender.outcome_source, Tender.OUTCOME_AUTO)
 
     def test_identified_loser_becomes_lost(self):
         estimate = self._estimate(bid_price=Decimal("1148700"))
         self._check(estimate)
-        estimate.refresh_from_db()
-        self.assertEqual(estimate.status, TenderEstimate.LOST)
+        self.tender.refresh_from_db()
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_LOST)
 
     def test_unidentified_moves_to_published_result(self):
         estimate = self._estimate()
         self._check(estimate)
-        estimate.refresh_from_db()
+        self.tender.refresh_from_db()
 
-        self.assertEqual(estimate.status, TenderEstimate.PUBLISHED)
-        self.assertEqual(estimate.protocol["participants"][0]["id"], "ZK-420728")
-        self.assertEqual(estimate.actual_reduction_percent, Decimal("40.60"))
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_PUBLISHED)
+        self.assertEqual(self.tender.protocol["participants"][0]["id"], "ZK-420728")
+        self.assertEqual(self.tender.contract_reduction_percent, Decimal("40.60"))
 
     def test_finished_estimate_keeps_its_status_but_gets_protocol(self):
-        estimate = self._estimate(status=TenderEstimate.NOT_PARTICIPATED)
+        estimate = self._estimate(status=Tender.OUTCOME_NOT_PARTICIPATED)
         self._check(estimate)
-        estimate.refresh_from_db()
+        self.tender.refresh_from_db()
 
-        self.assertEqual(estimate.status, TenderEstimate.NOT_PARTICIPATED)
-        self.assertEqual(estimate.actual_price, Decimal("1070000.00"))
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_NOT_PARTICIPATED)
+        self.assertEqual(self.tender.contract_price, Decimal("1070000.00"))
 
     def test_no_protocol_yet_only_marks_the_check(self):
         estimate = self._estimate()
         with patch.object(protocols, "fetch_protocol", return_value=None):
             self.assertFalse(services.check_protocol(estimate))
-        estimate.refresh_from_db()
+        self.tender.refresh_from_db()
 
-        self.assertEqual(estimate.status, TenderEstimate.PENDING)
-        self.assertIsNotNone(estimate.protocol_checked_at)
-        self.assertEqual(estimate.protocol, {})
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_PENDING)
+        self.assertIsNotNone(self.tender.protocol_checked_at)
+        self.assertEqual(self.tender.protocol, {})
 
     def test_entering_bid_on_published_result_decides_status(self):
         estimate = self._estimate()
         self._check(estimate)
-        estimate.refresh_from_db()
+        self.tender.refresh_from_db()
 
         services.set_our_bid(estimate, bid_number="ZK-421419", bid_price=None)
-        estimate.refresh_from_db()
-        self.assertEqual(estimate.status, TenderEstimate.LOST)
+        self.tender.refresh_from_db()
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_LOST)
 
 
 class RetryPendingProtocolsTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user("manager")
 
-    def _estimate(self, number, *, closed_ago=timedelta(days=1), checked_ago=None, status=TenderEstimate.PENDING):
+    def _estimate(self, number, *, closed_ago=timedelta(days=1), checked_ago=None, status=Tender.OUTCOME_PENDING):
         now = timezone.now()
-        tender = Tender.objects.create(purchase_number=number, collecting_finished_at=now - closed_ago)
+        tender = Tender.objects.create(
+            purchase_number=number, collecting_finished_at=now - closed_ago,
+            outcome_status=status, protocol_checked_at=now - checked_ago if checked_ago is not None else None,
+        )
         return TenderEstimate.objects.create(
-            owner=self.user, tender=tender, tender_number=number, name=number, status=status,
-            protocol_checked_at=now - checked_ago if checked_ago is not None else None,
+            owner=self.user, tender=tender, tender_number=number, name=number,
         )
 
     def _checked_numbers(self):
@@ -177,12 +188,12 @@ class RetryPendingProtocolsTests(TestCase):
 
     def test_bidding_after_deadline_and_finished_without_protocol_are_checked(self):
         self._estimate("closed")
-        self._estimate("lost-earlier", status=TenderEstimate.LOST)
+        self._estimate("lost-earlier", status=Tender.OUTCOME_LOST)
         self.assertEqual(self._checked_numbers(), {"closed", "lost-earlier"})
 
     def test_open_drafts_and_recent_checks_are_skipped(self):
         self._estimate("still-open", closed_ago=-timedelta(days=1))
-        self._estimate("draft", status=TenderEstimate.DRAFT)
+        self._estimate("draft", status=Tender.OUTCOME_DRAFT)
         self._estimate("just-checked", checked_ago=timedelta(minutes=5))
         self.assertEqual(self._checked_numbers(), set())
 
@@ -191,10 +202,12 @@ class ProtocolCardTests(TestCase):
     def setUp(self):
         self.admin = get_user_model().objects.create_superuser("admin", password="x")
         self.client.force_login(self.admin)
-        self.tender = Tender.objects.create(purchase_number="0172200004526000010", max_price=Decimal("1801340.00"))
+        self.tender = Tender.objects.create(
+            purchase_number="0172200004526000010", max_price=Decimal("1801340.00"),
+            outcome_status=Tender.OUTCOME_PUBLISHED, protocol=QUOTATION_PROTOCOL, bid_number="ZK-421419",
+        )
         self.estimate = TenderEstimate.objects.create(
             owner=self.admin, tender=self.tender, tender_number=self.tender.purchase_number, name="Полиграфия",
-            status=TenderEstimate.PUBLISHED, protocol=QUOTATION_PROTOCOL, bid_number="ZK-421419",
         )
 
     def _card(self):
@@ -211,14 +224,14 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, "40.60%")
 
     def test_saving_bid_amount_decides_status(self):
-        self.estimate.bid_number = ""
-        self.estimate.save()
+        self.tender.bid_number = ""
+        self.tender.save()
 
         self.client.post(f"/tender-selection/estimate/{self.estimate.pk}/bid/", {"bid_number": "", "bid_price": "1 070 000,00"})
-        self.estimate.refresh_from_db()
+        self.tender.refresh_from_db()
 
-        self.assertEqual(self.estimate.bid_price, Decimal("1070000.00"))
-        self.assertEqual(self.estimate.status, TenderEstimate.WON)
+        self.assertEqual(self.tender.bid_price, Decimal("1070000.00"))
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_WON)
 
 
 class ContractWinnerReconciliationTests(TestCase):
@@ -226,42 +239,44 @@ class ContractWinnerReconciliationTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create_user("manager")
-        tender = Tender.objects.create(purchase_number="0172200004526000010")
-        self.estimate = TenderEstimate.objects.create(
-            owner=self.user, tender=tender, tender_number=tender.purchase_number, name="Полиграфия",
-            status=TenderEstimate.PUBLISHED, protocol=QUOTATION_PROTOCOL,
-            actual_price=Decimal("1070000.00"), actual_reduction_percent=Decimal("40.60"),
+        self.tender = Tender.objects.create(
+            purchase_number="0172200004526000010",
+            outcome_status=Tender.OUTCOME_PUBLISHED, protocol=QUOTATION_PROTOCOL,
+            contract_price=Decimal("1070000.00"), contract_reduction_percent=Decimal("40.60"),
             outcome_checked_at=timezone.now() - services.CONTRACT_RECHECK - timedelta(minutes=1),
+        )
+        self.estimate = TenderEstimate.objects.create(
+            owner=self.user, tender=self.tender, tender_number=self.tender.purchase_number, name="Полиграфия",
         )
 
     def _reconcile(self, contracts):
         with patch.dict("os.environ", {"COMPANY_INN": self.OUR_INN}), \
                 patch.object(services.gosplan, "fetch_contracts", return_value=contracts) as fetch:
             services.retry_pending_outcomes()
-        self.estimate.refresh_from_db()
+        self.tender.refresh_from_db()
         return fetch
 
     def test_contract_with_our_inn_marks_won_and_keeps_protocol_figures(self):
         self._reconcile([{"price": 1070000, "suppliers": [self.OUR_INN]}])
 
-        self.assertEqual(self.estimate.status, TenderEstimate.WON)
-        self.assertEqual(self.estimate.actual_reduction_percent, Decimal("40.60"))
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_WON)
+        self.assertEqual(self.tender.contract_reduction_percent, Decimal("40.60"))
 
     def test_contract_with_someone_else_marks_lost(self):
         self._reconcile([{"price": 1070000, "suppliers": ["7700000000"]}])
-        self.assertEqual(self.estimate.status, TenderEstimate.LOST)
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_LOST)
 
     def test_no_contract_yet_waits_and_postpones_next_check(self):
         self._reconcile([])
 
-        self.assertEqual(self.estimate.status, TenderEstimate.PUBLISHED)
-        self.assertGreater(self.estimate.outcome_checked_at, timezone.now() - timedelta(minutes=1))
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_PUBLISHED)
+        self.assertGreater(self.tender.outcome_checked_at, timezone.now() - timedelta(minutes=1))
 
     def test_recently_checked_result_is_not_queried(self):
-        self.estimate.outcome_checked_at = timezone.now()
-        self.estimate.save()
+        self.tender.outcome_checked_at = timezone.now()
+        self.tender.save()
 
         fetch = self._reconcile([{"price": 1, "suppliers": [self.OUR_INN]}])
 
         fetch.assert_not_called()
-        self.assertEqual(self.estimate.status, TenderEstimate.PUBLISHED)
+        self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_PUBLISHED)

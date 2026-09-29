@@ -3112,9 +3112,10 @@ def verdict_for(estimate, source_tender) -> dict | None:
         price = Decimal(str(snapshot["rrp_total"]))
     except (KeyError, TypeError, InvalidOperation):
         price = None
+    has_actual_price = bool(source_tender and source_tender.outcome_checked_at and source_tender.contract_price is not None)
     return {
-        "price": estimate.actual_price if estimate.outcome_checked_at and estimate.actual_price is not None else price,
-        "price_is_actual": bool(estimate.outcome_checked_at and estimate.actual_price is not None),
+        "price": source_tender.contract_price if has_actual_price else price,
+        "price_is_actual": has_actual_price,
         "roi": roi,
         "roi_label": roi_label,
         "roi_state": roi_state,

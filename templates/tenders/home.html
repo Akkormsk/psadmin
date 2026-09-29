@@ -65,9 +65,9 @@
       <span class="tender-saved-totals"><strong>{% if saved.summary_snapshot.net_profit %}{{ saved.summary_snapshot.net_profit|floatformat:2|intcomma }} ₽{% else %}—{% endif %}</strong><small>ROI {{ saved.summary_snapshot.roi|default:""|floatformat:2 }}%</small></span>
     </a>
     {% if saved.is_tender_estimate %}
-    <span class="saved-estimate__status-pill is-{{ saved.status }}">{{ saved.display_status }}</span>
+    <span class="saved-estimate__status-pill is-{{ saved.tender.outcome_status }}">{{ saved.display_status }}</span>
     {% else %}
-    <form class="saved-estimate__status-form is-{{ saved.status }}" data-estimate-status-form data-estimate-id="{{ saved.pk }}" data-status="{{ saved.status }}" method="post" action="{% url 'order_estimate_status' saved.pk %}">{% csrf_token %}<select data-customized="true" class="saved-estimate__status" name="status" aria-label="Статус расчёта № {{ saved.tender_number }}">{% for value, label in saved.STATUS_CHOICES %}<option value="{{ value }}" {% if saved.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></form>
+    <form class="saved-estimate__status-form is-{{ saved.order.status }}" data-estimate-status-form data-estimate-id="{{ saved.pk }}" data-status="{{ saved.order.status }}" method="post" action="{% url 'order_estimate_status' saved.pk %}">{% csrf_token %}<select data-customized="true" class="saved-estimate__status" name="status" aria-label="Статус расчёта № {{ saved.tender_number }}">{% for value, label in saved.order.STATUS_CHOICES %}<option value="{{ value }}" {% if saved.order.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></form>
     {% endif %}
     {% if not saved.is_tender_estimate %}
     <span class="hover-actions">

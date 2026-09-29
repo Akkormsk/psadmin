@@ -52,7 +52,7 @@ class NotParticipatedArchiveTests(TestCase):
         tender = Tender.objects.create(purchase_number="1", status=Tender.PUSHED, review=Tender.INTERESTING)
         estimate = TenderEstimate.objects.create(owner=admin, tender=tender, tender_number="1", name="Ручки")
 
-        self.client.post(f"/tenders/pipeline/{estimate.pk}/status/", {"status": TenderEstimate.NOT_PARTICIPATED})
+        self.client.post(f"/tenders/pipeline/{estimate.pk}/status/", {"status": Tender.OUTCOME_NOT_PARTICIPATED})
         tender.refresh_from_db()
 
         self.assertEqual(tender.status, Tender.DISMISSED)

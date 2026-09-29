@@ -57,27 +57,28 @@ class ManagerWorklistTests(TestCase):
         self.assertEqual(filled.display_status(), "Готово")
 
     def test_non_draft_tender_estimate_shows_its_real_status(self):
-        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер", outcome_status=Tender.OUTCOME_PENDING)
         estimate = TenderEstimate.objects.create(
             owner=self.user, tender=tender, tender_number="1", name="На торгах",
-            status=TenderEstimate.PENDING,
         )
 
         self.assertEqual(estimate.display_status(), "На торгах")
 
     def test_worklist_tab_separates_active_from_ready(self):
-        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        tender1 = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        tender2 = Tender.objects.create(law="fz44", purchase_number="2", object_info="Тендер")
+        tender3 = Tender.objects.create(law="fz44", purchase_number="3", object_info="Тендер", outcome_status=Tender.OUTCOME_WON)
         draft = TenderEstimate.objects.create(
-            owner=self.user, tender=tender, tender_number="1", name="Незаполненный",
+            owner=self.user, tender=tender1, tender_number="1", name="Незаполненный",
             summary_snapshot={"is_incomplete": True},
         )
         ready = TenderEstimate.objects.create(
-            owner=self.user, tender=tender, tender_number="2", name="Заполненный",
+            owner=self.user, tender=tender2, tender_number="2", name="Заполненный",
             summary_snapshot={"is_incomplete": False},
         )
         won = TenderEstimate.objects.create(
-            owner=self.user, tender=tender, tender_number="3", name="Выигранный",
-            status=TenderEstimate.WON, summary_snapshot={"is_incomplete": False},
+            owner=self.user, tender=tender3, tender_number="3", name="Выигранный",
+            summary_snapshot={"is_incomplete": False},
         )
 
         active = self.client.get(reverse("tender_home"), {"worklist": "active"})

@@ -19,12 +19,14 @@ class ArchiveTests(TestCase):
     def _archived(self, number, title, *, review=Tender.UNREVIEWED, estimate_status=None, days_ago=1, **fields):
         tender = Tender.objects.create(
             purchase_number=number, title=title, review=review, status=Tender.DISMISSED,
-            archived_at=self.now - timedelta(days=days_ago), **fields,
+            archived_at=self.now - timedelta(days=days_ago),
+            **({"outcome_status": estimate_status} if estimate_status else {}),
+            **({"contract_reduction_percent": Decimal("40.60")} if estimate_status == Tender.OUTCOME_LOST else {}),
+            **fields,
         )
         if estimate_status:
             TenderEstimate.objects.create(
-                owner=self.admin, tender=tender, tender_number=number, name=title, status=estimate_status,
-                actual_reduction_percent=Decimal("40.60") if estimate_status == TenderEstimate.LOST else None,
+                owner=self.admin, tender=tender, tender_number=number, name=title,
             )
         return tender
 
@@ -36,10 +38,10 @@ class ArchiveTests(TestCase):
     def test_stage_is_the_reason_and_each_stage_is_counted(self):
         self._archived("incoming", "Кружки")
         self._archived("evaluation", "Флаги", review=Tender.INTERESTING)
-        self._archived("calculation", "Буклеты", review=Tender.INTERESTING, estimate_status=TenderEstimate.DRAFT)
-        self._archived("unprofitable", "Ручки", review=Tender.INTERESTING, estimate_status=TenderEstimate.NOT_PARTICIPATED)
-        self._archived("lost", "Календари", review=Tender.INTERESTING, estimate_status=TenderEstimate.LOST)
-        self._archived("won", "Футболки", review=Tender.INTERESTING, estimate_status=TenderEstimate.WON)
+        self._archived("calculation", "Буклеты", review=Tender.INTERESTING, estimate_status=Tender.OUTCOME_DRAFT)
+        self._archived("unprofitable", "Ручки", review=Tender.INTERESTING, estimate_status=Tender.OUTCOME_NOT_PARTICIPATED)
+        self._archived("lost", "Календари", review=Tender.INTERESTING, estimate_status=Tender.OUTCOME_LOST)
+        self._archived("won", "Футболки", review=Tender.INTERESTING, estimate_status=Tender.OUTCOME_WON)
 
         _, response = self._numbers()
         counts = {stage["key"]: stage["count"] for stage in response.context["stages"]}
@@ -67,7 +69,7 @@ class ArchiveTests(TestCase):
         self.assertEqual(self._numbers()[0], [])
 
     def test_restoring_a_tender_with_estimate_returns_it_to_work(self):
-        tender = self._archived("calc", "Буклеты", review=Tender.INTERESTING, estimate_status=TenderEstimate.DRAFT)
+        tender = self._archived("calc", "Буклеты", review=Tender.INTERESTING, estimate_status=Tender.OUTCOME_DRAFT)
 
         self.client.post(f"/tender-selection/{tender.pk}/restore/")
         tender.refresh_from_db()
