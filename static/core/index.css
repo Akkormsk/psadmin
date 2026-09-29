@@ -1532,6 +1532,11 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .training-route__fix[open] > summary::after { content:'▴'; }
 .training-route__fix[open] > summary { border-bottom:1px dashed var(--border-positive); }
 .training-route__fix .training-feedback { padding:10px; }
+.training-route__contractor { border:1px dashed var(--border); border-radius:9px; background:var(--surface); margin-top:6px; }
+.training-route__contractor > summary { padding:6px 10px; color:var(--ink-2); font-size:10px; font-weight:650; cursor:pointer; list-style:none; }
+.training-route__contractor > summary::-webkit-details-marker { display:none; }
+.training-route__contractor[open] > summary { border-bottom:1px dashed var(--border); }
+.training-route__contractor .production-base-add-form { border:0; border-radius:0; }
 .training-block-changes { display:grid; gap:4px; padding:9px 11px; border-radius:8px; background:var(--tint-positive); color:var(--ink-2); font-size:10.5px; }
 .training-block-changes b { font-size:9px; text-transform:uppercase; letter-spacing:.04em; }
 .training-block-changes ul { margin:0; padding:0; list-style:none; display:grid; gap:6px; }
