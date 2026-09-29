@@ -1621,6 +1621,13 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .training-source-form > header, .training-source-form > div small, .training-source-collection__actions small { font-size:10px; }
 .training-dialogue__status { display:block; min-height:14px; padding:2px 0 6px; color:var(--ink-3); font-size:10px; line-height:1.4; }
 .training-dialogue__details { margin-bottom:12px; padding:10px; border-radius:8px; background:var(--tint-neutral); }
+.training-knowledge-stack { display:grid; gap:8px; margin-top:12px; padding:10px 12px; border-radius:8px; background:var(--tint-positive); }
+.training-knowledge-stack header { display:grid; gap:2px; }
+.training-knowledge-stack header b { font-size:11px; }
+.training-knowledge-stack header small { color:var(--ink-3); font-size:10px; }
+.training-knowledge-stack ul { margin:0; padding:0; list-style:none; display:grid; gap:6px; }
+.training-knowledge-stack label { display:flex; align-items:flex-start; gap:8px; font-size:11px; color:var(--ink); cursor:pointer; }
+.training-knowledge-stack label input { margin-top:2px; flex:none; }
 @media (max-width:700px) { .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; } .training-feedback__row { display:grid; grid-template-columns:1fr; } .training-feedback__row button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } }
 .tender-production-dialog { display:grid; gap:8px; }
 .tender-production-dialog label { display:grid; gap:4px; }

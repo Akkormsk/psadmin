@@ -68,7 +68,13 @@ def normalize_route(raw, prior=None):
         proposed = step.get("proposed_process") if isinstance(step.get("proposed_process"), dict) else None
         if process is None and proposed is None:
             raise TenderAIError("Ассистент выбрал этап вне справочника. Уточните маршрут или предложите новый этап.")
+        # The model occasionally confuses `kind` (how the step is carried
+        # out) with the process's own `role` vocabulary (supply/production/
+        # completion) and sends "supply" here — a supply-role step is
+        # carried out as a catalog purchase, so that one substitution is
+        # safe to accept rather than fail the whole route.
         kind = _cell_text(step.get("kind"))
+        kind = "catalog" if kind == "supply" else kind
         if kind not in {"catalog", "production", "completion"}:
             raise TenderAIError("Ассистент не указал способ исполнения этапа.")
         if process is None:

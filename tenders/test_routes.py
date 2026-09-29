@@ -124,6 +124,14 @@ class RouteTests(TestCase):
             self.build()
         self.cascade.assert_not_called()
 
+    def test_a_supply_role_step_sent_as_kind_is_accepted_as_catalog(self):
+        """The model sometimes sends the process ROLE ("supply") where it
+        should send the step KIND ("catalog") — a real, reproducible mix-up
+        seen live (2026-09-29), not a hypothetical."""
+        self.answer["route"]["processes"][0]["kind"] = "supply"
+        result = self.build()
+        self.assertEqual(result["route"]["processes"][0]["kind"], "catalog")
+
     def test_ui_offers_explicit_search_and_step_feedback(self):
         response = self.client.get(reverse("tender_home"))
         self.assertContains(response, "data-start-catalog")
