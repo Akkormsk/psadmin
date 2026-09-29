@@ -257,6 +257,29 @@ class RouteTests(TestCase):
         self.assertTrue(process.is_active)
         self.assertEqual(session.confirmed_example.routes[0]["processes"][0]["process_id"], str(process.pk))
 
+    def test_confirm_proposed_stage_creates_it_immediately_not_only_on_route_confirm(self):
+        self.answer["route"] = {"reason": "Нужен отдельный этап", "processes": [{
+            "id": "laser", "proposed_process": {"name": "Лазерная резка акрила", "role": "production", "description": "Когда нужна резка акрила"},
+            "kind": "production", "details": [],
+        }]}
+        result = self.build(feedback="Добавь лазерную резку акрила")
+        session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Пакет", requirements=self.line["requirements"], current_hypothesis=result)
+        response = self.client.post(reverse("tender_confirm_proposed_stage"), {"payload": json.dumps({"session_id": session.pk, "step_id": "laser"})})
+        self.assertEqual(response.status_code, 200, response.content)
+        process = ProcessDefinition.objects.get(name="Лазерная резка акрила")
+        self.assertTrue(process.performs_production)
+        session.refresh_from_db()
+        step = session.current_hypothesis["route"]["processes"][0]
+        self.assertEqual(step["process_id"], str(process.pk))
+        self.assertNotIn("proposed_process", step)
+        self.assertFalse(session.is_confirmed)
+
+    def test_confirm_proposed_stage_rejects_unknown_step(self):
+        result = self.build()
+        session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Пакет", current_hypothesis=result)
+        response = self.client.post(reverse("tender_confirm_proposed_stage"), {"payload": json.dumps({"session_id": session.pk, "step_id": "nope"})})
+        self.assertEqual(response.status_code, 400)
+
     def test_current_order_feedback_is_not_saved_as_a_lesson(self):
         result = self.build(current=self.build(), feedback="Только для этого заказа", learn_for_similar=False)
         session = self.confirm(result)

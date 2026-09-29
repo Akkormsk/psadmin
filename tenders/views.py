@@ -764,6 +764,53 @@ def revise_production_hypothesis(request):
 
 @login_required
 @require_POST
+def confirm_proposed_stage(request):
+    """Явное создание этапа, который ИИ предложил в маршруте, но которого
+    ещё нет в справочнике (`proposed_process`) — до этого клика справочник
+    не меняется (§18 промпта). Раньше это происходило молча при
+    «Подтвердить маршрут»/«Принять и обучить»; теперь — отдельное решение,
+    сразу применяется к текущей гипотезе без полного пересчёта маршрута."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Создавать этапы может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        session = ProductionTrainingSession.objects.select_for_update().get(
+            pk=payload.get("session_id"), created_by=request.user, is_confirmed=False,
+        )
+        step_id = str(payload.get("step_id", "")).strip()
+        hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+        processes = hypothesis.get("route", {}).get("processes", [])
+        step = next((s for s in processes if s.get("id") == step_id), None)
+        proposed = step.get("proposed_process") if isinstance(step, dict) else None
+        if not step or not isinstance(proposed, dict):
+            raise ValueError
+    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
+        return JsonResponse({"error": "Этап не найден или маршрут устарел. Обновите расчёт."}, status=400)
+
+    role = proposed.get("role")
+    stage_payload = {
+        "name": proposed.get("name"),
+        "description": proposed.get("description", ""),
+        "supplies_input": role == "supply",
+        "performs_production": role == "production",
+        "terminal_mode": "always" if role == "completion" else "sometimes",
+    }
+    proposal = Proposal.objects.create(
+        type=Proposal.TYPE_CREATE_STAGE, payload=stage_payload,
+        summary=f"Новый этап «{stage_payload['name']}» — предложен из маршрута", created_by=request.user,
+    )
+    apply_proposal(proposal, request.user)
+    stage = ProcessDefinition.objects.get(name=stage_payload["name"])
+
+    step["process_id"] = str(stage.pk)
+    step.pop("proposed_process", None)
+    session.current_hypothesis = hypothesis
+    session.save(update_fields=["current_hypothesis", "updated_at"])
+    return JsonResponse({**hypothesis, "session_id": session.pk})
+
+
+@login_required
+@require_POST
 def drop_requirement_skip_rule(request):
     """Undo a learned "не участвует в подборе" — the row of this label goes
     back to being checked by default in future tenders."""

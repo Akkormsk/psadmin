@@ -21,6 +21,7 @@ urlpatterns = [
     path("production/route/", views.production_route_preview, name="tender_production_route_preview"),
     path("production/route/<int:session_id>/", views.production_route_status, name="tender_production_route_status"),
     path("production/revise/", views.revise_production_hypothesis, name="tender_revise_production_hypothesis"),
+    path("production/confirm-stage/", views.confirm_proposed_stage, name="tender_confirm_proposed_stage"),
     path("production/catalog/select/", views.select_catalog_product, name="tender_select_catalog_product"),
     path("production/source/", views.add_calculation_source, name="tender_add_calculation_source"),
     path("production/confirm/", views.confirm_production_type, name="tender_confirm_production_type"),
