@@ -258,10 +258,11 @@ def _tender_keywords(tender, card=None) -> set[str]:
 def price_stats_for(tender, card=None) -> dict | None:
     """Сводка по снижению цен на похожих закупках — для раздела карточки.
 
-    Источник один — своя воронка (ContractStat: любой архивный тендер, что
-    прошёл через «Входящие» и был обогащён протоколом/контрактом — не только
-    те, что мы считали и на которые заявлялись). Отдельного скана по всему
-    открытому рынку больше нет.
+    Источник один — своя воронка (ContractStat, own_funnel=True: любой
+    архивный тендер, что прошёл через «Входящие» и был обогащён протоколом/
+    контрактом — не только те, что мы считали и на которые заявлялись).
+    Строки от отдельного скана рынка по категориям (collect_price_stats,
+    own_funnel=False) в статистику прогноза не попадают.
 
     Похожесть = совпадение значимых слов в названии/товарных позициях, без
     баллов и весов. Медиана и разброс считаются по ВСЕМ подходящим закупкам
@@ -278,7 +279,7 @@ def price_stats_for(tender, card=None) -> dict | None:
 
     settings = FilterSettings.load()
     cats = tender_categories(tender, card)
-    pool = ContractStat.objects.filter(law="fz44", shared_purchase=False, discount_pct__isnull=False)
+    pool = ContractStat.objects.filter(law="fz44", own_funnel=True, shared_purchase=False, discount_pct__isnull=False)
     if cats:
         pool = pool.filter(category__in=cats)
     # 2000 — не бизнес-потолок выборки (та считается по всем найденным ниже),

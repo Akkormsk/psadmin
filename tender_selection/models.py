@@ -203,6 +203,10 @@ class ContractStat(models.Model):
     participants_count = models.PositiveSmallIntegerField("Участников", null=True, blank=True)
     winner_inn = models.CharField("ИНН победителя", max_length=32, blank=True)
     is_ours = models.BooleanField("Наш тендер", default=False)
+    own_funnel = models.BooleanField(
+        "Из своей воронки", default=False, db_index=True,
+        help_text="Пришло из наших Входящих/Архива, а не из общего скана рынка по категориям.",
+    )
     contract_date = models.DateField("Дата контракта", null=True, blank=True, db_index=True)
     nmck_checked = models.BooleanField("Начальная цена добрана", default=False, db_index=True)
     collected_at = models.DateTimeField("Собрано", auto_now=True)

@@ -107,6 +107,7 @@ class ConfiguredBehaviourTests(TestCase):
 
         ContractStat.objects.create(
             law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("70"),
+            own_funnel=True,
         )
         filters = FilterSettings.load()
         filters.stats_min_samples, filters.reduction_hint_max = 1, 50
@@ -116,6 +117,25 @@ class ConfiguredBehaviourTests(TestCase):
 
         self.assertEqual(stats["count"], 1)
         self.assertEqual(stats["suggested_reduction"], 50)
+
+    def test_market_scan_rows_do_not_count_toward_the_forecast(self):
+        """ContractStat также наполняется отдельным сканом рынка по категориям
+        (collect_price_stats, own_funnel=False) — в прогноз идёт только своя
+        воронка (own_funnel=True), рынок не подмешиваем."""
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="99", subject="Футболки хлопковые", discount_pct=Decimal("0"),
+            own_funnel=False,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 1
+        filters.save()
+
+        stats = price_stats_for(Tender(purchase_number="2", title="Поставка футболки хлопковые"))
+
+        self.assertIsNone(stats)
 
     def test_new_estimate_without_forecast_uses_default_reduction(self):
         from .models import Tender

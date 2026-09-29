@@ -1138,21 +1138,30 @@ def apply_tender_outcome(tender, *, status, price=None, reduction_percent=None, 
 def _record_contract_stat(tender) -> None:
     """Постоянная запись для статистики прогноза — не зависит от того, жив ли
     ещё сам Tender (архив можно чистить, эта запись останется). is_ours —
-    только когда контракт реально выигран нами, не факт участия."""
+    только когда контракт реально выигран нами, не факт участия.
+
+    own_funnel=True — маркер «это наша воронка» (Входящие → Архив), а не
+    отдельный скан рынка по категориям (collect_price_stats): статистика
+    прогноза (price_stats_for) считает только own_funnel=True.
+    Номер контракта не всегда известен (не у всех архивных тендеров дошло
+    до контракта) — используем свой формат, чтобы не столкнуться с
+    уникальностью (law, contract_reg_num) у настоящих номеров из рынка."""
     if tender.contract_price is None or tender.contract_reduction_percent is None:
         return
     from .stats import category_for_codes
 
+    reg_num = tender.contract_reg_num or f"tender:{tender.purchase_number}"
     ContractStat.objects.update_or_create(
         law=tender.law, purchase_number=tender.purchase_number,
         defaults={
+            "contract_reg_num": reg_num,
             "category": category_for_codes(tender.okpd2, [], effective_okpd2(FilterSettings.load())),
             "okpd2": tender.okpd2, "region": tender.region, "subject": tender.title or tender.object_info,
             "nmck": tender.max_price, "final_price": tender.contract_price,
             "discount_pct": tender.contract_reduction_percent,
             "contract_date": (tender.outcome_checked_at or timezone.now()).date(),
             "is_ours": tender.outcome_status == Tender.OUTCOME_WON,
-            "shared_purchase": False, "nmck_checked": True,
+            "own_funnel": True, "shared_purchase": False, "nmck_checked": True,
         },
     )
 
