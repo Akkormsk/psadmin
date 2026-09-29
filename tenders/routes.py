@@ -34,7 +34,7 @@ def _route_actions(raw, route):
     return result
 
 
-def _questions(raw):
+def _questions(raw, limit=3):
     result, ids = [], set()
     for index, item in enumerate(raw if isinstance(raw, list) else []):
         if isinstance(item, str):
@@ -49,9 +49,34 @@ def _questions(raw):
             continue
         ids.add(question_id)
         result.append({"id": question_id, "text": text, "reason": _cell_text(item.get("reason"))[:300]})
-        if len(result) == 3:
+        if len(result) == limit:
             break
     return result
+
+
+def _missing_parameter_questions(route, requirements, quantity):
+    """Детерминированная проверка «чего не хватает из ТЗ» по
+    `ProcessDefinition.parameters['required']` этапов уже построенного
+    маршрута (§17 промпта: не обучение, не меняет справочник — только
+    контекст текущего расчёта). Не полагается на то, что ИИ сам заметит
+    пропуск — сравнивает по перекрытию основ слов (та же техника, что и
+    поиск подходящих уроков), а не строгим совпадением текста."""
+    tz_rows = [
+        {"label": _cell_text(row.get("label")), "value": _cell_text(row.get("value"))}
+        for row in requirements.get("requirements", []) if isinstance(row, dict)
+    ]
+    tz_rows.append({"label": "тираж количество", "value": str(quantity)})
+    known_stems = set().union(*(_lesson_stems(f"{row['label']} {row['value']}") for row in tz_rows))
+    stage_ids = {step["process_id"] for step in route["processes"] if step.get("process_id")}
+    questions = []
+    for process in ProcessDefinition.objects.filter(pk__in=stage_ids).only("id", "name", "parameters"):
+        for item in (process.parameters or {}).get("required", []) if isinstance(process.parameters, dict) else []:
+            item_text = _cell_text(item)
+            if not item_text or _lesson_stems(item_text) & known_stems:
+                continue
+            question_id = re.sub(r"[^a-zA-Z0-9_-]", "_", f"req-{process.pk}-{item_text}")[:64]
+            questions.append({"id": question_id, "text": item_text, "reason": f"Нужно для этапа «{process.name}»"})
+    return questions
 
 
 def normalize_route(raw, prior=None):
@@ -220,7 +245,8 @@ kind=catalog используй только для подбора готово�
         "route_item": _cell_text(raw.get("item"))[:120] or _cell_text(line.get("name"))[:120],
         "route_line": {"name": line.get("name"), "quantity": line.get("quantity"), "requirements": requirements},
         "session_instructions": instructions, "understood_changes": _short_text_list(raw.get("understood_changes")),
-        "questions": _questions(raw.get("questions")), "question_answers": current.get("question_answers", {}),
+        "questions": _questions([*(raw.get("questions") or []), *_missing_parameter_questions(route, requirements, line.get("quantity", 1))], limit=6),
+        "question_answers": current.get("question_answers", {}),
         "feedback_actions": _route_actions(raw.get("feedback_actions"), route), "assumptions": _short_text_list(raw.get("assumptions")),
         "route_examples": [{"id": value["id"], "name": value["name"]} for value in examples], "route_lessons": lessons,
         "catalog_search_started": False, "catalog_candidates": [], "costs": [], "totals": {},

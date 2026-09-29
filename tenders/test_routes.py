@@ -44,6 +44,20 @@ class RouteTests(TestCase):
         self.assertIn("тиснение", self.ai.call_args.args[0])
         self.assertEqual(result["costs"], [])
 
+    def test_missing_required_parameter_becomes_a_question(self):
+        self.print_process.parameters = {"required": ["код клише", "тираж"], "optional": []}
+        self.print_process.save(update_fields=["parameters"])
+        result = self.build()
+        texts = [q["text"] for q in result["questions"]]
+        self.assertIn("код клише", texts)
+        self.assertNotIn("тираж", texts)  # уже известен из quantity позиции
+
+    def test_required_parameter_already_covered_by_tz_is_not_asked(self):
+        self.print_process.parameters = {"required": ["тиснение"], "optional": []}
+        self.print_process.save(update_fields=["parameters"])
+        result = self.build()  # ТЗ уже содержит строку "Нанесение: тиснение"
+        self.assertEqual(result["questions"], [])
+
     def test_catalog_only_route_mode_skips_route_agent(self):
         with patch.dict(os.environ, {"ROUTE_MODE": "catalog_only"}):
             result = self.build()
