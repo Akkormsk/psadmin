@@ -73,6 +73,31 @@ def _resolve_counterparty(payload):
     return counterparty
 
 
+def payload_from_feedback_item(item_type, raw):
+    """Свёртывает один разобранный ИИ пункт свободного фидбэка (см.
+    services.parse_production_feedback) в payload ровно того вида, что
+    ожидают обработчики выше — те же поля-белые-списки, что и у ручного
+    экрана. Незнакомые/лишние ключи из ответа ИИ отбрасываются здесь, не
+    доходят до записи в базу."""
+    fields = raw.get("fields") if isinstance(raw.get("fields"), dict) else {}
+    if item_type == Proposal.TYPE_CREATE_STAGE:
+        return {"name": _cell_text(raw.get("name")), "description": _cell_text(raw.get("description"))}
+    if item_type == Proposal.TYPE_UPDATE_STAGE:
+        return {"stage_name": _cell_text(raw.get("stage_name")), "fields": {k: v for k, v in fields.items() if k in STAGE_EDITABLE_FIELDS}}
+    if item_type == Proposal.TYPE_CREATE_COUNTERPARTY:
+        return {"name": _cell_text(raw.get("name")), "notes": _cell_text(raw.get("notes"))}
+    if item_type == Proposal.TYPE_UPDATE_COUNTERPARTY:
+        return {"counterparty_name": _cell_text(raw.get("counterparty_name")), "fields": {k: v for k, v in fields.items() if k in COUNTERPARTY_EDITABLE_FIELDS}}
+    if item_type == Proposal.TYPE_LINK_STAGE_COUNTERPARTY:
+        payload = {"stage_name": _cell_text(raw.get("stage_name")), "counterparty_name": _cell_text(raw.get("counterparty_name"))}
+        if isinstance(raw.get("priority"), int):
+            payload["priority"] = raw["priority"]
+        return payload
+    if item_type == Proposal.TYPE_CREATE_LESSON:
+        return {"admin_text": _cell_text(raw.get("admin_text"))}
+    return {}
+
+
 def _apply_create_stage(proposal, user):
     payload = proposal.payload
     name = _cell_text(payload.get("name"))

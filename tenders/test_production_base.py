@@ -180,6 +180,79 @@ class CounterpartyDraftFlowTests(TestCase):
         self.assertFalse(Counterparty.objects.exists())
 
 
+class ProductionFeedbackFlowTests(TestCase):
+    """Свободный фидбэк → черновик Proposal (сохранён сразу, pending) →
+    подтверждение выбранных пунктов через apply_batch."""
+
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser(username="admin", password="password")
+        self.manager = get_user_model().objects.create_user(username="manager", password="password")
+        self.stage = ProcessDefinition.objects.create(
+            name="УФ-печать (фидбэк-тест)", role=ProcessDefinition.ROLE_PRODUCTION, performs_production=True,
+        )
+        self.counterparty = Counterparty.objects.create(name="Типография Фидбэк", created_by=self.admin)
+        self.client.force_login(self.admin)
+
+    def test_ordinary_manager_cannot_draft(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(reverse("tender_production_feedback_draft"), {"text": "что-то"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_empty_text_is_rejected_without_calling_ai(self):
+        response = self.client.post(reverse("tender_production_feedback_draft"), {"text": "  "})
+        self.assertEqual(response.status_code, 400)
+
+    @patch("tenders.gateway_budget.preflight")
+    @patch("tenders.services._ai_gateway_json")
+    def test_draft_creates_pending_proposals_sharing_one_batch_but_applies_nothing(self, mock_ai, mock_preflight):
+        mock_ai.return_value = (
+            {"items": [
+                {"type": "link_stage_counterparty", "summary": "Связать УФ-печать и Типографию Фидбэк",
+                 "stage_name": self.stage.name, "counterparty_name": self.counterparty.name, "priority": 5},
+                {"type": "create_lesson", "summary": "Урок про УФ-печать", "admin_text": "УФ-печать не подходит для тканевой основы."},
+            ]},
+            {},
+        )
+        response = self.client.post(reverse("tender_production_feedback_draft"), {"text": "Свяжи УФ-печать с Типографией Фидбэк, приоритет 5. И запомни: УФ-печать не подходит для тканевой основы."})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["items"]), 2)
+        self.assertEqual({item["type"] for item in data["items"]}, {"link_stage_counterparty", "create_lesson"})
+        proposals = Proposal.objects.filter(batch_id=data["batch_id"])
+        self.assertEqual(proposals.count(), 2)
+        self.assertTrue(all(p.status == Proposal.STATUS_PENDING for p in proposals))
+        self.assertFalse(StageCounterpartyLink.objects.filter(stage=self.stage, counterparty=self.counterparty).exists())
+
+    @patch("tenders.gateway_budget.preflight")
+    @patch("tenders.services._ai_gateway_json")
+    def test_ai_response_with_no_recognizable_items_is_reported_not_silently_dropped(self, mock_ai, mock_preflight):
+        mock_ai.return_value = ({"items": []}, {})
+        response = self.client.post(reverse("tender_production_feedback_draft"), {"text": "бла бла бла"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_confirm_applies_only_accepted_items_and_rejects_the_rest(self):
+        batch = Proposal.objects.create(
+            type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY,
+            payload={"stage_name": self.stage.name, "counterparty_name": self.counterparty.name},
+            summary="Связать", created_by=self.admin,
+        )
+        other = Proposal.objects.create(
+            type=Proposal.TYPE_CREATE_LESSON, payload={"admin_text": "урок"},
+            summary="Урок", created_by=self.admin, batch_id=batch.batch_id,
+        )
+        payload = {"batch_id": str(batch.batch_id), "accepted_ids": [batch.pk]}
+        response = self.client.post(reverse("tender_production_feedback_confirm"), {"payload": json.dumps(payload)})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(StageCounterpartyLink.objects.filter(stage=self.stage, counterparty=self.counterparty).exists())
+        other.refresh_from_db()
+        self.assertEqual(other.status, Proposal.STATUS_REJECTED)
+
+    def test_ordinary_manager_cannot_confirm(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(reverse("tender_production_feedback_confirm"), {"payload": json.dumps({"batch_id": "x", "accepted_ids": []})})
+        self.assertEqual(response.status_code, 403)
+
+
 class ProductionBaseDataViewTests(TestCase):
     def setUp(self):
         self.admin = get_user_model().objects.create_superuser(username="admin", password="password")

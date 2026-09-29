@@ -27,12 +27,12 @@ from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
 from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
-from .proposals import apply_proposal
+from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
-from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, recognize_tender_items, refresh_training_example_embedding
+from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items, refresh_training_example_embedding
 
 
 logger = logging.getLogger(__name__)
@@ -885,6 +885,62 @@ def production_counterparty_confirm(request):
         TenderKnowledgeSource.objects.filter(pk=source_id, counterparty__isnull=True).update(counterparty=counterparty)
     linked_stage_names = list(counterparty.stage_links.select_related("stage").values_list("stage__name", flat=True))
     return JsonResponse({"id": counterparty.pk, "name": counterparty.name, "stage_names": linked_stage_names})
+
+
+@login_required
+@require_POST
+def production_feedback_draft(request):
+    """Свободный текст администратора про «Базу производства» → черновик
+    из одного или нескольких Proposal (сразу сохранены как pending — это
+    и есть журнал «что предложено», см. tenders/proposals.py). Ничего не
+    применяется здесь — только на production_feedback_confirm."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Учить «Базу производства» может только администратор."}, status=403)
+    text = request.POST.get("text", "").strip()
+    if not text:
+        return JsonResponse({"error": "Напишите, что изменить."}, status=400)
+    active_stages = list(ProcessDefinition.objects.filter(is_active=True).values("id", "name"))
+    active_counterparties = list(Counterparty.objects.filter(is_active=True).values("id", "name"))
+    try:
+        items = parse_production_feedback(text, active_stages, active_counterparties)
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    batch_id = None
+    proposals = []
+    for item in items:
+        proposal = Proposal.objects.create(
+            type=item["type"], payload=payload_from_feedback_item(item["type"], item["raw"]),
+            summary=item["summary"], source_text=text, created_by=request.user,
+            **({"batch_id": batch_id} if batch_id else {}),
+        )
+        batch_id = batch_id or proposal.batch_id
+        proposals.append(proposal)
+    return JsonResponse({
+        "batch_id": str(batch_id),
+        "items": [{"id": p.pk, "type": p.type, "type_display": p.get_type_display(), "summary": p.summary, "payload": p.payload} for p in proposals],
+        "active_stages": active_stages, "active_counterparties": active_counterparties,
+    })
+
+
+@login_required
+@require_POST
+def production_feedback_confirm(request):
+    """Администратор отметил, какие пункты черновика принять — остальные
+    из этого же batch_id отклоняются (см. proposals.apply_batch)."""
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Учить «Базу производства» может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        batch_id = payload["batch_id"]
+        accepted_ids = [int(value) for value in payload.get("accepted_ids", [])]
+    except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+        return JsonResponse({"error": "Не удалось прочитать список правок."}, status=400)
+    try:
+        decided = apply_batch(batch_id, accepted_ids, request.user)
+    except TenderAIError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse({"results": [{"id": p.pk, "status": p.status, "summary": p.summary} for p in decided]})
 
 
 @login_required
