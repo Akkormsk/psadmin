@@ -11,10 +11,9 @@ SAMPLE_PAYLOAD_PATH = Path(__file__).resolve().parent.parent.parent / "integrati
 class Command(BaseCommand):
     """Смоук-тест адаптера FSPrint: воспроизводит ИЗВЕСТНЫЙ реальный POST
     на calc.fsprint.ru (product_id=packet, живой пример из DevTools
-    28.09.2026) без изменения значений — цель первого прогона только
-    доказать, что можно повторить тот же расчёт server-to-server, без
-    браузерных cookies. Печатает сырой ответ целиком для изучения
-    структуры вручную — ничего из него ещё не разбирается."""
+    28.09.2026) без изменения значений, затем сам делает второй запрос
+    (show_variant) и печатает разобранный результат — цены по срокам
+    изготовления и построчные статьи себестоимости."""
 
     help = "Разовая проверка адаптера FSPrint на известном реальном payload."
 
@@ -26,9 +25,14 @@ class Command(BaseCommand):
         except FSPrintError as exc:
             self.stderr.write(self.style.ERROR(str(exc)))
             return
-        self.stdout.write(self.style.SUCCESS("Ответ получен."))
-        self.stdout.write(f"Похоже на JSON: {result.raw_json is not None}")
         if result.error:
             self.stdout.write(self.style.WARNING(result.error))
-        self.stdout.write("--- сырой ответ ---")
-        self.stdout.write(result.raw_text)
+            self.stdout.write("--- сырой ответ ---")
+            self.stdout.write(result.raw_text)
+            return
+        self.stdout.write(self.style.SUCCESS(f"Расчёт №{result.record}"))
+        for option in result.timeline_options:
+            self.stdout.write(f"  {option.label} (+{option.markup_percent}%): {option.total_cost} ₽, {option.price_per_unit} ₽/шт.")
+        self.stdout.write(f"Статей себестоимости: {len(result.fields)}")
+        for label, value in result.fields[:10]:
+            self.stdout.write(f"  {label}: {value}")
