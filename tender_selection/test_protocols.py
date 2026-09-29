@@ -112,7 +112,7 @@ class ApplyProtocolTests(TestCase):
 
     def _check(self, estimate):
         with patch.object(protocols, "fetch_protocol", return_value=QUOTATION_PROTOCOL):
-            return services.check_protocol(estimate)
+            return services.check_protocol(self.tender)
 
     def test_identified_winner_becomes_won(self):
         estimate = self._estimate(bid_number="ZK-420728")
@@ -150,7 +150,7 @@ class ApplyProtocolTests(TestCase):
     def test_no_protocol_yet_only_marks_the_check(self):
         estimate = self._estimate()
         with patch.object(protocols, "fetch_protocol", return_value=None):
-            self.assertFalse(services.check_protocol(estimate))
+            self.assertFalse(services.check_protocol(self.tender))
         self.tender.refresh_from_db()
 
         self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_PENDING)
@@ -184,7 +184,7 @@ class RetryPendingProtocolsTests(TestCase):
     def _checked_numbers(self):
         with patch.object(services, "check_protocol", return_value=False) as check:
             services.retry_pending_protocols(pause=0)
-        return {call.args[0].tender_number for call in check.call_args_list}
+        return {call.args[0].purchase_number for call in check.call_args_list}
 
     def test_bidding_after_deadline_and_finished_without_protocol_are_checked(self):
         self._estimate("closed")

@@ -17,7 +17,11 @@ def _settings(plus="футболк, кружк", minus="медицин"):
 
 
 class IncomingTraceTests(TestCase):
-    def test_purge_keeps_a_trace_of_deleted_incoming_tenders(self):
+    def test_purge_archives_shown_tenders_and_traces_only_the_hidden_ones(self):
+        """Показанные (прошли плюс/минус-фильтр) — источник статистики по
+        торгам, поэтому архивируются насовсем, а не удаляются. Скрытые
+        фильтром по-прежнему удаляются, для них остаётся только след
+        IncomingTrace (для аудита слов)."""
         _settings()
         now = timezone.now()
         Tender.objects.create(purchase_number="1", title="Футболки хлопковые", collecting_finished_at=now - timedelta(days=30))
@@ -25,12 +29,13 @@ class IncomingTraceTests(TestCase):
 
         services.purge_stale()
 
-        self.assertFalse(Tender.objects.exists())
-        traces = {t.purchase_number: t for t in IncomingTrace.objects.all()}
-        self.assertEqual(traces["1"].title, "Футболки хлопковые")
-        self.assertFalse(traces["1"].filtered_out)
-        self.assertEqual(traces["1"].plus_hits, ["футболк"])
-        self.assertTrue(traces["2"].filtered_out)
+        shown = Tender.objects.get(purchase_number="1")
+        self.assertEqual(shown.status, Tender.DISMISSED)
+        self.assertIsNotNone(shown.archived_at)
+        self.assertFalse(Tender.objects.filter(purchase_number="2").exists())
+        self.assertFalse(IncomingTrace.objects.filter(purchase_number="1").exists())
+        trace = IncomingTrace.objects.get(purchase_number="2")
+        self.assertTrue(trace.filtered_out)
 
 
 class WordStatsTests(TestCase):
@@ -125,3 +130,23 @@ class ApplySuggestionsTests(TestCase):
         audit = WordAudit.objects.first()
         self.assertEqual(audit.result["add_plus"], [])
         self.assertEqual(len(audit.result["add_minus"]), 1)
+
+    def test_applied_word_disappears_from_missed_topics_too(self):
+        """«Пропускаемые тематики» — тот же аудит, отдельная секция ответа ИИ;
+        принятое там слово тоже не должно всплывать повторно."""
+        _settings()
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+        WordAudit.objects.create(result={
+            "add_plus": [], "add_minus": [], "remove_plus": [], "remove_minus": [],
+            "missed_topics": [{
+                "topic": "Полиграфия", "why": "профиль", "examples": [],
+                "words": [{"word": "бланочн", "effects": {"opens_hidden": 9}}, {"word": "журнал", "effects": {"opens_hidden": 3}}],
+            }],
+        })
+
+        self.client.post("/tender-selection/word-audit/apply/", {"add_plus": ["бланочн"]})
+
+        audit = WordAudit.objects.first()
+        remaining = audit.result["missed_topics"][0]["words"]
+        self.assertEqual([w["word"] for w in remaining], ["журнал"])

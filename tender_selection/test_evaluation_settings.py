@@ -101,16 +101,13 @@ class ConfiguredBehaviourTests(TestCase):
         self.assertEqual(list(Tender.objects.values_list("purchase_number", flat=True)), ["fresh"])
 
     def test_forecast_uses_configured_sample_size_and_hint_bounds(self):
-        from tenders.models import TenderEstimate
-
+        from .models import ContractStat
         from .models import Tender
         from .stats import price_stats_for
 
-        user = get_user_model().objects.create_user("manager")
-        own_tender = Tender.objects.create(
-            purchase_number="1", outcome_status=Tender.OUTCOME_LOST, contract_reduction_percent=Decimal("70"),
+        ContractStat.objects.create(
+            law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("70"),
         )
-        TenderEstimate.objects.create(owner=user, tender=own_tender, tender_number="1", name="Футболки хлопковые")
         filters = FilterSettings.load()
         filters.stats_min_samples, filters.reduction_hint_max = 1, 50
         filters.save()

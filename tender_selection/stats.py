@@ -255,30 +255,20 @@ def _tender_keywords(tender, card=None) -> set[str]:
     return kws
 
 
-def _estimate_keywords(estimate) -> set[str]:
-    """Слова из названия расчёта и его товарных позиций — точнее, чем общее
-    название закупки: по своим прошлым тендерам видно, что именно покупали
-    (не «поставка полиграфии», а «визитки», «буклеты» и т.д.)."""
-    kws = _keywords(estimate.name or "")
-    for line in estimate.lines.all():
-        if line.name:
-            kws |= _keywords(line.name)
-    return kws
-
-
-def _region_of_estimate(estimate):
-    return estimate.tender.region if estimate.tender_id else None
-
-
 def price_stats_for(tender, card=None) -> dict | None:
     """Сводка по снижению цен на похожих закупках — для раздела карточки.
 
+    Источник один — своя воронка (ContractStat: любой архивный тендер, что
+    прошёл через «Входящие» и был обогащён протоколом/контрактом — не только
+    те, что мы считали и на которые заявлялись). Отдельного скана по всему
+    открытому рынку больше нет.
+
     Похожесть = совпадение значимых слов в названии/товарных позициях, без
-    баллов и весов. Сначала берём свои прошлые тендеры (знаем не только
-    общее название закупки, но и реальные товарные позиции) — если не
-    набралось ``stats_target_count`` (Настройки оценки) — добираем из открытой истории похожих
-    закупок. При равном совпадении слов вперёд идёт тот же регион, затем —
-    более свежая запись.
+    баллов и весов. Медиана и разброс считаются по ВСЕМ подходящим закупкам
+    (без искусственного потолка) — потолком ограничены только показанные
+    в качестве примеров (``stats_target_count``, самые похожие).
+    При равном совпадении слов вперёд идёт тот же регион, затем — более
+    свежий контракт.
     """
     if tender.law != "fz44":
         return None
@@ -286,83 +276,47 @@ def price_stats_for(tender, card=None) -> dict | None:
     if not t_kws:
         return None
 
-    from tenders.models import TenderEstimate
-
     settings = FilterSettings.load()
-    target_count = settings.stats_target_count
-    own_pool = (
-        TenderEstimate.objects.filter(tender__isnull=False)
-        .exclude(tender__contract_reduction_percent=None)
-        .select_related("tender")
-        .prefetch_related("lines")
-    )
-    own_scored = [
-        (len(t_kws & _estimate_keywords(est)), est) for est in own_pool
+    cats = tender_categories(tender, card)
+    pool = ContractStat.objects.filter(law="fz44", shared_purchase=False, discount_pct__isnull=False)
+    if cats:
+        pool = pool.filter(category__in=cats)
+    # 2000 — не бизнес-потолок выборки (та считается по всем найденным ниже),
+    # а просто предохранитель от загрузки всей таблицы разом.
+    scored = [
+        (len(t_kws & _keywords(row.subject or "")), row)
+        for row in pool.order_by("-contract_date")[:2000]
     ]
-    own_scored = [(overlap, est) for overlap, est in own_scored if overlap]
-    own_scored.sort(key=lambda pair: (
-        -pair[0],
-        0 if (tender.region and _region_of_estimate(pair[1]) == tender.region) else 1,
-        -(pair[1].tender.outcome_checked_at.toordinal() if pair[1].tender.outcome_checked_at else 0),
+    matches = [row for overlap, row in scored if overlap]
+    matches.sort(key=lambda row: (
+        -len(t_kws & _keywords(row.subject or "")),
+        0 if (tender.region and row.region == tender.region) else 1,
+        -(row.contract_date.toordinal() if row.contract_date else 0),
     ))
 
-    chosen = []
-    for _, est in own_scored[:target_count]:
-        nmck = (est.summary_snapshot or {}).get("nmck_total")
-        chosen.append({
-            "source": "own",
-            "subject": est.name,
-            "region": _region_of_estimate(est),
-            "nmck": Decimal(str(nmck)) if nmck else None,
-            "final_price": est.tender.contract_price,
-            "discount_pct": est.tender.contract_reduction_percent,
-            "contract_date": est.tender.outcome_checked_at.date() if est.tender.outcome_checked_at else None,
-        })
-    own_count = len(chosen)
-
-    remaining = target_count - own_count
-    if remaining > 0:
-        cats = tender_categories(tender, card)
-        market_pool = ContractStat.objects.filter(law="fz44", shared_purchase=False, discount_pct__isnull=False)
-        if cats:
-            market_pool = market_pool.filter(category__in=cats)
-        market_scored = [
-            (len(t_kws & _keywords(row.subject or "")), row)
-            for row in market_pool.order_by("-contract_date")[:500]
-        ]
-        market_scored = [(overlap, row) for overlap, row in market_scored if overlap]
-        market_scored.sort(key=lambda pair: (
-            -pair[0],
-            0 if (tender.region and pair[1].region == tender.region) else 1,
-            -(pair[1].contract_date.toordinal() if pair[1].contract_date else 0),
-        ))
-        for _, row in market_scored[:remaining]:
-            chosen.append({
-                "source": "market",
-                "subject": row.subject,
-                "region": row.region,
-                "nmck": row.nmck,
-                "final_price": row.final_price,
-                "discount_pct": row.discount_pct,
-                "contract_date": row.contract_date,
-            })
-    market_count = len(chosen) - own_count
-
-    if len(chosen) < settings.stats_min_samples:
+    if len(matches) < settings.stats_min_samples:
         return None
 
-    discounts = sorted(float(row["discount_pct"]) for row in chosen)
+    discounts = sorted(float(row.discount_pct) for row in matches)
     median = statistics.median(discounts)
+    display = matches[: settings.stats_target_count]
 
     return {
-        "count": len(chosen),
-        "own_count": own_count,
-        "market_count": market_count,
+        "count": len(matches),
+        "displayed_count": len(display),
+        "won_count": sum(1 for row in matches if row.is_ours),
         "median": round(median),
         "range_lo": round(discounts[0]),
         "range_hi": round(discounts[-1]),
         "suggested_reduction": max(settings.reduction_hint_min, min(settings.reduction_hint_max, round(median))),
-        "same_region": sum(1 for row in chosen if tender.region and row["region"] == tender.region),
-        "categories": sorted(tender_categories(tender, card)),
-        "examples": chosen,
+        "same_region": sum(1 for row in matches if tender.region and row.region == tender.region),
+        "categories": sorted(cats),
+        "examples": [
+            {
+                "subject": row.subject, "region": row.region, "nmck": row.nmck,
+                "final_price": row.final_price, "discount_pct": row.discount_pct,
+                "contract_date": row.contract_date, "is_ours": row.is_ours,
+            }
+            for row in display
+        ],
     }

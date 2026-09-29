@@ -258,6 +258,21 @@ def _drop_applied(**chosen: list[str]) -> None:
         if len(kept) != len(result[kind]):
             result[kind] = kept
             changed = True
+
+    # «Пропускаемые тематики» — та же ИИ-подсказка, отдельная секция: плюс-слово
+    # оттуда применяется тем же чекбоксом add_plus, но раньше не вычищалось.
+    wanted_plus = {w.strip().lower() for w in chosen.get("add_plus", [])}
+    if wanted_plus and result.get("missed_topics"):
+        topics = []
+        for topic in result["missed_topics"]:
+            original = topic.get("words") or []
+            words = [w for w in original if str(w.get("word", "")).strip().lower() not in wanted_plus]
+            if len(words) != len(original):
+                changed = True  # включает случай «тематика опустела целиком» — не показываем пустой заголовок
+            if words:
+                topics.append({**topic, "words": words})
+        result["missed_topics"] = topics
+
     if changed:
         audit.result = result
         audit.save(update_fields=["result"])
