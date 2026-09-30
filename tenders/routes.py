@@ -298,23 +298,86 @@ def catalog_step_state(hypothesis, step_id=""):
     return step, state
 
 
+def _assemble_costs(route, catalog_steps, production_steps):
+    """Один список статей себестоимости, собранный из ОБОИХ источников —
+    подбора готового товара (catalog_steps, список строк на шаг) и цены
+    производственного этапа у контрагента (production_steps, одна строка
+    на шаг). Общая функция для merge_catalog_step/merge_production_step —
+    пересчёт одного вида шага не должен тихо стирать уже посчитанные
+    строки другого вида."""
+    costs = []
+    for process in route["processes"]:
+        step_id = process["id"]
+        for cost in (catalog_steps.get(step_id) or {}).get("costs") or []:
+            costs.append({**cost, "process_name": process["name"], "step_id": step_id})
+        production = production_steps.get(step_id)
+        if production and production.get("total_cost"):
+            costs.append({
+                "process_name": process["name"], "step_id": step_id,
+                "amount_total": production["total_cost"], "source": production["counterparty_name"],
+            })
+    return costs
+
+
+def _totals_from_costs(costs, quantity):
+    from .services import _money
+
+    total = sum((Decimal(cost["amount_total"]) for cost in costs), Decimal("0"))
+    return {"material_unit": str(_money(total / quantity)), "cost_unit": str(_money(total / quantity)), "cost_total": str(_money(total))}
+
+
 def merge_catalog_step(current, result, line, step_id):
-    from .services import _attach_memory_preview, _money
+    from .services import _attach_memory_preview
 
     runs = copy.deepcopy(current.get("catalog_steps", {}))
     runs[step_id] = {key: result.get(key) for key in CATALOG_FIELDS}
     runs[step_id]["catalog_search_started"] = True
-    costs = []
-    for process in current["route"]["processes"]:
-        for cost in runs.get(process["id"], {}).get("costs") or []:
-            costs.append({**cost, "process_name": process["name"], "step_id": process["id"]})
-    total = sum((Decimal(cost["amount_total"]) for cost in costs), Decimal("0"))
     quantity = Decimal(str(line.get("quantity", 1)).replace(",", "."))
+    costs = _assemble_costs(current["route"], runs, current.get("production_steps", {}))
     merged = {**current, **{key: result.get(key) for key in CATALOG_FIELDS},
               "catalog_steps": runs, "catalog_step_id": step_id, "catalog_search_started": True,
               "session_instructions": result.get("session_instructions", current.get("session_instructions", [])),
               "costs": costs, "usage": result.get("usage", {}),
-              "totals": {"material_unit": str(_money(total / quantity)), "cost_unit": str(_money(total / quantity)), "cost_total": str(_money(total))}}
+              "totals": _totals_from_costs(costs, quantity)}
+    return _attach_memory_preview(merged)
+
+
+def production_step_state(hypothesis, step_id=""):
+    """Производственные шаги маршрута, у которых уже есть настоящий
+    (подтверждённый) этап справочника — предложенный, но ещё не
+    созданный `proposed_process` посчитать нельзя, у него нет
+    StageCounterpartyLink."""
+    steps = [step for step in hypothesis.get("route", {}).get("processes", []) if step.get("kind") == "production" and step.get("process_id")]
+    step = next((step for step in steps if step["id"] == step_id), None) if step_id else next(iter(steps), None)
+    if step is None:
+        raise TenderAIError("В маршруте нет подтверждённого производственного этапа для расчёта цены.")
+    return step
+
+
+def merge_production_step(current, line, step_id):
+    """Считает цену ОДНОГО производственного этапа через уже привязанных
+    к нему контрагентов (см. tenders/production_pricing.py) и вплетает
+    её в общий costs/totals маршрута — по нажатию «Посчитать стоимость»,
+    не автоматически при каждой правке (см. catalog-этапы — тот же
+    принцип: явное действие администратора, не побочный эффект)."""
+    from .production_pricing import ProductionPricingError, price_stage
+    from .services import _attach_memory_preview
+
+    step = production_step_state(current, step_id)
+    quantity = Decimal(str(line.get("quantity", 1)).replace(",", "."))
+    runs = copy.deepcopy(current.get("production_steps", {}))
+    try:
+        priced = price_stage(int(step["process_id"]), quantity, current)
+        runs[step_id] = {
+            "counterparty_name": priced.counterparty_name, "price_source_type": priced.price_source_type,
+            "unit_cost": str(priced.unit_cost), "total_cost": str(priced.total_cost),
+            "detail": priced.detail, "error": "",
+        }
+    except ProductionPricingError as exc:
+        runs[step_id] = {"error": str(exc), "total_cost": None, "unit_cost": None, "counterparty_name": "", "price_source_type": "", "detail": {}}
+
+    costs = _assemble_costs(current["route"], current.get("catalog_steps", {}), runs)
+    merged = {**current, "production_steps": runs, "costs": costs, "totals": _totals_from_costs(costs, quantity)}
     return _attach_memory_preview(merged)
 
 

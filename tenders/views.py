@@ -715,13 +715,14 @@ def revise_production_hypothesis(request):
         # "requirements" (the ТЗ-checkbox recompute) is catalog-scoped too —
         # the route and the search plan do not change, only which rows the
         # matcher is allowed to look at.
-        recompute = "catalog" if scope in {"catalog", "requirements"} else "all"
+        recompute = "catalog" if scope in {"catalog", "requirements"} else "production" if scope == "production_price" else "all"
         if len(feedback) > 3000 or not str(line.get("name", "")).strip() or _number(line.get("quantity")) <= 0:
             raise ValueError
         # A "requirements" recompute carries its change in the line payload
         # (the ТЗ-row `selected` flags); a chip removal carries it in
-        # instructions_override or clear_ranking — none need feedback text.
-        if not feedback and question_answers is None and instructions_override is None and not clear_ranking and not refresh and scope not in {"requirements", "catalog"}:
+        # instructions_override or clear_ranking; "production_price" needs
+        # only step_id — none of these need feedback text.
+        if not feedback and question_answers is None and instructions_override is None and not clear_ranking and not refresh and scope not in {"requirements", "catalog", "production_price"}:
             raise ValueError
     except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)

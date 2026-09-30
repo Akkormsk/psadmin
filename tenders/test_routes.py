@@ -7,11 +7,15 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession
+from .models import Counterparty, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, StageCounterpartyLink
 from .services import TenderAIError, apply_catalog_candidate, build_training_hypothesis
 
 
-class RouteTests(TestCase):
+class RouteFixtures:
+    """Общие фикстуры для тестов маршрута — не TestCase сам по себе,
+    чтобы наследники не подхватывали чужие тестовые методы (примешивается
+    к TestCase отдельно в каждом классе, который ей пользуется)."""
+
     def setUp(self):
         self.user = get_user_model().objects.create_superuser(username="route-admin", password="test")
         self.client.force_login(self.user)
@@ -36,6 +40,8 @@ class RouteTests(TestCase):
     def build(self, **kwargs):
         return build_training_hypothesis(copy.deepcopy(self.line), **kwargs)
 
+
+class RouteTests(RouteFixtures, TestCase):
     def test_route_build_does_not_start_catalog_and_keeps_full_tz(self):
         result = self.build()
         self.cascade.assert_not_called()
@@ -307,3 +313,49 @@ class RouteTests(TestCase):
         ]
         result = self.build()
         self.assertEqual(result["feedback_actions"], [{"type": "remove_stage", "stage_id": "purchase", "summary": "Убрана закупка"}])
+
+
+class ProductionPriceStepTests(RouteFixtures, TestCase):
+    """Мост StageCounterpartyLink → costs/totals маршрута (production_pricing.py)."""
+
+    def _link_print_process_to_a_priced_counterparty(self):
+        counterparty = Counterparty.objects.create(name="FSPrint (маршрут-тест)", created_by=self.user)
+        StageCounterpartyLink.objects.create(
+            stage=self.print_process, counterparty=counterparty,
+            price_source_type=StageCounterpartyLink.SOURCE_INTERNAL_CALCULATOR,
+            settings={"pricing_module": "tenders.integrations.fsprint_rizograf", "answer_mapping": {"тип бумаги": "paper_key"}},
+        )
+        return counterparty
+
+    def test_pricing_a_production_step_fills_costs_and_totals(self):
+        counterparty = self._link_print_process_to_a_priced_counterparty()
+        current = self.build()
+        current["question_answers"] = {f"req-{self.print_process.pk}-тип бумаги": "standard_ru_80"}
+        current["questions"] = [{"id": f"req-{self.print_process.pk}-тип бумаги", "text": "тип бумаги"}]
+        self.ai.reset_mock()
+        result = self.build(current=current, recompute="production", step_id="print")
+        self.assertEqual(result["production_steps"]["print"]["counterparty_name"], counterparty.name)
+        self.assertEqual(len(result["costs"]), 1)
+        self.assertEqual(result["costs"][0]["step_id"], "print")
+        self.assertGreater(float(result["totals"]["cost_total"]), 0)
+        self.ai.assert_not_called()  # детерминированный расчёт, без ИИ
+
+    def test_no_counterparty_reports_a_clear_error_without_crashing_the_route(self):
+        current = self.build()
+        result = self.build(current=current, recompute="production", step_id="print")
+        self.assertIn("не привязан", result["production_steps"]["print"]["error"])
+        self.assertEqual(result["costs"], [])
+
+    def test_catalog_and_production_costs_coexist_without_wiping_each_other(self):
+        from .cascade import CascadeResult
+        self._link_print_process_to_a_priced_counterparty()
+        current = self.build()
+        current["question_answers"] = {f"req-{self.print_process.pk}-тип бумаги": "standard_ru_80"}
+        current["questions"] = [{"id": f"req-{self.print_process.pk}-тип бумаги", "text": "тип бумаги"}]
+        current = self.build(current=current, recompute="production", step_id="print")
+        self.cascade.return_value = CascadeResult(item="пакет", queries=[], tz=[], candidates=[{"id": "x", "name": "Пакет", "price": "10", "fit": "exact"}], catalog_intent={}, requirement_selection=[])
+        current = self.build(current=current, recompute="catalog", step_id="purchase")
+        self.assertEqual({cost["step_id"] for cost in current["costs"]}, {"print", "purchase"})
+        # снова пересчитать производственный шаг — каталожная строка должна остаться на месте
+        result = self.build(current=current, recompute="production", step_id="print")
+        self.assertEqual({cost["step_id"] for cost in result["costs"]}, {"print", "purchase"})

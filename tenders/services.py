@@ -2807,10 +2807,12 @@ def learn_lessons_from_session(hypothesis, session, user):
 
 
 def build_training_hypothesis(line, current=None, feedback="", progress_callback=None, recompute="all", instructions_override=None, clear_ranking=False, step_id="", learn_for_similar=True):
-    from .routes import build_route_hypothesis, catalog_step_state, merge_catalog_step, route_instructions
+    from .routes import build_route_hypothesis, catalog_step_state, merge_catalog_step, merge_production_step, route_instructions
 
     current = current if isinstance(current, dict) else {}
     instructions = route_instructions(current, feedback, instructions_override, recompute, step_id, learn_for_similar)
+    if recompute == "production":
+        return {**merge_production_step(current, line, step_id), "session_instructions": instructions}
     if recompute != "catalog":
         return build_route_hypothesis(line, current, instructions, progress_callback)
     step, state = catalog_step_state(current, step_id)

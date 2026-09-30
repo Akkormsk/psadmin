@@ -51,9 +51,11 @@ class Command(BaseCommand):
                 "priority": 10,
                 "settings": {
                     "pricing_module": "tenders.integrations.fsprint_rizograf",
+                    "answer_mapping": {"формат (А4/А3)": "format", "тип бумаги": "paper_key"},
                     "source_url": SOURCE_URL,
                     "captured": "2026-09-29",
-                    "note": "Статичный прайс-лист, не калькулятор-API. Формула: тариф(тираж) + цена бумаги, А3 = 2x. Спецпредложение «листовки А7» на странице не включено.",
+                    "note": "Статичный прайс-лист, не калькулятор-API. Формула: тариф(тираж) + цена бумаги, А3 = 2x. Спецпредложение «листовки А7» на странице не включено. "
+                            "Ответ на «тип бумаги» должен быть одним из ключей PAPER_PRICES (fsprint_rizograf.py) — свободный текст пока не распознаётся, при несовпадении калькулятор вернёт список допустимых значений.",
                 },
             },
             summary="Связать «Ризография» с FSPrint (internal_calculator, fsprint_rizograf.py)",
