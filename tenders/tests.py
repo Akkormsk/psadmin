@@ -76,7 +76,7 @@ class TenderTests(TestCase):
 
         response = self.client.get(reverse("tender_home"))
 
-        self.assertContains(response, "routePreview(line)")
+        self.assertContains(response, "displayProduction=activeProduction?")
         self.assertContains(response, "autoStartProductSearch=false")
         self.assertContains(response, "autoRecalculateRequirements=false")
         self.assertContains(response, "activeProduction=info.production")
