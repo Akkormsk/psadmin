@@ -14,7 +14,7 @@ from .ai_gateway import chat_json
 from .filtering import _norm, match_title, parse_terms
 from .models import FilterSettings, IncomingTrace, Tender, WordAudit
 
-MODEL = os.getenv("WORD_AUDIT_MODEL", "openai/gpt-4.1-mini")
+MODEL = os.getenv("WORD_AUDIT_MODEL", "gemini/gemini-3.1-flash-lite")
 SAMPLE_LIMITS = {"taken": 120, "dismissed": 120, "ignored": 150, "hidden": 300}
 TITLE_CHARS = 160
 SUGGESTION_KINDS = ("add_plus", "add_minus", "remove_plus", "remove_minus")

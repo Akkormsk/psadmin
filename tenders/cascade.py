@@ -57,8 +57,8 @@ logger = logging.getLogger(__name__)
 
 _STRONG_MODEL = os.getenv("TIMEWEB_AI_MODEL_SEARCH_PLAN", "").strip() or "anthropic/claude-sonnet-4-5"
 _AGENT_MODEL = os.getenv("TIMEWEB_AI_MODEL_SHORTLIST", "").strip() or "anthropic/claude-sonnet-4-5"
-_FAST_MODEL = os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or "openai/gpt-4.1-mini"
-_TITLE_MODEL = os.getenv("TIMEWEB_AI_MODEL_TITLE", "").strip() or "openai/gpt-4.1-mini"
+_FAST_MODEL = os.getenv("TIMEWEB_AI_MODEL_NAME_FILTER", "").strip() or "gemini/gemini-3.1-flash-lite"
+_TITLE_MODEL = os.getenv("TIMEWEB_AI_MODEL_TITLE", "").strip() or "gemini/gemini-3.1-flash-lite"
 
 # Единственный сигнал приоритета критерия шага 1 — не отдельный флаг
 # "проверять/не проверять" плюс важность, а одна шкала: приоритет для

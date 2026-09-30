@@ -773,7 +773,7 @@ def _json_from_model(content):
 def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, model=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
-    model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "openai/gpt-4.1-mini").strip()
+    model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite").strip()
     if not api_key:
         raise TenderAIError("AI Gateway ещё не настроен.")
     has_images = bool(scan_ocr or image_data_urls)
@@ -2439,12 +2439,12 @@ def _requirement_skip_labels():
 # Читает ТОЛЬКО название товара (не карточку), сотнями, пачками по 240 —
 # отсеивает коробку/чехол/кабель/набор. Спорное оставляет; всё остальное
 # по ТЗ разбирает сильный агент в tenders/cascade.py (шаг 6).
-_NAME_FILTER_MODEL_DEFAULT = "openai/gpt-4.1-mini"
+_NAME_FILTER_MODEL_DEFAULT = "gemini/gemini-3.1-flash-lite"
 _NAME_FILTER_BATCH = 240
 
 
 def _run_name_filter(item, id_names, *, usage=None, model=None, intensity="cautious"):
-    """Step 4: the cheap AI name pass. `gpt-4.1-mini` reads each product
+    """Step 4: the cheap AI name pass. The cheap model reads each product
     NAME (nothing else) and drops the ones that are not the requested
     `item` — a case / box / holder / cable / a gift set of several things,
     not the thing itself. Ambiguous names are kept. Whatever the rest of

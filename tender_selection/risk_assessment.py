@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import re
 
-MODEL = os.getenv("RISK_ASSESSMENT_MODEL", "openai/gpt-4.1-mini")
+MODEL = os.getenv("RISK_ASSESSMENT_MODEL", "gemini/gemini-3.1-flash-lite")
 MAX_CONTEXT_CHARS = 150_000  # с запасом выше реально протестированных ~130к символов
 MAX_DOCUMENTS = 2  # ровно контракт + ООЗ/ТЗ — больше не читаем, это основные носители риска
 
