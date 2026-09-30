@@ -181,6 +181,14 @@
       Медиана и разброс — по всей выборке, в таблице показаны самые похожие. Совместные и многолотовые закупки исключены.
     </p>
   </details>
+  {% elif price_stats_diag %}
+  <details class="panel panel--separated">
+    <summary class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках <small class="ts-count">пока нет данных</small></h2></summary>
+    <p class="ts-stats-lead">
+      Своя история содержит {{ price_stats_diag.count }} похож{{ price_stats_diag.count|pluralize:"ую,их" }} закупк{{ price_stats_diag.count|pluralize:"у,и" }} по этой тематике, а для прогноза нужно минимум {{ price_stats_diag.min_samples }}.
+      Появится, когда в архиве наберётся больше тендеров с известным контрактом — это не сбой, просто пока не набралось данных.
+    </p>
+  </details>
   {% endif %}
 
   {% if pushed_estimate_id %}

@@ -432,7 +432,8 @@ def tender_detail(request, pk):
     # Прогноз снижения и оценка риска не показываются на «Входящих» — рано,
     # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
     # начиная с «Проверки» (review != unreviewed).
-    stats = price_stats_for(tender, card) if card and tender.review != Tender.UNREVIEWED else None
+    stats_diag = {}
+    stats = price_stats_for(tender, card, diag=stats_diag) if card and tender.review != Tender.UNREVIEWED else None
     if stats:
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
@@ -483,6 +484,7 @@ def tender_detail(request, pk):
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
+        "price_stats_diag": stats_diag or None,
         "risk_needs_fetch": risk_needs_fetch,
         "risk": risk,
         "risk_error": risk_error,

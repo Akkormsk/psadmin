@@ -137,6 +137,26 @@ class ConfiguredBehaviourTests(TestCase):
 
         self.assertIsNone(stats)
 
+    def test_insufficient_history_reports_why_via_diag_instead_of_vanishing(self):
+        """Когда своей истории мало — карточка должна показать «пока нет данных»,
+        а не молча спрятать блок целиком (иначе выглядит как баг)."""
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("70"),
+            own_funnel=True,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 3
+        filters.save()
+
+        diag = {}
+        stats = price_stats_for(Tender(purchase_number="2", title="Поставка футболки хлопковые"), diag=diag)
+
+        self.assertIsNone(stats)
+        self.assertEqual(diag, {"count": 1, "min_samples": 3})
+
     def test_new_estimate_without_forecast_uses_default_reduction(self):
         from .models import Tender
         from .services import push_to_estimate

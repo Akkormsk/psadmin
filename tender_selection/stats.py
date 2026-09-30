@@ -255,7 +255,7 @@ def _tender_keywords(tender, card=None) -> set[str]:
     return kws
 
 
-def price_stats_for(tender, card=None) -> dict | None:
+def price_stats_for(tender, card=None, *, diag: dict | None = None) -> dict | None:
     """Сводка по снижению цен на похожих закупках — для раздела карточки.
 
     Источник один — своя воронка (ContractStat, own_funnel=True: любой
@@ -270,6 +270,11 @@ def price_stats_for(tender, card=None) -> dict | None:
     в качестве примеров (``stats_target_count``, самые похожие).
     При равном совпадении слов вперёд идёт тот же регион, затем — более
     свежий контракт.
+
+    ``diag`` (опционально) — сюда, если передан, пишется причина отсутствия
+    прогноза ({"count": сколько похожих нашлось, "min_samples": сколько
+    нужно}), даже когда возвращается None — карточка тендера показывает по
+    этому честное «пока не набралось», а не молча прячет блок целиком.
     """
     if tender.law != "fz44":
         return None
@@ -296,6 +301,9 @@ def price_stats_for(tender, card=None) -> dict | None:
     ))
 
     if len(matches) < settings.stats_min_samples:
+        if diag is not None:
+            diag["count"] = len(matches)
+            diag["min_samples"] = settings.stats_min_samples
         return None
 
     discounts = sorted(float(row.discount_pct) for row in matches)
