@@ -58,6 +58,20 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertIn("код клише", texts)
         self.assertNotIn("тираж", texts)  # уже известен из quantity позиции
 
+    def test_missing_parameter_question_carries_choices_from_the_linked_calculator(self):
+        Counterparty.objects.create(name="FSPrint (вопрос-тест)", created_by=self.user)
+        StageCounterpartyLink.objects.create(
+            stage=self.print_process, counterparty=Counterparty.objects.get(name="FSPrint (вопрос-тест)"),
+            price_source_type=StageCounterpartyLink.SOURCE_INTERNAL_CALCULATOR,
+            settings={"pricing_module": "tenders.integrations.fsprint_rizograf", "answer_mapping": {"тип бумаги": "paper_key"}},
+        )
+        self.print_process.parameters = {"required": ["тип бумаги"], "optional": []}
+        self.print_process.save(update_fields=["parameters"])
+        result = self.build()
+        question = next(q for q in result["questions"] if q["text"] == "тип бумаги")
+        from .integrations.fsprint_rizograf import CHOICES
+        self.assertEqual(question["choices"], CHOICES["paper_key"])
+
     def test_required_parameter_already_covered_by_tz_is_not_asked(self):
         self.print_process.parameters = {"required": ["тиснение"], "optional": []}
         self.print_process.save(update_fields=["parameters"])

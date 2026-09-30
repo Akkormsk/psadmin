@@ -1,6 +1,6 @@
 from django.test import SimpleTestCase
 
-from .integrations.fsprint_rizograf import RizografError, calculate_price
+from .integrations.fsprint_rizograf import CHOICES, PAPER_PRICES, RizografError, calculate_price
 
 
 class RizografPriceTests(SimpleTestCase):
@@ -33,3 +33,13 @@ class RizografPriceTests(SimpleTestCase):
     def test_unknown_format_is_reported_not_guessed(self):
         with self.assertRaises(RizografError):
             calculate_price(1000, "standard_ru_80", format="A5")
+
+    def test_every_paper_choice_is_a_real_accepted_key(self):
+        choice_keys = {choice["value"] for choice in CHOICES["paper_key"]}
+        self.assertEqual(choice_keys, set(PAPER_PRICES))
+        for key in choice_keys:
+            calculate_price(1000, key)  # не должно бросать RizografError
+
+    def test_every_format_choice_is_accepted(self):
+        for choice in CHOICES["format"]:
+            calculate_price(1000, "standard_ru_80", format=choice["value"])

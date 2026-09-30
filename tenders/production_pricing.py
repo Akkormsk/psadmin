@@ -95,14 +95,42 @@ def _price_via_internal_calculator(link, quantity, answers):
     )
 
 
-def price_stage(stage_id, quantity, hypothesis):
+def _active_links(stage_id):
     from .models import StageCounterpartyLink
 
-    answers = _answers_for_stage(stage_id, hypothesis)
-    links = list(
+    return list(
         StageCounterpartyLink.objects.filter(stage_id=stage_id, is_active=True, counterparty__is_active=True)
         .select_related("counterparty").order_by("priority", "counterparty__name")
     )
+
+
+def choices_for_param(stage_id, param_text):
+    """Варианты ответа на уточняющий вопрос про `param_text`, если их
+    знает калькулятор хотя бы одного привязанного к этапу контрагента —
+    сам список вариантов живёт в модуле калькулятора (см. CHOICES в
+    fsprint_rizograf.py), здесь не дублируется и не угадывается. None,
+    если ни один модуль про этот параметр ничего не знает — тогда вопрос
+    остаётся свободным текстом, как раньше."""
+    for link in _active_links(stage_id):
+        if link.price_source_type != "internal_calculator":
+            continue
+        module_path = link.settings.get("pricing_module")
+        param_name = link.settings.get("answer_mapping", {}).get(param_text)
+        if not module_path or not param_name:
+            continue
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError:
+            continue
+        choices = getattr(module, "CHOICES", {}).get(param_name)
+        if choices:
+            return choices
+    return None
+
+
+def price_stage(stage_id, quantity, hypothesis):
+    answers = _answers_for_stage(stage_id, hypothesis)
+    links = _active_links(stage_id)
     if not links:
         raise ProductionPricingError("К этому этапу пока не привязан ни один контрагент — добавьте его в «Базе производства».")
     errors = []

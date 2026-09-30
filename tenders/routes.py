@@ -48,7 +48,14 @@ def _questions(raw, limit=3):
         if not text:
             continue
         ids.add(question_id)
-        result.append({"id": question_id, "text": text, "reason": _cell_text(item.get("reason"))[:300]})
+        entry = {"id": question_id, "text": text, "reason": _cell_text(item.get("reason"))[:300]}
+        choices = item.get("choices")
+        if isinstance(choices, list) and choices:
+            entry["choices"] = [
+                {"value": _cell_text(choice.get("value"))[:200], "label": _cell_text(choice.get("label"))[:200]}
+                for choice in choices if isinstance(choice, dict) and _cell_text(choice.get("value"))
+            ]
+        result.append(entry)
         if len(result) == limit:
             break
     return result
@@ -67,6 +74,8 @@ def _missing_parameter_questions(route, requirements, quantity):
     ]
     tz_rows.append({"label": "тираж количество", "value": str(quantity)})
     known_stems = set().union(*(_lesson_stems(f"{row['label']} {row['value']}") for row in tz_rows))
+    from .production_pricing import choices_for_param
+
     stage_ids = {step["process_id"] for step in route["processes"] if step.get("process_id")}
     questions = []
     for process in ProcessDefinition.objects.filter(pk__in=stage_ids).only("id", "name", "parameters"):
@@ -75,7 +84,11 @@ def _missing_parameter_questions(route, requirements, quantity):
             if not item_text or _lesson_stems(item_text) & known_stems:
                 continue
             question_id = re.sub(r"[^a-zA-Z0-9_-]", "_", f"req-{process.pk}-{item_text}")[:64]
-            questions.append({"id": question_id, "text": item_text, "reason": f"Нужно для этапа «{process.name}»"})
+            question = {"id": question_id, "text": item_text, "reason": f"Нужно для этапа «{process.name}»"}
+            choices = choices_for_param(process.pk, item_text)
+            if choices:
+                question["choices"] = choices
+            questions.append(question)
     return questions
 
 
