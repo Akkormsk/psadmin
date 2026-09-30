@@ -96,10 +96,13 @@ def _found_tender_card(tender):
     badges = [_risk_badge(tender)] if reviewed else []
     now = timezone.now()
     is_soon = bool(tender.collecting_finished_at and now <= tender.collecting_finished_at <= now + timedelta(days=1))
+    org = getattr(tender, "org", None)
+    customer = (org.name if org and org.name else "") or (f"ИНН {tender.customer_inn}" if tender.customer_inn else "")
     return {
         "kind": "found",
         "pk": tender.pk,
         "title": tender.title or tender.object_info,
+        "customer": customer,
         "law_label": tender.get_law_display(),
         "purchase_number": tender.purchase_number,
         "max_price": tender.max_price,
@@ -140,9 +143,11 @@ def _estimate_card(estimate):
             except InvalidOperation:
                 roi_state = "pending"
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
-    if estimate.status == estimate.WON:
+    tender = estimate.tender
+    outcome_status = tender.outcome_status if tender else Tender.OUTCOME_DRAFT
+    if tender and tender.outcome_status == Tender.OUTCOME_WON:
         badges.append({"state": "ok", "text": "Выигран"})
-    elif estimate.status == estimate.LOST:
+    elif tender and tender.outcome_status == Tender.OUTCOME_LOST:
         badges.append({"state": "error", "text": "Проигран"})
     # Карточка ведёт на страницу ТЕНДЕРА (с растущими блоками по стадиям), а не
     # сразу в рабочее пространство расчёта — туда только через кнопку «Перейти
@@ -153,9 +158,9 @@ def _estimate_card(estimate):
         "pk": estimate.pk,
         "title": estimate.name,
         "tender_number": estimate.tender_number,
-        "status": estimate.status,
-        "status_label": estimate.get_status_display(),
-        "status_key": estimate.status,
+        "status": outcome_status,
+        "status_label": tender.get_outcome_status_display() if tender else "",
+        "status_key": outcome_status,
         "badges": badges,
         # Внесение итога живёт на странице самого тендера (tenders/home.html,
         # рядом с прогнозом снижения), не на карточке канбана — здесь только
@@ -164,7 +169,7 @@ def _estimate_card(estimate):
         "dismiss_url": reverse("tender_selection:dismiss_estimate", args=[estimate.pk]),
         # Архивировать «в тихую» просчёт, по которому ещё не внесён итог торгов, —
         # частая случайная потеря данных; предупреждаем перед этим (см. kanban.html).
-        "warn_before_dismiss": not estimate.outcome_checked_at,
+        "warn_before_dismiss": not (tender.outcome_checked_at if tender else False),
     }
 
 
@@ -212,9 +217,12 @@ def kanban(request):
 
     # «Входящие» больше не колонка канбана — это отдельный список (tender_list);
     # сюда тендер попадает только после «В работу» (review != unreviewed).
+    review_tenders = _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), "review")
+    orgs = {o.inn: o for o in Organization.objects.filter(inn__in={t.customer_inn for t in review_tenders if t.customer_inn})}
+    for t in review_tenders:
+        t.org = orgs.get(t.customer_inn)
     review = [
-        _found_tender_card(t) for t in
-        _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), "review")
+        _found_tender_card(t) for t in review_tenders
     ]
 
     from tenders.models import TenderEstimate
@@ -224,15 +232,15 @@ def kanban(request):
     ).exclude(tender__status=Tender.DISMISSED).select_related("tender")
     calculation = [
         _estimate_card(e) for e in
-        live_estimates.filter(status=TenderEstimate.DRAFT).order_by(*_order("calculation", "updated_at"))
+        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_DRAFT).order_by(*_order("calculation", "updated_at"))
     ]
     bidding = [
         _estimate_card(e) for e in
-        live_estimates.filter(status=TenderEstimate.PENDING).order_by(*_order("bidding", "updated_at"))
+        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_PENDING).order_by(*_order("bidding", "updated_at"))
     ]
     result = [
         _estimate_card(e) for e in
-        live_estimates.exclude(status__in=(TenderEstimate.DRAFT, TenderEstimate.PENDING))
+        live_estimates.exclude(tender__outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_PENDING))
         .order_by(*_order("result", "updated_at"))
     ]
 
@@ -255,11 +263,11 @@ def kanban(request):
 
 
 def _deadline_urgency(deadline, now) -> tuple[int | None, str]:
-    """(полных дней до окончания подачи, 'urgent' ≤2 дн. | 'soon' ≤4 дн. | '')."""
+    """(полных дней до окончания подачи, 'urgent' — сутки (последний день) | 'soon' — двое суток | '')."""
     if deadline is None or deadline < now:
         return None, ""
     days = (deadline - now).days
-    return days, "urgent" if days <= 2 else "soon" if days <= 4 else ""
+    return days, "urgent" if days <= 0 else "soon" if days == 1 else ""
 
 
 def _incoming_count(settings) -> int:
@@ -411,8 +419,8 @@ def tender_detail(request, pk):
 
     lifecycle = _tender_lifecycle(tender, estimate)
     active_stage = "review" if estimate is None else (
-        "calculation" if estimate.status == TenderEstimate.DRAFT else
-        "bidding" if estimate.status == TenderEstimate.PENDING else "result"
+        "calculation" if tender.outcome_status == Tender.OUTCOME_DRAFT else
+        "bidding" if tender.outcome_status == Tender.OUTCOME_PENDING else "result"
     )
 
     org = Organization.objects.filter(inn=tender.customer_inn).first() if tender.customer_inn else None
@@ -424,7 +432,8 @@ def tender_detail(request, pk):
     # Прогноз снижения и оценка риска не показываются на «Входящих» — рано,
     # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
     # начиная с «Проверки» (review != unreviewed).
-    stats = price_stats_for(tender, card) if card and tender.review != Tender.UNREVIEWED else None
+    stats_diag = {}
+    stats = price_stats_for(tender, card, diag=stats_diag) if card and tender.review != Tender.UNREVIEWED else None
     if stats:
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
@@ -475,6 +484,7 @@ def tender_detail(request, pk):
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
+        "price_stats_diag": stats_diag or None,
         "risk_needs_fetch": risk_needs_fetch,
         "risk": risk,
         "risk_error": risk_error,
@@ -484,11 +494,12 @@ def tender_detail(request, pk):
 
 def _protocol_view(estimate):
     """Таблица участников итогового протокола; наша заявка отмечена, если опознана."""
-    protocol = (estimate.protocol or {}) if estimate else {}
+    tender = estimate.tender if estimate and estimate.tender_id else None
+    protocol = (tender.protocol or {}) if tender else {}
     if not protocol:
         return None
-    nmck = protocol.get("nmck") or (estimate.tender.max_price if estimate.tender_id else None)
-    ours = find_ours(protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price)
+    nmck = protocol.get("nmck") or (tender.max_price if tender else None)
+    ours = find_ours(protocol, bid_number=tender.bid_number, bid_price=tender.bid_price)
     rows = []
     for participant in sorted(protocol.get("participants", []), key=lambda p: (p.get("rank") is None, p.get("rank") or 0)):
         price = Decimal(participant["price"]) if participant.get("price") else None
@@ -503,7 +514,7 @@ def _protocol_view(estimate):
 
 def _tender_lifecycle(tender, estimate):
     """Короткий ориентир на карточке: этапы, а не вторая навигация."""
-    status = estimate.status if estimate else ""
+    status = tender.outcome_status if estimate else ""
     current = "incoming" if tender.review == Tender.UNREVIEWED else "evaluation"
     if estimate:
         current = "calculation" if status == "draft" else "bidding" if status == "pending" else "result"
@@ -900,6 +911,7 @@ def enter_outcome(request, pk):
     from tenders.models import TenderEstimate
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
+    tender = estimate.tender
     manual_status = request.POST.get("status")
     manual_reduction = request.POST.get("actual_reduction_percent", "").strip()
     try:
@@ -910,12 +922,12 @@ def enter_outcome(request, pk):
         messages.error(request, "Фактическое снижение должно быть числом от 0 до 100.")
         return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
-    if manual_status in (TenderEstimate.WON, TenderEstimate.LOST, TenderEstimate.NOT_PARTICIPATED):
+    if manual_status in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED):
         apply_tender_outcome(
             estimate, status=manual_status, reduction_percent=reduction_percent,
-            source=TenderEstimate.OUTCOME_MANUAL,
+            source=Tender.OUTCOME_MANUAL,
         )
-        messages.success(request, f"Итог внесён вручную: {estimate.get_status_display()}.")
+        messages.success(request, f"Итог внесён вручную: {tender.get_outcome_status_display()}.")
     else:
         try:
             protocol_found = check_protocol(estimate)
@@ -923,8 +935,8 @@ def enter_outcome(request, pk):
             protocol_found = False
             messages.warning(request, f"ЕИС сейчас не ответил ({exc}) — проверю протокол позже автоматически.")
         if protocol_found:
-            estimate.refresh_from_db()
-            messages.success(request, f"Итоговый протокол загружен из ЕИС: {estimate.get_status_display()}.")
+            tender.refresh_from_db()
+            messages.success(request, f"Итоговый протокол загружен из ЕИС: {tender.get_outcome_status_display()}.")
             return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
         outcome = fetch_tender_outcome(estimate)
         if not outcome.get("found"):
@@ -932,14 +944,16 @@ def enter_outcome(request, pk):
         elif outcome.get("auto_status"):
             apply_tender_outcome(
                 estimate, status=outcome["auto_status"], price=outcome.get("price"),
-                reduction_percent=outcome.get("reduction_percent"), source=TenderEstimate.OUTCOME_AUTO,
+                reduction_percent=outcome.get("reduction_percent"), source=Tender.OUTCOME_AUTO,
+                reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
             )
-            messages.success(request, f"Итог найден автоматически: {estimate.get_status_display()}.")
+            tender.refresh_from_db()
+            messages.success(request, f"Итог найден автоматически: {tender.get_outcome_status_display()}.")
         else:
-            estimate.actual_price = outcome.get("price")
-            estimate.actual_reduction_percent = outcome.get("reduction_percent")
-            estimate.outcome_checked_at = timezone.now()
-            estimate.save(update_fields=["actual_price", "actual_reduction_percent", "outcome_checked_at"])
+            tender.contract_price = outcome.get("price")
+            tender.contract_reduction_percent = outcome.get("reduction_percent")
+            tender.outcome_checked_at = timezone.now()
+            tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
             messages.info(request, "Цена контракта найдена, но выиграли мы или нет — решите сами кнопками ниже (свой ИНН не настроен).")
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
@@ -1030,18 +1044,16 @@ ARCHIVE_SORTS = {
 
 
 def _archive_stage(tender, estimate) -> str:
-    from tenders.models import TenderEstimate
-
     if estimate is None:
         return "incoming" if tender.review == Tender.UNREVIEWED else "evaluation"
     return {
-        TenderEstimate.DRAFT: "calculation",
-        TenderEstimate.NOT_PARTICIPATED: "calculation",
-        TenderEstimate.PENDING: "bidding",
-        TenderEstimate.PUBLISHED: "published",
-        TenderEstimate.LOST: "lost",
-        TenderEstimate.WON: "won",
-    }[estimate.status]
+        Tender.OUTCOME_DRAFT: "calculation",
+        Tender.OUTCOME_NOT_PARTICIPATED: "calculation",
+        Tender.OUTCOME_PENDING: "bidding",
+        Tender.OUTCOME_PUBLISHED: "published",
+        Tender.OUTCOME_LOST: "lost",
+        Tender.OUTCOME_WON: "won",
+    }[tender.outcome_status]
 
 
 @superuser_required
@@ -1094,8 +1106,8 @@ def archive(request):
         tender.region_label = region_name(tender.region) if tender.region else ""
         tender.law_label = LAW_LABELS.get(tender.law, tender.law)
         row["stage_label"] = stage_labels[row["stage"]]
-        protocol = (estimate.protocol or {}) if estimate else {}
-        row["ours"] = find_ours(protocol, bid_number=estimate.bid_number, bid_price=estimate.bid_price) if protocol else None
+        protocol = tender.protocol or {}
+        row["ours"] = find_ours(protocol, bid_number=tender.bid_number, bid_price=tender.bid_price) if protocol else None
         row["participants"] = len(protocol.get("participants", []))
 
     return render(request, "tender_selection/archive.html", {

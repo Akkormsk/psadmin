@@ -41,11 +41,16 @@ urlpatterns = [
     path("order/<int:pk>/delete/", views.delete_estimate, name="tender_estimate_delete"),
     path("order/<int:pk>/status/", views.update_order_status, name="order_estimate_status"),
     path("<int:pk>/", views.legacy_estimate_redirect, name="tender_estimate_legacy"),
-    path("pipeline/", views.home, {"pipeline": True}, name="tender_pipeline_home"),
+    path("pipeline/", views.home, {"pipeline": True, "minimal": True}, name="tender_pipeline_home"),
     path("pipeline/save/", views.save_estimate, {"pipeline": True}, name="tender_pipeline_estimate_create"),
-    path("pipeline/<int:pk>/", views.home, {"pipeline": True}, name="tender_pipeline_estimate"),
+    path("pipeline/<int:pk>/", views.home, {"pipeline": True, "minimal": True}, name="tender_pipeline_estimate"),
     path("pipeline/<int:pk>/save/", views.save_estimate, {"pipeline": True}, name="tender_pipeline_estimate_save"),
     path("pipeline/<int:pk>/duplicate/", views.duplicate_estimate, {"pipeline": True}, name="tender_pipeline_estimate_duplicate"),
     path("pipeline/<int:pk>/delete/", views.delete_estimate, {"pipeline": True}, name="tender_pipeline_estimate_delete"),
     path("pipeline/<int:pk>/status/", views.update_estimate_status, name="tender_pipeline_estimate_status"),
+    # Тот же TenderEstimate, но открытый из «Расчётов» (не из карточки тендера) —
+    # менеджеру без доступа к «Тендерам» здесь показывается блок рисков вместо
+    # ссылки на карточку.
+    path("tender/<int:pk>/", views.home, {"pipeline": True}, name="tender_worklist_estimate"),
+    path("tender/<int:pk>/save/", views.save_estimate, {"pipeline": True}, name="tender_worklist_estimate_save"),
 ]

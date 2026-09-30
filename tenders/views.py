@@ -26,7 +26,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
 from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
@@ -1420,6 +1420,11 @@ def _persist_tender_estimate(request, estimate, settings, *, pipeline=False):
     estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
     estimate.summary_snapshot["is_incomplete"] = not calculation_complete
     estimate.document_analysis = meta["posted_analysis"] or {}
+    if not pipeline and not estimate.order_id:
+        estimate.order = Order.objects.create(name=estimate.name)
+    elif not pipeline:
+        estimate.order.name = estimate.name
+        estimate.order.save(update_fields=["name", "updated_at"])
     estimate.save()
     estimate.lines.all().delete()
     line_model = TenderLine if pipeline else OrderLine
@@ -1428,8 +1433,90 @@ def _persist_tender_estimate(request, estimate, settings, *, pipeline=False):
     return estimate, None, meta
 
 
+def _saved_estimates_for(request):
+    """Список «Расчёты»: свои OrderEstimate и TenderEstimate в одной ленте.
+
+    Каждой строке нужен свой набор маршрутов (order/* против pipeline/*),
+    поэтому они дописываются на объект — шаблон видит один однородный список.
+    """
+    from tender_selection.models import Tender
+
+    order_qs = OrderEstimate.objects.all()
+    # Тот же критерий, что и на канбане: тендер виден, пока не архивирован
+    # («Расчёт» → «Торги» → «Результат»); архивный — пропадает отовсюду разом.
+    tender_qs = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED)
+    if not request.user.is_superuser:
+        order_qs = order_qs.filter(owner=request.user)
+        tender_qs = tender_qs.filter(owner=request.user)
+
+    # Пусто в query string ("kind=") — пользователь явно выбрал «Все»;
+    # параметра вовсе нет — свежий заход на страницу, показываем тендеры по умолчанию.
+    kind = request.GET.get("kind") if "kind" in request.GET else "tender"
+    if kind == "order":
+        tender_qs = TenderEstimate.objects.none()
+    elif kind == "tender":
+        order_qs = OrderEstimate.objects.none()
+
+    combined = list(order_qs) + list(tender_qs)
+    for estimate in combined:
+        is_tender = isinstance(estimate, TenderEstimate)
+        estimate.is_tender_estimate = is_tender
+        if is_tender:
+            # Тендерный расчёт нельзя переименовать/скопировать/удалить со
+            # страницы расчёта — только row_url, без duplicate/delete.
+            estimate.row_url = reverse("tender_worklist_estimate", args=[estimate.pk])
+        else:
+            estimate.row_url = reverse("tender_estimate", args=[estimate.pk])
+            estimate.duplicate_url = reverse("tender_estimate_duplicate", args=[estimate.pk])
+            estimate.delete_url = reverse("tender_estimate_delete", args=[estimate.pk])
+
+    worklist = request.GET.get("worklist") if "worklist" in request.GET else "active"
+    if worklist == "active":
+        combined = [e for e in combined if e.is_active_task()]
+    elif worklist == "ready":
+        combined = [e for e in combined if not e.is_active_task()]
+
+    combined.sort(key=lambda e: e.updated_at, reverse=True)
+    return combined[:12], kind, worklist
+
+
+def _risk_summary_for(tender):
+    """Сжатая выжимка для менеджера, у которого нет доступа к самой карточке
+    тендера: срок подачи заявки — всегда (это базовый факт тендера, не часть
+    оценки), остальное — из оценки риска, если она уже была. ``None`` только
+    если тендер не найден (расчёт остался без своей записи)."""
+    if not tender:
+        return None
+    from tender_selection.views import _risk_badge
+
+    risk = tender.risk_assessment or {}
+    delivery_mode = risk.get("delivery_mode")
+    batch_days = (risk.get("risk_facts") or {}).get("batch_days")
+    # Срок на одну заявку — деталь именно способа поставки, не срока
+    # исполнения контракта целиком, поэтому идёт тут, а не в "execution".
+    if delivery_mode and batch_days:
+        delivery_mode = f"{delivery_mode} (по одной заявке — {batch_days} дн.)"
+    return {
+        "risk_badge": _risk_badge(tender),
+        "submission_deadline": tender.collecting_finished_at,
+        "execution": (risk.get("execution_deadline") or {}).get("date"),
+        "delivery_mode": delivery_mode,
+        "sample_requirements": risk.get("sample_requirements"),
+        "national_regime": risk.get("national_regime"),
+        "risk_factors": risk.get("risk_factors"),
+        "risk_level": risk.get("risk_level"),
+    }
+
+
 @login_required
-def home(request, pk=None, pipeline=False):
+def home(request, pk=None, pipeline=False, minimal=False):
+    """Одно и то же ядро (таблица + калькулятор) в трёх средах:
+    ``order`` — самостоятельный расчёт, ``pipeline`` — минимальный вид из
+    карточки тендера (только счёт и «применить и вернуться»), ``worklist`` —
+    тот же TenderEstimate, но открытый из списка «Расчёты» (с блоком рисков,
+    без прямой ссылки на карточку тендера, которая менеджеру недоступна)."""
+    shell = "order" if not pipeline else ("pipeline" if minimal else "worklist")
+    route_prefix = {"order": "tender_estimate", "pipeline": "tender_pipeline_estimate", "worklist": "tender_worklist_estimate"}[shell]
     model = TenderEstimate if pipeline else OrderEstimate
     estimate = _estimate_for_user(request, pk, model) if pk else None
     settings = TenderSettings.objects.get_or_create(pk=1)[0]
@@ -1459,7 +1546,7 @@ def home(request, pk=None, pipeline=False):
             messages.error(request, error)
         else:
             messages.success(request, "Черновик просчёта сохранён." if meta["incomplete"] else "Просчёт тендера сохранён.")
-            return redirect("tender_pipeline_estimate" if pipeline else "tender_estimate", pk=estimate.pk)
+            return redirect(route_prefix, pk=estimate.pk)
 
     initial_lines = []
     if posted_lines is not None:
@@ -1472,13 +1559,10 @@ def home(request, pk=None, pipeline=False):
     if request.user.is_superuser:
         knowledge_sources = list(TenderKnowledgeSource.objects.filter(is_active=True).values("id", "title", "supplier_name", "source_type", "url")[:100])
     source_tender = estimate.tender if pipeline and estimate else None
-    saved_estimates = OrderEstimate.objects.all() if not pipeline else OrderEstimate.objects.none()
-    if not request.user.is_superuser:
-        saved_estimates = saved_estimates.filter(owner=request.user)
-    saved_estimates = saved_estimates.order_by("-updated_at")[:12]
+    saved_estimates, kind_filter, worklist_filter = _saved_estimates_for(request) if shell != "pipeline" else ([], "tender", "active")
 
-    route_prefix = "tender_pipeline_estimate" if pipeline else "tender_estimate"
-    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "saved_estimates": saved_estimates, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
+    risk_summary = _risk_summary_for(source_tender) if shell == "worklist" else None
+    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
 
 
 @login_required
@@ -1509,11 +1593,12 @@ def duplicate_estimate(request, pk, pipeline=False):
     line_model = TenderLine if pipeline else OrderLine
     original = _estimate_for_user(request, pk, model)
     lines = list(original.lines.all())
+    name = f"{original.name} (копия)"[:300]
     copy = model.objects.create(
         owner=request.user,
-        **({"tender": original.tender, "status": TenderEstimate.DRAFT} if pipeline else {}),
+        **({"tender": original.tender} if pipeline else {"order": Order.objects.create(name=name)}),
         tender_number=original.tender_number,
-        name=f"{original.name} (копия)"[:300],
+        name=name,
         reduction_percent=original.reduction_percent,
         russia_delivery=original.russia_delivery,
         result_notes="",
@@ -1546,34 +1631,31 @@ def delete_estimate(request, pk, pipeline=False):
 @login_required
 @require_POST
 def update_estimate_status(request, pk, pipeline=True):
+    from tender_selection.models import Tender
+
     estimate = _estimate_for_user(request, pk, TenderEstimate)
     status = request.POST.get("status", "")
-    if status not in dict(TenderEstimate.STATUS_CHOICES):
+    if status not in dict(Tender.OUTCOME_STATUS_CHOICES) or not estimate.tender_id:
         return HttpResponse(status=400)
-    estimate.status = status
-    update_fields = ["status"]
+    tender = estimate.tender
+    tender.outcome_status = status
+    update_fields = ["outcome_status"]
     # «Архивировать — невыгодно» — тоже терминальное решение по этому тендеру
     # (участвовать не будем), уходит в архив сразу же, как и настоящий факт
     # торгов (см. apply_tender_outcome) — не нужно отдельно жать «Скрыть».
-    if status == TenderEstimate.NOT_PARTICIPATED:
-        from django.utils import timezone
-        estimate.archived_at = timezone.now()
-        update_fields.append("archived_at")
-    estimate.save(update_fields=update_fields)
-    if status == TenderEstimate.NOT_PARTICIPATED and estimate.tender_id:
-        from tender_selection.models import Tender
-        Tender.objects.filter(pk=estimate.tender_id).update(status=Tender.DISMISSED, archived_at=estimate.archived_at)
+    if status == Tender.OUTCOME_NOT_PARTICIPATED:
+        tender.status = Tender.DISMISSED
+        tender.archived_at = timezone.now()
+        update_fields += ["status", "archived_at"]
+    tender.save(update_fields=update_fields)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({
             "status": status,
-            "label": estimate.get_status_display(),
-            "requires_result": status in {TenderEstimate.LOST, TenderEstimate.WON},
+            "label": tender.get_outcome_status_display(),
+            "requires_result": status in {Tender.OUTCOME_LOST, Tender.OUTCOME_WON},
         })
-    # Кнопка теперь живёт на странице тендера (не здесь) — туда и возвращаем,
-    # если у просчёта есть исходный найденный тендер; иначе больше некуда.
-    if estimate.tender_id:
-        return redirect("tender_selection:detail", pk=estimate.tender_id)
-    return redirect("tender_pipeline_estimate", pk=estimate.pk)
+    # Кнопка теперь живёт на странице тендера (не здесь) — туда и возвращаем.
+    return redirect("tender_selection:detail", pk=estimate.tender_id)
 
 
 @login_required
@@ -1581,10 +1663,14 @@ def update_estimate_status(request, pk, pipeline=True):
 def update_order_status(request, pk):
     estimate = _estimate_for_user(request, pk, OrderEstimate)
     status = request.POST.get("status", "")
-    if status not in dict(OrderEstimate.STATUS_CHOICES):
+    if status not in dict(Order.STATUS_CHOICES):
         return HttpResponse(status=400)
-    estimate.status = status
-    estimate.save(update_fields=["status", "updated_at"])
+    if not estimate.order_id:
+        estimate.order = Order.objects.create(name=estimate.name)
+        estimate.save(update_fields=["order"])
+    order = estimate.order
+    order.status = status
+    order.save(update_fields=["status", "updated_at"])
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({"status": status, "label": estimate.get_status_display()})
+        return JsonResponse({"status": status, "label": order.get_status_display()})
     return redirect("tender_home")

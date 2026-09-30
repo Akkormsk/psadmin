@@ -23,7 +23,11 @@ class AccumulatedBadgesTests(TestCase):
             risk_assessment={"risk_level": "high", "risk_factors": []}, risk_checked_at=timezone.now(),
         )
 
-    def _texts(self, **fields):
+    def _texts(self, *, tender_fields=None, **fields):
+        if tender_fields:
+            for key, value in tender_fields.items():
+                setattr(self.tender, key, value)
+            self.tender.save()
         estimate = TenderEstimate.objects.create(owner=self.user, tender=self.tender, tender_number="1", name="Расчёт", **fields)
         return [badge["text"] for badge in _estimate_card(estimate)["badges"]]
 
@@ -32,9 +36,12 @@ class AccumulatedBadgesTests(TestCase):
 
     def test_only_risk_roi_and_outcome_accumulate(self):
         texts = self._texts(
-            summary_snapshot={"roi": "25.00"}, status=TenderEstimate.LOST, bid_number="ZK-2",
-            protocol=PROTOCOL, actual_reduction_percent=Decimal("12.00"), outcome_checked_at=timezone.now(),
-            outcome_source=TenderEstimate.OUTCOME_AUTO,
+            summary_snapshot={"roi": "25.00"},
+            tender_fields={
+                "outcome_status": Tender.OUTCOME_LOST, "bid_number": "ZK-2", "protocol": PROTOCOL,
+                "contract_reduction_percent": Decimal("12.00"), "outcome_checked_at": timezone.now(),
+                "outcome_source": Tender.OUTCOME_AUTO,
+            },
         )
         self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "Проигран"])
 
@@ -81,3 +88,35 @@ class IncompleteRoiBadgeTests(TestCase):
             summary_snapshot={"roi": "40.00", "is_incomplete": False},
         )
         self.assertEqual(_estimate_card(estimate)["badges"][0]["state"], "ok")
+
+
+class CustomerOnKanbanCardTests(TestCase):
+    def test_found_card_shows_organization_name_when_known(self):
+        from .models import Organization
+        from .views import _found_tender_card
+
+        Organization.objects.create(inn="7700000001", name="Спорткомитет")
+        tender = Tender.objects.create(purchase_number="1", customer_inn="7700000001")
+        tender.org = Organization.objects.get(inn="7700000001")
+
+        self.assertEqual(_found_tender_card(tender)["customer"], "Спорткомитет")
+
+    def test_found_card_falls_back_to_inn_when_organization_unknown(self):
+        from .views import _found_tender_card
+
+        tender = Tender.objects.create(purchase_number="1", customer_inn="7700000002")
+        tender.org = None
+
+        self.assertEqual(_found_tender_card(tender)["customer"], "ИНН 7700000002")
+
+    def test_kanban_review_cards_carry_customer_name(self):
+        from .models import Organization
+
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+        Organization.objects.create(inn="7700000003", name="Комитет по спорту")
+        Tender.objects.create(purchase_number="1", title="Кружки", customer_inn="7700000003", review=Tender.INTERESTING)
+
+        response = self.client.get("/tender-selection/?view=kanban")
+
+        self.assertContains(response, "Комитет по спорту")

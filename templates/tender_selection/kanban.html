@@ -41,6 +41,7 @@
               {% if card.status_label and card.status_key != "draft" and card.status_key != "pending" and card.status_key != "won" and card.status_key != "lost" %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
             </div>
             {% if card.kind == "found" %}
+              {% if card.customer %}<div class="kb-card__customer">{{ card.customer }}</div>{% endif %}
               <div class="kb-card__meta">
                 № {{ card.purchase_number }}
               </div>
@@ -87,6 +88,7 @@
   .kb-card__title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
   .kb-card__title:hover { color: var(--ink); opacity: .8; }
   .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
+  .kb-card__customer { color: var(--ink-2); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
   .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
   .kb-card__deadline { font-size: 10px; }

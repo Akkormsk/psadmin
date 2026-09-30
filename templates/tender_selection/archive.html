@@ -59,7 +59,8 @@
           </span>
           <span class="ts-row__sub">
             {% if tender.org.city or tender.region_label %}<span>{{ tender.org.city|default:tender.region_label }}</span>{% endif %}
-            {% if estimate and estimate.actual_reduction_percent is not None %}<span>факт снижения {{ estimate.actual_reduction_percent }}% при прогнозе {{ estimate.reduction_percent }}%</span>{% endif %}
+            {% if tender.contract_reduction_percent is not None %}<span>факт снижения {{ tender.contract_reduction_percent }}% при прогнозе {{ estimate.reduction_percent }}%</span>{% endif %}
+            {% if tender.contract_exe_end %}<span>исполнение до {{ tender.contract_exe_end|date:"d.m.Y" }}</span>{% endif %}
             {% if row.participants %}<span>участников {{ row.participants }}</span>{% endif %}
             {% if row.ours %}<span><b>наше место: {% if row.ours.rejected %}отклонены{% else %}{{ row.ours.rank }}{% endif %}</b></span>{% endif %}
           </span>

@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import re
 
-MODEL = os.getenv("RISK_ASSESSMENT_MODEL", "openai/gpt-4.1-mini")
+MODEL = os.getenv("RISK_ASSESSMENT_MODEL", "gemini/gemini-3.1-flash-lite")
 MAX_CONTEXT_CHARS = 150_000  # с запасом выше реально протестированных ~130к символов
 MAX_DOCUMENTS = 2  # ровно контракт + ООЗ/ТЗ — больше не читаем, это основные носители риска
 
@@ -29,7 +29,10 @@ _RELEVANT_KIND_PATTERNS = [
     re.compile(r"проект\s*контракт", re.I),
     re.compile(r"описани[ея]\s*объект|техническ\w*\s*задани", re.I),
 ]
-_SKIP_EXT = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".zip", ".rar", ".7z")
+_SKIP_EXT = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".rar", ".7z")
+# ЕИС часто отдаёт сам .docx/.xlsx обёрнутым в .zip (например "Проект контракта.docx.zip") —
+# это не архив-мусор, а тот же документ; распаковку уже умеет services.documents_html.
+_ARCHIVE_DOC_EXT = (".docx", ".xlsx", ".doc")
 
 
 class RiskAssessmentError(RuntimeError):
@@ -40,8 +43,11 @@ def select_documents(documents: list[dict]) -> list[dict]:
     """Ровно по одному документу из каждой группы _RELEVANT_KIND_PATTERNS (контракт,
     описание/ТЗ) — не картинки и не обоснование цены."""
     def priority(doc):
-        haystack = f"{(doc.get('kind') or '').lower()} {(doc.get('name') or '').lower()}"
-        if (doc.get("name") or "").lower().endswith(_SKIP_EXT):
+        name = (doc.get("name") or "").lower()
+        haystack = f"{(doc.get('kind') or '').lower()} {name}"
+        if name.endswith(_SKIP_EXT):
+            return None
+        if name.endswith(".zip") and not name.removesuffix(".zip").endswith(_ARCHIVE_DOC_EXT):
             return None
         for i, pattern in enumerate(_RELEVANT_KIND_PATTERNS):
             if pattern.search(haystack):

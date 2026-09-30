@@ -57,7 +57,6 @@
           {% else %}
           <a href="#" onclick="tsGo('all','1');return false">Показать все<small>включая скрытые словами{% if hidden_count %} ({{ hidden_count }}){% endif %} и с истёкшим сроком{% if expired_count %} ({{ expired_count }}){% endif %}</small></a>
           {% endif %}
-          <a href="{% url 'tender_selection:settings' %}">Настройки фильтра<small>слова, категории, регионы, цена</small></a>
         </div>
       </details>
     </div>

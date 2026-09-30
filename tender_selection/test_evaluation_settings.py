@@ -101,15 +101,13 @@ class ConfiguredBehaviourTests(TestCase):
         self.assertEqual(list(Tender.objects.values_list("purchase_number", flat=True)), ["fresh"])
 
     def test_forecast_uses_configured_sample_size_and_hint_bounds(self):
-        from tenders.models import TenderEstimate
-
+        from .models import ContractStat
         from .models import Tender
         from .stats import price_stats_for
 
-        user = get_user_model().objects.create_user("manager")
-        TenderEstimate.objects.create(
-            owner=user, tender_number="1", name="Футболки хлопковые", status=TenderEstimate.LOST,
-            actual_reduction_percent=Decimal("70"),
+        ContractStat.objects.create(
+            law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("70"),
+            own_funnel=True,
         )
         filters = FilterSettings.load()
         filters.stats_min_samples, filters.reduction_hint_max = 1, 50
@@ -119,6 +117,45 @@ class ConfiguredBehaviourTests(TestCase):
 
         self.assertEqual(stats["count"], 1)
         self.assertEqual(stats["suggested_reduction"], 50)
+
+    def test_market_scan_rows_do_not_count_toward_the_forecast(self):
+        """ContractStat также наполняется отдельным сканом рынка по категориям
+        (collect_price_stats, own_funnel=False) — в прогноз идёт только своя
+        воронка (own_funnel=True), рынок не подмешиваем."""
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="99", subject="Футболки хлопковые", discount_pct=Decimal("0"),
+            own_funnel=False,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 1
+        filters.save()
+
+        stats = price_stats_for(Tender(purchase_number="2", title="Поставка футболки хлопковые"))
+
+        self.assertIsNone(stats)
+
+    def test_insufficient_history_reports_why_via_diag_instead_of_vanishing(self):
+        """Когда своей истории мало — карточка должна показать «пока нет данных»,
+        а не молча спрятать блок целиком (иначе выглядит как баг)."""
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("70"),
+            own_funnel=True,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 3
+        filters.save()
+
+        diag = {}
+        stats = price_stats_for(Tender(purchase_number="2", title="Поставка футболки хлопковые"), diag=diag)
+
+        self.assertIsNone(stats)
+        self.assertEqual(diag, {"count": 1, "min_samples": 3})
 
     def test_new_estimate_without_forecast_uses_default_reduction(self):
         from .models import Tender

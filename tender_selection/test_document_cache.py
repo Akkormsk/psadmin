@@ -131,3 +131,17 @@ class UnreadableDocumentTests(TestCase):
             {"name": "Проект контракта.docx", "kind": "Проект контракта", "url": "b"},
         ])
         self.assertEqual([doc["url"] for doc in picked], ["b"])
+
+    def test_docx_wrapped_in_zip_is_still_picked(self):
+        """ЕИС часто отдаёт сам .docx обёрнутым в .zip («Проект контракта.docx.zip») —
+        это не архив-мусор, а тот же документ (распаковку умеет documents_html),
+        и раньше он ошибочно отбрасывался наравне с .rar/.7z."""
+        from .risk_assessment import select_documents
+
+        picked = select_documents([
+            {"name": "Проект ГПД.doc.zip", "kind": "Проект контракта", "url": "a"},
+            {"name": "Описание объекта закупки (товара).docx.zip", "kind": "Описание объекта закупки", "url": "b"},
+            {"name": "Требования к содержанию, составу заявки.docx.zip", "kind": "Требования к заявке", "url": "c"},
+            {"name": "НМЦК.xlsx.zip", "kind": "Обоснование начальной (максимальной) цены контракта", "url": "d"},
+        ])
+        self.assertEqual({doc["url"] for doc in picked}, {"a", "b"})

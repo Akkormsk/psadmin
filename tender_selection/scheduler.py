@@ -50,6 +50,16 @@ def _run_once(tick: int) -> None:
     except Exception:
         logger.exception("autopull: run_pull failed")
 
+    close_old_connections()
+    try:
+        from .services import run_keyword_pull
+        kw_run = run_keyword_pull(max_requests=16)
+        logger.warning("autopull: keyword pull — %d new, %d seen, %.0fs, ok=%s%s",
+                       kw_run.created_count, kw_run.records_received, kw_run.duration_seconds,
+                       kw_run.ok, f", err={kw_run.error}" if kw_run.error else "")
+    except Exception:
+        logger.exception("autopull: run_keyword_pull failed")
+
     if tick % _STATS_EVERY_TICKS == 0:
         close_old_connections()
         try:
@@ -104,6 +114,15 @@ def _run_once(tick: int) -> None:
             logger.warning("autopull: риски — %d/%d тендеров на «Проверке» оценено", succeeded, attempted)
     except Exception:
         logger.exception("autopull: retry_pending_risks failed")
+
+    close_old_connections()
+    try:
+        from .services import retry_pending_deadlines
+        attempted, succeeded = retry_pending_deadlines()
+        if succeeded:
+            logger.warning("autopull: сроки — %d/%d продлены заказчиком, дата обновлена", succeeded, attempted)
+    except Exception:
+        logger.exception("autopull: retry_pending_deadlines failed")
 
     close_old_connections()
     try:

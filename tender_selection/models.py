@@ -30,6 +30,10 @@ class FilterSettings(models.Model):
     okpd2_codes = models.JSONField("Категории ОКПД2", default=list, blank=True)
     regions = models.JSONField("Регионы (коды)", default=list, blank=True)
     laws = models.JSONField("Источники", default=list, blank=True)
+    # Позиция в списке плюс-слов для run_keyword_pull — обход по кругу растянут
+    # на несколько циклов сбора, курсор просто запоминает, с какого слова
+    # продолжить в следующий раз.
+    keyword_pull_cursor = models.PositiveIntegerField(default=0)
 
     class Meta:
         verbose_name = "Настройки подбора"
@@ -57,6 +61,27 @@ class Tender(models.Model):
     UNREVIEWED = "unreviewed"
     INTERESTING = "interesting"
     REVIEW_CHOICES = ((UNREVIEWED, "Не проверен"), (INTERESTING, "В работе"))
+
+    # Стадия сделки — отдельно от status выше (тот про «попал ли тендер в
+    # работу вообще»). Раньше жила на TenderEstimate — расчёт может исчезнуть/
+    # пересчитаться, а факт того, что произошло с тендером, должен остаться.
+    OUTCOME_DRAFT = "draft"
+    OUTCOME_PENDING = "pending"
+    OUTCOME_NOT_PARTICIPATED = "not_participated"
+    OUTCOME_LOST = "lost"
+    OUTCOME_WON = "won"
+    OUTCOME_PUBLISHED = "published"
+    OUTCOME_STATUS_CHOICES = (
+        (OUTCOME_DRAFT, "Черновик"),
+        (OUTCOME_PENDING, "На торгах"),
+        (OUTCOME_NOT_PARTICIPATED, "Не участвовали"),
+        (OUTCOME_LOST, "Проигран"),
+        (OUTCOME_WON, "Выигран"),
+        (OUTCOME_PUBLISHED, "Итог опубликован"),
+    )
+    OUTCOME_AUTO = "auto"
+    OUTCOME_MANUAL = "manual"
+    OUTCOME_SOURCE_CHOICES = ((OUTCOME_AUTO, "Автоматически"), (OUTCOME_MANUAL, "Вручную"))
 
     law = models.CharField("Закон", max_length=8, choices=LAW_CHOICES, default="fz44", db_index=True)
     purchase_number = models.CharField("Номер закупки", max_length=40, db_index=True)
@@ -90,6 +115,20 @@ class Tender(models.Model):
     last_pulled_at = models.DateTimeField("Последняя выгрузка", null=True, blank=True)
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
     created_at = models.DateTimeField("Создан", auto_now_add=True)
+
+    outcome_status = models.CharField("Стадия сделки", max_length=16, choices=OUTCOME_STATUS_CHOICES, default=OUTCOME_DRAFT)
+    contract_price = models.DecimalField("Фактическая цена контракта", max_digits=16, decimal_places=2, null=True, blank=True)
+    contract_reduction_percent = models.DecimalField("Фактическое снижение, %", max_digits=5, decimal_places=2, null=True, blank=True)
+    outcome_checked_at = models.DateTimeField("Итог внесён", null=True, blank=True)
+    outcome_source = models.CharField("Источник итога", max_length=8, choices=OUTCOME_SOURCE_CHOICES, blank=True)
+    bid_number = models.CharField("Номер нашей заявки", max_length=40, blank=True)
+    bid_price = models.DecimalField("Сумма нашей заявки", max_digits=16, decimal_places=2, null=True, blank=True)
+    protocol = models.JSONField("Итоговый протокол (ЕИС)", default=dict, blank=True)
+    protocol_checked_at = models.DateTimeField("Протокол проверен", null=True, blank=True)
+    contract_reg_num = models.CharField("Номер контракта", max_length=40, blank=True)
+    contract_exe_start = models.DateField("Исполнение контракта с", null=True, blank=True)
+    contract_exe_end = models.DateField("Исполнение контракта по", null=True, blank=True)
+    contract_checked_at = models.DateTimeField("Контракт проверен", null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -164,6 +203,10 @@ class ContractStat(models.Model):
     participants_count = models.PositiveSmallIntegerField("Участников", null=True, blank=True)
     winner_inn = models.CharField("ИНН победителя", max_length=32, blank=True)
     is_ours = models.BooleanField("Наш тендер", default=False)
+    own_funnel = models.BooleanField(
+        "Из своей воронки", default=False, db_index=True,
+        help_text="Пришло из наших Входящих/Архива, а не из общего скана рынка по категориям.",
+    )
     contract_date = models.DateField("Дата контракта", null=True, blank=True, db_index=True)
     nmck_checked = models.BooleanField("Начальная цена добрана", default=False, db_index=True)
     collected_at = models.DateTimeField("Собрано", auto_now=True)
