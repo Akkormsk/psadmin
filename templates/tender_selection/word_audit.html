@@ -27,25 +27,27 @@
       {% csrf_token %}
       {% with r=audit.result %}
 
-      {% if r.missed_topics %}
-      <h3 class="settings-subtitle">Пропускаемые тематики</h3>
-      {% for topic in r.missed_topics %}
-      <div class="wa-item">
-        <b>{{ topic.topic }}</b> — {{ topic.why }}
-        {% if topic.examples %}<ul class="wa-examples">{% for e in topic.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
-        {% for w in topic.words %}
-        <label class="wa-check"><input type="checkbox" name="add_plus" value="{{ w.word }}"> плюс-слово <code>{{ w.word }}</code> <small>откроет скрытых: {{ w.effects.opens_hidden }}</small></label>
-        {% endfor %}
-      </div>
-      {% endfor %}
-      {% endif %}
-
       <h3 class="settings-subtitle">Добавить плюс-слова</h3>
-      {% for s in r.add_plus %}
-      <label class="wa-item wa-check"><input type="checkbox" name="add_plus" value="{{ s.word }}">
-        <span><code>{{ s.word }}</code> — {{ s.why }} <small>откроет скрытых: {{ s.effects.opens_hidden }}; встречается во взятых: {{ s.effects.in_taken }}</small>
-        {% if s.examples %}<ul class="wa-examples">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}</span>
-      </label>
+      {% regroup r.add_plus by topic as plus_groups %}
+      {% for group in plus_groups %}
+        {% if group.grouper %}
+        <div class="wa-item">
+          <b>{{ group.grouper }}</b>
+          {% for s in group.list %}
+          <label class="wa-check"><input type="checkbox" name="add_plus" value="{{ s.word }}">
+            <span><code>{{ s.word }}</code> — {{ s.why }} <small>откроет скрытых: {{ s.effects.opens_hidden }}; встречается во взятых: {{ s.effects.in_taken }}</small>
+            {% if s.examples %}<ul class="wa-examples">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% else %}
+        {% for s in group.list %}
+        <label class="wa-item wa-check"><input type="checkbox" name="add_plus" value="{{ s.word }}">
+          <span><code>{{ s.word }}</code> — {{ s.why }} <small>откроет скрытых: {{ s.effects.opens_hidden }}; встречается во взятых: {{ s.effects.in_taken }}</small>
+          {% if s.examples %}<ul class="wa-examples">{% for e in s.examples %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}</span>
+        </label>
+        {% endfor %}
+        {% endif %}
       {% empty %}<p class="settings-description">Нет предложений.</p>{% endfor %}
 
       <h3 class="settings-subtitle">Добавить минус-слова</h3>

@@ -43,7 +43,7 @@ class WordStatsTests(TestCase):
         _settings(plus="футболк, кружк, зонт", minus="медицин")
         now = timezone.now()
         Tender.objects.create(purchase_number="t1", title="Футболки с логотипом", review=Tender.INTERESTING)
-        Tender.objects.create(purchase_number="d1", title="Кружки фарфоровые", status=Tender.DISMISSED)
+        Tender.objects.create(purchase_number="d1", title="Кружки фарфоровые", status=Tender.DISMISSED, opened_at=now)
         IncomingTrace.objects.create(purchase_number="i1", title="Кружки термо", filtered_out=False)
         Tender.objects.create(purchase_number="h1", title="Медицинские футболки", collecting_finished_at=now + timedelta(days=3))
         Tender.objects.create(purchase_number="h2", title="Шопперы с печатью", collecting_finished_at=now + timedelta(days=3))
@@ -57,6 +57,18 @@ class WordStatsTests(TestCase):
         self.assertEqual(plus["зонт"]["passed"], 0)
         minus = {row["word"]: row for row in stats["minus"]}
         self.assertEqual(minus["медицин"]["hidden"], 1)
+
+    def test_archived_untouched_tender_is_not_counted_as_a_manual_rejection(self):
+        """purge_stale теперь архивирует показанные, но нетронутые тендеры
+        (status=DISMISSED, opened_at пусто) — это не сигнал «не наш профиль»,
+        в отличие от ручного отказа с открытой карточкой."""
+        Tender.objects.create(purchase_number="arch1", title="Кружки сувенирные", status=Tender.DISMISSED)
+
+        stats = word_audit.word_stats()
+
+        plus = {row["word"]: row for row in stats["plus"]}
+        self.assertEqual(plus["кружк"]["dismissed"], 1)  # только d1 (открытый вручную)
+        self.assertEqual(plus["кружк"]["ignored"], 2)  # i1 (трасса) + arch1 (архив, не открыт)
 
     def test_effects_of_a_proposed_word_are_computed_by_backend(self):
         self.assertEqual(word_audit.term_effects("шоппер", minus=False)["opens_hidden"], 1)
@@ -77,7 +89,7 @@ class AuditRunTests(TestCase):
             "data": {
                 "add_plus": [{"word": "шоппер", "why": "сумки с печатью — наш профиль", "examples": ["Поставка шопперов с печатью"]}],
                 "add_minus": [{"word": "логотип", "why": "шум"}],
-                "remove_plus": [], "remove_minus": [], "missed_topics": [],
+                "remove_plus": [], "remove_minus": [],
             },
             "usage": {"prompt_tokens": 100, "completion_tokens": 50},
         }
@@ -131,22 +143,29 @@ class ApplySuggestionsTests(TestCase):
         self.assertEqual(audit.result["add_plus"], [])
         self.assertEqual(len(audit.result["add_minus"]), 1)
 
-    def test_applied_word_disappears_from_missed_topics_too(self):
-        """«Пропускаемые тематики» — тот же аудит, отдельная секция ответа ИИ;
-        принятое там слово тоже не должно всплывать повторно."""
+    def test_topic_grouped_suggestions_use_the_same_add_plus_mechanism(self):
+        """Пропущенная тематика — это просто несколько add_plus-предложений с
+        одинаковым непустым ``topic`` (группировка только для отображения),
+        отдельного механизма/дублирования верх-низ больше нет; применяются и
+        пропадают они так же, как обычные add_plus."""
+        answer = {
+            "data": {
+                "add_plus": [
+                    {"word": "бланочн", "topic": "Полиграфия", "why": "профиль", "examples": []},
+                    {"word": "журнал", "topic": "Полиграфия", "why": "профиль", "examples": []},
+                ],
+                "add_minus": [], "remove_plus": [], "remove_minus": [],
+            },
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
         _settings()
         admin = get_user_model().objects.create_superuser("admin", password="x")
-        self.client.force_login(admin)
-        WordAudit.objects.create(result={
-            "add_plus": [], "add_minus": [], "remove_plus": [], "remove_minus": [],
-            "missed_topics": [{
-                "topic": "Полиграфия", "why": "профиль", "examples": [],
-                "words": [{"word": "бланочн", "effects": {"opens_hidden": 9}}, {"word": "журнал", "effects": {"opens_hidden": 3}}],
-            }],
-        })
+        with patch.object(word_audit, "chat_json", return_value=answer):
+            audit = word_audit.run_audit(admin)
+        self.assertEqual([row["topic"] for row in audit.result["add_plus"]], ["Полиграфия", "Полиграфия"])
 
+        self.client.force_login(admin)
         self.client.post("/tender-selection/word-audit/apply/", {"add_plus": ["бланочн"]})
 
-        audit = WordAudit.objects.first()
-        remaining = audit.result["missed_topics"][0]["words"]
-        self.assertEqual([w["word"] for w in remaining], ["журнал"])
+        audit.refresh_from_db()
+        self.assertEqual([row["word"] for row in audit.result["add_plus"]], ["журнал"])

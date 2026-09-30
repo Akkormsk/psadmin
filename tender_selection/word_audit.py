@@ -29,13 +29,24 @@ def _contains(text: str, entry: list[str]) -> bool:
 
 
 def _corpus() -> dict[str, list[str]]:
-    """Названия по судьбе тендера. «incoming» — живые «Входящие» и следы удалённых:
-    по ним видно, что слова пропускают и что скрывают прямо сейчас."""
+    """Названия по судьбе тендера. «incoming» — живые «Входящие» и следы удалённых
+    (а также архивные, но нетронутые): по ним видно, что слова пропускают и что
+    скрывают прямо сейчас.
+
+    Архивный тендер без реального просмотра (``opened_at`` пусто) — это тендер,
+    который прошёл фильтр, но истёк срок до того, как до него дошли руки (см.
+    ``services.purge_stale``): это НЕ сигнал «не наш профиль», а то же самое
+    «показан, но не взят», что и раньше было видно по ``IncomingTrace``.
+    Ручной отказ (кнопка «не наш профиль» на карточке) — только когда карточку
+    реально открывали."""
     groups = {"taken": [], "dismissed": [], "incoming": [], "ignored": []}
-    for tender in Tender.objects.only("title", "object_info", "review", "status"):
+    for tender in Tender.objects.only("title", "object_info", "review", "status", "opened_at"):
         title = tender.title or tender.object_info or ""
         if tender.review != Tender.UNREVIEWED:
             groups["taken"].append(title)
+        elif tender.status == Tender.DISMISSED and tender.opened_at is None:
+            groups["incoming"].append(title)
+            groups["ignored"].append(title)
         elif tender.status == Tender.DISMISSED:
             groups["dismissed"].append(title)
         else:
@@ -117,11 +128,10 @@ SYSTEM_PROMPT = (
 )
 
 _SCHEMA = """{
-  "add_plus": [{"word": "основа слова", "why": "1 предложение", "examples": ["название из списка СКРЫТЫ ФИЛЬТРОМ, которое оно откроет"]}],
+  "add_plus": [{"word": "основа слова", "topic": "опционально: тематика, если это часть пачки слов по одной идее — иначе пустая строка", "why": "1 предложение", "examples": ["название из списка СКРЫТЫ ФИЛЬТРОМ, которое оно откроет"]}],
   "add_minus": [{"word": "...", "why": "...", "examples": ["название из ПОКАЗАНЫ НО НЕ ВЗЯТЫ или СКРЫТЫ ВРУЧНУЮ"]}],
   "remove_plus": [{"word": "текущее плюс-слово", "why": "почему бесполезно или вредно"}],
-  "remove_minus": [{"word": "текущее минус-слово", "why": "какие нужные тендеры оно скрывает", "examples": ["..."]}],
-  "missed_topics": [{"topic": "тематика", "why": "почему это наш профиль", "words": ["предлагаемые плюс-слова"], "examples": ["названия из СКРЫТЫ ФИЛЬТРОМ"]}]
+  "remove_minus": [{"word": "текущее минус-слово", "why": "какие нужные тендеры оно скрывает", "examples": ["..."]}]
 }"""
 
 
@@ -156,7 +166,10 @@ def _prompt(settings, groups) -> tuple[str, dict]:
     return (
         header + "\n\n".join(parts)
         + f"\n\nПредложи изменения фильтра. Верни JSON строго по схеме:\n{_SCHEMA}\n"
-        "Не предлагай слова, которые уже есть. Минус-слово не должно задевать тендеры из ВЗЯТЫ В РАБОТУ."
+        "Не предлагай слова, которые уже есть. Минус-слово не должно задевать тендеры из ВЗЯТЫ В РАБОТУ.\n"
+        "Отдельно поищи среди СКРЫТЫ ФИЛЬТРОМ целую пропущенную тематику (не единичное слово, а направление "
+        "товаров/услуг в нашем профиле, которое сейчас не открывает ни одно плюс-слово) — предложи для неё "
+        "несколько add_plus-слов с одинаковым непустым \"topic\"."
     ), counts
 
 
@@ -178,25 +191,12 @@ def _clean(result: dict) -> dict:
             if (word in current[target]) == kind.startswith("add"):
                 continue
             row = {"word": word, "why": str(item.get("why") or ""), "examples": [str(x) for x in (item.get("examples") or [])][:5]}
+            if kind == "add_plus":
+                row["topic"] = str(item.get("topic") or "").strip()[:60]
             if kind.startswith("add"):
                 row["effects"] = term_effects(word, minus=target == "minus")
             rows.append(row)
         cleaned[kind] = rows
-    topics = []
-    for topic in result.get("missed_topics") or []:
-        if not isinstance(topic, dict):
-            continue
-        words = []
-        for raw in topic.get("words") or []:
-            entries = parse_terms(str(raw))
-            if entries and _entry_text(entries[0]) not in current["plus"]:
-                word = _entry_text(entries[0])
-                words.append({"word": word, "effects": term_effects(word, minus=False)})
-        topics.append({
-            "topic": str(topic.get("topic") or ""), "why": str(topic.get("why") or ""),
-            "words": words, "examples": [str(x) for x in (topic.get("examples") or [])][:5],
-        })
-    cleaned["missed_topics"] = topics
     return cleaned
 
 
@@ -258,20 +258,6 @@ def _drop_applied(**chosen: list[str]) -> None:
         if len(kept) != len(result[kind]):
             result[kind] = kept
             changed = True
-
-    # «Пропускаемые тематики» — та же ИИ-подсказка, отдельная секция: плюс-слово
-    # оттуда применяется тем же чекбоксом add_plus, но раньше не вычищалось.
-    wanted_plus = {w.strip().lower() for w in chosen.get("add_plus", [])}
-    if wanted_plus and result.get("missed_topics"):
-        topics = []
-        for topic in result["missed_topics"]:
-            original = topic.get("words") or []
-            words = [w for w in original if str(w.get("word", "")).strip().lower() not in wanted_plus]
-            if len(words) != len(original):
-                changed = True  # включает случай «тематика опустела целиком» — не показываем пустой заголовок
-            if words:
-                topics.append({**topic, "words": words})
-        result["missed_topics"] = topics
 
     if changed:
         audit.result = result
