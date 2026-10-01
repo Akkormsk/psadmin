@@ -1637,6 +1637,8 @@ def update_estimate_status(request, pk, pipeline=True):
     status = request.POST.get("status", "")
     if status not in dict(Tender.OUTCOME_STATUS_CHOICES) or not estimate.tender_id:
         return HttpResponse(status=400)
+    if status == Tender.OUTCOME_PENDING and (estimate.summary_snapshot or {}).get("is_incomplete", True):
+        return HttpResponse("Завершите расчёт перед переходом в торги.", status=400)
     tender = estimate.tender
     tender.outcome_status = status
     update_fields = ["outcome_status"]
