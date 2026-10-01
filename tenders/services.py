@@ -3156,12 +3156,13 @@ def _price_for_roi(purchase_total, russia_delivery, vat_rate, roi_percent) -> De
     return _money(C * (Decimal("1") + R) / denominator)
 
 
+def _profit_for_price(purchase_total, russia_delivery, vat_rate, price) -> Decimal:
+    vat = price * vat_rate / Decimal("100")
+    return _money(price - purchase_total - russia_delivery - vat)
+
+
 def price_thresholds_for(estimate) -> dict | None:
-    """Целевая цена (держит зелёную зону ROI) и минимальная цена (ниже —
-    участвовать невыгодно, жёлтая граница) — та же пара порогов, что красит
-    бейджи (roi_thresholds), просто выражена в рублях, а не в процентах:
-    инструмент прямо для торгов («до X можно опускаться, ниже Y — нельзя»),
-    не для отчёта постфактум."""
+    """Целевая и минимальная цена с прибылью на границах ROI."""
     snapshot = estimate.summary_snapshot or {}
     if snapshot.get("is_incomplete", True):
         return None
@@ -3177,6 +3178,12 @@ def price_thresholds_for(estimate) -> dict | None:
     return {
         "target_price": target,
         "floor_price": floor,
+        "target_profit": _profit_for_price(
+            purchase_total, estimate.russia_delivery, estimate.vat_rate_snapshot, target,
+        ),
+        "floor_profit": _profit_for_price(
+            purchase_total, estimate.russia_delivery, estimate.vat_rate_snapshot, floor,
+        ),
         "target_roi": good,
         "floor_roi": thin,
     }
@@ -3216,10 +3223,17 @@ def verdict_for(estimate, source_tender) -> dict | None:
         price = Decimal(str(snapshot["rrp_total"]))
     except (KeyError, TypeError, InvalidOperation):
         price = None
+    try:
+        nmck_total = Decimal(str(snapshot["nmck_total"]))
+        purchase_total = Decimal(str(snapshot["purchase_total"]))
+    except (KeyError, TypeError, InvalidOperation):
+        nmck_total = purchase_total = None
     has_actual_price = bool(source_tender and source_tender.outcome_checked_at and source_tender.contract_price is not None)
     return {
         "price": source_tender.contract_price if has_actual_price else price,
         "price_is_actual": has_actual_price,
+        "nmck_total": nmck_total,
+        "purchase_total": purchase_total,
         "roi": roi,
         "roi_label": roi_label,
         "roi_state": roi_state,

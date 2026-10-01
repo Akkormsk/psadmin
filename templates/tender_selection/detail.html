@@ -37,7 +37,7 @@
           {% csrf_token %}
           <button type="submit" class="ts-quiet">Скрыть</button>
         </form>
-        {% if tender.outcome_status == "draft" %}
+        {% if tender.outcome_status == "draft" and calc_verdict %}
         <form method="post" action="{% url 'tender_pipeline_estimate_status' estimate.pk %}">
           {% csrf_token %}<input type="hidden" name="status" value="pending">
           <button type="submit" class="ts-work">На торги →</button>
@@ -196,6 +196,12 @@
     <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><small class="ts-stage-summary">{% if calc_verdict %}прибыль {{ calc_verdict.net_profit|floatformat:0 }} ₽ · ROI {{ calc_verdict.roi }}%{% else %}расчёт не завершён{% endif %}</small></summary>
     {% if calc_verdict %}
     <div class="tender-verdict__stats">
+      {% if calc_verdict.purchase_total is not None %}
+      <div class="tender-verdict__stat"><small>Себестоимость</small><strong>{{ calc_verdict.purchase_total|floatformat:2 }} ₽</strong></div>
+      {% endif %}
+      {% if calc_verdict.nmck_total is not None %}
+      <div class="tender-verdict__stat"><small>НМЦК</small><strong>{{ calc_verdict.nmck_total|floatformat:2 }} ₽</strong></div>
+      {% endif %}
       {% if calc_verdict.price %}
       <div class="tender-verdict__stat"><small>{% if calc_verdict.price_is_actual %}Фактическая цена{% else %}Цена (с прогнозом){% endif %}</small><strong>{{ calc_verdict.price|floatformat:2 }} ₽</strong></div>
       {% endif %}
@@ -208,10 +214,11 @@
     {% if calc_verdict.price_thresholds %}
     <table class="tender-auction-guide">
       <caption>Ориентиры для торгов</caption>
+      <thead><tr><th>Ориентир</th><th>Цена</th><th>Прибыль</th><th>ROI</th></tr></thead>
       <tbody>
-        <tr><th>Прогнозная цена</th><td>{{ calc_verdict.price|floatformat:2 }} ₽</td><td>ROI {{ calc_verdict.roi }}%</td></tr>
-        <tr><th>Желаемая граница</th><td>{{ calc_verdict.price_thresholds.target_price|floatformat:2 }} ₽</td><td>ROI {{ calc_verdict.price_thresholds.target_roi }}%</td></tr>
-        <tr><th>Минимальная цена</th><td>{{ calc_verdict.price_thresholds.floor_price|floatformat:2 }} ₽</td><td>ROI {{ calc_verdict.price_thresholds.floor_roi }}%</td></tr>
+        <tr><th>Прогноз</th><td>{{ calc_verdict.price|floatformat:2 }} ₽</td><td>{{ calc_verdict.net_profit|floatformat:2 }} ₽</td><td>{{ calc_verdict.roi }}%</td></tr>
+        <tr><th>Прибыль при целевом ROI</th><td>{{ calc_verdict.price_thresholds.target_price|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.target_profit|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.target_roi }}%</td></tr>
+        <tr><th>Прибыль при минимальном ROI</th><td>{{ calc_verdict.price_thresholds.floor_price|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.floor_profit|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.floor_roi }}%</td></tr>
       </tbody>
     </table>
     {% endif %}
