@@ -197,6 +197,14 @@ class RetryPendingProtocolsTests(TestCase):
         self._estimate("just-checked", checked_ago=timedelta(minutes=5))
         self.assertEqual(self._checked_numbers(), set())
 
+    def test_legacy_archived_tender_without_deadline_is_checked(self):
+        Tender.objects.create(
+            purchase_number="legacy-archive", status=Tender.DISMISSED,
+            outcome_status=Tender.OUTCOME_DRAFT,
+        )
+
+        self.assertEqual(self._checked_numbers(), {"legacy-archive"})
+
 
 class ProtocolCardTests(TestCase):
     def setUp(self):

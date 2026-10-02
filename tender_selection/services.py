@@ -1262,7 +1262,9 @@ def retry_pending_protocols(*, limit: int = 6, pause: float = PROTOCOL_PAUSE_SEC
     ).order_by("-last_pulled_at")
     archived_untouched = base.filter(
         status=Tender.DISMISSED, outcome_status=Tender.OUTCOME_DRAFT,
-        protocol_checked_at__isnull=True, collecting_finished_at__lt=now,
+        protocol_checked_at__isnull=True,
+    ).filter(
+        Q(collecting_finished_at__lt=now) | Q(collecting_finished_at__isnull=True),
     ).order_by("-archived_at")
     tenders = (list(bidding[:limit]) + list(finished[:limit]) + list(archived_untouched[:limit]))[:limit]
 
