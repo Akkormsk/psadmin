@@ -337,6 +337,18 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertFalse(Lesson.objects.filter(session=session, admin_text="Только для этого заказа").exists())
         self.assertFalse(session.confirmed_example.is_active)
 
+    def test_question_answers_are_not_reused_as_route_knowledge(self):
+        result = self.build()
+        result["question_answers"] = {"format": "А5"}
+        result["route_line"]["requirements"]["clarifications"] = [{
+            "question_id": "format", "label": "Формат", "value": "А5",
+            "source_type": "manager_clarification",
+        }]
+
+        session = self.confirm(result)
+
+        self.assertFalse(session.confirmed_example.is_active)
+
     def test_unknown_feedback_action_is_not_exposed_as_backend_action(self):
         self.answer["feedback_actions"] = [
             {"type": "remove_stage", "stage_id": "purchase", "summary": "Убрана закупка"},

@@ -111,6 +111,8 @@ class Criterion:
                            # по нему матчатся галочка клиента и RequirementSkipRule,
                            # не по label. Пусто означает "то же самое, что label"
                            # (обычная, неразделённая строка).
+    source_type: str = ""  # manager_clarification — факт текущего заказа,
+                            # который нельзя превращать в постоянный урок.
 
     def as_row(self) -> tuple[str, str]:
         return (self.label or self.concept, self.value or self.raw_value)
@@ -602,7 +604,8 @@ class Cascade:
             candidates=shown,
             catalog_intent=self._catalog_intent(),
             requirement_selection=[
-                {"label": c.label, "value": c.value or c.raw_value, "selected": c.checked}
+                {"label": c.label, "value": c.value or c.raw_value, "selected": c.checked,
+                 **({"source_type": c.source_type} if c.source_type else {})}
                 for c in self.tz if c.label
             ],
             instructions=self.feedback_instructions_result,
@@ -777,6 +780,7 @@ class Cascade:
                     "importance": max(0, min(100, int(entry.get("importance") or 50))),
                     "importance_reason": _cell(entry.get("importance_reason"))[:160],
                     "maps_to": maps_to,
+                    "source_type": _cell(row.get("source_type"))[:40],
                 })
         return {"criteria": criteria}
 
@@ -824,6 +828,7 @@ class Cascade:
                 importance=importance,
                 importance_reason=importance_reason,
                 maps_to=entry.get("maps_to") if entry.get("maps_to") in {"color", "material"} else "",
+                source_type=_cell(entry.get("source_type"))[:40],
             ))
         limit = max(0, min(100, int(self.step_settings.get("1", {}).get("max_active_requirements", 0) or 0)))
         if limit:
@@ -850,6 +855,7 @@ class Cascade:
             label=_cell(row.get("label"))[:200], raw_value=_cell(row.get("value"))[:500],
             concept=_cell(row.get("label"))[:120], operator="~", value=_cell(row.get("value"))[:200],
             checked=_norm_label(row.get("label")) not in self.skip_labels and row.get("selected") is not False,
+            source_type=_cell(row.get("source_type"))[:40],
         )
 
     # -- шаг 2: план поиска --------------------------------------------- #
@@ -2040,10 +2046,10 @@ class Cascade:
 
     # -- вспомогательное ------------------------------------------------ #
     def _raw_requirement_rows(self) -> list[dict]:
-        from .services import _collapse_requirements
+        from .services import _collapse_requirements, _effective_requirement_rows
 
-        rows = self.line.get("requirements")
-        rows = rows.get("requirements") if isinstance(rows, dict) else rows
+        requirements = self.line.get("requirements")
+        rows = _effective_requirement_rows(requirements) if isinstance(requirements, dict) else requirements
         rows = _collapse_requirements(rows) if isinstance(rows, list) else []
         return [
             r for r in rows

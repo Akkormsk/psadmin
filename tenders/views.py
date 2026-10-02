@@ -735,10 +735,34 @@ def revise_production_hypothesis(request):
         session.save(update_fields=["current_hypothesis", "updated_at"])
         return JsonResponse({**prior, "session_id": session.pk})
     if question_answers is not None:
-        allowed = {str(question.get("id")) for question in prior.get("questions", []) if isinstance(question, dict)}
+        questions = {
+            str(question.get("id")): question for question in prior.get("questions", [])
+            if isinstance(question, dict) and question.get("id")
+        }
+        allowed = set(questions)
         answers = {str(key): str(value).strip()[:1000] for key, value in question_answers.items()
                    if str(key) in allowed and str(value).strip()}
-        prior = {**prior, "question_answers": answers}
+        prior = {**prior, "question_answers": {**prior.get("question_answers", {}), **answers}}
+        requirements = dict(line.get("requirements")) if isinstance(line.get("requirements"), dict) else {}
+        prior_requirements = session.requirements if isinstance(session.requirements, dict) else {}
+        existing = requirements.get("clarifications")
+        if not isinstance(existing, list):
+            existing = prior_requirements.get("clarifications", [])
+        clarifications = {
+            str(item.get("question_id")): dict(item) for item in existing
+            if isinstance(item, dict) and item.get("question_id")
+        }
+        for question_id, answer in answers.items():
+            clarifications[question_id] = {
+                "question_id": question_id,
+                "label": str(questions[question_id].get("text", "")).strip()[:500],
+                "value": answer,
+                "source": "Моё уточнение",
+                "source_type": "manager_clarification",
+                "selected": True,
+            }
+        requirements["clarifications"] = list(clarifications.values())
+        line = {**line, "requirements": requirements}
 
     def work(session):
         hypothesis = build_training_hypothesis(
@@ -1286,7 +1310,8 @@ def confirm_production_type(request):
             skipped = 0
             selection = hypothesis.get("requirement_selection", [])
             for row in selection if isinstance(selection, list) else []:
-                if not isinstance(row, dict) or row.get("selected") is not False:
+                if (not isinstance(row, dict) or row.get("selected") is not False
+                        or row.get("source_type") == "manager_clarification"):
                     continue
                 label = str(row.get("label", "")).strip()[:200]
                 label_normalized = _normalized_requirement_label(label)

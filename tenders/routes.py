@@ -8,7 +8,7 @@ from decimal import Decimal
 from django.db import transaction
 
 from .models import Lesson, ProcessDefinition, ProductionTrainingExample, ProductionType
-from .services import TenderAIError, _cell_text, _lesson_stems, _short_text_list
+from .services import TenderAIError, _cell_text, _effective_requirement_rows, _lesson_stems, _short_text_list
 
 
 ROUTE_ACTIONS = {
@@ -107,7 +107,7 @@ def _missing_parameter_questions(route, requirements, quantity):
     поиск подходящих уроков), а не строгим совпадением текста."""
     tz_rows = [
         {"label": _cell_text(row.get("label")), "value": _cell_text(row.get("value"))}
-        for row in requirements.get("requirements", []) if isinstance(row, dict)
+        for row in _effective_requirement_rows(requirements)
     ]
     tz_rows.append({"label": "тираж количество", "value": str(quantity)})
     known_stems = set().union(*(_lesson_stems(f"{row['label']} {row['value']}") for row in tz_rows))
@@ -210,7 +210,8 @@ def _catalog_only_hypothesis(line, current, instructions):
         "feedback_actions": [], "stage_proposals": [], "assumptions": ["Маршрут временно зафиксирован для проверки каскада."],
         "route_examples": [], "route_lessons": [], "catalog_search_started": False,
         "catalog_candidates": [], "costs": [], "totals": {},
-        "requirement_selection": current.get("requirement_selection", requirements.get("requirements", [])),
+        "requirement_selection": _effective_requirement_rows(requirements),
+        "requirement_clarifications": requirements.get("clarifications", []),
         "requirement_skip_rules": _requirement_skip_labels(), "usage": {}, "route_mode": "catalog_only",
     })
 
@@ -257,6 +258,7 @@ active_processes и не переименовывай их. Если подхо�
 цены, а не название процесса.
 Подтверждённые примеры, пресеты и уроки применяй только при совпадении существенных условий. Последняя
 правка администратора важнее старого опыта. answers_for_this_order — факты только текущего заказа, не правило.
+requirements.clarifications — подтверждённые пользователем уточнения текущего заказа; учитывай их наравне с ТЗ.
 Если важного факта нет, задай до трёх коротких вопросов. Не спрашивай то, что уже есть в ТЗ, ответах или опыте.
 Верни JSON: {"item":"вид продукции", "route":{"reason":"краткое обоснование","processes":[
 {"id":"сохрани id неизменённого этапа или пусто", "process_id":"id из active_processes", "details":["конкретные условия"],
@@ -293,7 +295,8 @@ active_processes и не переименовывай их. Если подхо�
         "assumptions": _short_text_list(raw.get("assumptions")),
         "route_examples": [{"id": value["id"], "name": value["name"]} for value in examples], "route_lessons": lessons,
         "catalog_search_started": False, "catalog_candidates": [], "costs": [], "totals": {},
-        "requirement_selection": current.get("requirement_selection", requirements.get("requirements", [])),
+        "requirement_selection": _effective_requirement_rows(requirements),
+        "requirement_clarifications": requirements.get("clarifications", []),
         "requirement_skip_rules": _requirement_skip_labels(), "usage": usage,
     }
     old_steps = {step["id"]: step for step in current.get("route", {}).get("processes", []) if step.get("id")}
@@ -435,7 +438,7 @@ def confirm_route(hypothesis, session, user):
         return 0
     route = normalize_route(copy.deepcopy(route), route)
     line = hypothesis["route_line"]
-    learn_route = not any(
+    learn_route = not hypothesis.get("question_answers") and not any(
         entry.get("scope") in {"route", "production_step"} and not entry.get("learn_for_similar", True)
         for entry in hypothesis.get("session_instructions", []) if isinstance(entry, dict)
     )

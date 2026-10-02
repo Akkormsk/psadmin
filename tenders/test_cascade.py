@@ -111,6 +111,31 @@ def _run(gateway, line, **kwargs):
 
 
 class CascadeStep1Tests(TestCase):
+    def test_manager_clarifications_are_parsed_with_document_requirements(self):
+        line = {
+            "name": "Ежедневник А5",
+            "quantity": "100",
+            "requirements": {
+                "requirements": [{"label": "Цвет", "value": "синий"}],
+                "clarifications": [{
+                    "question_id": "format",
+                    "label": "Какой формат ежедневника требуется?",
+                    "value": "А5",
+                    "source": "Моё уточнение",
+                    "source_type": "manager_clarification",
+                }],
+            },
+        }
+        gateway = _Gateway(criteria=[
+            {"n": 1, "concept": "цвет", "operator": "=", "value": "синий", "maps_to": "color"},
+            {"n": 2, "concept": "формат", "operator": "=", "value": "А5"},
+        ])
+
+        result = _run(gateway, line)
+
+        self.assertEqual([criterion.value for criterion in result.tz], ["синий", "А5"])
+        self.assertEqual(result.requirement_selection[1]["source_type"], "manager_clarification")
+
     def test_parses_criteria_and_caches_by_tz_hash(self):
         rows = [{"label": "Интерфейс", "value": "USB 2.0"}, {"label": "Ёмкость", "value": "не менее 32 ГБ"}]
         gw = _Gateway(criteria=[
