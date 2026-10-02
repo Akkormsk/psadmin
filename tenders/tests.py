@@ -1044,6 +1044,8 @@ class TenderTests(TestCase):
 
         self.assertIn("Требования позиции", content)
         self.assertIn("Мои уточнения", content)
+        self.assertIn("tender-requirements-tz__head", content)
+        self.assertIn("tender-clarification-chips", content)
 
     @patch("tenders.views.build_training_hypothesis")
     def test_question_answers_become_current_order_clarifications(self, build):

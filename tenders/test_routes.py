@@ -201,6 +201,8 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertNotContains(response, "маршрут зафиксирован")
         self.assertContains(response, "Найдено в названии")
         self.assertContains(response, "data-apply-name-requirements")
+        self.assertContains(response, "training-name-requirements")
+        self.assertContains(response, "training-name-requirements__grid")
         self.assertContains(response, "holder.querySelectorAll('[data-apply-question-answers]')")
         self.assertNotContains(response, "document.addEventListener('click',async event=>")
 

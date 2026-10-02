@@ -1302,19 +1302,35 @@ h1 {
    dialogue — always present regardless of whether a calculation is running,
    done, or hasn't started. Collapsed by default (it's reference material,
    not something to act on every time) and independent of the calculation. */
-.tender-requirements-tz { margin-top:14px; padding:11px 14px; border-radius:10px; background:var(--tint-neutral); border:1px solid var(--border); }
-.tender-requirements-tz > summary { cursor:pointer; color:var(--ink-2); font-size:11px; font-weight:700; text-transform:uppercase; list-style:none; }
+.tender-requirements-tz { margin-top:14px; overflow:hidden; border:1px solid var(--border); border-radius:14px; background:var(--surface); }
+.tender-requirements-tz > summary { display:flex; align-items:center; justify-content:space-between; padding:13px 15px; cursor:pointer; color:var(--ink); list-style:none; }
 .tender-requirements-tz > summary::-webkit-details-marker { display:none; }
-.tender-requirements-tz > summary::after { color:var(--ink-3); content:' ▾'; }
-.tender-requirements-tz[open] > summary { margin-bottom:8px; }
-.tender-requirements-tz[open] > summary::after { content:' ▴'; }
+.tender-requirements-tz > summary::after { color:var(--ink-3); content:'›'; font-size:20px; line-height:1; transform:rotate(90deg); transition:transform .15s ease; }
+.tender-requirements-tz > summary:focus { outline:0; }
+.tender-requirements-tz > summary:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; border-radius:12px; }
+.tender-requirements-tz[open] > summary { border-bottom:1px solid var(--border); }
+.tender-requirements-tz[open] > summary::after { transform:rotate(-90deg); }
+.tender-requirements-tz__head { display:flex; align-items:center; gap:10px; }
+.tender-requirements-tz__head > span:last-child { display:grid; gap:2px; }
+.tender-requirements-tz__head b { font-size:12px; }
+.tender-requirements-tz__head small { color:var(--ink-3); font-size:9px; font-weight:400; }
+.tender-requirements-tz__icon { display:grid; place-items:center; width:28px; height:28px; border-radius:8px; background:var(--tint-cool); color:var(--accent); font-size:12px; font-weight:800; }
+.tender-requirements-tz__section { padding:14px 15px; }
+.tender-requirements-tz__section + .tender-requirements-tz__section { padding-top:13px; border-top:1px solid var(--border); }
+.tender-requirements-tz__section h4 { margin:0 0 8px; color:var(--ink-3); font-size:9px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+.tender-requirements-tz__scope { display:block; margin:-4px 0 9px; color:var(--ink-3); font-size:9px; }
+.tender-requirements-tz__empty { margin:0; color:var(--ink-3); font-size:11px; }
 .tender-requirements-tz .tender-requirement-row:last-child { border-bottom:0; }
-.tender-requirements-tz .tender-requirement-row { display:grid; grid-template-columns:15px 108px 1fr; gap:3px 8px; align-items:start; cursor:pointer; }
-.tender-requirements-tz .tender-requirement-row input { margin:2px 0 0; cursor:pointer; }
+.tender-requirements-tz .tender-requirement-row { display:grid; grid-template-columns:16px minmax(90px,.8fr) minmax(130px,1.2fr); gap:3px 9px; align-items:center; padding:8px 0; cursor:pointer; }
+.tender-requirements-tz .tender-requirement-row input { width:15px; height:15px; margin:0; cursor:pointer; accent-color:var(--accent); }
 .tender-requirements-tz .tender-requirement-row small { grid-column:2 / -1; }
 .tender-requirements-tz .tender-requirement-row.is-off { opacity:.5; }
 .tender-requirements-tz .tender-requirement-row.is-off strong { text-decoration:line-through; }
 .tender-requirements-tz__count { margin-bottom:7px; color:var(--ink-3); font-size:9px; line-height:1.35; }
+.tender-clarification-chips { display:flex; flex-wrap:wrap; gap:7px; }
+.tender-clarification-chip { display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:6px 9px; border:1px solid var(--border); border-radius:999px; background:var(--tint-neutral); }
+.tender-clarification-chip small { color:var(--ink-3); font-size:9px; }
+.tender-clarification-chip strong { color:var(--ink); font-size:10px; }
 .tender-requirements-tz__rules { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-bottom:7px; }
 .tender-requirements-tz__rules small { color:var(--ink-3); font-size:9px; }
 .tz-skip-rule { display:inline-flex; align-items:center; gap:3px; padding:2px 3px 2px 8px; border:1px dashed var(--field-border); border-radius:11px; background:var(--surface); color:var(--ink-2); font-size:9px; }
@@ -1660,6 +1676,22 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .training-agent-panel__questions label { display:grid; gap:4px; font-size:11px; color:var(--ink); }
 .training-agent-panel__questions label small { color:var(--ink-3); font-weight:400; }
 .training-agent-panel__questions select, .training-agent-panel__questions input { padding:7px 9px; border:1px solid var(--field-border); border-radius:var(--radius-sm); background:var(--field-bg); color:var(--ink); font-size:12px; font-family:inherit; }
+.training-name-requirements { padding:14px; border:1px solid var(--field-border); border-radius:13px; background:var(--surface); }
+.training-name-requirements > header { display:flex; align-items:flex-start; gap:10px; }
+.training-name-requirements > header > span:last-child { display:grid; gap:3px; }
+.training-name-requirements > header b { font-size:11px; }
+.training-name-requirements > header small { color:var(--ink-3); font-size:9px; line-height:1.4; }
+.training-name-requirements__icon { display:grid; place-items:center; flex:none; width:28px; height:28px; border-radius:8px; background:var(--tint-cool); color:var(--accent); font-size:13px; }
+.training-name-requirements__grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+.training-name-requirements__grid label { position:relative; display:grid; align-content:start; gap:5px; min-height:74px; padding:10px 34px 10px 11px; border:1px solid var(--border); border-radius:11px; background:var(--tint-neutral); cursor:pointer; }
+.training-name-requirements__grid label:has(input:checked) { border-color:var(--accent); background:var(--accent-tint); }
+.training-name-requirements__grid input { position:absolute; top:10px; right:10px; width:15px; height:15px; margin:0; accent-color:var(--accent); }
+.training-name-requirements__grid span { color:var(--ink-3); font-size:9px; }
+.training-name-requirements__grid strong { color:var(--ink); font-size:11px; line-height:1.35; }
+.training-name-requirements > footer { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.training-name-requirements > footer small { color:var(--ink-3); font-size:9px; }
+.training-name-requirements > footer .button-secondary { min-height:32px; padding:6px 11px; border-color:var(--accent-fill); background:var(--accent-fill); color:#fff; font-size:10px; font-weight:700; }
+.training-name-requirements > [data-name-requirement-status] { min-height:0; margin:0; color:var(--ink-3); font-size:9px; }
 .training-proposed-stage { display:grid; gap:6px; margin-bottom:8px; padding:9px 11px; border-radius:8px; background:var(--tint-warning); }
 .training-proposed-stage p { margin:0; font-size:11px; color:var(--warning-ink); }
 .training-proposed-stage button { justify-self:start; font-size:11px; padding:6px 12px; }
@@ -1668,7 +1700,7 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .training-production-price.is-error { background:var(--tint-warning); }
 .training-production-price.is-error p { color:var(--warning-ink); }
 .training-production-price button { justify-self:start; font-size:11px; padding:6px 12px; }
-@media (max-width:700px) { .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; } .training-feedback__row { display:grid; grid-template-columns:1fr; } .training-feedback__row button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } }
+@media (max-width:700px) { .training-catalog-card { grid-template-columns:42px minmax(0,1fr) auto; } .training-feedback__row { display:grid; grid-template-columns:1fr; } .training-feedback__row button { width:100%; } .training-source-form { grid-template-columns:1fr; } .training-source-form > * { grid-column:1!important; } .training-name-requirements__grid { grid-template-columns:1fr; } .training-name-requirements > footer { align-items:stretch; flex-direction:column; } .training-name-requirements > footer .button-secondary { width:100%; } }
 .tender-production-dialog { display:grid; gap:8px; }
 .tender-production-dialog label { display:grid; gap:4px; }
 .tender-production-dialog label span { font-size:10px; line-height:1.35; }
