@@ -24,6 +24,8 @@ class RouteFixtures:
         self.turnkey_process = ProcessDefinition.objects.get_or_create(name="Изготовление под ключ", role="production")[0]
         self.own_process = ProcessDefinition.objects.get_or_create(name="Своё производство", role="production")[0]
         self.box_process = ProcessDefinition.objects.get_or_create(name="Закупка коробки", role="supply")[0]
+        ProcessDefinition.objects.filter(pk__in=[self.purchase_process.pk, self.box_process.pk]).update(supplies_input=True)
+        ProcessDefinition.objects.filter(pk__in=[self.print_process.pk, self.turnkey_process.pk, self.own_process.pk]).update(performs_production=True)
         self.line = {"name": "Пакет", "quantity": "100", "requirements": {"requirements": [
             {"label": "Нанесение", "value": "тиснение", "selected": False},
         ]}}
@@ -42,6 +44,22 @@ class RouteFixtures:
 
 
 class RouteTests(RouteFixtures, TestCase):
+    def test_explicit_name_requirements_are_offered_for_confirmation(self):
+        self.line["name"] = "Ежедневник А5, твёрдая обложка, тёмно-синий"
+        self.answer["requirement_proposals"] = [
+            {"id": "format", "label": "Формат", "value": "А5"},
+            {"id": "cover", "label": "Обложка", "value": "твёрдая обложка"},
+            {"id": "material", "label": "Материал", "value": "натуральная кожа"},
+        ]
+
+        result = self.build()
+
+        self.assertEqual(
+            [(row["label"], row["value"]) for row in result["requirement_proposals"]],
+            [("Формат", "А5"), ("Обложка", "твёрдая обложка")],
+        )
+        self.assertIn("requirement_proposals", self.ai.call_args.args[0])
+
     def test_route_build_does_not_start_catalog_and_keeps_full_tz(self):
         result = self.build()
         self.cascade.assert_not_called()
@@ -158,13 +176,22 @@ class RouteTests(RouteFixtures, TestCase):
             self.build()
         self.cascade.assert_not_called()
 
-    def test_a_supply_role_step_sent_as_kind_is_accepted_as_catalog(self):
-        """The model sometimes sends the process ROLE ("supply") where it
-        should send the step KIND ("catalog") — a real, reproducible mix-up
-        seen live (2026-09-29), not a hypothetical."""
-        self.answer["route"]["processes"][0]["kind"] = "supply"
+    def test_step_kind_is_derived_from_the_existing_stage_not_the_model(self):
+        self.answer["route"]["processes"][0]["kind"] = "production"
         result = self.build()
         self.assertEqual(result["route"]["processes"][0]["kind"], "catalog")
+
+    def test_prompt_contains_stage_selection_rules_and_full_catalog_metadata(self):
+        self.purchase_process.when_to_use = "Только для готовых изделий"
+        self.purchase_process.when_not_to_use = "Не для изготовления с нуля"
+        self.purchase_process.scope_tags = ["готовые изделия"]
+        self.purchase_process.save(update_fields=["when_to_use", "when_not_to_use", "scope_tags"])
+        self.build()
+        prompt = self.ai.call_args.args[0]
+        self.assertIn("stage_proposals", prompt)
+        self.assertIn("строго запрещено", prompt.lower())
+        self.assertIn("Только для готовых изделий", prompt)
+        self.assertIn("Не для изготовления с нуля", prompt)
 
     def test_ui_offers_explicit_search_and_step_feedback(self):
         response = self.client.get(reverse("tender_home"))
@@ -172,6 +199,10 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertContains(response, "Подобрать товар")
         self.assertContains(response, "data-feedback-step")
         self.assertNotContains(response, "маршрут зафиксирован")
+        self.assertContains(response, "Найдено в названии")
+        self.assertContains(response, "data-apply-name-requirements")
+        self.assertContains(response, "holder.querySelectorAll('[data-apply-question-answers]')")
+        self.assertNotContains(response, "document.addEventListener('click',async event=>")
 
     def confirm(self, result):
         session = ProductionTrainingSession.objects.create(created_by=self.user, position_name=self.line["name"], requirements=self.line["requirements"], current_hypothesis=result)
@@ -279,45 +310,62 @@ class RouteTests(RouteFixtures, TestCase):
         self.build(current=current)
         self.assertIn('"format": "А4"', self.ai.call_args.args[0])
 
-    def test_proposed_process_is_created_only_when_route_is_confirmed(self):
+    def test_proposed_process_inside_route_is_rejected(self):
         self.answer["route"] = {"reason": "Нужен отдельный этап", "processes": [{
             "id": "laser", "proposed_process": {"name": "Лазерная резка акрила", "role": "production", "description": "Когда нужна резка акрила"},
             "kind": "production", "details": ["После печати"],
         }]}
-        result = self.build(feedback="Добавь лазерную резку акрила")
+        with self.assertRaises(TenderAIError):
+            self.build(feedback="Добавь лазерную резку акрила")
         self.assertFalse(ProcessDefinition.objects.filter(name="Лазерная резка акрила").exists())
-        session = self.confirm(result)
-        process = ProcessDefinition.objects.get(name="Лазерная резка акрила")
-        self.assertTrue(process.is_active)
-        self.assertEqual(session.confirmed_example.routes[0]["processes"][0]["process_id"], str(process.pk))
 
-    def test_confirm_proposed_stage_creates_it_immediately_not_only_on_route_confirm(self):
-        self.answer["route"] = {"reason": "Нужен отдельный этап", "processes": [{
-            "id": "laser", "proposed_process": {"name": "Лазерная резка акрила", "role": "production", "description": "Когда нужна резка акрила"},
-            "kind": "production", "details": [],
-        }]}
+    def test_stage_proposal_is_separate_from_route_and_requires_explicit_confirmation(self):
+        self.answer["stage_proposals"] = [{
+            "id": "laser", "name": "Лазерная резка акрила", "role": "production",
+            "description": "Когда нужна резка акрила",
+        }]
         result = self.build(feedback="Добавь лазерную резку акрила")
+        self.assertNotIn("proposed_process", json.dumps(result["route"], ensure_ascii=False))
+        self.assertEqual(result["stage_proposals"][0]["name"], "Лазерная резка акрила")
+        self.assertFalse(ProcessDefinition.objects.filter(name="Лазерная резка акрила").exists())
         session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Пакет", requirements=self.line["requirements"], current_hypothesis=result)
-        response = self.client.post(reverse("tender_confirm_proposed_stage"), {"payload": json.dumps({"session_id": session.pk, "step_id": "laser"})})
+        response = self.client.post(reverse("tender_confirm_proposed_stage"), {"payload": json.dumps({"session_id": session.pk, "proposal_id": "laser"})})
         self.assertEqual(response.status_code, 200, response.content)
         process = ProcessDefinition.objects.get(name="Лазерная резка акрила")
         self.assertTrue(process.performs_production)
         session.refresh_from_db()
-        step = session.current_hypothesis["route"]["processes"][0]
-        self.assertEqual(step["process_id"], str(process.pk))
-        self.assertNotIn("proposed_process", step)
+        self.assertEqual(session.current_hypothesis["stage_proposals"], [])
+        self.assertTrue(response.json()["route_refresh_required"])
         self.assertFalse(session.is_confirmed)
 
-    def test_confirm_proposed_stage_rejects_unknown_step(self):
+    def test_confirming_route_does_not_create_a_separate_stage_proposal(self):
+        self.answer["stage_proposals"] = [{
+            "id": "laser", "name": "Лазерная резка акрила", "role": "production", "description": "",
+        }]
+        self.confirm(self.build())
+        self.assertFalse(ProcessDefinition.objects.filter(name="Лазерная резка акрила").exists())
+
+    def test_confirm_proposed_stage_rejects_unknown_proposal(self):
         result = self.build()
         session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Пакет", current_hypothesis=result)
-        response = self.client.post(reverse("tender_confirm_proposed_stage"), {"payload": json.dumps({"session_id": session.pk, "step_id": "nope"})})
+        response = self.client.post(reverse("tender_confirm_proposed_stage"), {"payload": json.dumps({"session_id": session.pk, "proposal_id": "nope"})})
         self.assertEqual(response.status_code, 400)
 
     def test_current_order_feedback_is_not_saved_as_a_lesson(self):
         result = self.build(current=self.build(), feedback="Только для этого заказа", learn_for_similar=False)
         session = self.confirm(result)
         self.assertFalse(Lesson.objects.filter(session=session, admin_text="Только для этого заказа").exists())
+        self.assertFalse(session.confirmed_example.is_active)
+
+    def test_question_answers_are_not_reused_as_route_knowledge(self):
+        result = self.build()
+        result["route_line"]["requirements"]["clarifications"] = [{
+            "question_id": "format", "label": "Формат", "value": "А5",
+            "source_type": "manager_clarification",
+        }]
+
+        session = self.confirm(result)
+
         self.assertFalse(session.confirmed_example.is_active)
 
     def test_unknown_feedback_action_is_not_exposed_as_backend_action(self):
@@ -353,6 +401,18 @@ class ProductionPriceStepTests(RouteFixtures, TestCase):
         self.assertEqual(result["costs"][0]["step_id"], "print")
         self.assertGreater(float(result["totals"]["cost_total"]), 0)
         self.ai.assert_not_called()  # детерминированный расчёт, без ИИ
+
+    def test_route_build_automatically_calculates_a_linked_stage_when_it_can(self):
+        counterparty = self._link_print_process_to_a_priced_counterparty()
+        self.print_process.parameters = {"required": ["тип бумаги"], "optional": []}
+        self.print_process.save(update_fields=["parameters"])
+        initial = self.build()
+        question_id = next(question["id"] for question in initial["questions"] if question["text"] == "тип бумаги")
+
+        result = self.build(current={**initial, "question_answers": {question_id: "standard_ru_80"}})
+
+        self.assertEqual(result["production_steps"]["print"]["counterparty_name"], counterparty.name)
+        self.assertGreater(float(result["totals"]["cost_total"]), 0)
 
     def test_no_counterparty_reports_a_clear_error_without_crashing_the_route(self):
         current = self.build()

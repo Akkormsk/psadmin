@@ -697,6 +697,10 @@ def revise_production_hypothesis(request):
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
         question_answers = payload.get("question_answers") if isinstance(payload.get("question_answers"), dict) else None
+        accepted_requirement_proposals = (
+            payload.get("accepted_requirement_proposals")
+            if isinstance(payload.get("accepted_requirement_proposals"), list) else None
+        )
         # Removing a correction chip resends the reduced instruction list.
         instructions_override = payload.get("instructions") if isinstance(payload.get("instructions"), list) else None
         clear_ranking = bool(payload.get("clear_ranking"))
@@ -722,7 +726,9 @@ def revise_production_hypothesis(request):
         # (the ТЗ-row `selected` flags); a chip removal carries it in
         # instructions_override or clear_ranking; "production_price" needs
         # only step_id — none of these need feedback text.
-        if not feedback and question_answers is None and instructions_override is None and not clear_ranking and not refresh and scope not in {"requirements", "catalog", "production_price"}:
+        if (not feedback and question_answers is None and accepted_requirement_proposals is None
+                and instructions_override is None and not clear_ranking and not refresh
+                and scope not in {"requirements", "catalog", "production_price"}):
             raise ValueError
     except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
@@ -734,11 +740,51 @@ def revise_production_hypothesis(request):
         session.current_hypothesis = prior
         session.save(update_fields=["current_hypothesis", "updated_at"])
         return JsonResponse({**prior, "session_id": session.pk})
-    if question_answers is not None:
-        allowed = {str(question.get("id")) for question in prior.get("questions", []) if isinstance(question, dict)}
-        answers = {str(key): str(value).strip()[:1000] for key, value in question_answers.items()
+    if question_answers is not None or accepted_requirement_proposals is not None:
+        questions = {
+            str(question.get("id")): question for question in prior.get("questions", [])
+            if isinstance(question, dict) and question.get("id")
+        }
+        allowed = set(questions)
+        answers = {str(key): str(value).strip()[:1000] for key, value in (question_answers or {}).items()
                    if str(key) in allowed and str(value).strip()}
-        prior = {**prior, "question_answers": answers}
+        prior = {**prior, "question_answers": {**prior.get("question_answers", {}), **answers}}
+        requirements = dict(line.get("requirements")) if isinstance(line.get("requirements"), dict) else {}
+        prior_requirements = session.requirements if isinstance(session.requirements, dict) else {}
+        existing = requirements.get("clarifications")
+        if not isinstance(existing, list):
+            existing = prior_requirements.get("clarifications", [])
+        clarifications = {
+            str(item.get("question_id")): dict(item) for item in existing
+            if isinstance(item, dict) and item.get("question_id")
+        }
+        for question_id, answer in answers.items():
+            clarifications[question_id] = {
+                "question_id": question_id,
+                "label": str(questions[question_id].get("text", "")).strip()[:500],
+                "value": answer,
+                "source": "Моё уточнение",
+                "source_type": "manager_clarification",
+                "selected": True,
+            }
+        proposals = {
+            str(item.get("id")): item for item in prior.get("requirement_proposals", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        for proposal_id in accepted_requirement_proposals or []:
+            proposal = proposals.get(str(proposal_id))
+            if proposal is None:
+                continue
+            clarifications[f"name-{proposal_id}"] = {
+                "question_id": f"name-{proposal_id}",
+                "label": str(proposal.get("label", "")).strip()[:500],
+                "value": str(proposal.get("value", "")).strip()[:1000],
+                "source": "Из названия · подтверждено",
+                "source_type": "manager_clarification",
+                "selected": True,
+            }
+        requirements["clarifications"] = list(clarifications.values())
+        line = {**line, "requirements": requirements}
 
     def work(session):
         hypothesis = build_training_hypothesis(
@@ -765,12 +811,13 @@ def revise_production_hypothesis(request):
 
 @login_required
 @require_POST
+@transaction.atomic
 def confirm_proposed_stage(request):
-    """Явное создание этапа, который ИИ предложил в маршруте, но которого
-    ещё нет в справочнике (`proposed_process`) — до этого клика справочник
-    не меняется (§18 промпта). Раньше это происходило молча при
-    «Подтвердить маршрут»/«Принять и обучить»; теперь — отдельное решение,
-    сразу применяется к текущей гипотезе без полного пересчёта маршрута."""
+    """Явно создаёт отдельное предложение из нижней панели.
+
+    Оно никогда не подменяет шаг текущего маршрута: после создания маршрут
+    нужно построить заново, и только тогда новый этап может быть выбран.
+    """
     if not request.user.is_superuser:
         return JsonResponse({"error": "Создавать этапы может только администратор."}, status=403)
     try:
@@ -778,12 +825,11 @@ def confirm_proposed_stage(request):
         session = ProductionTrainingSession.objects.select_for_update().get(
             pk=payload.get("session_id"), created_by=request.user, is_confirmed=False,
         )
-        step_id = str(payload.get("step_id", "")).strip()
+        proposal_id = str(payload.get("proposal_id", "")).strip()
         hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-        processes = hypothesis.get("route", {}).get("processes", [])
-        step = next((s for s in processes if s.get("id") == step_id), None)
-        proposed = step.get("proposed_process") if isinstance(step, dict) else None
-        if not step or not isinstance(proposed, dict):
+        proposals = hypothesis.get("stage_proposals", [])
+        proposed = next((item for item in proposals if isinstance(item, dict) and item.get("id") == proposal_id), None)
+        if not isinstance(proposed, dict):
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Этап не найден или маршрут устарел. Обновите расчёт."}, status=400)
@@ -803,11 +849,10 @@ def confirm_proposed_stage(request):
     apply_proposal(proposal, request.user)
     stage = ProcessDefinition.objects.get(name=stage_payload["name"])
 
-    step["process_id"] = str(stage.pk)
-    step.pop("proposed_process", None)
+    hypothesis["stage_proposals"] = [item for item in proposals if item.get("id") != proposal_id]
     session.current_hypothesis = hypothesis
     session.save(update_fields=["current_hypothesis", "updated_at"])
-    return JsonResponse({**hypothesis, "session_id": session.pk})
+    return JsonResponse({**hypothesis, "session_id": session.pk, "route_refresh_required": True})
 
 
 @login_required
@@ -1287,7 +1332,8 @@ def confirm_production_type(request):
             skipped = 0
             selection = hypothesis.get("requirement_selection", [])
             for row in selection if isinstance(selection, list) else []:
-                if not isinstance(row, dict) or row.get("selected") is not False:
+                if (not isinstance(row, dict) or row.get("selected") is not False
+                        or row.get("source_type") == "manager_clarification"):
                     continue
                 label = str(row.get("label", "")).strip()[:200]
                 label_normalized = _normalized_requirement_label(label)

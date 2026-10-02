@@ -1706,6 +1706,22 @@ def _collapse_requirements(rows):
     return [by_label[key] for key in order]
 
 
+def _effective_requirement_rows(requirements):
+    """Return document rows plus manager-confirmed facts for this order."""
+    if not isinstance(requirements, dict):
+        return []
+    document_rows = requirements.get("requirements")
+    clarifications = requirements.get("clarifications")
+    return [
+        dict(row)
+        for row in [
+            *(document_rows if isinstance(document_rows, list) else []),
+            *(clarifications if isinstance(clarifications, list) else []),
+        ]
+        if isinstance(row, dict) and _cell_text(row.get("label")) and _cell_text(row.get("value"))
+    ]
+
+
 def _merge_technical_items(raw_items):
     """Coalesce partial model answers for the same source product."""
     merged = []
@@ -2963,7 +2979,8 @@ def _build_catalog_hypothesis(line, current, session_instructions, progress_call
         ],
         "search_plan": {"item": _cell_text(plan.get("item")), "queries": [_cell_text(value) for value in (plan.get("queries") or []) if _cell_text(value)]},
         "requirement_selection": [
-            {"label": _cell_text(row.get("label")), "value": _cell_text(row.get("value")), "selected": row.get("selected") is not False}
+            {"label": _cell_text(row.get("label")), "value": _cell_text(row.get("value")), "selected": row.get("selected") is not False,
+             **({"source_type": _cell_text(row.get("source_type"))} if _cell_text(row.get("source_type")) else {})}
             for row in tagged_requirements if isinstance(row, dict) and _cell_text(row.get("label"))
         ],
         "requirement_skip_rules": [{"id": rule["id"], "label": rule["label"]} for rule in _requirement_skip_labels()],

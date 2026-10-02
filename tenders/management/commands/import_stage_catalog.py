@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 from openpyxl import load_workbook
 
 from tenders.models import ProcessDefinition, Proposal
@@ -50,6 +51,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("xlsx_path")
         parser.add_argument("--sheet", default=None)
+        parser.add_argument("--replace", action="store_true", help="Удалить текущие этапы и связи перед импортом")
 
     def handle(self, *args, **options):
         try:
@@ -64,22 +66,26 @@ class Command(BaseCommand):
             raise CommandError("Не найден ни один суперпользователь — не на кого оформить импорт.")
 
         created, updated, skipped = 0, 0, 0
-        for row in rows:
-            payload = _row_to_payload(row)
-            if payload is None:
-                skipped += 1
-                continue
-            existed = ProcessDefinition.objects.filter(name=payload["name"]).exists()
-            proposal = Proposal.objects.create(
-                type=Proposal.TYPE_CREATE_STAGE, payload=payload,
-                summary=f"Импорт из таблицы: «{payload['name']}»",
-                source_text="tenders_stage_catalog_import.xlsx", created_by=user,
-            )
-            apply_proposal(proposal, user)
-            if existed:
-                updated += 1
-            else:
-                created += 1
-            self.stdout.write(f"{'обновлён' if existed else 'создан'}: {payload['name']}")
+        with transaction.atomic():
+            if options["replace"]:
+                deleted, _ = ProcessDefinition.objects.all().delete()
+                self.stdout.write(f"Справочник очищен: удалено объектов вместе со связями — {deleted}.")
+            for row in rows:
+                payload = _row_to_payload(row)
+                if payload is None:
+                    skipped += 1
+                    continue
+                existed = ProcessDefinition.objects.filter(name=payload["name"]).exists()
+                proposal = Proposal.objects.create(
+                    type=Proposal.TYPE_CREATE_STAGE, payload=payload,
+                    summary=f"Импорт из таблицы: «{payload['name']}»",
+                    source_text="tenders_stage_catalog_import.xlsx", created_by=user,
+                )
+                apply_proposal(proposal, user)
+                if existed:
+                    updated += 1
+                else:
+                    created += 1
+                self.stdout.write(f"{'обновлён' if existed else 'создан'}: {payload['name']}")
 
         self.stdout.write(self.style.SUCCESS(f"Готово: создано {created}, обновлено {updated}, пропущено {skipped}."))
