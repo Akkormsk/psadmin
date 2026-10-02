@@ -1021,6 +1021,19 @@ class TenderTests(TestCase):
         admin_page = self.client.get(reverse("tender_home"))
         self.assertContains(admin_page, "aiEnabled=true")
 
+    def test_admin_assistant_button_allows_missing_tz_and_warns(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("tender_home")).content.decode()
+        button_script = content[content.index("function questionButton"):content.index("function render()")]
+
+        self.assertNotIn("disabled", button_script)
+        self.assertIn("ИИ-ассистент · без ТЗ", content)
+        self.assertIn("маршрут будет предварительным", content)
+
     @patch("tenders.views.build_training_hypothesis")
     def test_admin_feedback_creates_structured_turn_and_updates_session(self, build):
         self.user.is_superuser = True
