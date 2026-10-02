@@ -765,12 +765,13 @@ def revise_production_hypothesis(request):
 
 @login_required
 @require_POST
+@transaction.atomic
 def confirm_proposed_stage(request):
-    """Явное создание этапа, который ИИ предложил в маршруте, но которого
-    ещё нет в справочнике (`proposed_process`) — до этого клика справочник
-    не меняется (§18 промпта). Раньше это происходило молча при
-    «Подтвердить маршрут»/«Принять и обучить»; теперь — отдельное решение,
-    сразу применяется к текущей гипотезе без полного пересчёта маршрута."""
+    """Явно создаёт отдельное предложение из нижней панели.
+
+    Оно никогда не подменяет шаг текущего маршрута: после создания маршрут
+    нужно построить заново, и только тогда новый этап может быть выбран.
+    """
     if not request.user.is_superuser:
         return JsonResponse({"error": "Создавать этапы может только администратор."}, status=403)
     try:
@@ -778,12 +779,11 @@ def confirm_proposed_stage(request):
         session = ProductionTrainingSession.objects.select_for_update().get(
             pk=payload.get("session_id"), created_by=request.user, is_confirmed=False,
         )
-        step_id = str(payload.get("step_id", "")).strip()
+        proposal_id = str(payload.get("proposal_id", "")).strip()
         hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-        processes = hypothesis.get("route", {}).get("processes", [])
-        step = next((s for s in processes if s.get("id") == step_id), None)
-        proposed = step.get("proposed_process") if isinstance(step, dict) else None
-        if not step or not isinstance(proposed, dict):
+        proposals = hypothesis.get("stage_proposals", [])
+        proposed = next((item for item in proposals if isinstance(item, dict) and item.get("id") == proposal_id), None)
+        if not isinstance(proposed, dict):
             raise ValueError
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Этап не найден или маршрут устарел. Обновите расчёт."}, status=400)
@@ -803,11 +803,10 @@ def confirm_proposed_stage(request):
     apply_proposal(proposal, request.user)
     stage = ProcessDefinition.objects.get(name=stage_payload["name"])
 
-    step["process_id"] = str(stage.pk)
-    step.pop("proposed_process", None)
+    hypothesis["stage_proposals"] = [item for item in proposals if item.get("id") != proposal_id]
     session.current_hypothesis = hypothesis
     session.save(update_fields=["current_hypothesis", "updated_at"])
-    return JsonResponse({**hypothesis, "session_id": session.pk})
+    return JsonResponse({**hypothesis, "session_id": session.pk, "route_refresh_required": True})
 
 
 @login_required

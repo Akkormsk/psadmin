@@ -5,7 +5,7 @@ from django.core.management import call_command
 from django.test import TestCase
 from openpyxl import Workbook
 
-from .models import ProcessDefinition, Proposal
+from .models import Counterparty, ProcessDefinition, Proposal, StageCounterpartyLink
 
 
 def _workbook_path(tmp_path, rows):
@@ -78,3 +78,21 @@ class ImportStageCatalogTests(TestCase):
             call_command("import_stage_catalog", path)
 
         self.assertEqual(ProcessDefinition.objects.count(), before)
+
+    def test_replace_removes_old_stages_and_links_before_import(self):
+        import tempfile
+        from pathlib import Path
+
+        old_stage = ProcessDefinition.objects.create(name="Старый этап", role="production")
+        counterparty = Counterparty.objects.create(name="Старый подрядчик", created_by=self.admin)
+        StageCounterpartyLink.objects.create(stage=old_stage, counterparty=counterparty)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _workbook_path(Path(tmp), [(
+                "Новый этап", "нет", "да", "иногда", "Полиграфия",
+                "Для теста", "Не для старого маршрута", "Тираж",
+            )])
+            call_command("import_stage_catalog", path, replace=True)
+
+        self.assertEqual(list(ProcessDefinition.objects.values_list("name", flat=True)), ["Новый этап"])
+        self.assertFalse(StageCounterpartyLink.objects.exists())
+        self.assertTrue(Counterparty.objects.filter(pk=counterparty.pk).exists())
