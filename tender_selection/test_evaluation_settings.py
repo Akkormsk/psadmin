@@ -137,6 +137,24 @@ class ConfiguredBehaviourTests(TestCase):
 
         self.assertIsNone(stats)
 
+    def test_legacy_funnel_row_without_category_is_matched_by_subject(self):
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("20"),
+            own_funnel=True,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 1
+        filters.save()
+
+        stats = price_stats_for(Tender(
+            purchase_number="2", title="Поставка футболки хлопковые", okpd2=["17.23"],
+        ))
+
+        self.assertEqual(stats["count"], 1)
+
     def test_insufficient_history_reports_why_via_diag_instead_of_vanishing(self):
         """Когда своей истории мало — карточка должна показать «пока нет данных»,
         а не молча спрятать блок целиком (иначе выглядит как баг)."""

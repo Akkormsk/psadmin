@@ -84,3 +84,16 @@ class ArchiveTests(TestCase):
         tender.refresh_from_db()
 
         self.assertEqual(tender.status, Tender.NEW)
+
+    def test_archived_tender_with_outcome_shows_result_instead_of_active_stage(self):
+        tender = self._archived(
+            "result", "Кружки", source=Tender.MANUAL,
+            contract_price=Decimal("900.00"), contract_reduction_percent=Decimal("10.00"),
+            outcome_checked_at=self.now,
+        )
+
+        response = self.client.get(f"/tender-selection/{tender.pk}/")
+
+        self.assertTrue(response.context["is_archived"])
+        self.assertTrue(response.context["show_outcome"])
+        self.assertContains(response, "900.00")

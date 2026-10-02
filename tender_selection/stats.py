@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from . import gosplan
@@ -286,7 +286,9 @@ def price_stats_for(tender, card=None, *, diag: dict | None = None) -> dict | No
     cats = tender_categories(tender, card)
     pool = ContractStat.objects.filter(law="fz44", own_funnel=True, shared_purchase=False, discount_pct__isnull=False)
     if cats:
-        pool = pool.filter(category__in=cats)
+        # У старых карточек воронки категория ещё не сохранялась. Их можно
+        # безопасно сопоставить по названию ниже, но нельзя отсеивать заранее.
+        pool = pool.filter(Q(category__in=cats) | Q(category=""))
     # 2000 — не бизнес-потолок выборки (та считается по всем найденным ниже),
     # а просто предохранитель от загрузки всей таблицы разом.
     scored = [

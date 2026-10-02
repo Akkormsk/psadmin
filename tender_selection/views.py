@@ -395,6 +395,7 @@ def tender_list(request):
 @tender_viewer_required
 def tender_detail(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
+    is_archived = tender.status == Tender.DISMISSED
     if tender.opened_at is None:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
         tender.opened_at = timezone.now()
         tender.save(update_fields=["opened_at"])
@@ -479,8 +480,17 @@ def tender_detail(request, pk):
         "calc_verdict": calc_verdict,
         "lifecycle": lifecycle,
         "active_stage": active_stage,
+        "is_archived": is_archived,
+        "archive_stage_label": {key: label for key, label, _ in ARCHIVE_STAGES}.get(_archive_stage(tender, estimate), ""),
         "estimate": estimate,
-        "protocol": _protocol_view(estimate),
+        "protocol": _protocol_view(tender),
+        "show_outcome": bool(
+            (estimate and tender.outcome_status != Tender.OUTCOME_DRAFT)
+            or (is_archived and (
+                tender.protocol or tender.contract_price is not None
+                or tender.contract_reduction_percent is not None or tender.outcome_checked_at
+            ))
+        ),
         "clarifications": parse_clarifications(clar_raw),
         "complaints": parse_complaints(comp_raw),
         "price_stats": stats,
@@ -492,13 +502,12 @@ def tender_detail(request, pk):
     })
 
 
-def _protocol_view(estimate):
+def _protocol_view(tender):
     """Таблица участников итогового протокола; наша заявка отмечена, если опознана."""
-    tender = estimate.tender if estimate and estimate.tender_id else None
-    protocol = (tender.protocol or {}) if tender else {}
+    protocol = tender.protocol or {}
     if not protocol:
         return None
-    nmck = protocol.get("nmck") or (tender.max_price if tender else None)
+    nmck = protocol.get("nmck") or tender.max_price
     ours = find_ours(protocol, bid_number=tender.bid_number, bid_price=tender.bid_price)
     rows = []
     for participant in sorted(protocol.get("participants", []), key=lambda p: (p.get("rank") is None, p.get("rank") or 0)):
