@@ -1,10 +1,12 @@
 from decimal import InvalidOperation
+import re
 
 from django import template
 
 register = template.Library()
 
 NBSP = "\N{NO-BREAK SPACE}"  # число не переносится по разрядам
+NARROW_NBSP = "\N{NARROW NO-BREAK SPACE}"
 
 
 def _to_float(value):
@@ -34,3 +36,12 @@ def rub_full(value):
     """То же, что rub — для title-подсказки при наведении."""
     number = _to_float(value)
     return f"{_grouped(number)} \N{RUBLE SIGN}" if number is not None else ""
+
+
+@register.filter
+def group_number(value):
+    """Разделяет разряды узким неразрывным пробелом, сохраняя дробную часть."""
+    text = str(value)
+    separator_at = next((index for index, char in enumerate(text) if char in ".,"), len(text))
+    integer, fraction = text[:separator_at], text[separator_at:]
+    return re.sub(r"(?<=\d)(?=(?:\d{3})+$)", NARROW_NBSP, integer) + fraction

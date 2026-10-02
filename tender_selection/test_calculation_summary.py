@@ -57,6 +57,11 @@ class CalculationSummaryTests(TestCase):
         self.assertContains(response, "НМЦК")
         self.assertContains(response, "Прибыль при целевом ROI")
         self.assertContains(response, "Прибыль при минимальном ROI")
+        self.assertContains(response, "2\u202f000.00 ₽")
+        self.assertContains(response, "1\u202f000.00 ₽")
+        self.assertContains(response, "1\u202f600.00 ₽")
+        self.assertContains(response, "1\u202f529.41 ₽")
+        self.assertNotContains(response, "2000.00 ₽")
 
     def test_summary_remains_visible_after_transition_to_bidding(self):
         self.tender.outcome_status = Tender.OUTCOME_PENDING

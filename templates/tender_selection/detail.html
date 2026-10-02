@@ -193,20 +193,20 @@
 
   {% if pushed_estimate_id %}
   <details class="panel panel--separated" {% if active_stage == "calculation" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><small class="ts-stage-summary">{% if calc_verdict %}прибыль {{ calc_verdict.net_profit|floatformat:0 }} ₽ · ROI {{ calc_verdict.roi }}%{% else %}расчёт не завершён{% endif %}</small></summary>
+    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><small class="ts-stage-summary">{% if calc_verdict %}прибыль {{ calc_verdict.net_profit|floatformat:0|group_number }} ₽ · ROI {{ calc_verdict.roi|group_number }}%{% else %}расчёт не завершён{% endif %}</small></summary>
     {% if calc_verdict %}
     <div class="tender-verdict__stats">
       {% if calc_verdict.purchase_total is not None %}
-      <div class="tender-verdict__stat"><small>Себестоимость</small><strong>{{ calc_verdict.purchase_total|floatformat:2 }} ₽</strong></div>
+      <div class="tender-verdict__stat"><small>Себестоимость</small><strong>{{ calc_verdict.purchase_total|floatformat:2|group_number }} ₽</strong></div>
       {% endif %}
       {% if calc_verdict.nmck_total is not None %}
-      <div class="tender-verdict__stat"><small>НМЦК</small><strong>{{ calc_verdict.nmck_total|floatformat:2 }} ₽</strong></div>
+      <div class="tender-verdict__stat"><small>НМЦК</small><strong>{{ calc_verdict.nmck_total|floatformat:2|group_number }} ₽</strong></div>
       {% endif %}
       {% if calc_verdict.price %}
-      <div class="tender-verdict__stat"><small>{% if calc_verdict.price_is_actual %}Фактическая цена{% else %}Цена (с прогнозом){% endif %}</small><strong>{{ calc_verdict.price|floatformat:2 }} ₽</strong></div>
+      <div class="tender-verdict__stat"><small>{% if calc_verdict.price_is_actual %}Фактическая цена{% else %}Цена (с прогнозом){% endif %}</small><strong>{{ calc_verdict.price|floatformat:2|group_number }} ₽</strong></div>
       {% endif %}
-      <div class="tender-verdict__stat"><small>Прибыль</small><strong>{{ calc_verdict.net_profit|floatformat:2 }} ₽</strong></div>
-      <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
+      <div class="tender-verdict__stat"><small>Прибыль</small><strong>{{ calc_verdict.net_profit|floatformat:2|group_number }} ₽</strong></div>
+      <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi|group_number }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
     </div>
     {% else %}
     <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
@@ -216,9 +216,9 @@
       <caption>Ориентиры для торгов</caption>
       <thead><tr><th>Ориентир</th><th>Цена</th><th>Прибыль</th><th>ROI</th></tr></thead>
       <tbody>
-        <tr><th>Прогноз</th><td>{{ calc_verdict.price|floatformat:2 }} ₽</td><td>{{ calc_verdict.net_profit|floatformat:2 }} ₽</td><td>{{ calc_verdict.roi }}%</td></tr>
-        <tr><th>Прибыль при целевом ROI</th><td>{{ calc_verdict.price_thresholds.target_price|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.target_profit|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.target_roi }}%</td></tr>
-        <tr><th>Прибыль при минимальном ROI</th><td>{{ calc_verdict.price_thresholds.floor_price|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.floor_profit|floatformat:2 }} ₽</td><td>{{ calc_verdict.price_thresholds.floor_roi }}%</td></tr>
+        <tr><th>Прогноз</th><td>{{ calc_verdict.price|floatformat:2|group_number }} ₽</td><td>{{ calc_verdict.net_profit|floatformat:2|group_number }} ₽</td><td>{{ calc_verdict.roi|group_number }}%</td></tr>
+        <tr><th>Прибыль при целевом ROI</th><td>{{ calc_verdict.price_thresholds.target_price|floatformat:2|group_number }} ₽</td><td>{{ calc_verdict.price_thresholds.target_profit|floatformat:2|group_number }} ₽</td><td>{{ calc_verdict.price_thresholds.target_roi|group_number }}%</td></tr>
+        <tr><th>Прибыль при минимальном ROI</th><td>{{ calc_verdict.price_thresholds.floor_price|floatformat:2|group_number }} ₽</td><td>{{ calc_verdict.price_thresholds.floor_profit|floatformat:2|group_number }} ₽</td><td>{{ calc_verdict.price_thresholds.floor_roi|group_number }}%</td></tr>
       </tbody>
     </table>
     {% endif %}
