@@ -1094,6 +1094,50 @@ class TenderTests(TestCase):
         self.assertEqual(session.requirements["clarifications"], [clarification])
 
     @patch("tenders.views.build_training_hypothesis")
+    def test_confirmed_name_requirements_become_current_order_clarifications(self, build):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_superuser", "is_staff"])
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user,
+            position_name="Ежедневник А5",
+            requirements={"requirements": []},
+            current_hypothesis={
+                "stage": "training_dialogue", "route": {"name": "Закупка"}, "questions": [],
+                "requirement_proposals": [{"id": "format", "label": "Формат", "value": "А5"}],
+            },
+        )
+        build.return_value = {
+            "stage": "training_dialogue", "route": {"name": "Закупка"},
+            "understood_changes": [], "questions": [], "requirement_clarifications": [{
+                "question_id": "name-format", "label": "Формат", "value": "А5",
+                "source": "Из названия · подтверждено", "source_type": "manager_clarification", "selected": True,
+            }],
+        }
+        self.client.force_login(self.user)
+        payload = {
+            "session_id": session.pk,
+            "line": {"name": "Ежедневник А5", "quantity": 100, "requirements": {"requirements": []}},
+            "scope": "route", "accepted_requirement_proposals": ["format"],
+        }
+
+        def run_job(session_id, work, fallback=None):
+            active_session = ProductionTrainingSession.objects.get(pk=session_id)
+            active_session.current_hypothesis = work(active_session)
+            active_session.save(update_fields=["current_hypothesis", "requirements", "updated_at"])
+
+        with patch("tenders.views._submit_assistant_job", side_effect=run_job):
+            response = self.client.post(
+                reverse("tender_revise_production_hypothesis"), {"payload": json.dumps(payload)},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        clarification = build.call_args.args[0]["requirements"]["clarifications"][0]
+        self.assertEqual(clarification["label"], "Формат")
+        self.assertEqual(clarification["value"], "А5")
+        self.assertEqual(clarification["source_type"], "manager_clarification")
+
+    @patch("tenders.views.build_training_hypothesis")
     def test_admin_feedback_creates_structured_turn_and_updates_session(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True

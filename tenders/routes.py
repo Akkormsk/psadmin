@@ -61,6 +61,34 @@ def _questions(raw, limit=3):
     return result
 
 
+def _name_requirement_proposals(raw, line, limit=8):
+    """Keep only proposed values that are literally present in the title."""
+    name = re.sub(r"[^a-zа-я0-9]+", " ", _cell_text(line.get("name")).casefold().replace("ё", "е")).strip()
+    requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
+    existing = {
+        re.sub(r"[^a-zа-я0-9]+", " ", _cell_text(row.get("value")).casefold().replace("ё", "е")).strip()
+        for row in _effective_requirement_rows(requirements)
+    }
+    result, ids, values = [], set(), set()
+    for index, item in enumerate(raw if isinstance(raw, list) else []):
+        if not isinstance(item, dict):
+            continue
+        label = _cell_text(item.get("label"))[:200]
+        value = _cell_text(item.get("value"))[:500]
+        normalized = re.sub(r"[^a-zа-я0-9]+", " ", value.casefold().replace("ё", "е")).strip()
+        if not label or not normalized or normalized not in name or normalized in existing or normalized in values:
+            continue
+        proposal_id = _cell_text(item.get("id"))
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", proposal_id) or proposal_id in ids:
+            proposal_id = f"name-requirement-{index + 1}"
+        ids.add(proposal_id)
+        values.add(normalized)
+        result.append({"id": proposal_id, "label": label, "value": value})
+        if len(result) == limit:
+            break
+    return result
+
+
 def _stage_proposals(raw, limit=3):
     active_names = set(ProcessDefinition.objects.filter(is_active=True).values_list("name", flat=True))
     result, ids = [], set()
@@ -259,11 +287,14 @@ active_processes и не переименовывай их. Если подхо�
 Подтверждённые примеры, пресеты и уроки применяй только при совпадении существенных условий. Последняя
 правка администратора важнее старого опыта. answers_for_this_order — факты только текущего заказа, не правило.
 requirements.clarifications — подтверждённые пользователем уточнения текущего заказа; учитывай их наравне с ТЗ.
+В requirement_proposals предложи характеристики, которые явно написаны в названии позиции, но ещё отсутствуют в
+requirements. value копируй из названия дословно. Не включай сам вид товара, количество и никаких догадок.
 Если важного факта нет, задай до трёх коротких вопросов. Не спрашивай то, что уже есть в ТЗ, ответах или опыте.
 Верни JSON: {"item":"вид продукции", "route":{"reason":"краткое обоснование","processes":[
 {"id":"сохрани id неизменённого этапа или пусто", "process_id":"id из active_processes", "details":["конкретные условия"],
 "catalog_item":"что искать, только для этапа снабжения"}]},
 "stage_proposals":[{"id":"стабильный_id", "name":"название отсутствующего этапа", "role":"supply|production|completion", "description":"когда применять"}],
+"requirement_proposals":[{"id":"стабильный_id", "label":"характеристика", "value":"точная цитата из названия позиции"}],
 "questions":[{"id":"стабильный_id", "text":"вопрос", "reason":"какое решение зависит"}],
 "assumptions":["допущения"], "understood_changes":["изменения"],
 "feedback_actions":[{"type":"add_stage|remove_stage|move_stage|replace_stage|update_stage_details|propose_process|disable_process|set_route_rule|remove_route_rule|ask_question", "stage_id":"id этапа если есть", "summary":"что сделано или предложено"}]}.
@@ -292,6 +323,7 @@ requirements.clarifications — подтверждённые пользоват�
         "question_answers": current.get("question_answers", {}),
         "feedback_actions": _route_actions(raw.get("feedback_actions"), route),
         "stage_proposals": _stage_proposals(raw.get("stage_proposals")),
+        "requirement_proposals": _name_requirement_proposals(raw.get("requirement_proposals"), line),
         "assumptions": _short_text_list(raw.get("assumptions")),
         "route_examples": [{"id": value["id"], "name": value["name"]} for value in examples], "route_lessons": lessons,
         "catalog_search_started": False, "catalog_candidates": [], "costs": [], "totals": {},
@@ -438,7 +470,8 @@ def confirm_route(hypothesis, session, user):
         return 0
     route = normalize_route(copy.deepcopy(route), route)
     line = hypothesis["route_line"]
-    learn_route = not hypothesis.get("question_answers") and not any(
+    requirements_payload = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
+    learn_route = not requirements_payload.get("clarifications") and not any(
         entry.get("scope") in {"route", "production_step"} and not entry.get("learn_for_similar", True)
         for entry in hypothesis.get("session_instructions", []) if isinstance(entry, dict)
     )

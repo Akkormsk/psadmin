@@ -44,6 +44,22 @@ class RouteFixtures:
 
 
 class RouteTests(RouteFixtures, TestCase):
+    def test_explicit_name_requirements_are_offered_for_confirmation(self):
+        self.line["name"] = "Ежедневник А5, твёрдая обложка, тёмно-синий"
+        self.answer["requirement_proposals"] = [
+            {"id": "format", "label": "Формат", "value": "А5"},
+            {"id": "cover", "label": "Обложка", "value": "твёрдая обложка"},
+            {"id": "material", "label": "Материал", "value": "натуральная кожа"},
+        ]
+
+        result = self.build()
+
+        self.assertEqual(
+            [(row["label"], row["value"]) for row in result["requirement_proposals"]],
+            [("Формат", "А5"), ("Обложка", "твёрдая обложка")],
+        )
+        self.assertIn("requirement_proposals", self.ai.call_args.args[0])
+
     def test_route_build_does_not_start_catalog_and_keeps_full_tz(self):
         result = self.build()
         self.cascade.assert_not_called()
@@ -183,6 +199,10 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertContains(response, "Подобрать товар")
         self.assertContains(response, "data-feedback-step")
         self.assertNotContains(response, "маршрут зафиксирован")
+        self.assertContains(response, "Найдено в названии")
+        self.assertContains(response, "data-apply-name-requirements")
+        self.assertContains(response, "holder.querySelectorAll('[data-apply-question-answers]')")
+        self.assertNotContains(response, "document.addEventListener('click',async event=>")
 
     def confirm(self, result):
         session = ProductionTrainingSession.objects.create(created_by=self.user, position_name=self.line["name"], requirements=self.line["requirements"], current_hypothesis=result)
@@ -339,7 +359,6 @@ class RouteTests(RouteFixtures, TestCase):
 
     def test_question_answers_are_not_reused_as_route_knowledge(self):
         result = self.build()
-        result["question_answers"] = {"format": "А5"}
         result["route_line"]["requirements"]["clarifications"] = [{
             "question_id": "format", "label": "Формат", "value": "А5",
             "source_type": "manager_clarification",
