@@ -18,7 +18,7 @@ from django.views.decorators.http import require_POST
 from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
 from .filtering import match_title, parse_terms
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
-from .notification import parse_clarifications, parse_complaints, parse_notification
+from .notification import detail_document_candidate, parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
     CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, apply_tender_outcome, check_protocol, effective_laws,
@@ -436,6 +436,7 @@ def tender_detail(request, pk):
     is_manual = tender.source == Tender.MANUAL
     payload = None if is_manual else notification_for(tender, force=request.GET.get("refresh") == "1")
     card = parse_notification(payload) if payload else None
+    detail_document = detail_document_candidate(card.get("items", []), card.get("documents", [])) if card else None
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
 
     # Компактная сводка расчёта прямо на странице тендера (см. концепцию: блок
@@ -505,6 +506,7 @@ def tender_detail(request, pk):
         "is_manual": is_manual,
         "display_purchase_number": (tender.raw or {}).get("display_number") or tender.purchase_number,
         "card": card,
+        "detail_document": detail_document,
         "org": org,
         "region_label": region_name(tender.region) if tender.region else "",
         "fetch_failed": payload is None and tender.law == "fz44",

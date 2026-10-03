@@ -100,9 +100,22 @@ def _documents(source: dict) -> list[dict]:
                 "size_kb": size_kb,
                 "date": _dt(att.get("docDate")),
                 "url": url,
+                "index": len(docs),
             }
         )
     return docs
+
+
+def detail_document_candidate(items: list[dict], documents: list[dict]) -> dict | None:
+    """Return the specification document when a one-line notice may hide its itemisation."""
+    if len(items) != 1:
+        return None
+    markers = ("ооз", "описание объекта", "техническое задание", "техническая спецификация", "спецификация")
+    for document in documents:
+        label = f"{document.get('name', '')} {document.get('kind', '')}".lower().replace("ё", "е")
+        if any(marker in label for marker in markers):
+            return document
+    return None
 
 
 def parse_notification(payload: dict) -> dict:
