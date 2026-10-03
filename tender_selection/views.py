@@ -11,8 +11,8 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.template.loader import render_to_string
-from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
@@ -38,6 +38,13 @@ SORTS = {
 }
 DEFAULT_SORT = "deadline"
 LAW_LABELS = dict(Tender.LAW_CHOICES)
+
+
+def _dismiss_redirect(request):
+    next_url = request.POST.get("next", "")
+    if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}):
+        return redirect(next_url)
+    return redirect("tender_selection:list")
 
 
 def superuser_required(view):
@@ -112,7 +119,7 @@ def _found_tender_card(tender):
         "status_label": "",
         "status_key": status_key,
         "badges": badges,
-        "detail_url": reverse("tender_selection:detail", args=[tender.pk]),
+        "detail_url": f"{reverse('tender_selection:detail', args=[tender.pk])}?return_to=board",
         "dismiss_url": reverse("tender_selection:dismiss", args=[tender.pk]),
     }
 
@@ -153,7 +160,7 @@ def _estimate_card(estimate):
     # Карточка ведёт на страницу ТЕНДЕРА (с растущими блоками по стадиям), а не
     # сразу в рабочее пространство расчёта — туда только через кнопку «Перейти
     # в расчёт» внутри блока «Расчёт» на самой странице тендера.
-    detail_url = reverse("tender_selection:detail", args=[estimate.tender_id]) if estimate.tender_id else ""
+    detail_url = f"{reverse('tender_selection:detail', args=[estimate.tender_id])}?return_to=board" if estimate.tender_id else ""
     return {
         "kind": "estimate",
         "pk": estimate.pk,
@@ -418,6 +425,11 @@ def tender_list(request):
 def tender_detail(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     is_archived = tender.status == Tender.DISMISSED
+    return_url = (
+        reverse("tender_selection:archive") if is_archived or request.GET.get("from") == "archive"
+        else f"{reverse('tender_selection:list')}?view=kanban" if request.GET.get("return_to") == "board"
+        else reverse("tender_selection:list")
+    )
     if tender.opened_at is None:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
         tender.opened_at = timezone.now()
         tender.save(update_fields=["opened_at"])
@@ -505,6 +517,7 @@ def tender_detail(request, pk):
         "is_archived": is_archived,
         "archive_stage_label": {key: label for key, label, _ in ARCHIVE_STAGES}.get(_archive_stage(tender, estimate), ""),
         "back_to_archive": is_archived or request.GET.get("from") == "archive",
+        "return_url": return_url,
         "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
         "protocol": _protocol_view(tender),
@@ -1017,7 +1030,7 @@ def dismiss(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     _clear_tender_document_previews(tender)
     archive_tender(tender)
-    return redirect("tender_selection:archive")
+    return _dismiss_redirect(request)
 
 
 @superuser_required
@@ -1030,7 +1043,7 @@ def dismiss_estimate(request, pk):
     tender = get_object_or_404(Tender, pk=estimate.tender_id)
     _clear_tender_document_previews(tender)
     archive_tender(tender)
-    return redirect("tender_selection:archive")
+    return _dismiss_redirect(request)
 
 
 @superuser_required

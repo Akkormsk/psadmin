@@ -57,6 +57,7 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertEqual(response.headers["X-Frame-Options"], "SAMEORIGIN")
         self.assertContains(response, '<body class="has-account-bar workspace-embedded ">', html=False)
         self.assertContains(response, 'data-workspace-open')
+        self.assertContains(response, 'data-workspace-dismiss')
         self.assertContains(response, reverse("tender_pipeline_estimate", args=[estimate.pk]))
         self.assertContains(response, 'data-workspace-title="Расчёт"')
         self.assertContains(response, "ps-workspace-open")

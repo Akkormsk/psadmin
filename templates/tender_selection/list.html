@@ -102,9 +102,9 @@
           <details class="ts-menu ts-menu--icon">
             <summary aria-label="Ещё действия">⋮</summary>
             <div class="ts-menu__list">
-              <a href="{% url 'tender_selection:detail' tender.pk %}" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">Открыть тендер</a>
+              <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">Открыть тендер</a>
               {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
-              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<button type="submit" class="is-danger">Скрыть в архив</button></form>
+              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="is-danger">Скрыть в архив</button></form>
             </div>
           </details>
         </div>

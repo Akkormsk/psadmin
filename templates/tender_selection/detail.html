@@ -42,8 +42,8 @@
         </form>
         {% else %}
         {% if estimate %}
-        <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}"{% if not tender.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
-          {% csrf_token %}
+        <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}" data-workspace-dismiss{% if not tender.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
+          {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
           <button type="submit" class="ts-quiet">Скрыть</button>
         </form>
         {% if tender.outcome_status == "draft" and calc_verdict %}
@@ -53,8 +53,8 @@
         </form>
         {% endif %}
         {% else %}
-        <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">
-          {% csrf_token %}
+        <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-workspace-dismiss>
+          {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
           <button type="submit" class="ts-quiet">Скрыть</button>
         </form>
         {% if tender.review == "unreviewed" %}
@@ -636,6 +636,22 @@
           showResult(data);
         })
         .catch(function () { uploadStatus.textContent = "Не удалось загрузить файл."; });
+    });
+  })();
+
+  (function () {
+    if (window.parent === window || !document.body.classList.contains("workspace-embedded")) return;
+    document.querySelectorAll("[data-workspace-dismiss]").forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        if (event.defaultPrevented) return;
+        event.preventDefault();
+        fetch(form.action, {method: "POST", body: new FormData(form)})
+          .then(function (response) {
+            if (!response.ok) throw new Error();
+            window.parent.postMessage({type: "ps-workspace-close", refresh: true}, location.origin);
+          })
+          .catch(function () { form.submit(); });
+      });
     });
   })();
 

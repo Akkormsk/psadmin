@@ -94,6 +94,25 @@ class ArchiveTests(TestCase):
         self.assertEqual(tender.status, Tender.DISMISSED)
         self.assertEqual(tender.archived_from_stage, "incoming")
 
+    def test_dismissal_returns_to_the_screen_where_the_tender_was_opened(self):
+        incoming = Tender.objects.create(purchase_number="incoming", title="Кружки")
+        calculated = Tender.objects.create(
+            purchase_number="calculated", title="Буклеты", review=Tender.INTERESTING, status=Tender.PUSHED,
+        )
+        estimate = TenderEstimate.objects.create(
+            owner=self.admin, tender=calculated, tender_number="calculated", name="Буклеты",
+        )
+
+        incoming_response = self.client.post(
+            f"/tender-selection/{incoming.pk}/dismiss/", {"next": "/tender-selection/?view=list"},
+        )
+        calculation_response = self.client.post(
+            f"/tender-selection/estimate/{estimate.pk}/dismiss/", {"next": "/tender-selection/?view=kanban"},
+        )
+
+        self.assertRedirects(incoming_response, "/tender-selection/?view=list")
+        self.assertRedirects(calculation_response, "/tender-selection/?view=kanban")
+
     def test_archived_result_can_be_excluded_from_forecast(self):
         tender = self._archived("stat", "Кружки", source=Tender.MANUAL)
         stat = ContractStat.objects.create(
