@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import CalculatorSettings, Estimate, PriceItem
+from .models import CalculatorSettings, Estimate, EstimateGroup, PriceItem
 from .services import calculate_sheet_estimate
 
 
@@ -31,6 +31,22 @@ class SheetCalculatorTests(TestCase):
 
         self.assertRedirects(response, reverse("calculator_home"))
         self.assertFalse(Estimate.objects.filter(pk=estimate.pk).exists())
+
+    def test_bulk_grouping_names_estimates_and_shows_their_total(self):
+        first = Estimate.objects.create(owner=self.user, name="Буклет", summary_snapshot={"standard": "120.00"})
+        second = Estimate.objects.create(owner=self.user, name="Листовка", summary_snapshot={"standard": "80.00"})
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("calculator_estimates_bulk"), {
+            "action": "group", "name": "Весенняя кампания", "estimate_ids": [first.pk, second.pk],
+        })
+
+        self.assertRedirects(response, f"{reverse('calculator_home')}?calculator=sheet")
+        group = EstimateGroup.objects.get(owner=self.user, name="Весенняя кампания")
+        self.assertCountEqual(group.estimates.values_list("pk", flat=True), [first.pk, second.pk])
+        page = self.client.get(reverse("calculator_home"))
+        self.assertContains(page, "Весенняя кампания")
+        self.assertContains(page, "200.00")
 
     def test_wide_calculator_uses_its_formula(self):
         settings = CalculatorSettings.objects.create(hourly_rate=Decimal("550"))

@@ -4,7 +4,24 @@
 <section class="panel"><div class="panel-header"><h2 class="panel-title">{% if calculator_type == 'wide' %}Плоттер Canon{% else %}Листовая печать{% endif %}</h2><div class="panel-actions"><button type="button" class="button-secondary" id="clear-calc">Новый расчёт</button>{% if request.user.is_superuser %}<a class="button-secondary" href="{% if calculator_type == 'wide' %}{% url 'admin:calculator_canonpriceitem_changelist' %}{% else %}{% url 'admin:calculator_sheetpriceitem_changelist' %}{% endif %}">Справочник цен</a>{% endif %}</div></div><div id="groups"></div><div class="calculator-parameters"><label>Тираж конечного изделия <input type="number" min="1" name="product_quantity" id="product-quantity" value="{{ estimate.product_quantity|default:1 }}"></label><label>Рабочие часы (шаг 0,5) <input type="number" min="0" step="0.5" name="work_hours" id="work-hours" value="{{ estimate.work_hours|default:'0.0' }}"></label></div></section>
 <section class="panel"><div class="panel-header"><h2 class="panel-title">Итог</h2></div><div class="calculator-summary" id="summary"></div><div class="calculator-save"><label>Название расчёта <input name="name" value="{{ estimate.name|default:'Новый расчёт' }}"></label><label>Комментарий <input name="comment" maxlength="300" value="{{ estimate.comment|default:'' }}" placeholder="Короткая заметка"></label><button type="button" class="button-success" id="save-calc"{% if estimate %} hidden{% endif %}>Сохранить расчёт</button><span class="autosave-status" id="autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span></div></section>
 </form>
-<section class="panel panel--separated"><div class="panel-header"><h2 class="panel-title">Сохранённые расчёты</h2></div>{% for saved in estimates %}<div class="saved-estimate"><a class="saved-estimate__main" href="{% url 'calculator_estimate' saved.pk %}"><span><strong>{{ saved.name }}</strong>{% if saved.comment %}<span class="saved-estimate__comment">{{ saved.comment }}</span>{% endif %}<small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=saved.owner %}<span>{{ saved.owner.get_full_name|default:"Имя не указано" }} · {{ saved.updated_at|date:"d.m.Y H:i" }}</span></small></span><strong>{% if saved.summary_snapshot.standard %}{{ saved.summary_snapshot.standard|floatformat:2|intcomma }} ₽{% else %}—{% endif %}</strong></a><span class="hover-actions"><form method="post" action="{% url 'calculator_estimate_duplicate' saved.pk %}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать расчёт" aria-label="Копировать расчёт {{ saved.name }}">⧉</button></form><form method="post" action="{% url 'calculator_estimate_delete' saved.pk %}" onsubmit="return confirm('Удалить расчёт «{{ saved.name|escapejs }}»?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить расчёт" aria-label="Удалить расчёт {{ saved.name }}">×</button></form></span></div>{% empty %}<p class="settings-description">Сохранённых расчётов пока нет.</p>{% endfor %}</section></div></div>
+<section class="panel panel--separated">
+  <div class="panel-header"><h2 class="panel-title">Сохранённые расчёты</h2></div>
+  <form method="post" action="{% url 'calculator_estimates_bulk' %}" id="bulk-estimates-form">
+    {% csrf_token %}<input type="hidden" name="calculator_type" value="{{ calculator_type }}">
+    <div class="calculator-bulk" hidden>
+      <strong data-bulk-count>Выбрано: 0</strong>
+      <button type="button" class="button-secondary" data-bulk-group>Сгруппировать</button>
+      <button type="submit" class="button-secondary" name="action" value="ungroup">Убрать из группы</button>
+      <button type="submit" class="button-danger" name="action" value="delete" onclick="return confirm('Удалить выбранные расчёты?');">Удалить</button>
+    </div>
+  </form>
+    {% for section in estimate_sections %}
+      {% if section.group %}<div class="estimate-group"><div class="estimate-group__head"><strong>{{ section.group.name }}</strong><span>{{ section.estimates|length }} расчёта · {{ section.total|floatformat:2|intcomma }} ₽</span></div>{% endif %}
+      {% for saved in section.estimates %}
+        <div class="saved-estimate"><label class="saved-estimate__check"><input type="checkbox" name="estimate_ids" value="{{ saved.pk }}" form="bulk-estimates-form" data-bulk-estimate><span class="sr-only">Выбрать {{ saved.name }}</span></label><a class="saved-estimate__main" href="{% url 'calculator_estimate' saved.pk %}"><span><strong>{{ saved.name }}</strong>{% if saved.comment %}<span class="saved-estimate__comment">{{ saved.comment }}</span>{% endif %}<small class="user-name-with-avatar">{% include "core/_user_avatar.html" with user=saved.owner %}<span>{{ saved.owner.get_full_name|default:"Имя не указано" }} · {{ saved.updated_at|date:"d.m.Y H:i" }}</span></small></span><strong>{% if saved.summary_snapshot.standard %}{{ saved.summary_snapshot.standard|floatformat:2|intcomma }} ₽{% else %}—{% endif %}</strong></a><span class="hover-actions"><form method="post" action="{% url 'calculator_estimate_duplicate' saved.pk %}">{% csrf_token %}<button type="submit" class="hover-action" title="Копировать расчёт" aria-label="Копировать расчёт {{ saved.name }}">⧉</button></form><form method="post" action="{% url 'calculator_estimate_delete' saved.pk %}" onsubmit="return confirm('Удалить расчёт «{{ saved.name|escapejs }}»?');">{% csrf_token %}<button type="submit" class="hover-action" title="Удалить расчёт" aria-label="Удалить расчёт {{ saved.name }}">×</button></form></span></div>
+      {% endfor %}{% if section.group %}</div>{% endif %}
+    {% empty %}<p class="settings-description">Сохранённых расчётов пока нет.</p>{% endfor %}
+</section></div></div>
 <script>
 const items={{ items_json|safe }}, initial={{ initial_lines_json|safe }},calculatorType="{{ calculator_type }}",settings={hour:+"{{ settings.hourly_rate }}",mat:+"{{ settings.material_coefficient }}",time:+"{{ settings.time_coefficient }}",regular:+"{{ settings.regular_discount }}",partner:+"{{ settings.partner_discount }}",urgent:+"{{ settings.urgency_multiplier }}",vat:+"{{ settings.vat_rate }}"},groups=calculatorType==='wide'?[['wide_paper','Бумага'],['wide_print','Печать'],['wide_postpress','Постпечатка']]:[['paper','Бумага'],['konica','Печать · Konica'],['xerox','Печать · Xerox'],['postpress','Постпечатная обработка'],['embossing','Тиснение']];let lines=initial;const money=v=>new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2}).format(v)+' ₽';
 function calc(){let q=+product.value||1,h=+hours.value||0,m=lines.reduce((s,x)=>s+x.unit_price*x.quantity,0),paperCategory=calculatorType==='wide'?'wide_paper':'paper',p=lines.filter(x=>x.category===paperCategory).reduce((s,x)=>s+x.quantity,0),cost=m+h*settings.hour,k=1+(p?1/p:0),std=calculatorType==='wide'?m*2*k+h*settings.hour*2:(m*settings.mat+h*settings.hour*settings.time)*k,prices=[['Стандарт','standard',std],['Постоянник −10%','regular',std*(1-settings.regular/100)],['Контрагент −15%','partner',std*(1-settings.partner/100)],['Без очереди +50%','urgent',std*settings.urgent]];summary.innerHTML=`<div class="summary-cost"><span>Себестоимость</span><span class="summary-cost__metric"><small>Общая</small><strong>${money(cost)}</strong></span><span class="summary-cost__metric"><small>За единицу</small><strong>${money(cost/q)}</strong></span></div><div class="summary-head"><span>Вариант</span><span>Итог</span><span>Маржа</span><span>За единицу</span><span>С НДС {{ settings.vat_rate|floatformat:"-2" }}%</span></div>`+prices.map(([n,c,v])=>`<div class="summary-row summary-row--${c}"><span>${n}</span><strong>${money(v)}</strong><span>${money(v-cost)}</span><span>${money(v/q)}</span><span>${money(v*(1+settings.vat/100))}</span></div>`).join('')}
@@ -96,5 +113,29 @@ const groupsEl=document.querySelector('#groups'),product=document.querySelector(
       }
     });
     setTimeout(function () { ready = true; }, 0);
+  })();
+</script>
+<script>
+  (function () {
+    var form = document.getElementById('bulk-estimates-form');
+    if (!form) return;
+    var toolbar = form.querySelector('.calculator-bulk');
+    var count = form.querySelector('[data-bulk-count]');
+    function selected() { return document.querySelectorAll('[data-bulk-estimate]:checked'); }
+    function sync() {
+      var amount = selected().length;
+      toolbar.hidden = !amount;
+      count.textContent = 'Выбрано: ' + amount;
+    }
+    document.querySelectorAll('[data-bulk-estimate]').forEach(function (box) { box.addEventListener('change', sync); });
+    form.querySelector('[data-bulk-group]').onclick = function () {
+      var name = window.prompt('Название группы');
+      if (!name || !name.trim()) return;
+      var input = document.createElement('input');
+      input.type = 'hidden'; input.name = 'name'; input.value = name.trim(); form.append(input);
+      var action = document.createElement('input');
+      action.type = 'hidden'; action.name = 'action'; action.value = 'group'; form.append(action);
+      form.submit();
+    };
   })();
 </script>{% endblock %}

@@ -112,6 +112,7 @@ class Estimate(models.Model):
     TYPE_CHOICES = [(TYPE_SHEET, "Листовая печать"), (TYPE_WIDE, "Плоттер Canon")]
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimates")
+    group = models.ForeignKey("EstimateGroup", null=True, blank=True, on_delete=models.SET_NULL, related_name="estimates")
     calculator_type = models.CharField("Калькулятор", max_length=20, choices=TYPE_CHOICES, default=TYPE_SHEET)
     name = models.CharField(max_length=200, default="Новый расчёт")
     comment = models.CharField("Комментарий", max_length=300, blank=True)
@@ -126,6 +127,21 @@ class Estimate(models.Model):
         ordering = ["-updated_at"]
         verbose_name = "Расчёт"
         verbose_name_plural = "Сохранённые расчёты"
+
+    def __str__(self):
+        return self.name
+
+
+class EstimateGroup(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimate_groups")
+    calculator_type = models.CharField(max_length=20, choices=Estimate.TYPE_CHOICES, default=Estimate.TYPE_SHEET)
+    name = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "pk"]
+        verbose_name = "Группа расчётов"
+        verbose_name_plural = "Группы расчётов"
 
     def __str__(self):
         return self.name

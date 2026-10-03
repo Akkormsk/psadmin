@@ -1238,6 +1238,11 @@ body.workspace-embedded .app-home > .container > .ts-nav { display: none; }
 .saved-estimate__main span { color:var(--ink-3); font-size:14px; }
 .saved-estimate__main > span:first-child { display:grid; gap:4px; }
 .saved-estimate__comment { color:var(--ink-2) !important; overflow-wrap:anywhere; }
+.saved-estimate__check { padding-left:10px; }
+.calculator-bulk { display:flex; align-items:center; gap:8px; margin:0 0 12px; padding:10px; border-radius:10px; background:var(--tint-neutral); }
+.estimate-group { margin:12px 0; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.estimate-group__head { display:flex; justify-content:space-between; gap:12px; padding:10px 12px; background:var(--tint-neutral); }
+.estimate-group__head span { color:var(--ink-2); font-size:13px; }
 
 /* ---------- tenders ---------- */
 .tender-meta { display:grid; grid-template-columns:220px minmax(280px, 1fr) 260px; gap:16px; }

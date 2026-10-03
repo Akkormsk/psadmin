@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .models import CalculatorSettings, Estimate, EstimateLine, PriceItem
+from .models import CalculatorSettings, Estimate, EstimateGroup, EstimateLine, PriceItem
 from .services import calculate_sheet_estimate
 
 
@@ -101,8 +101,18 @@ def home(request, pk=None):
         initial_lines = [{"category": line.category, "item_id": line.price_item_id, "name": line.name_snapshot, "unit_price": str(line.unit_price_snapshot), "quantity": str(line.quantity), "custom": line.is_custom} for line in estimate.lines.select_related("price_item")]
     items = [{"id": item.pk, "category": item.category, "name": item.name, "unit_name": item.unit_name, "unit_price": str(item.effective_unit_price)} for item in PriceItem.objects.filter(is_active=True).select_related("base_item")]
     estimates = Estimate.objects.filter(owner=request.user) if not request.user.is_superuser else Estimate.objects.all()
-    estimates = estimates.filter(calculator_type=calculator_type).select_related("owner", "owner__profile").defer("owner__profile__avatar_data")
-    return render(request, "calculator/sheet.html", {"settings": settings, "calculator_type": calculator_type, "items_json": json.dumps(items, ensure_ascii=False), "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "estimate": estimate, "estimates": estimates[:20]})
+    estimates = list(estimates.filter(calculator_type=calculator_type).select_related("owner", "owner__profile", "group").defer("owner__profile__avatar_data"))
+    grouped = {}
+    ungrouped = []
+    for saved in estimates:
+        (grouped.setdefault(saved.group, []) if saved.group else ungrouped).append(saved)
+    estimate_sections = []
+    for group, grouped_estimates in grouped.items():
+        total = sum((Decimal(str(item.summary_snapshot.get("standard", 0))) for item in grouped_estimates), Decimal("0"))
+        estimate_sections.append({"group": group, "estimates": grouped_estimates, "total": total})
+    if ungrouped:
+        estimate_sections.append({"group": None, "estimates": ungrouped, "total": None})
+    return render(request, "calculator/sheet.html", {"settings": settings, "calculator_type": calculator_type, "items_json": json.dumps(items, ensure_ascii=False), "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "estimate": estimate, "estimate_sections": estimate_sections})
 
 
 @login_required
@@ -165,3 +175,35 @@ def delete_estimate(request, pk):
     estimate.delete()
     messages.success(request, "Сохранённый расчёт удалён.")
     return redirect("calculator_home")
+
+
+@login_required
+@require_POST
+def bulk_estimates(request):
+    ids = [int(value) for value in request.POST.getlist("estimate_ids") if value.isdigit()]
+    estimates = Estimate.objects.filter(pk__in=ids)
+    if not request.user.is_superuser:
+        estimates = estimates.filter(owner=request.user)
+    estimates = list(estimates)
+    action = request.POST.get("action")
+    if not estimates:
+        messages.error(request, "Выберите хотя бы один расчёт.")
+    elif action == "group":
+        name = request.POST.get("name", "").strip()[:200]
+        if not name:
+            messages.error(request, "Укажите название группы.")
+        elif len({estimate.calculator_type for estimate in estimates}) != 1:
+            messages.error(request, "В одну группу можно собрать расчёты одного калькулятора.")
+        else:
+            group, _ = EstimateGroup.objects.get_or_create(owner=request.user, calculator_type=estimates[0].calculator_type, name=name)
+            Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).update(group=group)
+            messages.success(request, f"Расчёты собраны в группу «{group.name}».")
+    elif action == "ungroup":
+        Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).update(group=None)
+        messages.success(request, "Расчёты убраны из группы.")
+    elif action == "delete":
+        Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).delete()
+        messages.success(request, "Выбранные расчёты удалены.")
+    else:
+        messages.error(request, "Неизвестное массовое действие.")
+    return redirect(f"{reverse('calculator_home')}?calculator={request.POST.get('calculator_type', Estimate.TYPE_SHEET)}")
