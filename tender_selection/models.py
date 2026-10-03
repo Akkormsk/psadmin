@@ -114,6 +114,7 @@ class Tender(models.Model):
     first_seen_at = models.DateTimeField("Впервые найден", null=True, blank=True)
     last_pulled_at = models.DateTimeField("Последняя выгрузка", null=True, blank=True)
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
+    archived_from_stage = models.CharField("Этап при архивировании", max_length=16, blank=True, db_index=True)
     created_at = models.DateTimeField("Создан", auto_now_add=True)
 
     outcome_status = models.CharField("Стадия сделки", max_length=16, choices=OUTCOME_STATUS_CHOICES, default=OUTCOME_DRAFT)
@@ -207,6 +208,7 @@ class ContractStat(models.Model):
         "Из своей воронки", default=False, db_index=True,
         help_text="Пришло из наших Входящих/Архива, а не из общего скана рынка по категориям.",
     )
+    forecast_included = models.BooleanField("Учитывать в прогнозе", default=True, db_index=True)
     contract_date = models.DateField("Дата контракта", null=True, blank=True, db_index=True)
     nmck_checked = models.BooleanField("Начальная цена добрана", default=False, db_index=True)
     collected_at = models.DateTimeField("Собрано", auto_now=True)

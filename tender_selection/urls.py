@@ -22,6 +22,7 @@ urlpatterns = [
     path("<int:pk>/push/", views.push_estimate, name="push"),
     path("<int:pk>/dismiss/", views.dismiss, name="dismiss"),
     path("<int:pk>/restore/", views.restore, name="restore"),
+    path("<int:pk>/forecast/", views.toggle_forecast, name="toggle_forecast"),
     path("archive/", views.archive, name="archive"),
     path("estimate/<int:pk>/outcome/", views.enter_outcome, name="enter_outcome"),
     path("estimate/<int:pk>/bid/", views.save_bid, name="save_bid"),

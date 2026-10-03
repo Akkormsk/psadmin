@@ -1608,7 +1608,7 @@ def home(request, pk=None, pipeline=False, minimal=False):
     saved_estimates, kind_filter, worklist_filter = _saved_estimates_for(request) if shell != "pipeline" else ([], "tender", "active")
 
     risk_summary = _risk_summary_for(source_tender) if shell == "worklist" else None
-    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
+    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "return_to_archive": request.GET.get("from") == "archive", "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
 
 
 @login_required
@@ -1692,10 +1692,12 @@ def update_estimate_status(request, pk, pipeline=True):
     # (участвовать не будем), уходит в архив сразу же, как и настоящий факт
     # торгов (см. apply_tender_outcome) — не нужно отдельно жать «Скрыть».
     if status == Tender.OUTCOME_NOT_PARTICIPATED:
-        tender.status = Tender.DISMISSED
-        tender.archived_at = timezone.now()
-        update_fields += ["status", "archived_at"]
-    tender.save(update_fields=update_fields)
+        from tender_selection.services import archive_tender
+
+        tender.save(update_fields=update_fields)
+        archive_tender(tender)
+    else:
+        tender.save(update_fields=update_fields)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({
             "status": status,

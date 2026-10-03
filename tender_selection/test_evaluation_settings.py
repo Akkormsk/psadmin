@@ -155,6 +155,20 @@ class ConfiguredBehaviourTests(TestCase):
 
         self.assertEqual(stats["count"], 1)
 
+    def test_excluded_funnel_row_does_not_count_toward_forecast(self):
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="1", subject="Футболки хлопковые", discount_pct=Decimal("20"),
+            own_funnel=True, forecast_included=False,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 1
+        filters.save()
+
+        self.assertIsNone(price_stats_for(Tender(purchase_number="2", title="Поставка футболки хлопковые")))
+
     def test_insufficient_history_reports_why_via_diag_instead_of_vanishing(self):
         """Когда своей истории мало — карточка должна показать «пока нет данных»,
         а не молча спрятать блок целиком (иначе выглядит как баг)."""

@@ -205,6 +205,14 @@ class RetryPendingProtocolsTests(TestCase):
 
         self.assertEqual(self._checked_numbers(), {"legacy-archive"})
 
+    def test_archived_calculation_is_checked_even_if_it_was_not_a_draft(self):
+        Tender.objects.create(
+            purchase_number="archived-calculation", status=Tender.DISMISSED,
+            outcome_status=Tender.OUTCOME_NOT_PARTICIPATED,
+        )
+
+        self.assertEqual(self._checked_numbers(), {"archived-calculation"})
+
 
 class ProtocolCardTests(TestCase):
     def setUp(self):

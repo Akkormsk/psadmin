@@ -284,7 +284,10 @@ def price_stats_for(tender, card=None, *, diag: dict | None = None) -> dict | No
 
     settings = FilterSettings.load()
     cats = tender_categories(tender, card)
-    pool = ContractStat.objects.filter(law="fz44", own_funnel=True, shared_purchase=False, discount_pct__isnull=False)
+    pool = ContractStat.objects.filter(
+        law="fz44", own_funnel=True, forecast_included=True,
+        shared_purchase=False, discount_pct__isnull=False,
+    )
     if cats:
         # У старых карточек воронки категория ещё не сохранялась. Их можно
         # безопасно сопоставить по названию ниже, но нельзя отсеивать заранее.

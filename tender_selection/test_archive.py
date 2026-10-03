@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from tenders.models import TenderEstimate
 
-from .models import Organization, Tender
+from .models import ContractStat, Organization, Tender
 
 
 class ArchiveTests(TestCase):
@@ -85,6 +85,28 @@ class ArchiveTests(TestCase):
 
         self.assertEqual(tender.status, Tender.NEW)
 
+    def test_dismissal_records_the_stage_where_the_tender_was_hidden(self):
+        tender = Tender.objects.create(purchase_number="dismissed", title="Кружки")
+
+        self.client.post(f"/tender-selection/{tender.pk}/dismiss/")
+        tender.refresh_from_db()
+
+        self.assertEqual(tender.status, Tender.DISMISSED)
+        self.assertEqual(tender.archived_from_stage, "incoming")
+
+    def test_archived_result_can_be_excluded_from_forecast(self):
+        tender = self._archived("stat", "Кружки", source=Tender.MANUAL)
+        stat = ContractStat.objects.create(
+            law="fz44", purchase_number=tender.purchase_number, contract_reg_num="stat-contract",
+            own_funnel=True,
+        )
+
+        response = self.client.post(f"/tender-selection/{tender.pk}/forecast/")
+        stat.refresh_from_db()
+
+        self.assertRedirects(response, f"/tender-selection/{tender.pk}/?from=archive")
+        self.assertFalse(stat.forecast_included)
+
     def test_archived_tender_with_outcome_shows_result_instead_of_active_stage(self):
         tender = self._archived(
             "result", "Кружки", source=Tender.MANUAL,
@@ -97,3 +119,23 @@ class ArchiveTests(TestCase):
         self.assertTrue(response.context["is_archived"])
         self.assertTrue(response.context["show_outcome"])
         self.assertContains(response, "900.00")
+
+    def test_archive_keeps_origin_and_full_history_without_calculation(self):
+        tender = self._archived("history", "Кружки", source=Tender.MANUAL)
+
+        response = self.client.get(f"/tender-selection/{tender.pk}/?from=archive")
+
+        self.assertEqual(response.context["archive_stage_label"], "Входящие")
+        self.assertContains(response, "Расчёт не создавался")
+        self.assertContains(response, "Данные результата ещё не найдены")
+        self.assertContains(response, 'href="/tender-selection/archive/"')
+
+    def test_archived_origin_does_not_change_when_result_arrives(self):
+        tender = self._archived("origin", "Кружки", source=Tender.MANUAL)
+        tender.archived_from_stage = "incoming"
+        tender.outcome_status = Tender.OUTCOME_LOST
+        tender.save(update_fields=["archived_from_stage", "outcome_status"])
+
+        response = self.client.get(f"/tender-selection/{tender.pk}/?from=archive")
+
+        self.assertEqual(response.context["archive_stage_label"], "Входящие")

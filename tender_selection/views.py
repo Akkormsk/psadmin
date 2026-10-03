@@ -9,6 +9,7 @@ from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
@@ -16,13 +17,13 @@ from django.views.decorators.http import require_POST
 
 from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
 from .filtering import match_title, parse_terms
-from .models import DocumentPreview, FilterSettings, Organization, PullRun, Tender
+from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
     CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, apply_tender_outcome, check_protocol, effective_laws,
     effective_okpd2, enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
-    risk_assessment_for, run_pull, set_our_bid, start_risk_assessment_in_background,
+    archive_tender, archive_stage_for, risk_assessment_for, run_pull, set_our_bid, start_risk_assessment_in_background,
 )
 from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
@@ -434,7 +435,7 @@ def tender_detail(request, pk):
     # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
     # начиная с «Проверки» (review != unreviewed).
     stats_diag = {}
-    stats = price_stats_for(tender, card, diag=stats_diag) if card and tender.review != Tender.UNREVIEWED else None
+    stats = price_stats_for(tender, card, diag=stats_diag) if (is_archived or tender.review != Tender.UNREVIEWED) else None
     if stats:
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
@@ -482,6 +483,8 @@ def tender_detail(request, pk):
         "active_stage": active_stage,
         "is_archived": is_archived,
         "archive_stage_label": {key: label for key, label, _ in ARCHIVE_STAGES}.get(_archive_stage(tender, estimate), ""),
+        "back_to_archive": is_archived or request.GET.get("from") == "archive",
+        "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
         "protocol": _protocol_view(tender),
         "show_outcome": bool(
@@ -992,10 +995,8 @@ def save_bid(request, pk):
 def dismiss(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     _clear_tender_document_previews(tender)
-    tender.status = Tender.DISMISSED
-    tender.archived_at = timezone.now()
-    tender.save(update_fields=["status", "archived_at"])
-    return redirect("tender_selection:list")
+    archive_tender(tender)
+    return redirect("tender_selection:archive")
 
 
 @superuser_required
@@ -1007,10 +1008,8 @@ def dismiss_estimate(request, pk):
     estimate = get_object_or_404(TenderEstimate, pk=pk)
     tender = get_object_or_404(Tender, pk=estimate.tender_id)
     _clear_tender_document_previews(tender)
-    tender.status = Tender.DISMISSED
-    tender.archived_at = timezone.now()
-    tender.save(update_fields=["status", "archived_at"])
-    return redirect("tender_selection:list")
+    archive_tender(tender)
+    return redirect("tender_selection:archive")
 
 
 @superuser_required
@@ -1020,8 +1019,9 @@ def restore(request, pk):
     # Со стадий расчёта и дальше — обратно на доску, а не во «Входящие».
     tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
     tender.archived_at = None
-    tender.save(update_fields=["status", "archived_at"])
-    return redirect("tender_selection:list")
+    tender.archived_from_stage = ""
+    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+    return redirect(f"{reverse('tender_selection:list')}?view=kanban")
 
 
 @superuser_required
@@ -1031,6 +1031,20 @@ def restore_estimate(request, pk):
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
     return restore(request, estimate.tender_id)
+
+
+@superuser_required
+@require_POST
+def toggle_forecast(request, pk):
+    tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
+    stat = ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first()
+    if stat is None:
+        messages.warning(request, "Результат торгов ещё не попал в статистику прогноза.")
+    else:
+        stat.forecast_included = not stat.forecast_included
+        stat.save(update_fields=["forecast_included"])
+        messages.success(request, "Результат добавлен в прогноз." if stat.forecast_included else "Результат исключён из прогноза.")
+    return redirect(f"{reverse('tender_selection:detail', args=[pk])}?from=archive")
 
 
 # Причину скрытия не спрашиваем: её задаёт стадия, на которой тендер ушёл в архив.
@@ -1053,16 +1067,9 @@ ARCHIVE_SORTS = {
 
 
 def _archive_stage(tender, estimate) -> str:
-    if estimate is None:
-        return "incoming" if tender.review == Tender.UNREVIEWED else "evaluation"
-    return {
-        Tender.OUTCOME_DRAFT: "calculation",
-        Tender.OUTCOME_NOT_PARTICIPATED: "calculation",
-        Tender.OUTCOME_PENDING: "bidding",
-        Tender.OUTCOME_PUBLISHED: "published",
-        Tender.OUTCOME_LOST: "lost",
-        Tender.OUTCOME_WON: "won",
-    }[tender.outcome_status]
+    if tender.archived_from_stage:
+        return tender.archived_from_stage
+    return archive_stage_for(tender)
 
 
 @superuser_required

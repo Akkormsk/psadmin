@@ -7,7 +7,7 @@
 {% block content %}
 <div class="container ts-detail">
   {% if request.user.is_superuser %}
-  <a href="{% url 'tender_selection:list' %}" class="back-link">← к списку</a>
+  <a href="{% if back_to_archive %}{% url 'tender_selection:archive' %}{% else %}{% url 'tender_selection:list' %}{% endif %}" class="back-link">← {% if back_to_archive %}к архиву{% else %}к списку{% endif %}</a>
   {% elif pushed_estimate_id %}
   <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}" class="back-link">← назад к просчёту</a>
   {% endif %}
@@ -201,7 +201,7 @@
   </details>
   {% endif %}
 
-  {% if pushed_estimate_id %}
+  {% if pushed_estimate_id or is_archived %}
   <details class="panel panel--separated" {% if active_stage == "calculation" %}open{% endif %}>
     <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><small class="ts-stage-summary">{% if calc_verdict %}прибыль {{ calc_verdict.net_profit|floatformat:0|group_number }} ₽ · ROI {{ calc_verdict.roi|group_number }}%{% else %}расчёт не завершён{% endif %}</small></summary>
     {% if calc_verdict %}
@@ -218,8 +218,10 @@
       <div class="tender-verdict__stat"><small>Прибыль</small><strong>{{ calc_verdict.net_profit|floatformat:2|group_number }} ₽</strong></div>
       <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi|group_number }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
     </div>
-    {% else %}
+    {% elif pushed_estimate_id %}
     <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
+    {% else %}
+    <p class="ts-sub">Расчёт не создавался.</p>
     {% endif %}
     {% if calc_verdict.price_thresholds %}
     <table class="tender-auction-guide">
@@ -232,11 +234,11 @@
       </tbody>
     </table>
     {% endif %}
-    <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}" class="button-success">Перейти в расчёт →</a>
+    {% if pushed_estimate_id %}<a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% if back_to_archive %}?from=archive{% endif %}" class="button-success">Перейти в расчёт →</a>{% endif %}
   </details>
   {% endif %}
 
-  {% if show_outcome %}
+  {% if show_outcome or is_archived %}
   <details class="panel panel--separated" {% if active_stage == "bidding" or active_stage == "result" %}open{% endif %}>
     <summary class="panel-header"><h2 class="panel-title">{% if not is_archived and tender.outcome_status == "pending" %}Торги{% else %}Результат{% endif %}</h2><small class="ts-stage-summary">{% if not is_archived and tender.outcome_status == "pending" %}ожидаем протокол{% else %}{% if not is_archived %}{{ tender.get_outcome_status_display }}{% else %}данные из ЕИС{% endif %}{% if tender.contract_reduction_percent is not None %} · снижение {{ tender.contract_reduction_percent }}%{% endif %}{% endif %}</small></summary>
 
@@ -265,16 +267,21 @@
       </tbody>
     </table></div>
     {% if tender.contract_reduction_percent is not None %}<p class="settings-description">Фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} при нашем прогнозе {{ estimate.reduction_percent }}%{% endif %}.</p>{% endif %}
-    {% elif tender.outcome_status == "pending" %}
+    {% elif tender.outcome_status == "pending" and not is_archived %}
     <p class="settings-description">Протокол проверяется в ЕИС автоматически каждые 30 минут после окончания подачи заявок{% if tender.protocol_checked_at %} (последняя проверка {{ tender.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m H:i" }}){% endif %}. Как только он выйдет, карточка перейдёт в «Результат».</p>
     {% elif tender.outcome_checked_at %}
     <p class="settings-description">
       Данные результата обновлены {% if tender.outcome_source == "auto" %}из ЕИС{% else %}вручную{% endif %}, {{ tender.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% if not is_archived %}: статус «{{ tender.get_outcome_status_display }}»{% endif %}{% if tender.contract_price %}, цена контракта {{ tender.contract_price|floatformat:2 }} ₽{% endif %}{% if tender.contract_reduction_percent is not None %}, фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} (прогноз был {{ estimate.reduction_percent }}%){% endif %}{% endif %}.
     </p>
+    {% elif is_archived %}
+    <p class="settings-description">Данные результата ещё не найдены. Последняя проверка протокола: {% if tender.protocol_checked_at %}{{ tender.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% else %}ещё не выполнялась{% endif %}.</p>
     {% else %}
     <p class="settings-description">Итог зафиксирован ранее: статус «{{ tender.get_outcome_status_display }}». Протокол в ЕИС ещё не найден.</p>
     {% endif %}
     {% if tender.contract_reg_num %}<p class="settings-description">Контракт № {{ tender.contract_reg_num }}{% if tender.contract_exe_start and tender.contract_exe_end %} — исполнение с {{ tender.contract_exe_start|date:"d.m.Y" }} по {{ tender.contract_exe_end|date:"d.m.Y" }}{% elif tender.contract_exe_end %} — исполнение до {{ tender.contract_exe_end|date:"d.m.Y" }}{% endif %}.</p>{% endif %}
+    {% if is_archived and forecast_stat %}
+    <form method="post" action="{% url 'tender_selection:toggle_forecast' tender.pk %}">{% csrf_token %}<button type="submit" class="button-secondary">{% if forecast_stat.forecast_included %}Не учитывать в прогнозе{% else %}Вернуть в прогноз{% endif %}</button></form>
+    {% endif %}
 
     {% if estimate and not is_archived %}
     <form method="post" action="{% url 'tender_selection:save_bid' estimate.pk %}" class="ts-bid-form">

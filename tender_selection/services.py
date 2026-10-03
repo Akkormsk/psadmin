@@ -641,7 +641,9 @@ def purge_stale() -> dict:
     # След — для аудита плюс/минус-слов: без него «не наши» (скрытые) тендеры исчезают бесследно.
     with transaction.atomic():
         IncomingTrace.objects.bulk_create(traces)
-        archived_incoming = Tender.objects.filter(id__in=to_archive_ids).update(status=Tender.DISMISSED, archived_at=now)
+        archived_incoming = Tender.objects.filter(id__in=to_archive_ids).update(
+            status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
+        )
         expired_incoming, _ = Tender.objects.filter(id__in=to_delete_ids).delete()
     return {
         "expired_incoming": expired_incoming, "archived_incoming": archived_incoming,
@@ -1041,7 +1043,7 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
         # Архивный показанный тендер, который мы не отслеживали (см. purge_stale) —
         # протокол уже проверяли (retry_pending_protocols), но цены в нём не
         # нашлось (не опубликован/несостоявшиеся торги) — добираем контрактом.
-        | Q(status=Tender.DISMISSED, outcome_status=Tender.OUTCOME_DRAFT, contract_price__isnull=True,
+        | Q(status=Tender.DISMISSED, outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_NOT_PARTICIPATED), contract_price__isnull=True,
             protocol_checked_at__isnull=False, outcome_checked_at__isnull=True),
     ).order_by("created_at")[:50]
     for tender in tenders:
@@ -1058,7 +1060,7 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             continue
         if not outcome.get("found"):
             continue
-        if tender.outcome_status == Tender.OUTCOME_DRAFT:
+        if tender.outcome_status in (Tender.OUTCOME_DRAFT, Tender.OUTCOME_NOT_PARTICIPATED):
             # Мы в этом тендере не участвовали — только факты для статистики,
             # стадию сделки (draft) не трогаем, «выигран/проигран» тут неуместны.
             tender.contract_price = outcome.get("price")
@@ -1166,6 +1168,27 @@ def _record_contract_stat(tender) -> None:
     )
 
 
+def archive_stage_for(tender) -> str:
+    if not tender.estimates.exists():
+        return "incoming" if tender.review == Tender.UNREVIEWED else "evaluation"
+    return {
+        Tender.OUTCOME_DRAFT: "calculation",
+        Tender.OUTCOME_NOT_PARTICIPATED: "calculation",
+        Tender.OUTCOME_PENDING: "bidding",
+        Tender.OUTCOME_PUBLISHED: "published",
+        Tender.OUTCOME_LOST: "lost",
+        Tender.OUTCOME_WON: "won",
+    }[tender.outcome_status]
+
+
+def archive_tender(tender) -> None:
+    tender.status = Tender.DISMISSED
+    tender.archived_at = timezone.now()
+    if not tender.archived_from_stage:
+        tender.archived_from_stage = archive_stage_for(tender)
+    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+
+
 PROTOCOL_RECHECK = timedelta(minutes=30)
 # Уже завершённые (итог внесён вручную) — дозаполняем протоколом для статистики, но не чаще раза в сутки.
 PROTOCOL_BACKFILL_RECHECK = timedelta(days=1)
@@ -1261,9 +1284,9 @@ def retry_pending_protocols(*, limit: int = 6, pause: float = PROTOCOL_PAUSE_SEC
         outcome_status__in=(Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED),
     ).order_by("-last_pulled_at")
     archived_untouched = base.filter(
-        status=Tender.DISMISSED, outcome_status=Tender.OUTCOME_DRAFT,
-        protocol_checked_at__isnull=True,
+        status=Tender.DISMISSED,
     ).filter(
+        Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_BACKFILL_RECHECK),
         Q(collecting_finished_at__lt=now) | Q(collecting_finished_at__isnull=True),
     ).order_by("-archived_at")
     tenders = (list(bidding[:limit]) + list(finished[:limit]) + list(archived_untouched[:limit]))[:limit]
