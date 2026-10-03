@@ -17,25 +17,20 @@
     <form id="lab-run-form">
       {% csrf_token %}
       <div class="cascade-lab__source">
-        <label>Набор настроек<select id="lab-preset" data-customized="true"><option value="">Текущие значения</option>{% for preset in lab_presets %}<option value="{{ preset.id }}" data-settings="{{ preset.settings_json|escape }}">{{ preset.name }}</option>{% endfor %}</select></label>
-        <label>Позиция тендера<select name="line_id" id="lab-line" data-customized="true"><option value="">Новый товар</option>{% for line in lines %}<option value="{{ line.pk }}"{% if selected_line.pk == line.pk %} selected{% endif %}>{{ line.estimate.tender_number }} · {{ line.name }}</option>{% endfor %}</select></label>
-        <div class="cascade-lab__product cascade-lab__wide" id="lab-product-fields">
-          <label>Название товара<input type="text" name="line_name" placeholder="Например, флешка"></label>
-          <label>Количество<input type="number" name="line_quantity" min="0" step="1" placeholder="100"></label>
-          <section class="cascade-lab__requirements">
-            <header><div><strong>Требования ТЗ</strong><small>Каждая характеристика — отдельная строка.</small></div><button type="button" class="button-secondary" id="lab-add-requirement">+ Добавить</button></header>
-            <div id="lab-requirement-list">
-              <div class="cascade-lab__requirement-row"><input name="requirement_label" placeholder="Параметр, например Ёмкость"><input name="requirement_value" placeholder="Требование, например не менее 32 ГБ"><button type="button" data-remove-requirement aria-label="Удалить">×</button></div>
-            </div>
-          </section>
-        </div>
-        <details class="cascade-lab__advanced cascade-lab__wide"><summary>Расширенный тест для разработчика</summary>
-          <div>
-            <label>Готовая позиция, JSON<textarea name="line_json" rows="4" placeholder="Заменяет поля товара выше"></textarea></label>
-            <label>Собственные карточки, JSON-массив <small>Поиск на шагах 3–4 будет пропущен.</small><textarea name="cards_json" rows="4"></textarea></label>
-            <label>Автоматические ожидания, JSON<textarea name="expectations_json" rows="4"></textarea></label>
+        {% if lab_line %}
+        <section class="cascade-lab__position">
+          <textarea name="line_json" hidden>{{ lab_line_json }}</textarea>
+          <header><div><span class="cascade-lab__eyebrow">Текущая позиция</span><h2>{{ lab_line.name }}</h2></div><div class="cascade-lab__position-meta"><span>Передано из Расчёта</span>{% if lab_line.quantity %}<strong>{{ lab_line.quantity }} шт.</strong>{% endif %}</div></header>
+          <div class="cascade-lab__position-title"><strong>Рабочее ТЗ</strong><small>Исходные требования и подтверждённые уточнения собраны в одном списке.</small></div>
+          <div class="cascade-lab__requirement-list">
+            {% for row in lab_requirements %}<div class="cascade-lab__requirement"><div><span>{{ row.label }}</span><strong>{{ row.value }}</strong></div><small>{{ row.source|default:"Из ТЗ" }}</small></div>
+            {% empty %}<p class="cascade-lab__empty-requirements">У позиции нет требований. Каскад начнёт поиск по названию.</p>{% endfor %}
           </div>
-        </details>
+        </section>
+        {% else %}
+        <section class="cascade-lab__empty-position"><strong>Нет позиции для проверки</strong><span>Откройте лабораторию кнопкой «Настроить каскад» у нужного товара в Расчёте.</span></section>
+        {% endif %}
+        <label class="cascade-lab__preset">Набор настроек<select id="lab-preset" data-customized="true"><option value="">Текущие значения</option>{% for preset in lab_presets %}<option value="{{ preset.id }}" data-settings="{{ preset.settings_json|escape }}">{{ preset.name }}</option>{% endfor %}</select></label>
       </div>
       <details class="cascade-lab__settings" open><summary>Настройки восьми шагов</summary>
         <div class="cascade-lab__limits">
@@ -65,7 +60,7 @@
           </article>
         </div>
       </details>
-      <div class="cascade-lab__actions"><button type="submit" class="button-success" id="lab-run">Запустить до выбранного шага</button><button type="button" class="button-secondary" id="lab-save-preset">Сохранить набор</button><button type="button" class="button-secondary" id="lab-activate">Применить настройки к подбору товаров</button><span id="lab-message" role="status"></span></div><p class="cascade-lab__active-config">Активные настройки подбора: <strong id="lab-active-config">{% if active_config %}{{ active_config.name }} · {{ active_config.created_at|date:"d.m.Y H:i" }}{% else %}по умолчанию{% endif %}</strong></p>
+      <div class="cascade-lab__actions"><button type="submit" class="button-success" id="lab-run"{% if not lab_line %} disabled{% endif %}>Запустить до выбранного шага</button><button type="button" class="button-secondary" id="lab-save-preset">Сохранить набор</button><button type="button" class="button-secondary" id="lab-activate">Применить настройки к подбору товаров</button><span id="lab-message" role="status"></span></div><p class="cascade-lab__active-config">Активные настройки подбора: <strong id="lab-active-config">{% if active_config %}{{ active_config.name }} · {{ active_config.created_at|date:"d.m.Y H:i" }}{% else %}по умолчанию{% endif %}</strong></p>
     </form>
   </section>
 
@@ -73,7 +68,7 @@
     <div class="cascade-graph" aria-label="Граф каскада">
       {% for step in steps %}<button type="button" class="cascade-node" data-step="{{ step.step }}" data-method="{{ step.method }}">
         <span class="cascade-node__number">{{ step.step }}</span><strong>{{ step.title }}</strong><small>{{ step.input }} → {{ step.output }}</small><span class="cascade-node__metrics">Не запускался</span>
-      </button>{% if not forloop.last %}<span class="cascade-edge" aria-hidden="true">→</span>{% endif %}{% endfor %}
+      </button>{% if step.step == 5 %}<span class="cascade-edge" aria-hidden="true">→</span><button type="button" class="cascade-triage-node" data-step="triage"><span>5→6</span><strong>Большой Jev</strong><small>Триаж карточек</small><em class="cascade-node__metrics">Не запускался</em></button><span class="cascade-edge" aria-hidden="true">→</span>{% elif not forloop.last %}<span class="cascade-edge" aria-hidden="true">→</span>{% endif %}{% endfor %}
     </div>
 
     <div class="cascade-lab__inspector panel">

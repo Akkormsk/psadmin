@@ -115,18 +115,45 @@ def cascade_lab(request):
     from .cascade_lab import STEP_DEFINITIONS
     from .gateway_budget import model_catalog
 
+    from .services import _effective_requirement_rows
+
     selected_line = None
+    lab_line = None
+    try:
+        session_id = int(request.GET.get("session_id") or 0)
+    except (TypeError, ValueError):
+        session_id = 0
+    if session_id:
+        session = ProductionTrainingSession.objects.filter(
+            pk=session_id, created_by=request.user,
+        ).first()
+        if session:
+            hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+            route_line = hypothesis.get("route_line")
+            if isinstance(route_line, dict) and str(route_line.get("name") or "").strip():
+                lab_line = route_line
+            else:
+                lab_line = {
+                    "name": session.position_name,
+                    "quantity": "",
+                    "requirements": session.requirements if isinstance(session.requirements, dict) else {},
+                }
     try:
         selected_line_id = int(request.GET.get("line_id") or 0)
     except (TypeError, ValueError):
         selected_line_id = 0
     if selected_line_id:
         selected_line = TenderLine.objects.select_related("estimate").filter(pk=selected_line_id).first()
+        if selected_line and not lab_line:
+            lab_line = _line_payload(selected_line)
+    requirements = lab_line.get("requirements", {}) if lab_line else {}
     active_config = CascadeConfigVersion.objects.filter(is_active=True).first()
     return render(request, "tenders/cascade_lab.html", {
         "steps": STEP_DEFINITIONS,
-        "lines": TenderLine.objects.select_related("estimate").order_by("-estimate__updated_at", "sort_order")[:250],
         "selected_line": selected_line,
+        "lab_line": lab_line,
+        "lab_line_json": json.dumps(lab_line, ensure_ascii=False) if lab_line else "",
+        "lab_requirements": _effective_requirement_rows(requirements),
         "lab_presets": [
             {"id": preset.pk, "name": preset.name, "settings_json": json.dumps(text_search_settings(preset.settings), ensure_ascii=False)}
             for preset in CascadeLabPreset.objects.filter(created_by=request.user)[:100]

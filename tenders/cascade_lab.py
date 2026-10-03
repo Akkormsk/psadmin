@@ -204,6 +204,30 @@ def execute_cascade_steps(*, line, settings, from_step=1, stop_after=8, snapshot
             pause_reason = f"Достигнут лимит {time_limit:g} секунд"
             break
         step = definition["step"]
+        triage_result = None
+        if step == 6:
+            triage_input = _decode_output(previous)
+            triage_before_usage = _json_value(cascade.usage_by_model)
+            triage_started = time.perf_counter()
+            triage_output = cascade._jev_triage(triage_input)
+            triage_seconds = time.perf_counter() - triage_started
+            triage_usage = _usage_delta(triage_before_usage, cascade.usage_by_model)
+            triage_cost = _cost(triage_usage)
+            total_seconds += triage_seconds
+            total_cost = round(total_cost + triage_cost, 4)
+            triage_settings = cascade.step_settings.get("triage", {})
+            triage_diagnostics = cascade.diagnostics.get("jev_triage", {})
+            triage_result = {
+                "status": "completed" if triage_settings.get("engine") == "jev" else "skipped",
+                "input_count": _count_payload(triage_input),
+                "output_count": sum(1 for card in triage_output if not card.get("_removed")),
+                "checked": triage_diagnostics.get("checked", 0),
+                "dropped": triage_diagnostics.get("dropped", 0),
+                "seconds": round(triage_seconds, 4),
+                "cost_rub": triage_cost,
+                "usage_by_model": triage_usage,
+            }
+            previous = _encode_output(triage_output)
         input_data = line.get("requirements", {}) if step == 1 else {"name": line.get("name", "")} if step == 2 else _encode_output(previous)
         before_usage = _json_value(cascade.usage_by_model)
         before_error = cascade.error
@@ -233,6 +257,8 @@ def execute_cascade_steps(*, line, settings, from_step=1, stop_after=8, snapshot
             "metrics": {"seconds": round(seconds, 4), "cost_rub": cost, "usage_by_model": usage,
                         "input_count": _count_payload(input_data), "output_count": _count_payload(encoded)},
         }
+        if triage_result is not None:
+            snapshot["triage"] = triage_result
         snapshots.append(snapshot)
         previous = encoded
         if step_error and "лимит" in step_error.lower() and step < stop_after:

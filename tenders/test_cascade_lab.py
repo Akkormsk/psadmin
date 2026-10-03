@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from .cascade import Cascade
 from .cascade_lab import _decode_output, _encode_output, execute_cascade_steps
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogProduct, CatalogSupplier, TenderEstimate, TenderLine
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogProduct, CatalogSupplier, ProductionTrainingSession, TenderEstimate, TenderLine
 
 
 class CascadeLabViewTests(TestCase):
@@ -37,6 +37,46 @@ class CascadeLabViewTests(TestCase):
         self.assertIn("render(data);", script)
         self.assertNotContains(response, "Последние прогоны")
         self.assertNotContains(response, "Сохранить как тест")
+
+    def test_lab_uses_the_exact_assistant_session_instead_of_a_product_picker(self):
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.admin,
+            position_name="Ежедневник А5",
+            requirements={},
+            current_hypothesis={
+                "route_line": {
+                    "name": "Ежедневник А5",
+                    "quantity": "100",
+                    "requirements": {
+                        "requirements": [{"label": "Формат", "value": "А5", "source": "из ТЗ"}],
+                        "clarifications": [{
+                            "label": "Цвет", "value": "тёмно-синий",
+                            "source": "Из названия · подтверждено",
+                            "source_type": "manager_clarification",
+                        }],
+                    },
+                },
+            },
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse("cascade_lab"), {"session_id": session.pk})
+
+        self.assertContains(response, "Ежедневник А5")
+        self.assertContains(response, "тёмно-синий")
+        self.assertContains(response, "Из названия · подтверждено")
+        self.assertContains(response, 'name="line_json"')
+        self.assertNotContains(response, 'id="lab-line"')
+        self.assertNotContains(response, "Готовая позиция, JSON")
+        self.assertNotContains(response, "Собственные карточки, JSON-массив")
+
+    def test_lab_renders_jev_triage_as_a_separate_gate(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("cascade_lab"), {"line_id": self.line.pk})
+
+        self.assertContains(response, 'data-step="triage"')
+        self.assertContains(response, "5→6")
+        self.assertContains(response, "Большой Jev")
 
     def test_active_config_settings_prefill_the_lab_form(self):
         CascadeConfigVersion.objects.create(
@@ -201,6 +241,30 @@ class CascadeLabViewTests(TestCase):
         output = result["snapshots"][-1]["output"]
         self.assertNotIn("matrix", output[0])
         self.assertEqual(output[0]["match_count"], 1)
+
+    @patch("tenders.cascade.Cascade.step_6_agent_matrix")
+    @patch("tenders.cascade.Cascade._jev_triage")
+    @patch("tenders.cascade_lab.preflight")
+    def test_step_6_runs_and_reports_jev_triage_first(self, _preflight, triage, matrix):
+        cards = [{"id": "daily-1", "name": "Ежедневник"}, {"id": "alien", "name": "Календарь"}]
+        triaged = [cards[0], {**cards[1], "_removed": True, "_removed_reason": "Jev"}]
+        triage.return_value = triaged
+        matrix.return_value = triaged
+
+        result = execute_cascade_steps(
+            line={"name": "Ежедневник", "quantity": 100},
+            settings={"steps": {"triage": {"engine": "jev"}}, "max_cost_rub": 10, "max_seconds": 10},
+            from_step=6,
+            stop_after=6,
+            snapshots=[{"step": 5, "output": cards, "state": {}, "metrics": {}}],
+        )
+
+        triage.assert_called_once()
+        matrix.assert_called_once_with(triaged)
+        triage_result = result["snapshots"][-1]["triage"]
+        self.assertEqual(triage_result["status"], "completed")
+        self.assertEqual(triage_result["input_count"], 2)
+        self.assertEqual(triage_result["output_count"], 1)
 
     @patch("tenders.cascade_lab.preflight")
     def test_polo_sized_step_7_payload_reaches_step_8(self, _preflight):

@@ -5,6 +5,7 @@
   const form = document.getElementById("lab-run-form");
   const message = document.getElementById("lab-message");
   const nodes = [...document.querySelectorAll(".cascade-node")];
+  const triageNode = document.querySelector(".cascade-triage-node");
   const inputTerminal = document.getElementById("lab-step-input");
   const outputTerminal = document.getElementById("lab-step-output");
   const inputReadable = document.getElementById("lab-step-input-readable");
@@ -302,6 +303,8 @@
   function selectStep(step) {
     selectedStep = Math.max(1, Math.min(8, Number(step)));
     nodes.forEach(node => node.classList.toggle("is-selected", Number(node.dataset.step) === selectedStep));
+    triageNode?.classList.remove("is-selected");
+    document.querySelectorAll("[data-settings-step]").forEach(panel => panel.classList.toggle("is-selected", panel.dataset.settingsStep === String(selectedStep)));
     const item = snapshot(selectedStep);
     const node = nodes[selectedStep - 1];
     document.getElementById("lab-step-title").textContent = `${selectedStep}. ${node.querySelector("strong").textContent}`;
@@ -335,6 +338,30 @@
     rerunButton.hidden = !activeRun || selectedStep > activeRun.current_step;
   }
 
+  function selectTriage() {
+    nodes.forEach(node => node.classList.remove("is-selected"));
+    triageNode?.classList.add("is-selected");
+    document.querySelectorAll("[data-settings-step]").forEach(panel => panel.classList.toggle("is-selected", panel.dataset.settingsStep === "triage"));
+    const item = snapshot(6)?.triage;
+    document.getElementById("lab-step-title").textContent = "5→6. Большой Jev";
+    document.getElementById("lab-step-method").textContent = "_jev_triage";
+    const input = snapshot(5)?.output;
+    inputTerminal.textContent = pretty(input);
+    renderReadable(inputReadable, input, 5, "output");
+    outputTerminal.textContent = item ? pretty(item) : "Триаж ещё не выполнялся.";
+    outputReadable.replaceChildren();
+    appendSummary(outputReadable, item ? `${item.input_count} карточек → ${item.output_count} передано в шаг 6` : "Триаж ещё не выполнялся.", item?.status === "completed" ? "is-ok" : "");
+    metrics.innerHTML = item ? metric("Статус", item.status)
+      + metric("Проверено", item.checked ?? 0)
+      + metric("Отсеяно", item.dropped ?? 0)
+      + metric("Время", `${Number(item.seconds || 0).toFixed(3)} с`)
+      + metric("Стоимость", `${Number(item.cost_rub || 0).toFixed(4)} ₽`) : "";
+    previousButton.hidden = true;
+    followingButton.hidden = true;
+    runNextButton.hidden = true;
+    rerunButton.hidden = true;
+  }
+
   function render(run) {
     activeRun = run;
     document.getElementById("lab-total-time").textContent = `${Number(run.total_seconds || 0).toFixed(2)} с`;
@@ -347,16 +374,23 @@
       const values = item.metrics || {};
       node.querySelector(".cascade-node__metrics").textContent = `${values.output_count ?? 0} · ${Number(values.seconds || 0).toFixed(2)} с · ${Number(values.cost_rub || 0).toFixed(2)} ₽`;
     });
+    if (triageNode) {
+      const item = snapshot(6)?.triage;
+      triageNode.classList.remove("is-completed", "is-skipped", "is-error");
+      if (!item) triageNode.querySelector(".cascade-node__metrics").textContent = "Не запускался";
+      else {
+        triageNode.classList.add(item.status === "skipped" ? "is-skipped" : "is-completed");
+        triageNode.querySelector(".cascade-node__metrics").textContent = item.status === "skipped" ? "Выключен" : `${item.input_count} → ${item.output_count}`;
+      }
+    }
     message.textContent = run.result?.pause_reason || (run.current_step === 8 ? "Прогон завершён" : `Остановлено после шага ${run.current_step}`);
     renderChecks(run);
     selectStep(selectedStep || Math.max(1, run.current_step));
   }
 
-  function settingsFromForm(includeFixtures = false) {
+  function settingsFromForm() {
     const value = name => form.elements.namedItem(name)?.value;
     const integer = (name, fallback) => Number.parseInt(value(name) || fallback, 10);
-    let customCards = [];
-    try { customCards = JSON.parse(value("cards_json") || "[]"); } catch (_) {}
     const settings = {
       steps: {
         "1": {model: value("step_1_model"), cache: value("step_1_cache"), max_active_requirements: integer("step_1_max_requirements", 0)},
@@ -374,7 +408,6 @@
       max_cost_rub: Number(value("max_cost_rub") || 10),
       max_seconds: Number(value("max_seconds") || 10),
     };
-    if (includeFixtures) settings.custom_cards = Array.isArray(customCards) ? customCards : [];
     return settings;
   }
 
@@ -401,7 +434,7 @@
   }
 
   async function execute(fromStep, stopAfter) {
-    const settings = settingsFromForm(true);
+    const settings = settingsFromForm();
     document.getElementById("lab-run").disabled = true;
     runNextButton.disabled = true;
     try {
@@ -447,26 +480,8 @@
     }
   }
 
-  function syncProductFields() {
-    document.getElementById("lab-product-fields").hidden = Boolean(document.getElementById("lab-line").value);
-  }
-  function bindRequirementRow(row) {
-    row.querySelector("[data-remove-requirement]").onclick = () => {
-      const list = document.getElementById("lab-requirement-list");
-      if (list.children.length === 1) row.querySelectorAll("input").forEach(input => input.value = "");
-      else row.remove();
-    };
-  }
-
   nodes.forEach(node => node.onclick = () => selectStep(node.dataset.step));
-  document.querySelectorAll(".cascade-lab__requirement-row").forEach(bindRequirementRow);
-  document.getElementById("lab-add-requirement").onclick = () => {
-    const row = document.querySelector(".cascade-lab__requirement-row").cloneNode(true);
-    row.querySelectorAll("input").forEach(input => input.value = "");
-    bindRequirementRow(row);
-    document.getElementById("lab-requirement-list").append(row);
-  };
-  document.getElementById("lab-line").onchange = syncProductFields;
+  if (triageNode) triageNode.onclick = selectTriage;
   document.getElementById("lab-preset").onchange = event => {
     const option = event.target.selectedOptions[0];
     if (!option?.dataset.settings) return;
@@ -513,7 +528,6 @@
     message.textContent = response.ok ? "Настройки применены к подбору товаров." : data.error;
     if (response.ok) document.getElementById("lab-active-config").textContent = data.name;
   };
-  syncProductFields();
   selectStep(1);
   // Открыли лабораторию — форма должна показывать то, что реально сейчас в
   // поиске, а не захардкоженные дефолты полей.
