@@ -37,7 +37,7 @@
               <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
             </form>
             <div class="kb-card__head">
-              <a class="kb-card__title" href="{{ card.detail_url }}">{{ card.title }}</a>
+              <a class="kb-card__title" href="{{ card.detail_url }}" data-workspace-open data-workspace-title="Тендер № {% if card.kind == 'found' %}{{ card.purchase_number }}{% else %}{{ card.tender_number }}{% endif %}">{{ card.title }}</a>
               {% if card.status_label and card.status_key != "draft" and card.status_key != "pending" and card.status_key != "won" and card.status_key != "lost" %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
             </div>
             {% if card.kind == "found" %}

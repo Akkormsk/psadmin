@@ -5,11 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'core/index.css' %}">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261003">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
-<body class="{% if request.user.is_authenticated %}has-account-bar {% endif %}{% block body_class %}{% endblock %}">
+<body class="{% if request.user.is_authenticated %}has-account-bar {% endif %}{% if request.GET.workspace %}workspace-embedded {% endif %}{% block body_class %}{% endblock %}">
     {% block topbar %}
     {% if request.user.is_authenticated %}
     <nav class="account-bar" aria-label="Аккаунт">
@@ -33,6 +33,7 @@
     {% endif %}
 
     {% block content %}{% endblock %}
+    <div class="app-workspace-stack" id="app-workspace-stack" aria-live="polite"></div>
     {% if messages %}
     <script>
       document.querySelectorAll(".toast").forEach(function (toast, index) {
@@ -164,6 +165,164 @@
               select.classList.remove("is-open");
               select.querySelector(".custom-select__button").setAttribute("aria-expanded", "false");
             });
+          }
+        });
+      })();
+    </script>
+    <script>
+      (function () {
+        const embedded = window.parent !== window && document.body.classList.contains("workspace-embedded");
+        let workspaceApi = null;
+
+        function workspaceLink(event) {
+          const link = event.target.closest("a[data-workspace-open]");
+          if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          if (link.target || link.hasAttribute("download")) return;
+          event.preventDefault();
+          const title = link.dataset.workspaceTitle || link.textContent.trim() || "Рабочее окно";
+          if (embedded) {
+            window.parent.postMessage({type: "ps-workspace-open", url: link.href, title}, location.origin);
+          } else if (workspaceApi) {
+            workspaceApi.open(link.href, title);
+          }
+        }
+        document.addEventListener("click", workspaceLink);
+
+        if (embedded) return;
+        const root = document.getElementById("app-workspace-stack");
+        const layers = [];
+        let refreshAfterBack = false;
+        const browserHistory = window.history;
+        const historyEnabled = Boolean(
+          browserHistory
+          && typeof browserHistory.replaceState === "function"
+          && typeof browserHistory.pushState === "function"
+        );
+        if (historyEnabled) {
+          const initialState = browserHistory.state || {};
+          browserHistory.replaceState({...initialState, psWorkspaceDepth: 0}, "", location.href);
+        }
+
+        function embeddedUrl(rawUrl) {
+          const url = new URL(rawUrl, location.href);
+          url.searchParams.set("workspace", "1");
+          return url.toString();
+        }
+
+        function renderStack() {
+          root.classList.toggle("is-open", layers.length > 0);
+          document.body.classList.toggle("has-workspace-stack", layers.length > 0);
+          layers.forEach(function (layer, index) {
+            const top = index === layers.length - 1;
+            layer.element.classList.toggle("is-active", top);
+            layer.element.classList.toggle("is-covered", !top);
+            layer.element.style.setProperty("--workspace-depth", String(index));
+            layer.element.style.setProperty("--workspace-offset", `${index * 18}px`);
+            const trail = layer.element.querySelector("[data-workspace-trail]");
+            trail.innerHTML = "";
+            layers.slice(0, index + 1).forEach(function (item, trailIndex) {
+              const crumb = document.createElement(trailIndex === index ? "span" : "button");
+              if (trailIndex !== index) {
+                crumb.type = "button";
+                crumb.addEventListener("click", function () {
+                  if (historyEnabled) browserHistory.go(-(layers.length - trailIndex - 1));
+                  else removeToDepth(trailIndex + 1);
+                });
+              }
+              crumb.textContent = item.title;
+              trail.append(crumb);
+            });
+          });
+        }
+
+        function removeToDepth(depth) {
+          while (layers.length > depth) layers.pop().element.remove();
+          renderStack();
+          if (refreshAfterBack && layers.length) {
+            refreshAfterBack = false;
+            const frame = layers[layers.length - 1].frame;
+            let scrollTop = 0;
+            try { scrollTop = frame.contentWindow.scrollY; } catch (error) {}
+            frame.addEventListener("load", function restoreScroll() {
+              frame.removeEventListener("load", restoreScroll);
+              try { frame.contentWindow.scrollTo(0, scrollTop); } catch (error) {}
+            });
+            frame.contentWindow.location.reload();
+          } else if (!layers.length) {
+            refreshAfterBack = false;
+          }
+        }
+
+        function open(rawUrl, title) {
+          const element = document.createElement("section");
+          element.className = "app-workspace-layer is-loading";
+          element.setAttribute("role", "dialog");
+          element.setAttribute("aria-modal", "true");
+          element.innerHTML = `
+            <header class="app-workspace-layer__bar">
+              <button type="button" class="app-workspace-layer__back" data-workspace-back aria-label="Вернуться на один уровень">←</button>
+              <nav class="app-workspace-layer__trail" data-workspace-trail aria-label="Путь рабочего окна"></nav>
+              <a class="app-workspace-layer__external" href="${new URL(rawUrl, location.href).toString()}" target="_blank" rel="noopener" title="Открыть отдельной страницей">↗</a>
+              <button type="button" class="app-workspace-layer__close" data-workspace-close aria-label="Закрыть все рабочие окна">×</button>
+            </header>
+            <div class="app-workspace-layer__loader"><i></i><span>Открываю…</span></div>`;
+          const frame = document.createElement("iframe");
+          frame.className = "app-workspace-layer__frame";
+          frame.title = title;
+          frame.src = embeddedUrl(rawUrl);
+          element.append(frame);
+          const layer = {element, frame, title};
+          layers.push(layer);
+          root.append(element);
+          element.querySelector("[data-workspace-back]").addEventListener("click", function () { workspaceApi.closeOne(); });
+          element.querySelector("[data-workspace-close]").addEventListener("click", function () { workspaceApi.closeAll(); });
+          frame.addEventListener("load", function () {
+            element.classList.remove("is-loading");
+            try {
+              const frameTitle = frame.contentDocument.title.trim();
+              if (frameTitle && title === "Рабочее окно") layer.title = frameTitle;
+            } catch (error) {}
+            renderStack();
+          });
+          if (historyEnabled) {
+            browserHistory.pushState({...browserHistory.state, psWorkspaceDepth: layers.length}, "", location.href);
+          }
+          renderStack();
+        }
+
+        workspaceApi = {
+          open,
+          closeOne: function (refresh) {
+            if (!layers.length) return;
+            refreshAfterBack = Boolean(refresh);
+            if (historyEnabled) browserHistory.back();
+            else removeToDepth(layers.length - 1);
+          },
+          closeAll: function () {
+            if (!layers.length) return;
+            if (historyEnabled) browserHistory.go(-layers.length);
+            else removeToDepth(0);
+          },
+          depth: function () { return layers.length; },
+        };
+        window.addEventListener("message", function (event) {
+          if (event.origin !== location.origin || !layers.some(layer => layer.frame.contentWindow === event.source)) return;
+          if (event.data?.type === "ps-workspace-open" && event.data.url) {
+            workspaceApi.open(event.data.url, event.data.title || "Рабочее окно");
+          }
+          if (event.data?.type === "ps-workspace-close") {
+            workspaceApi.closeOne(Boolean(event.data.refresh));
+          }
+        });
+        if (historyEnabled) {
+          window.addEventListener("popstate", function (event) {
+            removeToDepth(Math.min(layers.length, Number(event.state?.psWorkspaceDepth || 0)));
+          });
+        }
+        document.addEventListener("keydown", function (event) {
+          if (event.key === "Escape" && layers.length) {
+            event.preventDefault();
+            workspaceApi.closeOne();
           }
         });
       })();

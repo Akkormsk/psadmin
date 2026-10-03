@@ -234,7 +234,7 @@
       </tbody>
     </table>
     {% endif %}
-    {% if pushed_estimate_id %}<a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% if back_to_archive %}?from=archive{% endif %}" class="button-success">Перейти в расчёт →</a>{% endif %}
+    {% if pushed_estimate_id %}<a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% if back_to_archive %}?from=archive{% endif %}" class="button-success" data-workspace-open data-workspace-title="Расчёт">Перейти в расчёт →</a>{% endif %}
   </details>
   {% endif %}
 

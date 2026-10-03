@@ -488,7 +488,10 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
     if(!form.checkValidity()){ form.reportValidity(); return; }
     applyReturn.disabled=true;
     applyReturn.textContent='Сохраняю…';
-    if(await save()) window.location.href='{% url "tender_selection:detail" source_tender.pk %}{% if return_to_archive %}?from=archive{% endif %}';
+    if(await save()) {
+      if(document.body.classList.contains('workspace-embedded'))window.parent.postMessage({type:'ps-workspace-close',refresh:true},location.origin);
+      else window.location.href='{% url "tender_selection:detail" source_tender.pk %}{% if return_to_archive %}?from=archive{% endif %}';
+    }
     else { applyReturn.disabled=false; applyReturn.textContent='Применить и вернуться к тендеру'; }
   };
   {% endif %}

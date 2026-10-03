@@ -51,7 +51,7 @@
       {% for row in page_obj.object_list %}
       {% with tender=row.tender estimate=row.estimate %}
       <li class="ts-row ts-row--nocheck">
-        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}?from=archive">
+        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}?from=archive" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">
           <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>
           <span class="ts-row__meta">
             <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span> <span class="ts-stage ts-stage--{{ row.stage }}">{{ row.stage_label }}</span> № {{ tender.purchase_number }}</span>

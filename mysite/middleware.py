@@ -17,3 +17,16 @@ class InternalHealthCheckMiddleware:
         except ValueError:
             pass
         return self.get_response(request)
+
+
+class WorkspaceFrameOptionsMiddleware:
+    """Allow only explicitly embedded app pages inside our same-origin workspace shell."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if request.GET.get("workspace") == "1":
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        return response
