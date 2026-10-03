@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -121,12 +122,17 @@ class CustomerOnKanbanCardTests(TestCase):
 
         self.assertContains(response, "Комитет по спорту")
 
-    def test_calculation_card_keeps_tender_title_and_nmck(self):
+    def test_calculation_card_uses_the_same_tender_details_as_a_review_card(self):
+        from .models import Organization
+
         admin = get_user_model().objects.create_superuser("admin", password="x")
         self.client.force_login(admin)
+        Organization.objects.create(inn="7700000004", name="Комитет по туризму")
         tender = Tender.objects.create(
             purchase_number="0172200001726002654", title="Поставка сувенирной продукции",
-            max_price=Decimal("317799.00"), review=Tender.INTERESTING, status=Tender.PUSHED,
+            max_price=Decimal("317799.00"), customer_inn="7700000004",
+            collecting_finished_at=timezone.now() + timedelta(days=3),
+            review=Tender.INTERESTING, status=Tender.PUSHED,
         )
         TenderEstimate.objects.create(
             owner=admin, tender=tender, tender_number=tender.purchase_number,
@@ -136,4 +142,6 @@ class CustomerOnKanbanCardTests(TestCase):
         response = self.client.get("/tender-selection/?view=kanban")
 
         self.assertContains(response, "Поставка сувенирной продукции")
+        self.assertContains(response, "Комитет по туризму")
         self.assertContains(response, "317\u00a0799\u00a0₽")
+        self.assertContains(response, "до ")

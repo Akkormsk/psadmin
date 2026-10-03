@@ -37,22 +37,15 @@
               <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>
             </form>
             <div class="kb-card__head">
-              <a class="kb-card__title" href="{{ card.detail_url }}" data-workspace-open data-workspace-title="Тендер № {% if card.kind == 'found' %}{{ card.purchase_number }}{% else %}{{ card.tender_number }}{% endif %}">{{ card.title }}</a>
+              <a class="kb-card__title" href="{{ card.detail_url }}" data-workspace-open data-workspace-title="Тендер № {{ card.purchase_number }}">{{ card.title }}</a>
               {% if card.status_label and card.status_key != "draft" and card.status_key != "pending" and card.status_key != "won" and card.status_key != "lost" %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
             </div>
-            {% if card.kind == "found" %}
-              {% if card.customer %}<div class="kb-card__customer">{{ card.customer }}</div>{% endif %}
-              <div class="kb-card__meta">
-                № {{ card.purchase_number }}
-              </div>
-              <div class="kb-card__row">
-                <strong>{{ card.max_price|rub }}</strong>
-                {% if card.deadline %}<small class="kb-card__deadline{% if card.is_soon %} is-soon{% endif %}">{% if card.is_soon %}⏰ {% endif %}до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}</small>{% endif %}
-              </div>
-            {% else %}
-              <div class="kb-card__meta">№ {{ card.tender_number }}</div>
-              {% if card.max_price is not None %}<div class="kb-card__row"><strong>{{ card.max_price|rub }}</strong></div>{% endif %}
-            {% endif %}
+            {% if card.customer %}<div class="kb-card__customer">{{ card.customer }}</div>{% endif %}
+            <div class="kb-card__meta">№ {{ card.purchase_number }}</div>
+            <div class="kb-card__row">
+              <strong>{{ card.max_price|rub }}</strong>
+              {% if card.deadline %}<small class="kb-card__deadline{% if card.is_soon %} is-soon{% endif %}">{% if card.is_soon %}⏰ {% endif %}до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}</small>{% endif %}
+            </div>
             {% if card.badges %}
             <div class="kb-card__badges">
               {% for badge in card.badges %}<span class="kb-badge kb-badge--{{ badge.state }}">{{ badge.text }}</span>{% endfor %}

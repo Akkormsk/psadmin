@@ -158,8 +158,18 @@ def _estimate_card(estimate):
         "kind": "estimate",
         "pk": estimate.pk,
         "title": (tender.title or tender.object_info) if tender else estimate.name,
+        "customer": (
+            (getattr(tender, "org", None).name if getattr(tender, "org", None) and tender.org.name else "")
+            or (f"ИНН {tender.customer_inn}" if tender and tender.customer_inn else "")
+        ),
+        "purchase_number": tender.purchase_number if tender else estimate.tender_number,
         "tender_number": tender.purchase_number if tender else estimate.tender_number,
         "max_price": tender.max_price if tender else None,
+        "deadline": tender.collecting_finished_at if tender else None,
+        "is_soon": bool(
+            tender and tender.collecting_finished_at
+            and timezone.now() <= tender.collecting_finished_at <= timezone.now() + timedelta(days=1)
+        ),
         "status": outcome_status,
         "status_label": tender.get_outcome_status_display() if tender else "",
         "status_key": outcome_status,
@@ -232,16 +242,26 @@ def kanban(request):
     live_estimates = TenderEstimate.objects.filter(
         tender__isnull=False,
     ).exclude(tender__status=Tender.DISMISSED).select_related("tender")
+    estimate_orgs = {
+        org.inn: org for org in Organization.objects.filter(
+            inn__in=live_estimates.values_list("tender__customer_inn", flat=True),
+        )
+    }
+
+    def estimate_card(estimate):
+        estimate.tender.org = estimate_orgs.get(estimate.tender.customer_inn)
+        return _estimate_card(estimate)
+
     calculation = [
-        _estimate_card(e) for e in
+        estimate_card(e) for e in
         live_estimates.filter(tender__outcome_status=Tender.OUTCOME_DRAFT).order_by(*_order("calculation", "updated_at"))
     ]
     bidding = [
-        _estimate_card(e) for e in
+        estimate_card(e) for e in
         live_estimates.filter(tender__outcome_status=Tender.OUTCOME_PENDING).order_by(*_order("bidding", "updated_at"))
     ]
     result = [
-        _estimate_card(e) for e in
+        estimate_card(e) for e in
         live_estimates.exclude(tender__outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_PENDING))
         .order_by(*_order("result", "updated_at"))
     ]
