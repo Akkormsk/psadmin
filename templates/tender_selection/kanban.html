@@ -51,6 +51,7 @@
               </div>
             {% else %}
               <div class="kb-card__meta">№ {{ card.tender_number }}</div>
+              {% if card.max_price is not None %}<div class="kb-card__row"><strong>{{ card.max_price|rub }}</strong></div>{% endif %}
             {% endif %}
             {% if card.badges %}
             <div class="kb-card__badges">

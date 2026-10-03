@@ -157,8 +157,9 @@ def _estimate_card(estimate):
     return {
         "kind": "estimate",
         "pk": estimate.pk,
-        "title": estimate.name,
-        "tender_number": estimate.tender_number,
+        "title": (tender.title or tender.object_info) if tender else estimate.name,
+        "tender_number": tender.purchase_number if tender else estimate.tender_number,
+        "max_price": tender.max_price if tender else None,
         "status": outcome_status,
         "status_label": tender.get_outcome_status_display() if tender else "",
         "status_key": outcome_status,
