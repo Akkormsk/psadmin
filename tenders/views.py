@@ -1,4 +1,5 @@
 import atexit
+import copy
 import hmac
 import json
 import logging
@@ -715,15 +716,46 @@ def production_route_status(request, session_id):
 
 @login_required
 @require_POST
+@transaction.atomic
+def reopen_production_hypothesis(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Редактировать принятый расчёт может только администратор."}, status=403)
+    try:
+        payload = json.loads(request.POST.get("payload", "{}"))
+        accepted = ProductionTrainingSession.objects.select_for_update().get(
+            pk=payload.get("session_id"), created_by=request.user, is_confirmed=True,
+        )
+    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
+        return JsonResponse({"error": "Принятый расчёт не найден."}, status=400)
+
+    if accepted.confirmed_example_id:
+        ProductionTrainingExample.objects.filter(pk=accepted.confirmed_example_id).update(is_active=False)
+    Lesson.objects.filter(session=accepted).update(is_active=False)
+    draft_hypothesis = copy.deepcopy(accepted.current_hypothesis)
+    draft_hypothesis.update({
+        "is_confirmed": False,
+        "revision_parent_session_id": accepted.pk,
+    })
+    draft = ProductionTrainingSession.objects.create(
+        created_by=request.user,
+        position_name=accepted.position_name,
+        requirements=copy.deepcopy(accepted.requirements),
+        current_hypothesis=draft_hypothesis,
+    )
+    draft_hypothesis["session_id"] = draft.pk
+    draft.current_hypothesis = draft_hypothesis
+    draft.save(update_fields=["current_hypothesis", "updated_at"])
+    return JsonResponse(draft_hypothesis)
+
+
+@login_required
+@require_POST
 def revise_production_hypothesis(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Обучать ассистента может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        scope = str(payload.get("scope", "all")).strip().lower()
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user)
-        if session.is_confirmed and scope not in {"catalog", "requirements"}:
-            raise ValueError
+        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
         question_answers = payload.get("question_answers") if isinstance(payload.get("question_answers"), dict) else None
@@ -741,6 +773,7 @@ def revise_production_hypothesis(request):
         # the admin typed in decides the scope — no LLM guesses which block a
         # comment belongs to. "catalog" keeps the route and search plan
         # untouched; anything else is a full rebuild.
+        scope = str(payload.get("scope", "all")).strip().lower()
         learn_for_similar = bool(payload.get("learn_for_similar", not scope.endswith("_current")))
         if scope.endswith("_current"):
             scope = scope.removesuffix("_current")
@@ -1113,7 +1146,7 @@ def select_catalog_product(request):
         return JsonResponse({"error": "Выбирать товары для обучения может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user)
+        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         product_id = str(payload.get("product_id", "")).strip()[:100]
         if not product_id:

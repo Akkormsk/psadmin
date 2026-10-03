@@ -204,8 +204,8 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertContains(response, "training-name-requirements")
         self.assertContains(response, "training-name-requirements__grid")
         self.assertContains(response, "session_id=${encodeURIComponent(result.session_id)}")
-        self.assertContains(response, "const catalog=step.kind==='catalog'?")
-        self.assertNotContains(response, "step.kind==='catalog'&&!result.is_confirmed")
+        self.assertContains(response, "step.kind==='catalog'&&!result.is_confirmed")
+        self.assertContains(response, "data-reopen-training")
         self.assertContains(response, "holder.querySelectorAll('[data-apply-question-answers]')")
         self.assertNotContains(response, "document.addEventListener('click',async event=>")
 
@@ -266,31 +266,33 @@ class RouteTests(RouteFixtures, TestCase):
             self.assertEqual(build.call_args.kwargs["step_id"], "purchase")
             self.assertEqual(build.call_args.kwargs["recompute"], "catalog")
 
-    def test_confirmed_route_can_still_start_and_select_catalog_product(self):
-        current = {**self.build(), "is_confirmed": True}
-        session = ProductionTrainingSession.objects.create(
-            created_by=self.user, position_name="Пакет", current_hypothesis=current, is_confirmed=True,
-        )
-        with patch("tenders.views._submit_assistant_job") as submit, patch(
-            "tenders.views.build_training_hypothesis", return_value=current,
-        ):
-            response = self.client.post(reverse("tender_revise_production_hypothesis"), {
-                "payload": json.dumps({
-                    "session_id": session.pk, "line": self.line,
-                    "scope": "catalog", "step_id": "purchase",
-                }),
-            })
-        self.assertEqual(response.status_code, 202)
-        submit.assert_called_once()
+    def test_confirmed_calculation_returns_to_a_new_draft_and_retires_knowledge(self):
+        confirmed = self.confirm(self.build(feedback="Пакет закупаем"))
+        old_hypothesis = copy.deepcopy(confirmed.current_hypothesis)
 
-        selected = {**current, "catalog_selection": {"id": "x", "name": "Пакет", "price": "10"}}
-        with patch("tenders.views.apply_catalog_candidate", return_value=selected):
-            response = self.client.post(reverse("tender_select_catalog_product"), {
-                "payload": json.dumps({
-                    "session_id": session.pk, "line": self.line, "product_id": "x",
-                }),
-            })
-        self.assertEqual(response.status_code, 200)
+        response = self.client.post(reverse("tender_reopen_production_hypothesis"), {
+            "payload": json.dumps({"session_id": confirmed.pk}),
+        })
+
+        self.assertEqual(response.status_code, 200, response.content)
+        draft = ProductionTrainingSession.objects.get(pk=response.json()["session_id"])
+        confirmed.refresh_from_db()
+        confirmed.confirmed_example.refresh_from_db()
+        self.assertTrue(confirmed.is_confirmed)
+        self.assertFalse(confirmed.confirmed_example.is_active)
+        self.assertFalse(Lesson.objects.get(session=confirmed).is_active)
+        self.assertFalse(draft.is_confirmed)
+        self.assertFalse(draft.current_hypothesis["is_confirmed"])
+        self.assertEqual(draft.current_hypothesis["route"], old_hypothesis["route"])
+        self.assertEqual(draft.current_hypothesis["revision_parent_session_id"], confirmed.pk)
+
+        response = self.client.post(reverse("tender_confirm_production_type"), {
+            "payload": json.dumps({"session_id": draft.pk, "line": self.line}),
+        })
+        self.assertEqual(response.status_code, 200, response.content)
+        confirmed.confirmed_example.refresh_from_db()
+        draft.refresh_from_db()
+        self.assertEqual(confirmed.confirmed_example.superseded_by_id, draft.confirmed_example_id)
 
     def test_requirements_toggle_before_search_does_not_run_any_job(self):
         current = self.build()

@@ -20,6 +20,7 @@ urlpatterns = [
     path("import/requirements/", views.technical_requirements_preview, name="tender_requirements_preview"),
     path("production/route/", views.production_route_preview, name="tender_production_route_preview"),
     path("production/route/<int:session_id>/", views.production_route_status, name="tender_production_route_status"),
+    path("production/reopen/", views.reopen_production_hypothesis, name="tender_reopen_production_hypothesis"),
     path("production/revise/", views.revise_production_hypothesis, name="tender_revise_production_hypothesis"),
     path("production/confirm-stage/", views.confirm_proposed_stage, name="tender_confirm_proposed_stage"),
     path("production/catalog/select/", views.select_catalog_product, name="tender_select_catalog_product"),

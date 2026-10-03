@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from django.db import transaction
 
-from .models import Lesson, ProcessDefinition, ProductionTrainingExample, ProductionType
+from .models import Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionType
 from .services import TenderAIError, _cell_text, _effective_requirement_rows, _lesson_stems, _short_text_list
 
 
@@ -481,6 +481,15 @@ def confirm_route(hypothesis, session, user):
         production_type=production_type, position_name=line["name"][:500], requirements=requirements,
         routes=[route], features=hypothesis.get("assumptions", []), is_active=learn_route, created_by=user,
     )
+    parent_session_id = hypothesis.get("revision_parent_session_id")
+    if parent_session_id:
+        parent = ProductionTrainingSession.objects.filter(
+            pk=parent_session_id, created_by=user,
+        ).select_related("confirmed_example").first()
+        if parent and parent.confirmed_example_id:
+            ProductionTrainingExample.objects.filter(pk=parent.confirmed_example_id).update(
+                is_active=False, superseded_by=example,
+            )
     # Only replace the same order context; alternatives for other specifications remain active.
     if learn_route:
         previous = ProductionTrainingExample.objects.filter(position_name=example.position_name, requirements=requirements, is_active=True).exclude(pk=example.pk)
