@@ -92,6 +92,14 @@ class IncompleteRoiBadgeTests(TestCase):
 
 
 class CustomerOnKanbanCardTests(TestCase):
+    def test_card_title_is_limited_to_three_visual_lines(self):
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+
+        response = self.client.get("/tender-selection/?view=kanban")
+
+        self.assertContains(response, "-webkit-line-clamp: 3")
+
     def test_found_card_shows_organization_name_when_known(self):
         from .models import Organization
         from .views import _found_tender_card

@@ -79,7 +79,7 @@
   .kb-card__dismiss { position: absolute; top: 6px; right: 6px; }
   .kb-card:hover .hover-action, .kb-card:focus-within .hover-action { opacity: 1; pointer-events: auto; }
   .kb-card__head { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
-  .kb-card__title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+  .kb-card__title { flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
   .kb-card__title:hover { color: var(--ink); opacity: .8; }
   .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
   .kb-card__customer { color: var(--ink-2); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
