@@ -720,7 +720,10 @@ def revise_production_hypothesis(request):
         return JsonResponse({"error": "Обучать ассистента может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
+        scope = str(payload.get("scope", "all")).strip().lower()
+        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user)
+        if session.is_confirmed and scope not in {"catalog", "requirements"}:
+            raise ValueError
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         feedback = str(payload.get("feedback", "")).strip()
         question_answers = payload.get("question_answers") if isinstance(payload.get("question_answers"), dict) else None
@@ -738,7 +741,6 @@ def revise_production_hypothesis(request):
         # the admin typed in decides the scope — no LLM guesses which block a
         # comment belongs to. "catalog" keeps the route and search plan
         # untouched; anything else is a full rebuild.
-        scope = str(payload.get("scope", "all")).strip().lower()
         learn_for_similar = bool(payload.get("learn_for_similar", not scope.endswith("_current")))
         if scope.endswith("_current"):
             scope = scope.removesuffix("_current")
@@ -1111,7 +1113,7 @@ def select_catalog_product(request):
         return JsonResponse({"error": "Выбирать товары для обучения может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
+        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user)
         line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         product_id = str(payload.get("product_id", "")).strip()[:100]
         if not product_id:

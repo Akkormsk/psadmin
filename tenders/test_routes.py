@@ -204,6 +204,8 @@ class RouteTests(RouteFixtures, TestCase):
         self.assertContains(response, "training-name-requirements")
         self.assertContains(response, "training-name-requirements__grid")
         self.assertContains(response, "session_id=${encodeURIComponent(result.session_id)}")
+        self.assertContains(response, "const catalog=step.kind==='catalog'?")
+        self.assertNotContains(response, "step.kind==='catalog'&&!result.is_confirmed")
         self.assertContains(response, "holder.querySelectorAll('[data-apply-question-answers]')")
         self.assertNotContains(response, "document.addEventListener('click',async event=>")
 
@@ -263,6 +265,32 @@ class RouteTests(RouteFixtures, TestCase):
             submit.call_args.args[1](session)
             self.assertEqual(build.call_args.kwargs["step_id"], "purchase")
             self.assertEqual(build.call_args.kwargs["recompute"], "catalog")
+
+    def test_confirmed_route_can_still_start_and_select_catalog_product(self):
+        current = {**self.build(), "is_confirmed": True}
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Пакет", current_hypothesis=current, is_confirmed=True,
+        )
+        with patch("tenders.views._submit_assistant_job") as submit, patch(
+            "tenders.views.build_training_hypothesis", return_value=current,
+        ):
+            response = self.client.post(reverse("tender_revise_production_hypothesis"), {
+                "payload": json.dumps({
+                    "session_id": session.pk, "line": self.line,
+                    "scope": "catalog", "step_id": "purchase",
+                }),
+            })
+        self.assertEqual(response.status_code, 202)
+        submit.assert_called_once()
+
+        selected = {**current, "catalog_selection": {"id": "x", "name": "Пакет", "price": "10"}}
+        with patch("tenders.views.apply_catalog_candidate", return_value=selected):
+            response = self.client.post(reverse("tender_select_catalog_product"), {
+                "payload": json.dumps({
+                    "session_id": session.pk, "line": self.line, "product_id": "x",
+                }),
+            })
+        self.assertEqual(response.status_code, 200)
 
     def test_requirements_toggle_before_search_does_not_run_any_job(self):
         current = self.build()
