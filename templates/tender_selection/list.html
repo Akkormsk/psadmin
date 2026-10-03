@@ -20,12 +20,13 @@
           {% if expired_count %}<span>{{ expired_count }} срок истёк</span>{% endif %}
         </p>
       </div>
-      <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form" class="ts-refresh">
-        {% csrf_token %}
-        <button type="submit">↻ Обновить</button>
-        <span class="ts-refresh__params">от {{ settings.min_price|rub }} · за {{ settings.window_days }} дн.</span>
-        <a href="{% url 'tender_selection:settings' %}" title="Настройки фильтра" aria-label="Настройки фильтра"><span class="ts-chevron"></span></a>
-      </form>
+      <div class="ts-refresh">
+        <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
+          {% csrf_token %}<button type="submit">↻ Обновить</button>
+        </form>
+        <a class="ts-refresh__settings" href="{% url 'tender_selection:settings' %}">☷ Настроить отбор</a>
+        <span class="ts-refresh__params">Сейчас: от {{ settings.min_price|rub }} · за {{ settings.window_days }} дн.</span>
+      </div>
     </div>
 
     <div class="ts-toolbar">
@@ -49,16 +50,11 @@
         <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ <small>{{ law_counts.fz44 }}</small></button>
         <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ <small>{{ law_counts.fz223 }}</small></button>
       </div>
-      <details class="ts-menu">
-        <summary>Фильтры</summary>
-        <div class="ts-menu__list">
-          {% if show_all %}
-          <a href="#" onclick="tsGo('all','');return false">Только подходящие и актуальные</a>
-          {% else %}
-          <a href="#" onclick="tsGo('all','1');return false">Показать все<small>включая скрытые словами{% if hidden_count %} ({{ hidden_count }}){% endif %} и с истёкшим сроком{% if expired_count %} ({{ expired_count }}){% endif %}</small></a>
-          {% endif %}
-        </div>
-      </details>
+      {% if show_all %}
+      <button type="button" class="ts-show-hidden" onclick="tsGo('all','')">Вернуть отбор</button>
+      {% elif hidden_count or expired_count %}
+      <button type="button" class="ts-show-hidden" onclick="tsGo('all','1')" title="Скрыты фильтрами: {{ hidden_count }} · срок истёк: {{ expired_count }}">Показать скрытые · {{ hidden_count|add:expired_count }}</button>
+      {% endif %}
     </div>
 
     <div class="ts-bulkbar" data-bulk-bar>

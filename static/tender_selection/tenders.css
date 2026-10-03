@@ -27,13 +27,14 @@
 .ts-head__stats span + span::before { content: "·"; margin: 0 6px; }
 
 .ts-refresh {
-  display: inline-flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px;
+  display: inline-flex; align-items: center; gap: 10px; padding: 6px 10px;
   border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 14px; color: var(--ink-2);
 }
-.ts-refresh button { display: inline-flex; align-items: center; gap: 8px; padding: 2px 0; border: 0; background: none; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.ts-refresh form { margin: 0; }
+.ts-refresh button { display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.ts-refresh button:hover, .ts-refresh__settings:hover { background: var(--tint-neutral); color: var(--ink); }
+.ts-refresh__settings { display: inline-flex; align-items: center; padding: 6px 8px; border-radius: 8px; color: var(--ink); font-weight: 600; text-decoration: none; white-space: nowrap; }
 .ts-refresh__params { padding-left: 10px; border-left: 1px solid var(--separator); white-space: nowrap; }
-.ts-refresh a { display: inline-flex; padding: 4px 6px; border-radius: 8px; color: var(--ink-3); text-decoration: none; }
-.ts-refresh a:hover { background: var(--tint-neutral); color: var(--ink); }
 
 /* ---------- toolbar ---------- */
 .ts-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -77,6 +78,8 @@
 .ts-menu__list a:hover, .ts-menu__list button:hover { background: var(--tint-neutral); }
 .ts-menu__list .is-danger { color: var(--negative-ink); }
 .ts-menu__list small { display: block; color: var(--ink-3); font-size: 12px; }
+.ts-show-hidden { height: 42px; box-sizing: border-box; padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--tint-neutral); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ts-show-hidden:hover { background: var(--surface); border-color: var(--ink-3); }
 
 /* ---------- bulk bar ---------- */
 .ts-bulkbar { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 4px 8px; border-bottom: 1px solid var(--separator); font-size: 14px; color: var(--ink-2); }

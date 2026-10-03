@@ -67,3 +67,12 @@ class IncomingPageTests(TestCase):
         self.assertContains(response, 'data-bulk-select')
         self.assertContains(response, 'class="ts-seg')
         self.assertNotContains(response, "Плюс/минус-слова")
+
+    def test_hidden_tenders_toggle_is_direct_and_names_what_it_shows(self):
+        self._tender("expired", "Старый", days=-2)
+
+        response = self._page()
+
+        self.assertContains(response, "Показать скрытые · 1")
+        self.assertNotContains(response, ">Фильтры<")
+        self.assertContains(response, "Настроить отбор")
