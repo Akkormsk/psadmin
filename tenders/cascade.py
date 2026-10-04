@@ -584,18 +584,27 @@ class Cascade:
 
     # -- запуск ----------------------------------------------------------- #
     def run(self) -> CascadeResult:
+        seconds = self.diagnostics.setdefault("seconds", {})
+
+        def run_step(label, method, *args):
+            started = time.perf_counter()
+            try:
+                return method(*args)
+            finally:
+                seconds[label] = round(time.perf_counter() - started, 3)
+
         self._ping("ai")
-        self.step_1_parse_tz()
-        phrases = self.step_2_search_plan()
+        run_step("1", self.step_1_parse_tz)
+        phrases = run_step("2", self.step_2_search_plan)
         self._ping("catalog")
-        pool = self.step_3_search_by_name(phrases)
-        pool = self.step_4_name_filter(pool)
-        cards = self.step_5_hard_gates_and_collapse(pool)
-        cards = self._jev_triage(cards)
+        pool = run_step("3", self.step_3_search_by_name, phrases)
+        pool = run_step("4", self.step_4_name_filter, pool)
+        cards = run_step("5", self.step_5_hard_gates_and_collapse, pool)
+        cards = run_step("6_jev", self._jev_triage, cards)
         self._ping("shortlist")
-        graded = self.step_6_agent_matrix(cards)
-        ranked = self.step_7_collapse_and_sort(graded)
-        shown = self.step_8_price_and_top(ranked)
+        graded = run_step("6", self.step_6_agent_matrix, cards)
+        ranked = run_step("7", self.step_7_collapse_and_sort, graded)
+        shown = run_step("8", self.step_8_price_and_top, ranked)
         cards = graded  # полный список (с _removed) для removed/outcome ниже
         return CascadeResult(
             item=self.item,

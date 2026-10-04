@@ -36,6 +36,10 @@ class CascadeContractTests(SimpleTestCase):
             result = cascade.run()
         self.assertEqual(calls, names)
         self.assertIs(result.candidates, outputs[7])
+        self.assertEqual(
+            set(result.diagnostics["seconds"]),
+            {"1", "2", "3", "4", "5", "6_jev", "6", "7", "8"},
+        )
 
     def test_step_1_limit_keeps_only_most_important_non_explicit_criteria(self):
         cascade = Cascade({"name": "Товар"}, step_settings={"1": {"max_active_requirements": 2}})
