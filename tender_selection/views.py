@@ -22,8 +22,9 @@ from .notification import detail_document_candidate, parse_clarifications, parse
 from .regions import REGION_NAMES, region_name
 from .services import (
     CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, apply_tender_outcome, check_protocol, effective_laws,
-    effective_okpd2, enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
+    effective_okpd2, enrich_one_org, extras_for, extras_need_refresh, fetch_tender_outcome, notification_for, push_to_estimate,
     archive_tender, archive_stage_for, risk_assessment_for, run_pull, set_our_bid, start_risk_assessment_in_background,
+    start_extras_refresh_in_background,
 )
 from .profile_triage import start_profile_triage_in_background
 from .protocols import ProtocolError, find_ours
@@ -367,7 +368,9 @@ def tender_list(request):
     query = request.GET.get("q", "").strip()
     now = timezone.now()
 
-    queryset = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
+    queryset = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).defer(
+        "raw", "clarifications_raw", "risk_assessment", "risk_assessment_docs",
+    )
     if law_filter != "all":
         queryset = queryset.filter(law=law_filter)
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
@@ -419,7 +422,14 @@ def tender_list(request):
         "settings": settings,
         "last_run": PullRun.objects.first(),
         "query": query,
-        "nav_counts": {"incoming": _incoming_count(settings), "board": _board_count(settings)},
+        "nav_counts": {
+            "incoming": sum(
+                not tender.filtered_out and (
+                    tender.collecting_finished_at is None or tender.collecting_finished_at >= now
+                ) for tender in rows
+            ),
+            "board": _board_count(settings),
+        },
     })
 
 
@@ -465,7 +475,15 @@ def tender_detail(request, pk):
     if tender.law != "fz44" and org is None and tender.customer_inn:
         org = enrich_one_org(tender.customer_inn, tender.law)  # для 223 карточки заказчика больше неоткуда взять
 
-    clar_raw, comp_raw = ([], []) if is_manual else extras_for(tender, force=request.GET.get("refresh") == "1")
+    if is_manual:
+        clar_raw, comp_raw = [], []
+    elif request.GET.get("workspace"):
+        clar_raw, comp_raw = tender.clarifications_raw or [], tender.complaints_raw or []
+        force_extras = request.GET.get("refresh") == "1"
+        if extras_need_refresh(tender, force=force_extras):
+            start_extras_refresh_in_background(tender.pk, force=force_extras)
+    else:
+        clar_raw, comp_raw = extras_for(tender, force=request.GET.get("refresh") == "1")
 
     # Прогноз снижения и оценка риска не показываются на «Входящих» — рано,
     # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
@@ -1055,6 +1073,8 @@ def dismiss(request, pk):
         TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
     _clear_tender_document_previews(tender)
     archive_tender(tender)
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"archived": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
 
 
@@ -1068,6 +1088,8 @@ def dismiss_estimate(request, pk):
     tender = get_object_or_404(Tender, pk=estimate.tender_id)
     _clear_tender_document_previews(tender)
     archive_tender(tender)
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"archived": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
 
 

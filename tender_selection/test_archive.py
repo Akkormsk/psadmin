@@ -113,6 +113,28 @@ class ArchiveTests(TestCase):
         self.assertRedirects(incoming_response, "/tender-selection/?view=list")
         self.assertRedirects(calculation_response, "/tender-selection/?view=kanban")
 
+    def test_workspace_dismiss_returns_json_without_rendering_the_list_again(self):
+        tender = Tender.objects.create(purchase_number="dismiss-ajax", title="Кружки")
+
+        response = self.client.post(
+            f"/tender-selection/{tender.pk}/dismiss/", {"reason": "not_profile"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"archived": True, "tender_id": tender.pk})
+
+    def test_workspace_estimate_dismiss_returns_json_without_rendering_the_board_again(self):
+        tender = Tender.objects.create(purchase_number="dismiss-estimate-ajax", title="Кружки", status=Tender.PUSHED)
+        estimate = TenderEstimate.objects.create(owner=self.admin, tender=tender, tender_number=tender.purchase_number, name=tender.title)
+
+        response = self.client.post(
+            f"/tender-selection/estimate/{estimate.pk}/dismiss/", HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"archived": True, "tender_id": tender.pk})
+
     def test_archived_result_can_be_excluded_from_forecast(self):
         tender = self._archived("stat", "Кружки", source=Tender.MANUAL)
         stat = ContractStat.objects.create(

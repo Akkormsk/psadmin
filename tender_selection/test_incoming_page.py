@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
+from unittest.mock import patch
 
 from tenders.models import TenderEstimate
 
@@ -67,6 +68,21 @@ class IncomingPageTests(TestCase):
         self.assertContains(response, 'data-bulk-select')
         self.assertContains(response, 'class="ts-seg')
         self.assertNotContains(response, "Плюс/минус-слова")
+
+    def test_rows_have_an_id_for_immediate_removal_after_archiving(self):
+        tender = self._tender("1", "Входящий", days=3)
+
+        response = self._page()
+
+        self.assertContains(response, f'data-tender-id="{tender.pk}"')
+
+    def test_list_reuses_its_filtered_rows_for_the_incoming_counter(self):
+        self._tender("1", "Входящий", days=3)
+
+        with patch("tender_selection.views._incoming_count", side_effect=AssertionError("second full scan")):
+            response = self._page()
+
+        self.assertEqual(response.status_code, 200)
 
     def test_hidden_tenders_toggle_is_direct_and_names_what_it_shows(self):
         self._tender("expired", "Старый", days=-2)

@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
+    {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
     <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261003">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
@@ -255,6 +256,11 @@
           }
         }
 
+        function removeTenderCard(tenderId) {
+          if (!tenderId) return;
+          document.querySelectorAll(`[data-tender-id="${tenderId}"]`).forEach(function (card) { card.remove(); });
+        }
+
         function open(rawUrl, title) {
           const element = document.createElement("section");
           element.className = "app-workspace-layer is-loading";
@@ -313,6 +319,7 @@
             workspaceApi.open(event.data.url, event.data.title || "Рабочее окно");
           }
           if (event.data?.type === "ps-workspace-close") {
+            removeTenderCard(event.data.tenderId);
             workspaceApi.closeOne(Boolean(event.data.refresh));
           }
         });
@@ -329,6 +336,7 @@
         });
       })();
     </script>
+    {% if request.GET.workspace %}<script>window.addEventListener("load", function () { document.body.classList.add("is-ready"); });</script>{% endif %}
 </body>
 </html>
 

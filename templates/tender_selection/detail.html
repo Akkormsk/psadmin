@@ -659,10 +659,13 @@
       form.addEventListener("submit", function (event) {
         if (event.defaultPrevented) return;
         event.preventDefault();
-        fetch(form.action, {method: "POST", body: new FormData(form)})
+        fetch(form.action, {method: "POST", body: new FormData(form), headers: {"X-Requested-With": "XMLHttpRequest"}})
           .then(function (response) {
             if (!response.ok) throw new Error();
-            window.parent.postMessage({type: "ps-workspace-close", refresh: true}, location.origin);
+            return response.json();
+          })
+          .then(function (data) {
+            window.parent.postMessage({type: "ps-workspace-close", tenderId: data.tender_id}, location.origin);
           })
           .catch(function () { form.submit(); });
       });

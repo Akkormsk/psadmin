@@ -672,6 +672,20 @@ _EXTRAS_TTL = timedelta(hours=6)
 _EXTRAS_ACTIVE_WINDOW = timedelta(days=45)  # после закрытия приёма новые разъяснения/жалобы ещё возможны
 
 
+def extras_need_refresh(tender, *, force: bool = False) -> bool:
+    if tender.law != "fz44":
+        return False
+
+    now = timezone.now()
+    checked = tender.extras_checked_at
+    if checked is None or force:
+        return True
+    elif now - checked <= _EXTRAS_TTL:
+        return False
+    deadline = tender.collecting_finished_at
+    return deadline is None or now - deadline <= _EXTRAS_ACTIVE_WINDOW
+
+
 def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
     """(разъяснения, жалобы) для карточки. Только 44-ФЗ.
 
@@ -682,17 +696,7 @@ def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
     if tender.law != "fz44":
         return [], []
 
-    now = timezone.now()
-    checked = tender.extras_checked_at
-    if checked is None or force:
-        stale = True
-    elif now - checked <= _EXTRAS_TTL:
-        stale = False
-    else:
-        deadline = tender.collecting_finished_at
-        stale = deadline is None or now - deadline <= _EXTRAS_ACTIVE_WINDOW
-
-    if not stale:
+    if not extras_need_refresh(tender, force=force):
         return tender.clarifications_raw or [], tender.complaints_raw or []
 
     clar = tender.clarifications_raw or []
@@ -715,6 +719,26 @@ def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
         tender.extras_checked_at = now
         tender.save(update_fields=["clarifications_raw", "complaints_raw", "extras_checked_at"])
     return clar, comp
+
+
+def start_extras_refresh_in_background(tender_id: int, *, force: bool = False) -> None:
+    """Обновляет второстепенные сведения ЕИС, не задерживая открытие карточки."""
+    import threading
+
+    from django.db import close_old_connections
+
+    def _job():
+        close_old_connections()
+        try:
+            extras_for(Tender.objects.get(pk=tender_id), force=force)
+        except Tender.DoesNotExist:
+            pass
+        except Exception:
+            logger.exception("Фоновое обновление сведений ЕИС не удалось для тендера %s", tender_id)
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=_job, daemon=True).start()
 
 
 def _classify(facts) -> dict:

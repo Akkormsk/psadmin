@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from unittest.mock import patch
 
 from tenders.models import TenderEstimate
 
@@ -43,6 +44,7 @@ class LayeredWorkspaceNavigationTests(TestCase):
             review=Tender.INTERESTING,
             status=Tender.PUSHED,
             notification_raw={"source": {}},
+            extras_checked_at=timezone.now(),
         )
         estimate = TenderEstimate.objects.create(
             owner=self.admin,
@@ -63,12 +65,29 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, 'data-workspace-title="Расчёт"')
         self.assertContains(response, "ps-workspace-open")
 
+    def test_embedded_dismiss_removes_the_card_without_reloading_the_list(self):
+        tender = Tender.objects.create(
+            purchase_number="dismiss-fast",
+            title="Быстро скрываемый тендер",
+            notification_raw={"source": {}},
+        )
+
+        with patch("tender_selection.views.start_extras_refresh_in_background") as refresh:
+            response = self.client.get(
+                f"{reverse('tender_selection:detail', args=[tender.pk])}?workspace=1"
+            )
+
+        refresh.assert_called_once_with(tender.pk, force=False)
+        self.assertContains(response, "tenderId: data.tender_id")
+        self.assertContains(response, "removeTenderCard")
+
     def test_direct_tender_link_remains_a_normal_page(self):
         tender = Tender.objects.create(
             purchase_number="44",
             title="Обычная карточка",
             review=Tender.INTERESTING,
             notification_raw={"source": {}},
+            extras_checked_at=timezone.now(),
         )
 
         response = self.client.get(reverse("tender_selection:detail", args=[tender.pk]))

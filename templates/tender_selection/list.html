@@ -69,7 +69,7 @@
 
     <ul class="ts-rows">
       {% for tender in page_obj.object_list %}
-      <li class="ts-row{% if tender.filtered_out %} is-dim{% endif %}{% if not tender.opened_at %} is-unread{% endif %}">
+      <li class="ts-row{% if tender.filtered_out %} is-dim{% endif %}{% if not tender.opened_at %} is-unread{% endif %}" data-tender-id="{{ tender.pk }}">
         <input type="checkbox" class="ts-check" data-bulk-select
                data-review-url="{% url 'tender_selection:review' tender.pk %}" data-dismiss-url="{% url 'tender_selection:dismiss' tender.pk %}"
                aria-label="Выбрать тендер {{ tender.purchase_number }}">
