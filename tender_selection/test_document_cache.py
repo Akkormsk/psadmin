@@ -1,10 +1,12 @@
+import io
+import zipfile
 from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 
-from . import services
+from . import documents, services
 from .models import DocumentPreview, Tender
 
 CONTRACT_URL = "https://zakupki.gov.ru/contract"
@@ -46,6 +48,28 @@ class DocumentHtmlTests(TestCase):
 
         self.assertEqual(html, "<p>текст</p>")
         self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).html, "<p>текст</p>")
+
+    def test_stale_zip_preview_is_reparsed(self):
+        DocumentPreview.objects.create(url=CONTRACT_URL, filename="Проект контракта.doc.zip", kind="zip", html="<p>Архив</p>")
+        with patch.object(services, "_fetch_doc_bytes", return_value=b"raw"), \
+                patch.object(services, "extract_preview", return_value={"kind": "pdf", "html": "<p>контракт</p>"}):
+            html = services.document_html(self.tender, CONTRACT_URL, "Проект контракта.doc.zip")
+
+        self.assertEqual(html, "<p>контракт</p>")
+        self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).kind, "pdf")
+
+
+class ArchivePreviewTests(TestCase):
+    def test_zip_with_doc_and_pdf_copies_uses_pdf(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("Контракт.doc", b"old doc")
+            zf.writestr("Контракт.doc.pdf", b"%PDF")
+
+        with patch.object(documents, "_pdf_html", return_value="<p>контракт</p>"):
+            result = documents.extract_preview(archive.getvalue(), "Контракт.doc.zip")
+
+        self.assertEqual(result, {"kind": "pdf", "html": "<p>контракт</p>"})
 
 
 class RiskAssessmentDocumentsTests(TestCase):

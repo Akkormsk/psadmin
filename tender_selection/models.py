@@ -127,6 +127,7 @@ class Tender(models.Model):
     protocol = models.JSONField("Итоговый протокол (ЕИС)", default=dict, blank=True)
     protocol_checked_at = models.DateTimeField("Протокол проверен", null=True, blank=True)
     contract_reg_num = models.CharField("Номер контракта", max_length=40, blank=True)
+    contract_winner_inn = models.CharField("ИНН победителя", max_length=32, blank=True)
     contract_exe_start = models.DateField("Исполнение контракта с", null=True, blank=True)
     contract_exe_end = models.DateField("Исполнение контракта по", null=True, blank=True)
     contract_checked_at = models.DateTimeField("Контракт проверен", null=True, blank=True)

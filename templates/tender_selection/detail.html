@@ -284,7 +284,9 @@
     {% else %}
     <p class="settings-description">Итог зафиксирован ранее: статус «{{ tender.get_outcome_status_display }}». Протокол в ЕИС ещё не найден.</p>
     {% endif %}
-    {% if tender.contract_reg_num %}<p class="settings-description">Контракт № {{ tender.contract_reg_num }}{% if tender.contract_exe_start and tender.contract_exe_end %} — исполнение с {{ tender.contract_exe_start|date:"d.m.Y" }} по {{ tender.contract_exe_end|date:"d.m.Y" }}{% elif tender.contract_exe_end %} — исполнение до {{ tender.contract_exe_end|date:"d.m.Y" }}{% endif %}.</p>{% endif %}
+    {% if tender.contract_reg_num %}<p class="settings-description">Контракт № {{ tender.contract_reg_num }}.</p>{% endif %}
+    {% if tender.contract_winner_inn %}<p class="settings-description">Победитель: ИНН {{ tender.contract_winner_inn }}{% if tender.outcome_status == "won" %} · мы{% endif %}.</p>{% endif %}
+    {% if tender.contract_exe_start and tender.contract_exe_end %}<p class="settings-description">Исполнение контракта: с {{ tender.contract_exe_start|date:"d.m.Y" }} по {{ tender.contract_exe_end|date:"d.m.Y" }}.</p>{% elif tender.contract_exe_end %}<p class="settings-description">Исполнение контракта: до {{ tender.contract_exe_end|date:"d.m.Y" }}.</p>{% endif %}
     {% if is_archived and forecast_stat %}
     <form method="post" action="{% url 'tender_selection:toggle_forecast' tender.pk %}">{% csrf_token %}<button type="submit" class="button-secondary">{% if forecast_stat.forecast_included %}Не учитывать в прогнозе{% else %}Вернуть в прогноз{% endif %}</button></form>
     {% endif %}

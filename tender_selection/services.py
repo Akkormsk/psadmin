@@ -395,7 +395,7 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
     Скачанный, но нечитаемый файл (архив, битый .doc) тоже в кэше — с пустым HTML,
     повторно за ним не ходим. DocumentError — документ сейчас не получить."""
     cached = DocumentPreview.objects.filter(url=url).first()
-    if cached:
+    if cached and cached.kind != "zip":
         return cached.html
     return _store_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs))
 
@@ -405,9 +405,11 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
     В потоках только сеть — база читается и пишется в вызывающем потоке."""
     from concurrent.futures import ThreadPoolExecutor
 
-    htmls = dict(
-        DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", "html")
-    )
+    htmls = {
+        url: html
+        for url, kind, html in DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", "kind", "html")
+        if kind != "zip"
+    }
     missing = [doc for doc in documents if doc["url"] not in htmls]
 
     def fetch_one(doc):
@@ -1066,11 +1068,12 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             tender.contract_price = outcome.get("price")
             tender.contract_reduction_percent = outcome.get("reduction_percent")
             tender.contract_reg_num = outcome.get("reg_num") or tender.contract_reg_num
+            tender.contract_winner_inn = (outcome.get("suppliers") or [""])[0] or tender.contract_winner_inn
             tender.contract_exe_start = outcome.get("exe_start") or tender.contract_exe_start
             tender.contract_exe_end = outcome.get("exe_end") or tender.contract_exe_end
             tender.outcome_checked_at = timezone.now()
             tender.save(update_fields=[
-                "contract_price", "contract_reduction_percent", "contract_reg_num",
+                "contract_price", "contract_reduction_percent", "contract_reg_num", "contract_winner_inn",
                 "contract_exe_start", "contract_exe_end", "outcome_checked_at",
             ])
             _record_contract_stat(tender)
@@ -1078,13 +1081,17 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             apply_tender_outcome(
                 tender, status=outcome["auto_status"], price=outcome.get("price"),
                 reduction_percent=outcome.get("reduction_percent"), source=Tender.OUTCOME_AUTO,
-                reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
+                reg_num=outcome.get("reg_num"), winner_inn=(outcome.get("suppliers") or [""])[0], exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
             )
         else:
             tender.contract_price = outcome.get("price")
             tender.contract_reduction_percent = outcome.get("reduction_percent")
+            tender.contract_reg_num = outcome.get("reg_num") or tender.contract_reg_num
+            tender.contract_winner_inn = (outcome.get("suppliers") or [""])[0] or tender.contract_winner_inn
+            tender.contract_exe_start = outcome.get("exe_start") or tender.contract_exe_start
+            tender.contract_exe_end = outcome.get("exe_end") or tender.contract_exe_end
             tender.outcome_checked_at = timezone.now()
-            tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
+            tender.save(update_fields=["contract_price", "contract_reduction_percent", "contract_reg_num", "contract_winner_inn", "contract_exe_start", "contract_exe_end", "outcome_checked_at"])
         succeeded += 1
     return attempted, succeeded
 
@@ -1103,13 +1110,13 @@ def _reconcile_published_with_contract(tender, outcome: dict) -> bool:
             tender.contract_reduction_percent if tender.contract_reduction_percent is not None
             else outcome.get("reduction_percent")
         ),
-        reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
+        reg_num=outcome.get("reg_num"), winner_inn=(outcome.get("suppliers") or [""])[0], exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
         source=Tender.OUTCOME_AUTO,
     )
     return True
 
 
-def apply_tender_outcome(tender, *, status, price=None, reduction_percent=None, source, reg_num=None, exe_start=None, exe_end=None) -> None:
+def apply_tender_outcome(tender, *, status, price=None, reduction_percent=None, source, reg_num=None, winner_inn=None, exe_start=None, exe_end=None) -> None:
     """Записать факт торгов на ТЕНДЕР (не на расчёт — расчёт можно пересчитать
     или удалить, а то, что случилось с тендером, должно остаться и после
     архивации). Пишем ContractStat при любом исходе (не только победа) —
@@ -1124,6 +1131,8 @@ def apply_tender_outcome(tender, *, status, price=None, reduction_percent=None, 
         tender.contract_reduction_percent = reduction_percent
     if reg_num:
         tender.contract_reg_num = reg_num
+    if winner_inn:
+        tender.contract_winner_inn = winner_inn
     if exe_start:
         tender.contract_exe_start = exe_start
     if exe_end:
@@ -1131,7 +1140,7 @@ def apply_tender_outcome(tender, *, status, price=None, reduction_percent=None, 
     tender.outcome_checked_at = timezone.now()
     tender.outcome_source = source
     tender.save(update_fields=[
-        "outcome_status", "contract_price", "contract_reduction_percent", "contract_reg_num",
+        "outcome_status", "contract_price", "contract_reduction_percent", "contract_reg_num", "contract_winner_inn",
         "contract_exe_start", "contract_exe_end", "outcome_checked_at", "outcome_source",
     ])
     _record_contract_stat(tender)
@@ -1161,6 +1170,7 @@ def _record_contract_stat(tender) -> None:
             "okpd2": tender.okpd2, "region": tender.region, "subject": tender.title or tender.object_info,
             "nmck": tender.max_price, "final_price": tender.contract_price,
             "discount_pct": tender.contract_reduction_percent,
+            "winner_inn": tender.contract_winner_inn,
             "contract_date": (tender.outcome_checked_at or timezone.now()).date(),
             "is_ours": tender.outcome_status == Tender.OUTCOME_WON,
             "own_funnel": True, "shared_purchase": False, "nmck_checked": True,

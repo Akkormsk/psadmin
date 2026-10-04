@@ -239,6 +239,18 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, "ZK-421419 · мы")
         self.assertContains(response, "40.60%")
 
+    def test_result_card_shows_winner_and_contract_dates(self):
+        self.tender.contract_winner_inn = "771978661830"
+        self.tender.contract_exe_start = "2026-11-01"
+        self.tender.contract_exe_end = "2026-12-31"
+        self.tender.outcome_status = Tender.OUTCOME_WON
+        self.tender.save()
+
+        response = self._card()
+
+        self.assertContains(response, "Победитель: ИНН 771978661830 · мы.")
+        self.assertContains(response, "Исполнение контракта: с 01.11.2026 по 31.12.2026.")
+
     def test_saving_bid_amount_decides_status(self):
         self.tender.bid_number = ""
         self.tender.save()
@@ -273,10 +285,13 @@ class ContractWinnerReconciliationTests(TestCase):
         return fetch
 
     def test_contract_with_our_inn_marks_won_and_keeps_protocol_figures(self):
-        self._reconcile([{"price": 1070000, "suppliers": [self.OUR_INN]}])
+        self._reconcile([{"price": 1070000, "suppliers": [self.OUR_INN], "reg_num": "123", "exe_start": "2026-11-01", "exe_end": "2026-12-31"}])
 
         self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_WON)
         self.assertEqual(self.tender.contract_reduction_percent, Decimal("40.60"))
+        self.assertEqual(self.tender.contract_winner_inn, self.OUR_INN)
+        self.assertEqual(str(self.tender.contract_exe_start), "2026-11-01")
+        self.assertEqual(str(self.tender.contract_exe_end), "2026-12-31")
 
     def test_contract_with_someone_else_marks_lost(self):
         self._reconcile([{"price": 1070000, "suppliers": ["7700000000"]}])

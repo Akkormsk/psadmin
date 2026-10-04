@@ -354,6 +354,18 @@ def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
         return None
 
 
+def _archive_stem(path: str) -> str:
+    stem = path.rsplit("/", 1)[-1].lower()
+    while True:
+        previous = stem
+        for extension in (".pdf", ".docx", ".xlsx", ".doc"):
+            if stem.endswith(extension):
+                stem = stem.removesuffix(extension)
+                break
+        if stem == previous:
+            return stem
+
+
 def extract_preview(data: bytes, filename: str) -> dict:
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
@@ -367,6 +379,10 @@ def extract_preview(data: bytes, filename: str) -> dict:
                 office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "pdf")]
                 if len(office) == 1:
                     return extract_preview(zf.read(office[0]), office[0])
+                if office and len({_archive_stem(path) for path in office}) == 1:
+                    priority = {".pdf": 0, ".docx": 1, ".xlsx": 2, ".doc": 3}
+                    selected = min(office, key=lambda path: priority.get("." + path.rsplit(".", 1)[-1].lower(), 4))
+                    return extract_preview(zf.read(selected), selected)
                 if names:
                     clickable = {n for n in office}
                     clickable |= {n for n in names if n.lower().endswith(".zip")}
