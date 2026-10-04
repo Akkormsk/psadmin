@@ -49,6 +49,7 @@ SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
 _ASSISTANT_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="assistant-job")
 _ASSISTANT_INFLIGHT = set()
 _ASSISTANT_INFLIGHT_LOCK = threading.Lock()
+_ASSISTANT_STALE_AFTER = timedelta(minutes=1)
 atexit.register(_ASSISTANT_EXECUTOR.shutdown, wait=False)
 
 _STAGE_LABELS = {
@@ -62,10 +63,21 @@ _STAGE_LABELS = {
 
 
 def _record_stage(session_id, stage):
-    ProductionTrainingSession.objects.filter(pk=session_id).update(current_hypothesis={
-        "status": "processing", "stage": stage,
-        "stage_label": _STAGE_LABELS.get(stage, "Идёт расчёт…"),
-    })
+    with transaction.atomic():
+        session = ProductionTrainingSession.objects.select_for_update().get(pk=session_id)
+        current = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+        if current.get("status") != "processing":
+            return
+        session.current_hypothesis = {
+            **current,
+            "stage": stage,
+            "stage_label": _STAGE_LABELS.get(stage, "Идёт расчёт…"),
+        }
+        session.save(update_fields=["current_hypothesis", "updated_at"])
+
+
+def _assistant_job_is_stale(session):
+    return session.updated_at < timezone.now() - _ASSISTANT_STALE_AFTER
 
 
 def _run_assistant_job(session_id, work, fallback):
@@ -667,7 +679,7 @@ def production_route_preview(request):
         position_name=position_name,
         is_confirmed=False,
         current_hypothesis__status="processing",
-        updated_at__gte=timezone.now() - timedelta(minutes=10),
+        updated_at__gte=timezone.now() - _ASSISTANT_STALE_AFTER,
     ).order_by("-updated_at").first()
     if running is not None:
         return JsonResponse({"status": "processing", "session_id": running.pk}, status=202)
@@ -703,6 +715,14 @@ def production_route_status(request, session_id):
     session = get_object_or_404(ProductionTrainingSession, pk=session_id, created_by=request.user)
     hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
     if hypothesis.get("status") == "processing":
+        if _assistant_job_is_stale(session):
+            session.current_hypothesis = {
+                **hypothesis,
+                "status": "error",
+                "error": "Подбор не ответил за минуту. Запустите его повторно.",
+            }
+            session.save(update_fields=["current_hypothesis", "updated_at"])
+            return JsonResponse({"error": session.current_hypothesis["error"]}, status=400)
         return JsonResponse({
             "status": "processing", "session_id": session.pk,
             "stage_label": hypothesis.get("stage_label", ""),
@@ -796,7 +816,9 @@ def revise_production_hypothesis(request):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
     prior = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
     if prior.get("status") == "processing":
-        return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+        if not _assistant_job_is_stale(session):
+            return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+        prior = {key: value for key, value in prior.items() if key not in {"status", "stage", "stage_label"}}
     if scope == "requirements" and not prior.get("catalog_search_started"):
         prior["requirement_selection"] = line.get("requirements", {}).get("requirements", [])
         session.current_hypothesis = prior

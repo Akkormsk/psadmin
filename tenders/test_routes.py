@@ -1,11 +1,13 @@
 import copy
 import json
 import os
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import Counterparty, Lesson, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, StageCounterpartyLink
 from .services import TenderAIError, apply_catalog_candidate, build_training_hypothesis
@@ -265,6 +267,37 @@ class RouteTests(RouteFixtures, TestCase):
             submit.call_args.args[1](session)
             self.assertEqual(build.call_args.kwargs["step_id"], "purchase")
             self.assertEqual(build.call_args.kwargs["recompute"], "catalog")
+
+    def test_stale_catalog_job_is_restarted_after_one_minute(self):
+        current = self.build()
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Пакет",
+            current_hypothesis={**current, "status": "processing", "stage": "catalog"},
+        )
+        ProductionTrainingSession.objects.filter(pk=session.pk).update(
+            updated_at=timezone.now() - timedelta(seconds=61)
+        )
+
+        with patch("tenders.views._submit_assistant_job") as submit:
+            response = self.client.post(reverse("tender_revise_production_hypothesis"), {
+                "payload": json.dumps({"session_id": session.pk, "line": self.line, "scope": "catalog", "step_id": "purchase"}),
+            })
+
+        self.assertEqual(response.status_code, 202)
+        submit.assert_called_once()
+
+    def test_progress_update_keeps_the_existing_route(self):
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user, position_name="Пакет",
+            current_hypothesis={"route": self.route, "catalog_search_started": False, "status": "processing"},
+        )
+
+        from .views import _record_stage
+        _record_stage(session.pk, "catalog")
+
+        session.refresh_from_db()
+        self.assertEqual(session.current_hypothesis["route"], self.route)
+        self.assertEqual(session.current_hypothesis["stage"], "catalog")
 
     def test_confirmed_calculation_returns_to_a_new_draft_and_retires_knowledge(self):
         confirmed = self.confirm(self.build(feedback="Пакет закупаем"))

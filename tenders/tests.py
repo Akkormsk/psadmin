@@ -1,5 +1,6 @@
 import json
 import zipfile
+from datetime import timedelta
 from io import BytesIO, StringIO
 from decimal import Decimal
 from pathlib import Path
@@ -1002,6 +1003,26 @@ class TenderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["route"]["name"], "Готово")
         self.assertEqual(response.json()["session_id"], session.pk)
+
+    def test_stale_production_route_job_reports_retry_after_one_minute(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.user,
+            position_name="Блокнот А5",
+            current_hypothesis={"status": "processing", "route": {"name": "Готово"}},
+        )
+        ProductionTrainingSession.objects.filter(pk=session.pk).update(
+            updated_at=timezone.now() - timedelta(seconds=61)
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("tender_production_route_status", args=[session.pk]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("за минуту", response.json()["error"])
+        session.refresh_from_db()
+        self.assertEqual(session.current_hypothesis["route"]["name"], "Готово")
 
     def test_manager_cannot_start_ai_calculation(self):
         self.client.force_login(self.user)
