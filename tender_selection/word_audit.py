@@ -12,10 +12,10 @@ from decimal import Decimal
 
 from .ai_gateway import chat_json
 from .filtering import _norm, match_title, parse_terms
-from .models import FilterSettings, IncomingTrace, Tender, WordAudit
+from .models import FilterSettings, IncomingTrace, Tender, TenderDismissalFeedback, WordAudit
 
 MODEL = os.getenv("WORD_AUDIT_MODEL", "gemini/gemini-3.1-flash-lite")
-SAMPLE_LIMITS = {"taken": 120, "dismissed": 120, "ignored": 150, "hidden": 300}
+SAMPLE_LIMITS = {"taken": 120, "dismissed": 120, "ignored": 150, "jev_suspects": 120, "hidden": 300}
 TITLE_CHARS = 160
 SUGGESTION_KINDS = ("add_plus", "add_minus", "remove_plus", "remove_minus")
 
@@ -39,18 +39,26 @@ def _corpus() -> dict[str, list[str]]:
     «показан, но не взят», что и раньше было видно по ``IncomingTrace``.
     Ручной отказ (кнопка «не наш профиль» на карточке) — только когда карточку
     реально открывали."""
-    groups = {"taken": [], "dismissed": [], "incoming": [], "ignored": []}
+    groups = {"taken": [], "dismissed": [], "incoming": [], "ignored": [], "jev_suspects": []}
+    feedback_reasons = dict(TenderDismissalFeedback.objects.order_by("created_at", "pk").values_list("tender_id", "reason"))
     for tender in Tender.objects.only("title", "object_info", "review", "status", "opened_at"):
         title = tender.title or tender.object_info or ""
         if tender.review != Tender.UNREVIEWED:
             groups["taken"].append(title)
+        elif tender.status == Tender.DISMISSED and feedback_reasons.get(tender.pk) == TenderDismissalFeedback.OTHER:
+            continue
         elif tender.status == Tender.DISMISSED and tender.opened_at is None:
             groups["incoming"].append(title)
             groups["ignored"].append(title)
         elif tender.status == Tender.DISMISSED:
-            groups["dismissed"].append(title)
+            continue
         else:
             groups["incoming"].append(title)
+            if tender.profile_signal in {Tender.PROFILE_SIGNAL_DOUBT, Tender.PROFILE_SIGNAL_NOT_PROFILE}:
+                groups["jev_suspects"].append(title)
+    profile_ids = [pk for pk, reason in feedback_reasons.items() if reason == TenderDismissalFeedback.NOT_PROFILE]
+    for tender in Tender.objects.filter(pk__in=profile_ids).only("title", "object_info"):
+        groups["dismissed"].append(tender.title or tender.object_info or "")
     for trace in IncomingTrace.objects.only("title", "filtered_out").order_by("-purged_at"):
         groups["incoming"].append(trace.title)
         if not trace.filtered_out:
@@ -153,8 +161,9 @@ def _prompt(settings, groups) -> tuple[str, dict]:
     parts, counts = [], {}
     for key, title, titles in (
         ("taken", "ВЗЯТЫ В РАБОТУ (наш профиль)", groups["taken"]),
-        ("dismissed", "СКРЫТЫ ВРУЧНУЮ ИЗ ВХОДЯЩИХ (не наш профиль)", groups["dismissed"]),
+        ("dismissed", "ПОДТВЕРЖДЕНО: НЕ НАШ ПРОФИЛЬ", groups["dismissed"]),
         ("ignored", "ПОКАЗАНЫ НО НЕ ВЗЯТЫ (скорее не наш профиль)", groups["ignored"]),
+        ("jev_suspects", "JEV СОМНЕВАЕТСЯ (ещё не подтверждено)", groups["jev_suspects"]),
         ("hidden", "СКРЫТЫ ФИЛЬТРОМ (ищи среди них пропущенные нужные)", hidden),
     ):
         text, counts[key] = _section(title, titles, SAMPLE_LIMITS[key])
@@ -166,7 +175,8 @@ def _prompt(settings, groups) -> tuple[str, dict]:
     return (
         header + "\n\n".join(parts)
         + f"\n\nПредложи изменения фильтра. Верни JSON строго по схеме:\n{_SCHEMA}\n"
-        "Не предлагай слова, которые уже есть. Минус-слово не должно задевать тендеры из ВЗЯТЫ В РАБОТУ.\n"
+        "Не предлагай слова, которые уже есть. Минус-слово не должно задевать тендеры из ВЗЯТЫ В РАБОТУ. "
+        "Для add_minus используй только ПОДТВЕРЖДЕНО: НЕ НАШ ПРОФИЛЬ; JEV СОМНЕВАЕТСЯ — лишь повод искать гипотезу, не доказательство.\n"
         "Отдельно поищи среди СКРЫТЫ ФИЛЬТРОМ целую пропущенную тематику (не единичное слово, а направление "
         "товаров/услуг в нашем профиле, которое сейчас не открывает ни одно плюс-слово) — предложи для неё "
         "несколько add_plus-слов с одинаковым непустым \"topic\"."

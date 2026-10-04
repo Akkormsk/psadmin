@@ -220,6 +220,7 @@ def run_pull(
         stats["records"] += got
 
     created = updated = 0
+    triage_ids = []
     seen: set[str] = set()
     bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law) for law in laws}
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
@@ -247,6 +248,8 @@ def run_pull(
                     )
                 created += int(is_created)
                 updated += int(not is_created)
+                if is_created:
+                    triage_ids.append(tender.pk)
         run.ok = True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
@@ -259,6 +262,11 @@ def run_pull(
     run.updated_count = updated
     run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
     run.save()
+
+    if run.ok:
+        from .profile_triage import start_profile_triage_in_background
+
+        start_profile_triage_in_background(triage_ids)
 
     return run
 
@@ -320,6 +328,7 @@ def run_keyword_pull(
 
     cursor = settings.keyword_pull_cursor % len(words)
     created = updated = words_done = 0
+    triage_ids = []
     try:
         for offset in range(min(max_requests, len(words))):
             if offset:
@@ -339,6 +348,8 @@ def run_keyword_pull(
                     )
                 created += int(is_created)
                 updated += int(not is_created)
+                if is_created:
+                    triage_ids.append(tender.pk)
             words_done += 1
         run.ok = True
     except gosplan.GosplanError as exc:
@@ -355,6 +366,10 @@ def run_keyword_pull(
     run.updated_count = updated
     run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
     run.save()
+    if run.ok:
+        from .profile_triage import start_profile_triage_in_background
+
+        start_profile_triage_in_background(triage_ids)
     return run
 
 

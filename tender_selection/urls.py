@@ -11,6 +11,7 @@ urlpatterns = [
     path("word-audit/", views.word_audit_page, name="word_audit"),
     path("word-audit/run/", views.word_audit_run, name="word_audit_run"),
     path("word-audit/apply/", views.word_audit_apply, name="word_audit_apply"),
+    path("profile-triage/", views.profile_triage_run, name="profile_triage_run"),
     path("pull/", views.pull_now, name="pull"),
     path("<int:pk>/", views.tender_detail, name="detail"),
     path("<int:pk>/risk/", views.risk_status, name="risk_status"),

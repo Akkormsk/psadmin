@@ -17,7 +17,7 @@ from django.views.decorators.http import require_POST
 
 from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
 from .filtering import match_title, parse_terms
-from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
+from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender, TenderDismissalFeedback
 from .notification import detail_document_candidate, parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
@@ -25,6 +25,7 @@ from .services import (
     effective_okpd2, enrich_one_org, extras_for, fetch_tender_outcome, notification_for, push_to_estimate,
     archive_tender, archive_stage_for, risk_assessment_for, run_pull, set_our_bid, start_risk_assessment_in_background,
 )
+from .profile_triage import start_profile_triage_in_background
 from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
 
@@ -758,6 +759,7 @@ def filter_settings(request):
     if request.method == "POST":
         settings.include_words = request.POST.get("include_words", "").strip()
         settings.exclude_words = request.POST.get("exclude_words", "").strip()
+        settings.profile_triage_enabled = request.POST.get("profile_triage_enabled") == "1"
         settings.min_price = request.POST.get("min_price") or 0
         settings.window_days = request.POST.get("window_days") or 7
         settings.okpd2_codes = request.POST.getlist("okpd2")
@@ -922,6 +924,23 @@ def word_audit_apply(request):
 
 @superuser_required
 @require_POST
+def profile_triage_run(request):
+    settings = FilterSettings.load()
+    if not settings.profile_triage_enabled:
+        messages.info(request, "Сначала включите Jev-проверку в настройках отбора.")
+        return redirect("tender_selection:list")
+    rows, _hidden, _expired = _visible_found_tenders(
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED, profile_checked_at__isnull=True),
+        min_price=settings.min_price, include_words=settings.include_words, exclude_words=settings.exclude_words,
+    )
+    ids = [tender.pk for tender in rows[:100]]
+    start_profile_triage_in_background(ids)
+    messages.success(request, f"Jev начал проверку {len(ids)} входящих. Отметки появятся после обновления страницы.")
+    return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+
+
+@superuser_required
+@require_POST
 def pull_now(request):
     run = run_pull(max_requests=16)
     if run.ok:
@@ -1030,6 +1049,9 @@ def save_bid(request, pk):
 @require_POST
 def dismiss(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
+    reason = request.POST.get("reason")
+    if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
+        TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
     _clear_tender_document_previews(tender)
     archive_tender(tender)
     return _dismiss_redirect(request)

@@ -12,7 +12,7 @@
       <strong data-bulk-count>Выбрано: 0</strong>
       <button type="button" class="button-secondary" data-bulk-group>Сгруппировать</button>
       <button type="submit" class="button-secondary" name="action" value="ungroup">Убрать из группы</button>
-      <button type="submit" class="button-danger" name="action" value="delete" onclick="return confirm('Удалить выбранные расчёты?');">Удалить</button>
+      <button type="submit" class="button-secondary calculator-bulk__delete" name="action" value="delete" onclick="return confirm('Удалить выбранные расчёты?');">Удалить</button>
     </div>
   </form>
     {% for section in estimate_sections %}

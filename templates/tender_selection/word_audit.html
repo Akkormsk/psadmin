@@ -16,9 +16,9 @@
       </form>
     </div>
     <p class="settings-description">
-      ИИ читает названия: взятые в работу ({{ stats.counts.taken }}), скрытые вручную ({{ stats.counts.dismissed }}),
-      показанные, но не взятые ({{ stats.counts.ignored }}), и скрытые фильтром из {{ stats.counts.incoming }} во «Входящих» и удалённых уборкой.
-      Предлагает слова и пропущенные тематики. Цифры последствий под каждым словом считает сервер, не ИИ. Ничего не меняется, пока вы не отметите и не примените.
+      ИИ читает взятые в работу ({{ stats.counts.taken }}), подтверждённые вами отказы «не по профилю» ({{ stats.counts.dismissed }}),
+      пометки Jev для проверки ({{ stats.counts.jev_suspects }}) и скрытые фильтром из {{ stats.counts.incoming }} известных тендеров.
+      Скрытия по другой причине не участвуют в предложениях минус-слов. Цифры последствий под каждым словом считает сервер, не ИИ. Ничего не меняется, пока вы не отметите и не примените.
     </p>
 
     {% if audit %}
@@ -50,7 +50,7 @@
         {% endif %}
       {% empty %}<p class="settings-description">Нет предложений.</p>{% endfor %}
 
-      <h3 class="settings-subtitle">Добавить минус-слова</h3>
+      <h3 class="settings-subtitle">Кандидаты в минус-слова</h3>
       {% for s in r.add_minus %}
       <label class="wa-item wa-check{% if s.effects.hits_taken %} wa-danger{% endif %}"><input type="checkbox" name="add_minus" value="{{ s.word }}">
         <span><code>{{ s.word }}</code> — {{ s.why }} <small>скроет проходящих: {{ s.effects.hides_passing }}{% if s.effects.hits_taken %}; <b>задевает взятые в работу: {{ s.effects.hits_taken }}</b>{% endif %}</small>

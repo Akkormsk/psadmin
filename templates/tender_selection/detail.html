@@ -53,10 +53,13 @@
         </form>
         {% endif %}
         {% else %}
-        <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-workspace-dismiss>
-          {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
-          <button type="submit" class="ts-quiet">Скрыть</button>
-        </form>
+        <details class="ts-menu">
+          <summary class="ts-quiet">Скрыть</summary>
+          <div class="ts-menu__list">
+            <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-workspace-dismiss>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
+            <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-workspace-dismiss>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="reason" value="other"><button type="submit">Другая причина</button></form>
+          </div>
+        </details>
         {% if tender.review == "unreviewed" %}
         <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
           {% csrf_token %}<input type="hidden" name="review" value="interesting">

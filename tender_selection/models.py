@@ -34,6 +34,10 @@ class FilterSettings(models.Model):
     # на несколько циклов сбора, курсор просто запоминает, с какого слова
     # продолжить в следующий раз.
     keyword_pull_cursor = models.PositiveIntegerField(default=0)
+    profile_triage_enabled = models.BooleanField(
+        "Jev: помечать сомнительные входящие", default=False,
+        help_text="Проверяет только новые тендеры, уже прошедшие плюс/минус-слова.",
+    )
 
     class Meta:
         verbose_name = "Настройки подбора"
@@ -116,6 +120,19 @@ class Tender(models.Model):
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
     archived_from_stage = models.CharField("Этап при архивировании", max_length=16, blank=True, db_index=True)
     created_at = models.DateTimeField("Создан", auto_now_add=True)
+
+    PROFILE_SIGNAL_CLEAR = "clear"
+    PROFILE_SIGNAL_DOUBT = "doubt"
+    PROFILE_SIGNAL_NOT_PROFILE = "not_profile"
+    PROFILE_SIGNAL_CHOICES = (
+        ("", "Не проверен"),
+        (PROFILE_SIGNAL_CLEAR, "Похоже, по профилю"),
+        (PROFILE_SIGNAL_DOUBT, "Нужно проверить"),
+        (PROFILE_SIGNAL_NOT_PROFILE, "Возможно, не по профилю"),
+    )
+    profile_signal = models.CharField("Сигнал Jev по профилю", max_length=16, choices=PROFILE_SIGNAL_CHOICES, blank=True)
+    profile_confidence = models.DecimalField("Уверенность Jev по профилю", max_digits=4, decimal_places=3, null=True, blank=True)
+    profile_checked_at = models.DateTimeField("Jev проверил профиль", null=True, blank=True)
 
     outcome_status = models.CharField("Стадия сделки", max_length=16, choices=OUTCOME_STATUS_CHOICES, default=OUTCOME_DRAFT)
     contract_price = models.DecimalField("Фактическая цена контракта", max_digits=16, decimal_places=2, null=True, blank=True)
@@ -289,6 +306,27 @@ class IncomingTrace(models.Model):
 
     def __str__(self):
         return self.purchase_number
+
+
+class TenderDismissalFeedback(models.Model):
+    """Подтверждённая причина скрытия из «Входящих».
+
+    Записи не перезаписываются: повторный отказ после восстановления остаётся
+    отдельным фактом для аудита и последующей проверки качества отбора.
+    """
+
+    NOT_PROFILE = "not_profile"
+    OTHER = "other"
+    REASON_CHOICES = ((NOT_PROFILE, "Не по профилю"), (OTHER, "Другая причина"))
+
+    tender = models.ForeignKey(Tender, on_delete=models.CASCADE, related_name="dismissal_feedback")
+    reason = models.CharField("Причина", max_length=16, choices=REASON_CHOICES)
+    created_at = models.DateTimeField("Когда отмечено", auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        verbose_name = "Причина скрытия входящего"
+        verbose_name_plural = "Причины скрытия входящих"
 
 
 class WordAudit(models.Model):

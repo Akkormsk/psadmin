@@ -24,6 +24,7 @@
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
           {% csrf_token %}<button type="submit">↻ Обновить</button>
         </form>
+        {% if settings.profile_triage_enabled %}<form method="post" action="{% url 'tender_selection:profile_triage_run' %}">{% csrf_token %}<button type="submit">✦ Проверить профиль</button></form>{% endif %}
         <a class="ts-refresh__settings" href="{% url 'tender_selection:settings' %}">☷ Настроить отбор</a>
         <span class="ts-refresh__params">Сейчас: от {{ settings.min_price|rub }} · за {{ settings.window_days }} дн.</span>
       </div>
@@ -79,6 +80,7 @@
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
             {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠ нет данных</span>{% endif %}
             {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠ жалоба</span>{% endif %}
+            {% if tender.profile_signal == "doubt" %}<span class="ts-flag ts-flag--profile" title="Jev не уверен, что закупка соответствует вашему профилю">✦ проверить профиль</span>{% elif tender.profile_signal == "not_profile" %}<span class="ts-flag ts-flag--profile" title="Jev считает тему, вероятно, не вашей; решение остаётся за вами">✦ возможно не по профилю</span>{% endif %}
           </span>
           {% if tender.org.city or tender.region_label or tender.match_hits %}
           <span class="ts-row__sub">
@@ -104,7 +106,8 @@
             <div class="ts-menu__list">
               <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">Открыть тендер</a>
               {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
-              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="is-danger">Скрыть в архив</button></form>
+              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
+              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="other"><button type="submit">Скрыть по другой причине</button></form>
             </div>
           </details>
         </div>
@@ -201,13 +204,13 @@
         var rows = selected(), work = button.dataset.bulkAction === "work";
         var question = work
           ? "Перевести в работу: " + rows.length + ". Для каждого запустится оценка рисков ИИ (~2 ₽ за тендер)."
-          : "Скрыть в архив: " + rows.length + ".";
+          : "Скрыть по другой причине: " + rows.length + ". Эти решения не будут обучать минус-слова.";
         if (!confirm(question)) return;
         actions.forEach(function (b) { b.disabled = true; });
         for (var box of rows) {
           var body = new FormData();
           body.append("csrfmiddlewaretoken", csrf);
-          if (work) body.append("review", "interesting");
+          if (work) body.append("review", "interesting"); else body.append("reason", "other");
           await fetch(work ? box.dataset.reviewUrl : box.dataset.dismissUrl, {
             method: "POST", body: body, headers: {"X-Requested-With": "XMLHttpRequest"},
           });

@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from . import services, word_audit
-from .models import FilterSettings, IncomingTrace, Tender, WordAudit
+from .models import FilterSettings, IncomingTrace, Tender, TenderDismissalFeedback, WordAudit
 
 
 def _settings(plus="футболк, кружк", minus="медицин"):
@@ -43,7 +43,8 @@ class WordStatsTests(TestCase):
         _settings(plus="футболк, кружк, зонт", minus="медицин")
         now = timezone.now()
         Tender.objects.create(purchase_number="t1", title="Футболки с логотипом", review=Tender.INTERESTING)
-        Tender.objects.create(purchase_number="d1", title="Кружки фарфоровые", status=Tender.DISMISSED, opened_at=now)
+        dismissed = Tender.objects.create(purchase_number="d1", title="Кружки фарфоровые", status=Tender.DISMISSED, opened_at=now)
+        TenderDismissalFeedback.objects.create(tender=dismissed, reason=TenderDismissalFeedback.NOT_PROFILE)
         IncomingTrace.objects.create(purchase_number="i1", title="Кружки термо", filtered_out=False)
         Tender.objects.create(purchase_number="h1", title="Медицинские футболки", collecting_finished_at=now + timedelta(days=3))
         Tender.objects.create(purchase_number="h2", title="Шопперы с печатью", collecting_finished_at=now + timedelta(days=3))
@@ -103,6 +104,19 @@ class AuditRunTests(TestCase):
         plus = audit.result["add_plus"][0]
         self.assertEqual((plus["word"], plus["effects"]["opens_hidden"]), ("шоппер", 1))
         self.assertEqual(audit.result["add_minus"][0]["effects"]["hits_taken"], 1)
+
+    def test_other_dismissals_are_not_sent_as_profile_rejections(self):
+        profile = Tender.objects.create(purchase_number="p1", title="Полиграфическое оборудование")
+        other = Tender.objects.create(purchase_number="o1", title="Поставка футболок", status=Tender.DISMISSED, opened_at=timezone.now())
+        TenderDismissalFeedback.objects.create(tender=profile, reason=TenderDismissalFeedback.NOT_PROFILE)
+        TenderDismissalFeedback.objects.create(tender=other, reason=TenderDismissalFeedback.OTHER)
+        with patch.object(word_audit, "chat_json", return_value={"data": {}, "usage": {}}) as chat:
+            word_audit.run_audit(self.user)
+
+        prompt = chat.call_args.args[1]
+        self.assertIn("ПОДТВЕРЖДЕНО: НЕ НАШ ПРОФИЛЬ", prompt)
+        self.assertIn("Полиграфическое оборудование", prompt)
+        self.assertNotIn("Поставка футболок", prompt)
 
 
 class ApplySuggestionsTests(TestCase):

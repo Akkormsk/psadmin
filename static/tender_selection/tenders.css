@@ -119,6 +119,7 @@
 .ts-law--fz223 { background: var(--tint-info); color: light-dark(#2f5da8, #8fb4ff); }
 .ts-flag { color: var(--negative-ink); font-size: 12px; font-weight: 700; }
 .ts-flag--data { color: var(--warning-ink); }
+.ts-flag--profile { color: var(--warning-ink); }
 .ts-hits { color: var(--positive-ink); }
 
 .ts-work {
