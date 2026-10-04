@@ -228,7 +228,10 @@ _FALLBACK_MODELS = tuple(row["id"] for row in _FALLBACK_ROWS)
 # смотрим на сам id. Не список продуктовых категорий (то, что каскаду
 # запрещено хардкодить) — список типов API-вызова, это другое: у "chat" vs
 # "embedding" vs "image_generation" нет тысячи случайных вариантов.
-_NON_CHAT_ID_MARKERS = ("embed", "bge", "flux", "tts", "transcribe", "image")
+_NON_CHAT_ID_MARKERS = (
+    "embed", "bge", "flux", "tts", "transcribe", "image",
+    "video", "sora", "veo", "kling", "luma", "music", "audio",
+)
 
 
 def _is_chat_row(row: dict) -> bool:

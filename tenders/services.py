@@ -2559,6 +2559,62 @@ def _requirement_skip_labels():
 # по ТЗ разбирает сильный агент в tenders/cascade.py (шаг 6).
 _NAME_FILTER_MODEL_DEFAULT = "gemini/gemini-3.1-flash-lite"
 _NAME_FILTER_BATCH = 240
+_NAME_FILTER_JEV_BATCH = 40
+
+
+def _run_name_filter_jev(item, id_names, *, usage=None, intensity="cautious"):
+    """Step 4 through System One: one narrow yes/no decision per title."""
+    from .jev import decide_matrix
+
+    item = _cell_text(item)[:80]
+    pairs = [(str(identifier), _cell_text(name)[:120]) for identifier, name in id_names if _cell_text(name)]
+    if not item or not pairs:
+        return None
+    batches = [pairs[index:index + _NAME_FILTER_JEV_BATCH] for index in range(0, len(pairs), _NAME_FILTER_JEV_BATCH)]
+    no_threshold = 0.4 if intensity == "strict" else 0.2
+
+    def run_batch(batch):
+        questions = {
+            f"p{number}": {
+                "type": "noul",
+                "instructions": (
+                    f"Является ли название {number} именно товаром «{item}»? "
+                    "Высокая вероятность — сам товар. Низкая — другой предмет, аксессуар, "
+                    "упаковка, запчасть или набор. При двусмысленности оставь вероятность около середины."
+                ),
+            }
+            for number in range(1, len(batch) + 1)
+        }
+        state = f"Искомый товар: {item}\n" + "\n".join(
+            f"НАЗВАНИЕ {number}: {name}" for number, (_, name) in enumerate(batch, 1)
+        )
+        try:
+            answers, batch_usage = decide_matrix(state, questions, timeout=45)
+        except Exception:
+            logger.exception("Jev name-filter batch failed")
+            return {identifier for identifier, _ in batch}, {}
+        keep = set()
+        for number, (identifier, _name) in enumerate(batch, 1):
+            answer = answers.get(f"p{number}") if isinstance(answers, dict) else None
+            try:
+                probability = float(answer.get("noul")) if isinstance(answer, dict) else 0.5
+            except (TypeError, ValueError):
+                probability = 0.5
+            if probability > no_threshold:
+                keep.add(identifier)
+        return keep, batch_usage
+
+    results = (
+        [run_batch(batches[0])] if len(batches) == 1
+        else list(ThreadPoolExecutor(max_workers=min(8, len(batches))).map(run_batch, batches))
+    )
+    keep = set()
+    for batch_keep, batch_usage in results:
+        keep.update(batch_keep)
+        if isinstance(usage, dict) and isinstance(batch_usage, dict):
+            usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + (batch_usage.get("prompt_tokens", 0) or 0)
+            usage["completion_tokens"] = usage.get("completion_tokens", 0) + (batch_usage.get("completion_tokens", 0) or 0)
+    return keep
 
 
 def _run_name_filter(item, id_names, *, usage=None, model=None, intensity="cautious"):

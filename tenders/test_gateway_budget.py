@@ -19,6 +19,9 @@ class IsChatRowTests(SimpleTestCase):
         self.assertFalse(gateway_budget._is_chat_row({"id": "timeweb/bge-m3"}))
         self.assertFalse(gateway_budget._is_chat_row({"id": "dashscope/text-embedding-v4"}))
         self.assertFalse(gateway_budget._is_chat_row({"id": "black_forest_labs/flux-2-pro"}))
+        self.assertFalse(gateway_budget._is_chat_row({"id": "google/veo-3.1"}))
+        self.assertFalse(gateway_budget._is_chat_row({"id": "openai/sora-2"}))
+        self.assertFalse(gateway_budget._is_chat_row({"id": "elevenlabs/music-v1"}))
 
 
 class ModelCatalogTests(SimpleTestCase):

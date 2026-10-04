@@ -972,7 +972,7 @@ class Cascade:
         синками каталога, повтор пропускает вызов."""
         if not pool:
             return pool
-        from .services import _run_name_filter
+        from .services import _run_name_filter, _run_name_filter_jev
 
         settings = self.step_settings.get("4", {})
         intensity = settings.get("intensity", "cautious")
@@ -980,7 +980,8 @@ class Cascade:
             self.diagnostics["name_filter"] = "disabled"
             self.diagnostics["name_filter_removed"] = 0
             return pool
-        model = _selected_model(settings.get("model"), _FAST_MODEL)
+        configured_model = settings.get("model")
+        model = "jev" if configured_model == "jev" else _selected_model(configured_model, _FAST_MODEL)
         use_cache = settings.get("cache", "yes") != "no"
 
         ids = sorted(str(p.external_id) for p in pool)
@@ -995,11 +996,19 @@ class Cascade:
         else:
             id_names = [(p.external_id, p.full_name or p.name) for p in pool]
             nf_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-            keep = _run_name_filter(
-                self.item or _cell(self.line.get("name")), id_names,
-                usage=nf_usage, model=model, intensity=intensity,
-            )
-            self._add_usage(nf_usage, model)
+            if model == "jev":
+                self._check_budget(sum(len(name) for _identifier, name in id_names), 20 * len(id_names), "jev-1.13.0")
+                keep = _run_name_filter_jev(
+                    self.item or _cell(self.line.get("name")), id_names,
+                    usage=nf_usage, intensity=intensity,
+                )
+                self._add_usage(nf_usage, "jev-1.13.0")
+            else:
+                keep = _run_name_filter(
+                    self.item or _cell(self.line.get("name")), id_names,
+                    usage=nf_usage, model=model, intensity=intensity,
+                )
+                self._add_usage(nf_usage, model)
             if keep is None:
                 self.diagnostics["name_filter"] = "skipped"
                 return pool

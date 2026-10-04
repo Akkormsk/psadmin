@@ -78,6 +78,17 @@ class CascadeLabViewTests(TestCase):
         self.assertContains(response, "5→6")
         self.assertContains(response, "Большой Jev")
 
+    def test_jev_is_first_in_binary_executor_selectors(self):
+        self.client.force_login(self.admin)
+        html = self.client.get(reverse("cascade_lab")).content.decode()
+
+        step_4 = html.split('name="step_4_model"', 1)[1].split("</select>", 1)[0]
+        step_6 = html.split('name="step_6_engine"', 1)[1].split("</select>", 1)[0]
+        triage = html.split('name="triage_engine"', 1)[1].split("</select>", 1)[0]
+        self.assertLess(step_4.index('value="jev"'), step_4.index("gemini/"))
+        self.assertLess(step_6.index('value="jev"'), step_6.index('value="llm"'))
+        self.assertLess(triage.index('value="jev"'), triage.index('value="off"'))
+
     def test_active_config_settings_prefill_the_lab_form(self):
         CascadeConfigVersion.objects.create(
             name="В поиске", created_by=self.admin, is_active=True,
