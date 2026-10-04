@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -1163,6 +1163,18 @@ def _stem_in_words(stem, words):
     return False
 
 
+def _postgres_name_rows(base, stems):
+    """Return only name-matched rows through PostgreSQL's persisted GIN index."""
+    if base.db != "default" or connection.vendor != "postgresql":
+        return None
+    from django.contrib.postgres.search import SearchQuery, SearchVector
+
+    terms = [f"{stem}:*" if len(stem) >= 5 else stem for stem in stems]
+    query = SearchQuery(" | ".join(terms), config="russian", search_type="raw")
+    vector = SearchVector("name", "full_name", config="russian")
+    return base.annotate(_name_vector=vector).filter(_name_vector=query).values_list("id", "name", "full_name")
+
+
 def _text_search_pool(supplier_code, phrases):
     """Every mirrored card of one supplier whose PRODUCT NAME carries a
     query word (as a stem). Description and attributes are deliberately not
@@ -1181,7 +1193,9 @@ def _text_search_pool(supplier_code, phrases):
     base = CatalogProduct.objects.filter(supplier__code=supplier_code, is_active=True)
     from .name_index import rank_names
 
-    rows = base.values_list("id", "name", "full_name").order_by("id").iterator(chunk_size=4000)
+    rows = _postgres_name_rows(base, stems)
+    if rows is None:
+        rows = base.values_list("id", "name", "full_name").order_by("id").iterator(chunk_size=4000)
     ranked_ids = rank_names(rows, stems)
     if not ranked_ids:
         return []

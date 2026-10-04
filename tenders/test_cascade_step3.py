@@ -73,6 +73,13 @@ class IndexedSearchTests(TestCase):
         type(product).objects.filter(pk=product.pk).update(is_active=False)
         self.assertEqual(_text_search_pool("oasis", ["кружка"]), [])
 
+    def test_postgres_candidate_lookup_avoids_full_name_scan(self):
+        product = _product("Футболка", external_id="T")
+        with patch("tenders.catalog._postgres_name_rows", return_value=[(product.pk, product.name, product.full_name)]) as lookup:
+            result = _text_search_pool("oasis", ["футболка"])
+        self.assertEqual([item.pk for item in result], [product.pk])
+        lookup.assert_called_once()
+
     def test_supplier_and_description_do_not_leak_into_results(self):
         _product("Кружка", external_id="P", supplier_code="gifts", description="флешка")
         _product("Флешка", external_id="P", supplier_code="oasis")
