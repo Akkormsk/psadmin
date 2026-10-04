@@ -818,6 +818,13 @@ def revise_production_hypothesis(request):
     if prior.get("status") == "processing":
         if not _assistant_job_is_stale(session):
             return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+        saved_hypothesis = line.get("requirements", {}).get("production", {})
+        if (
+            isinstance(saved_hypothesis, dict)
+            and str(saved_hypothesis.get("session_id")) == str(session.pk)
+            and isinstance(saved_hypothesis.get("route"), dict)
+        ):
+            prior = saved_hypothesis
         prior = {key: value for key, value in prior.items() if key not in {"status", "stage", "stage_label"}}
     if scope == "requirements" and not prior.get("catalog_search_started"):
         prior["requirement_selection"] = line.get("requirements", {}).get("requirements", [])

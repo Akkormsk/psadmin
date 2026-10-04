@@ -272,19 +272,23 @@ class RouteTests(RouteFixtures, TestCase):
         current = self.build()
         session = ProductionTrainingSession.objects.create(
             created_by=self.user, position_name="Пакет",
-            current_hypothesis={**current, "status": "processing", "stage": "catalog"},
+            current_hypothesis={"status": "processing", "stage": "catalog"},
         )
         ProductionTrainingSession.objects.filter(pk=session.pk).update(
             updated_at=timezone.now() - timedelta(seconds=61)
         )
+        current["session_id"] = session.pk
+        line = copy.deepcopy(self.line)
+        line["requirements"]["production"] = current
 
         with patch("tenders.views._submit_assistant_job") as submit:
             response = self.client.post(reverse("tender_revise_production_hypothesis"), {
-                "payload": json.dumps({"session_id": session.pk, "line": self.line, "scope": "catalog", "step_id": "purchase"}),
+                "payload": json.dumps({"session_id": session.pk, "line": line, "scope": "catalog", "step_id": "purchase"}),
             })
 
         self.assertEqual(response.status_code, 202)
         submit.assert_called_once()
+        self.assertEqual(submit.call_args.kwargs["fallback"]["route"], current["route"])
 
     def test_progress_update_keeps_the_existing_route(self):
         session = ProductionTrainingSession.objects.create(
