@@ -311,3 +311,14 @@ class ContractWinnerReconciliationTests(TestCase):
 
         fetch.assert_not_called()
         self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_PUBLISHED)
+
+    def test_archived_result_without_winner_is_rechecked(self):
+        self.tender.status = Tender.DISMISSED
+        self.tender.outcome_status = Tender.OUTCOME_DRAFT
+        self.tender.contract_winner_inn = ""
+        self.tender.save()
+
+        self._reconcile([{"price": 1070000, "suppliers": [self.OUR_INN], "reg_num": "123", "exe_end": "2026-12-31"}])
+
+        self.assertEqual(self.tender.contract_winner_inn, self.OUR_INN)
+        self.assertEqual(str(self.tender.contract_exe_end), "2026-12-31")

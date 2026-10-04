@@ -1046,7 +1046,9 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
         # протокол уже проверяли (retry_pending_protocols), но цены в нём не
         # нашлось (не опубликован/несостоявшиеся торги) — добираем контрактом.
         | Q(status=Tender.DISMISSED, outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_NOT_PARTICIPATED), contract_price__isnull=True,
-            protocol_checked_at__isnull=False, outcome_checked_at__isnull=True),
+            protocol_checked_at__isnull=False, outcome_checked_at__isnull=True)
+        | Q(status=Tender.DISMISSED, contract_price__isnull=False, contract_winner_inn="",
+            outcome_checked_at__lt=timezone.now() - CONTRACT_RECHECK)
     ).order_by("created_at")[:50]
     for tender in tenders:
         if attempted >= limit:
