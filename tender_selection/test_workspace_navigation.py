@@ -31,6 +31,7 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, 'data-workspace-open')
         self.assertContains(response, "const browserHistory = window.history;")
         self.assertContains(response, "removeToDepth(layers.length - 1);")
+        self.assertContains(response, "if (reloadPage) window.location.reload();")
         self.assertContains(response, reverse("tender_selection:detail", args=[tender.pk]))
         self.assertContains(response, "let workspaceApi = null;")
         self.assertNotContains(response, "window.PSWorkspace")

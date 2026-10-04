@@ -249,7 +249,9 @@
             });
             frame.contentWindow.location.reload();
           } else if (!layers.length) {
+            const reloadPage = refreshAfterBack;
             refreshAfterBack = false;
+            if (reloadPage) window.location.reload();
           }
         }
 
