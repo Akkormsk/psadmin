@@ -400,6 +400,7 @@ def tender_list(request):
         # гореть на буквально каждой новой карточке.
         tender.notification_missing = (
             tender.law == "fz44" and not tender.notification_raw and tender.notification_checked_at is not None
+            and not tender.notification_error
         )
 
     counts = dict(

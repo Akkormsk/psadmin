@@ -454,17 +454,17 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
         return tender.notification_raw
     try:
         payload = gosplan.fetch_notification(tender.purchase_number)
-    except gosplan.GosplanError:
-        # Помечаем попытку даже на неудаче — иначе «нет данных» в списке (см.
-        # notification_missing в views.py) не отличить от «карточку ещё никто не
-        # открывал»: тендер только что выгружен и извещение для него попросту
-        # никогда не запрашивалось, это не сбой API.
+    except gosplan.GosplanError as exc:
+        # Время последней попытки нужно для повторов, но не является признаком,
+        # что данных в ЕИС нет: 429 и сетевые сбои здесь обычны.
         tender.notification_checked_at = timezone.now()
-        tender.save(update_fields=["notification_checked_at"])
+        tender.notification_error = str(exc)[:300]
+        tender.save(update_fields=["notification_checked_at", "notification_error"])
         return None
     tender.notification_raw = payload
     tender.notification_checked_at = timezone.now()
-    tender.save(update_fields=["notification_raw", "notification_checked_at"])
+    tender.notification_error = ""
+    tender.save(update_fields=["notification_raw", "notification_checked_at", "notification_error"])
 
     resp_org = (
         (payload.get("source") or {}).get("purchaseResponsibleInfo") or {}

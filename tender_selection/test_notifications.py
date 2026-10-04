@@ -70,3 +70,11 @@ class RetryPendingNotificationsTests(TestCase):
         self._tender("loaded", checked_ago=long_ago, raw={"source": {}})
         self._tender("closed", checked_ago=long_ago, closes_in=-timedelta(days=1))
         self.assertEqual(self._retried_numbers(), set())
+
+    def test_temporary_error_is_recorded_separately_from_missing_notification(self):
+        tender = self._tender("temporary-error")
+        with patch.object(services.gosplan, "fetch_notification", side_effect=services.gosplan.GosplanError("429")):
+            self.assertIsNone(services.notification_for(tender))
+
+        tender.refresh_from_db()
+        self.assertEqual(tender.notification_error, "429")

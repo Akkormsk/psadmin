@@ -105,6 +105,7 @@ class Tender(models.Model):
     raw = models.JSONField("Ответ API", default=dict, blank=True)
     notification_raw = models.JSONField("Извещение (сырое)", default=dict, blank=True)
     notification_checked_at = models.DateTimeField("Извещение загружено", null=True, blank=True)
+    notification_error = models.CharField("Ошибка загрузки извещения", max_length=300, blank=True)
     clarifications_raw = models.JSONField("Разъяснения (сырые)", default=list, blank=True)
     complaints_raw = models.JSONField("Жалобы (сырые)", default=list, blank=True)
     extras_checked_at = models.DateTimeField("Разъяснения/жалобы загружены", null=True, blank=True)
