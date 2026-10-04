@@ -135,6 +135,17 @@ class ArchiveTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"archived": True, "tender_id": tender.pk})
 
+    def test_workspace_review_returns_the_tender_id(self):
+        tender = Tender.objects.create(purchase_number="review-ajax", title="Кружки")
+
+        response = self.client.post(
+            f"/tender-selection/{tender.pk}/review/", {"review": Tender.INTERESTING},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["tender_id"], tender.pk)
+
     def test_archived_result_can_be_excluded_from_forecast(self):
         tender = self._archived("stat", "Кружки", source=Tender.MANUAL)
         stat = ContractStat.objects.create(

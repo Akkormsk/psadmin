@@ -61,12 +61,12 @@
           </div>
         </details>
         {% if tender.review == "unreviewed" %}
-        <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
+        <form method="post" action="{% url 'tender_selection:review' tender.pk %}" data-workspace-leaves-incoming>
           {% csrf_token %}<input type="hidden" name="review" value="interesting">
           <button type="submit" class="ts-work">В работу →</button>
         </form>
         {% else %}
-        <form method="post" action="{% url 'tender_selection:push' tender.pk %}">
+        <form method="post" action="{% url 'tender_selection:push' tender.pk %}" data-workspace-leaves-incoming>
           {% csrf_token %}
           <button type="submit" class="ts-work">В расчёт →</button>
         </form>
@@ -655,6 +655,22 @@
 
   (function () {
     if (window.parent === window || !document.body.classList.contains("workspace-embedded")) return;
+    document.querySelectorAll("[data-workspace-leaves-incoming]").forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        if (event.defaultPrevented) return;
+        event.preventDefault();
+        fetch(form.action, {method: "POST", body: new FormData(form), headers: {"X-Requested-With": "XMLHttpRequest"}})
+          .then(function (response) {
+            if (!response.ok) throw new Error();
+            return response.json();
+          })
+          .then(function (data) {
+            window.parent.postMessage({type: "ps-workspace-remove-tender", tenderId: data.tender_id}, location.origin);
+            window.location.reload();
+          })
+          .catch(function () { form.submit(); });
+      });
+    });
     document.querySelectorAll("[data-workspace-dismiss]").forEach(function (form) {
       form.addEventListener("submit", function (event) {
         if (event.defaultPrevented) return;

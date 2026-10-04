@@ -978,6 +978,8 @@ def pull_now(request):
 def push_estimate(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     if tender.status == Tender.PUSHED and tender.estimates.exists():
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"tender_id": tender.pk})
         return redirect("tender_selection:detail", pk=tender.pk)
     try:
         push_to_estimate(tender, request.user)
@@ -985,6 +987,8 @@ def push_estimate(request, pk):
         messages.error(request, f"Не удалось создать просчёт: {exc}")
         return redirect("tender_selection:detail", pk=pk)
     messages.success(request, "Просчёт создан. Позиции подставлены из извещения.")
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"tender_id": tender.pk})
     return redirect("tender_selection:detail", pk=tender.pk)
 
 
@@ -1230,5 +1234,5 @@ def set_review(request, pk):
         if was_unreviewed and value != Tender.UNREVIEWED and not tender.risk_checked_at:
             start_risk_assessment_in_background(tender.pk)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"review": tender.review, "label": tender.get_review_display()})
+        return JsonResponse({"tender_id": tender.pk, "review": tender.review, "label": tender.get_review_display()})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")

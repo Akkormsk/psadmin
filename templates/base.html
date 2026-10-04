@@ -322,6 +322,9 @@
             removeTenderCard(event.data.tenderId);
             workspaceApi.closeOne(Boolean(event.data.refresh));
           }
+          if (event.data?.type === "ps-workspace-remove-tender") {
+            removeTenderCard(event.data.tenderId);
+          }
         });
         if (historyEnabled) {
           window.addEventListener("popstate", function (event) {
