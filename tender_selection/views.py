@@ -217,19 +217,13 @@ def kanban(request):
     dirs = _kanban_column_dirs(request)
     settings = FilterSettings.load()
 
-    def _order(dir_key, *fields):
-        return tuple(f if dirs[dir_key] == "asc" else f"-{f}" for f in fields)
-
-    # Тот же порядок, что и по умолчанию в плоском списке (SORTS[DEFAULT_SORT] —
-    # ближайший срок подачи сверху) — одно и то же выражение в обоих режимах,
-    # чтобы «Входящие»/«Проверка» не расходились со списком последовательностью.
-    def _found_order(dir_key):
+    def _deadline_order(dir_key, deadline_field, tie_breaker):
         if dirs[dir_key] == "asc":
-            return (F("collecting_finished_at").desc(nulls_last=True), F("first_seen_at").asc())
-        return (SORTS[DEFAULT_SORT], F("first_seen_at").desc())
+            return (F(deadline_field).desc(nulls_last=True), F(tie_breaker).asc())
+        return (F(deadline_field).asc(nulls_last=True), F(tie_breaker).desc())
 
     def _visible(base_qs, dir_key):
-        qs = base_qs.order_by(*_found_order(dir_key))
+        qs = base_qs.order_by(*_deadline_order(dir_key, "collecting_finished_at", "first_seen_at"))
         rows, _hidden, _expired = _visible_found_tenders(
             qs, min_price=settings.min_price,
             include_words=settings.include_words, exclude_words=settings.exclude_words,
@@ -263,16 +257,20 @@ def kanban(request):
 
     calculation = [
         estimate_card(e) for e in
-        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_DRAFT).order_by(*_order("calculation", "updated_at"))
+        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_DRAFT).order_by(
+            *_deadline_order("calculation", "tender__collecting_finished_at", "updated_at")
+        )
     ]
     bidding = [
         estimate_card(e) for e in
-        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_PENDING).order_by(*_order("bidding", "updated_at"))
+        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_PENDING).order_by(
+            *_deadline_order("bidding", "tender__collecting_finished_at", "updated_at")
+        )
     ]
     result = [
         estimate_card(e) for e in
         live_estimates.exclude(tender__outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_PENDING))
-        .order_by(*_order("result", "updated_at"))
+        .order_by(*_deadline_order("result", "tender__collecting_finished_at", "updated_at"))
     ]
 
     columns = [

@@ -92,3 +92,14 @@ class IncomingPageTests(TestCase):
         self.assertContains(response, "Показать скрытые · 1")
         self.assertNotContains(response, ">Фильтры<")
         self.assertContains(response, "Настроить отбор")
+
+    def test_every_kanban_column_sorts_by_submission_deadline(self):
+        early = self._tender("early", "Ближайший", days=1, review=Tender.INTERESTING, status=Tender.PUSHED)
+        late = self._tender("late", "Дальний", days=5, review=Tender.INTERESTING, status=Tender.PUSHED)
+        TenderEstimate.objects.create(owner=self.admin, tender=early, tender_number="early", name="Ближайший")
+        TenderEstimate.objects.create(owner=self.admin, tender=late, tender_number="late", name="Дальний")
+
+        response = self.client.get("/tender-selection/", {"view": "kanban"})
+        calculation = next(column for column in response.context["columns"] if column["key"] == "calculation")
+
+        self.assertEqual([card["pk"] for card in calculation["cards"]], [early.pk, late.pk])
