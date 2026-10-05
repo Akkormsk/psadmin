@@ -122,7 +122,7 @@ class ArchiveTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"archived": True, "tender_id": tender.pk})
+        self.assertEqual(response.json(), {"lifecycle_changed": True, "tender_id": tender.pk})
 
     def test_workspace_estimate_dismiss_returns_json_without_rendering_the_board_again(self):
         tender = Tender.objects.create(purchase_number="dismiss-estimate-ajax", title="Кружки", status=Tender.PUSHED)
@@ -133,7 +133,7 @@ class ArchiveTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"archived": True, "tender_id": tender.pk})
+        self.assertEqual(response.json(), {"lifecycle_changed": True, "tender_id": tender.pk})
 
     def test_workspace_review_returns_the_tender_id(self):
         tender = Tender.objects.create(purchase_number="review-ajax", title="Кружки")
@@ -144,7 +144,18 @@ class ArchiveTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["tender_id"], tender.pk)
+        self.assertEqual(response.json(), {"lifecycle_changed": True, "tender_id": tender.pk})
+
+    def test_workspace_restore_returns_lifecycle_change(self):
+        tender = self._archived("restore-ajax", "Кружки")
+
+        response = self.client.post(
+            f"/tender-selection/{tender.pk}/restore/",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"lifecycle_changed": True, "tender_id": tender.pk})
 
     def test_archived_result_can_be_excluded_from_forecast(self):
         tender = self._archived("stat", "Кружки", source=Tender.MANUAL)

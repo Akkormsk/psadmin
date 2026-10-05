@@ -60,12 +60,12 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertEqual(response.headers["X-Frame-Options"], "SAMEORIGIN")
         self.assertContains(response, '<body class="has-account-bar workspace-embedded ">', html=False)
         self.assertContains(response, 'data-workspace-open')
-        self.assertContains(response, 'data-workspace-dismiss')
+        self.assertContains(response, 'data-tender-transition')
         self.assertContains(response, reverse("tender_pipeline_estimate", args=[estimate.pk]))
         self.assertContains(response, 'data-workspace-title="Расчёт"')
         self.assertContains(response, "ps-workspace-open")
 
-    def test_embedded_dismiss_removes_the_card_without_reloading_the_list(self):
+    def test_embedded_dismiss_refreshes_the_parent_collection(self):
         tender = Tender.objects.create(
             purchase_number="dismiss-fast",
             title="Быстро скрываемый тендер",
@@ -78,10 +78,11 @@ class LayeredWorkspaceNavigationTests(TestCase):
             )
 
         refresh.assert_called_once_with(tender.pk, force=False)
-        self.assertContains(response, "tenderId: data.tender_id")
-        self.assertContains(response, "removeTenderCard")
+        self.assertContains(response, "data-tender-transition")
+        self.assertContains(response, "ps-tender-transition")
+        self.assertNotContains(response, "removeTenderCard")
 
-    def test_embedded_stage_change_removes_the_card_from_incoming(self):
+    def test_embedded_stage_change_uses_the_shared_transition_handler(self):
         tender = Tender.objects.create(
             purchase_number="move-fast",
             title="Тендер для перехода",
@@ -93,8 +94,8 @@ class LayeredWorkspaceNavigationTests(TestCase):
                 f"{reverse('tender_selection:detail', args=[tender.pk])}?workspace=1"
             )
 
-        self.assertContains(response, "data-workspace-leaves-incoming")
-        self.assertContains(response, "ps-workspace-remove-tender")
+        self.assertContains(response, "data-tender-transition")
+        self.assertContains(response, "ps-tender-transition")
 
     def test_direct_tender_link_remains_a_normal_page(self):
         tender = Tender.objects.create(

@@ -979,7 +979,7 @@ def push_estimate(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     if tender.status == Tender.PUSHED and tender.estimates.exists():
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-            return JsonResponse({"tender_id": tender.pk})
+            return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
         return redirect("tender_selection:detail", pk=tender.pk)
     try:
         push_to_estimate(tender, request.user)
@@ -988,7 +988,7 @@ def push_estimate(request, pk):
         return redirect("tender_selection:detail", pk=pk)
     messages.success(request, "Просчёт создан. Позиции подставлены из извещения.")
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"tender_id": tender.pk})
+        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect("tender_selection:detail", pk=tender.pk)
 
 
@@ -1027,6 +1027,8 @@ def enter_outcome(request, pk):
         if protocol_found:
             tender.refresh_from_db()
             messages.success(request, f"Итоговый протокол загружен из ЕИС: {tender.get_outcome_status_display()}.")
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
             return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
         outcome = fetch_tender_outcome(estimate)
         if not outcome.get("found"):
@@ -1045,6 +1047,8 @@ def enter_outcome(request, pk):
             tender.outcome_checked_at = timezone.now()
             tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
             messages.info(request, "Цена контракта найдена, но выиграли мы или нет — решите сами кнопками ниже (свой ИНН не настроен).")
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
 
@@ -1078,7 +1082,7 @@ def dismiss(request, pk):
     _clear_tender_document_previews(tender)
     archive_tender(tender)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"archived": True, "tender_id": tender.pk})
+        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
 
 
@@ -1093,7 +1097,7 @@ def dismiss_estimate(request, pk):
     _clear_tender_document_previews(tender)
     archive_tender(tender)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"archived": True, "tender_id": tender.pk})
+        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
 
 
@@ -1106,6 +1110,8 @@ def restore(request, pk):
     tender.archived_at = None
     tender.archived_from_stage = ""
     tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(f"{reverse('tender_selection:list')}?view=kanban")
 
 
@@ -1234,5 +1240,5 @@ def set_review(request, pk):
         if was_unreviewed and value != Tender.UNREVIEWED and not tender.risk_checked_at:
             start_risk_assessment_in_background(tender.pk)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"tender_id": tender.pk, "review": tender.review, "label": tender.get_review_display()})
+        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")

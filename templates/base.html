@@ -189,6 +189,25 @@
         }
         document.addEventListener("click", workspaceLink);
 
+        document.addEventListener("submit", function (event) {
+          const form = event.target.closest("form[data-tender-transition]");
+          if (!form || event.defaultPrevented) return;
+          if (!embedded && !document.querySelector("[data-tender-collection]")) return;
+          event.preventDefault();
+          form.querySelectorAll("button, input[type=submit]").forEach(function (control) { control.disabled = true; });
+          fetch(form.action, {method: "POST", body: new FormData(form), headers: {"X-Requested-With": "XMLHttpRequest"}})
+            .then(function (response) {
+              if (!response.ok) throw new Error();
+              return response.json();
+            })
+            .then(function (data) {
+              if (!data.lifecycle_changed) throw new Error();
+              if (embedded) window.parent.postMessage({type: "ps-tender-transition"}, location.origin);
+              else window.location.reload();
+            })
+            .catch(function () { form.submit(); });
+        });
+
         if (embedded) return;
         const root = document.getElementById("app-workspace-stack");
         const layers = [];
@@ -256,11 +275,6 @@
           }
         }
 
-        function removeTenderCard(tenderId) {
-          if (!tenderId) return;
-          document.querySelectorAll(`[data-tender-id="${tenderId}"]`).forEach(function (card) { card.remove(); });
-        }
-
         function open(rawUrl, title) {
           const element = document.createElement("section");
           element.className = "app-workspace-layer is-loading";
@@ -319,11 +333,10 @@
             workspaceApi.open(event.data.url, event.data.title || "Рабочее окно");
           }
           if (event.data?.type === "ps-workspace-close") {
-            removeTenderCard(event.data.tenderId);
             workspaceApi.closeOne(Boolean(event.data.refresh));
           }
-          if (event.data?.type === "ps-workspace-remove-tender") {
-            removeTenderCard(event.data.tenderId);
+          if (event.data?.type === "ps-tender-transition") {
+            workspaceApi.closeOne(true);
           }
         });
         if (historyEnabled) {

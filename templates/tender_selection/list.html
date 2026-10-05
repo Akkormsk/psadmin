@@ -10,7 +10,7 @@
   <h1>Тендеры</h1>
   {% include "tender_selection/_nav.html" with active="incoming" %}
 
-  <section class="panel ts-sheet">
+  <section class="panel ts-sheet" data-tender-collection>
     <div class="ts-head">
       <div>
         <h2 class="ts-head__title">Входящие <span class="ts-count-pill">{{ shown_count }}</span></h2>
@@ -97,7 +97,7 @@
           {% else %}<span class="ts-row__left">Срок не указан</span>{% endif %}
         </div>
         <div class="ts-row__actions">
-          <form method="post" action="{% url 'tender_selection:review' tender.pk %}">
+          <form method="post" action="{% url 'tender_selection:review' tender.pk %}" data-tender-transition>
             {% csrf_token %}<input type="hidden" name="review" value="interesting">
             <button type="submit" class="ts-work">В работу →</button>
           </form>
@@ -106,8 +106,8 @@
             <div class="ts-menu__list">
               <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">Открыть тендер</a>
               {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
-              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
-              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="other"><button type="submit">Скрыть по другой причине</button></form>
+              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
+              <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="other"><button type="submit">Скрыть по другой причине</button></form>
             </div>
           </details>
         </div>

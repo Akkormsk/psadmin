@@ -10,7 +10,7 @@
   <h1>Тендеры</h1>
   {% include "tender_selection/_nav.html" with active="board" %}
 
-  <section class="panel ts-sheet">
+  <section class="panel ts-sheet" data-tender-collection>
     <div class="ts-head">
       <h2 class="ts-head__title">Торги <span class="ts-count-pill">{{ nav_counts.board }}</span></h2>
       <div class="ts-row__actions">
@@ -32,7 +32,7 @@
         <div class="kb-column__cards">
           {% for card in column.cards %}
           <div class="kb-card">
-            <form method="post" action="{{ card.dismiss_url }}" class="kb-card__dismiss"{% if card.warn_before_dismiss %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
+            <form method="post" action="{{ card.dismiss_url }}" class="kb-card__dismiss" data-tender-transition{% if card.warn_before_dismiss %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
               {% csrf_token %}
               <input type="hidden" name="next" value="{{ request.get_full_path }}">
               <button type="submit" class="hover-action" title="Скрыть тендер" aria-label="Скрыть тендер">×</button>

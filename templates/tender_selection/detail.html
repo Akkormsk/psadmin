@@ -37,12 +37,12 @@
       </div>
       <div class="panel-actions ts-detail__actions">
         {% if is_archived %}
-        <form method="post" action="{% url 'tender_selection:restore' tender.pk %}">
+        <form method="post" action="{% url 'tender_selection:restore' tender.pk %}" data-tender-transition>
           {% csrf_token %}<button type="submit" class="button-secondary">Восстановить</button>
         </form>
         {% else %}
         {% if estimate %}
-        <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}" data-workspace-dismiss{% if not tender.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
+        <form method="post" action="{% url 'tender_selection:dismiss_estimate' estimate.pk %}" data-tender-transition{% if not tender.outcome_checked_at %} onsubmit="return confirm('Итог торгов ещё не внесён — архивировать без итога?')"{% endif %}>
           {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
           <button type="submit" class="ts-quiet">Скрыть</button>
         </form>
@@ -56,17 +56,17 @@
         <details class="ts-menu">
           <summary class="ts-quiet">Скрыть</summary>
           <div class="ts-menu__list">
-            <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-workspace-dismiss>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
-            <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-workspace-dismiss>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="reason" value="other"><button type="submit">Другая причина</button></form>
+            <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
+            <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="reason" value="other"><button type="submit">Другая причина</button></form>
           </div>
         </details>
         {% if tender.review == "unreviewed" %}
-        <form method="post" action="{% url 'tender_selection:review' tender.pk %}" data-workspace-leaves-incoming>
+        <form method="post" action="{% url 'tender_selection:review' tender.pk %}" data-tender-transition>
           {% csrf_token %}<input type="hidden" name="review" value="interesting">
           <button type="submit" class="ts-work">В работу →</button>
         </form>
         {% else %}
-        <form method="post" action="{% url 'tender_selection:push' tender.pk %}" data-workspace-leaves-incoming>
+        <form method="post" action="{% url 'tender_selection:push' tender.pk %}" data-tender-transition>
           {% csrf_token %}
           <button type="submit" class="ts-work">В расчёт →</button>
         </form>
@@ -304,14 +304,14 @@
     </form>
 
     <div class="tender-outcome__actions">
-      <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}">
+      <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" data-tender-transition>
         {% csrf_token %}
         <button type="submit" class="{% if tender.outcome_status == 'pending' %}button-success{% else %}button-secondary{% endif %}">{% if protocol %}Обновить из ЕИС{% else %}Проверить протокол в ЕИС{% endif %}</button>
       </form>
       {% if tender.outcome_status == "pending" or tender.outcome_status == "published" %}
       <details class="tender-outcome__manual">
         <summary class="button-secondary">Внести вручную</summary>
-        <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__manual-options">
+        <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" class="tender-outcome__manual-options" data-tender-transition>
           {% csrf_token %}
           <label>Фактическое снижение, % <input type="number" name="actual_reduction_percent" min="0" max="100" step="0.01"></label>
           <button type="submit" name="status" value="won" class="button-secondary">Выиграли</button>
@@ -650,41 +650,6 @@
           showResult(data);
         })
         .catch(function () { uploadStatus.textContent = "Не удалось загрузить файл."; });
-    });
-  })();
-
-  (function () {
-    if (window.parent === window || !document.body.classList.contains("workspace-embedded")) return;
-    document.querySelectorAll("[data-workspace-leaves-incoming]").forEach(function (form) {
-      form.addEventListener("submit", function (event) {
-        if (event.defaultPrevented) return;
-        event.preventDefault();
-        fetch(form.action, {method: "POST", body: new FormData(form), headers: {"X-Requested-With": "XMLHttpRequest"}})
-          .then(function (response) {
-            if (!response.ok) throw new Error();
-            return response.json();
-          })
-          .then(function (data) {
-            window.parent.postMessage({type: "ps-workspace-remove-tender", tenderId: data.tender_id}, location.origin);
-            window.location.reload();
-          })
-          .catch(function () { form.submit(); });
-      });
-    });
-    document.querySelectorAll("[data-workspace-dismiss]").forEach(function (form) {
-      form.addEventListener("submit", function (event) {
-        if (event.defaultPrevented) return;
-        event.preventDefault();
-        fetch(form.action, {method: "POST", body: new FormData(form), headers: {"X-Requested-With": "XMLHttpRequest"}})
-          .then(function (response) {
-            if (!response.ok) throw new Error();
-            return response.json();
-          })
-          .then(function (data) {
-            window.parent.postMessage({type: "ps-workspace-close", tenderId: data.tender_id}, location.origin);
-          })
-          .catch(function () { form.submit(); });
-      });
     });
   })();
 

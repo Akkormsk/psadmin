@@ -10,7 +10,7 @@
   <h1>Тендеры</h1>
   {% include "tender_selection/_nav.html" with active="" %}
 
-  <section class="panel ts-sheet">
+  <section class="panel ts-sheet" data-tender-collection>
     <div class="ts-head">
       <div>
         <h2 class="ts-head__title">Архив <span class="ts-count-pill">{{ page_obj.paginator.count }}</span></h2>
@@ -70,7 +70,7 @@
           <span class="ts-row__left">{% if tender.archived_at %}скрыт {{ tender.archived_at|timezone:"Europe/Moscow"|date:"d.m.Y" }}{% else %}дата скрытия неизвестна{% endif %}</span>
         </div>
         <div class="ts-row__actions">
-          <form method="post" action="{% url 'tender_selection:restore' tender.pk %}">{% csrf_token %}<button type="submit" class="ts-quiet">Восстановить</button></form>
+          <form method="post" action="{% url 'tender_selection:restore' tender.pk %}" data-tender-transition>{% csrf_token %}<button type="submit" class="ts-quiet">Восстановить</button></form>
         </div>
       </li>
       {% endwith %}
