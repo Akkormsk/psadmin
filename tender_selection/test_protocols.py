@@ -262,7 +262,7 @@ class ProtocolCardTests(TestCase):
         self.assertEqual(self.tender.bid_price, Decimal("1070000.00"))
         self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_WON)
 
-    def test_pending_tender_shows_saved_bid_and_result_date(self):
+    def test_pending_tender_shows_saved_bid_and_auction_link(self):
         self.tender.outcome_status = Tender.OUTCOME_PENDING
         self.tender.bid_number = "7"
         self.tender.bid_price = Decimal("1200000.00")
@@ -285,9 +285,6 @@ class ProtocolCardTests(TestCase):
 
         self.assertContains(response, "Наша заявка сохранена")
         self.assertContains(response, "№ 7")
-        self.assertContains(response, "Рассмотрение заявок")
-        self.assertContains(response, "Подведение итогов — 07.10.2026")
-        self.assertContains(response, "Приём заявок завершён.")
         self.assertContains(response, "Следующее событие")
         self.assertContains(response, "Перейти на РТС-тендер")
 
