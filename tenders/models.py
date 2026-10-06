@@ -2,6 +2,7 @@ from decimal import Decimal
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -892,3 +893,63 @@ class Step4DecisionCache(models.Model):
 
     def __str__(self):
         return f"{self.supplier}:{self.product_external_id}:{self.decision}"
+
+class TenderSourceItem(models.Model):
+    tender = models.ForeignKey("tender_selection.Tender", on_delete=models.CASCADE, related_name="v2_source_items")
+    source_key = models.CharField(max_length=160)
+    source_type = models.CharField(max_length=32, default="notification")
+    original_text = models.TextField()
+    quantity = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    unit = models.CharField(max_length=64, blank=True)
+    requirements = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+    confidence = models.DecimalField(max_digits=5, decimal_places=4, null=True, blank=True)
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="derived_items")
+    supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by_items")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=["tender","source_key"],name="unique_v2_source_item")]
+
+class TenderComputeJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED="queued"; PREPARING_INPUT="preparing_input"; ROUTING="routing"; PREPARING="preparing"; PARTIAL="partial"; READY="ready"; NEEDS_REVIEW="needs_review"; FAILED="failed"; CANCELLED="cancelled"; RUNNING="running"
+    tender=models.ForeignKey("tender_selection.Tender",on_delete=models.CASCADE,related_name="v2_compute_jobs")
+    status=models.CharField(max_length=24,choices=Status.choices,default=Status.QUEUED)
+    version=models.CharField(max_length=64,default="v2")
+    trigger=models.CharField(max_length=64,default="manual")
+    attempt_count=models.PositiveIntegerField(default=0)
+    started_at=models.DateTimeField(null=True,blank=True); completed_at=models.DateTimeField(null=True,blank=True)
+    diagnostics=models.JSONField(default=dict,blank=True); total_cost=models.DecimalField(max_digits=12,decimal_places=4,default=0); error=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
+
+class TenderComputeLine(models.Model):
+    job=models.ForeignKey(TenderComputeJob,on_delete=models.CASCADE,related_name="lines")
+    source_item=models.ForeignKey(TenderSourceItem,on_delete=models.PROTECT,related_name="compute_lines")
+    input_snapshot=models.JSONField(default=dict,blank=True); route_key=models.CharField(max_length=100,blank=True); engine_key=models.CharField(max_length=100,blank=True); route_confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); route_metadata=models.JSONField(default=dict,blank=True)
+    status=models.CharField(max_length=32,default="queued"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["job","source_item"],name="unique_v2_compute_line")]
+
+class TenderComputeWorkUnit(models.Model):
+    job=models.ForeignKey(TenderComputeJob,on_delete=models.CASCADE,related_name="work_units")
+    engine_key=models.CharField(max_length=100); dedupe_key=models.CharField(max_length=128); input_fingerprint=models.CharField(max_length=128); status=models.CharField(max_length=32,default="queued")
+    lines=models.ManyToManyField(TenderComputeLine,related_name="work_units"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True); attempt_count=models.PositiveIntegerField(default=0); error=models.JSONField(default=dict,blank=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["job","engine_key","dedupe_key"],name="unique_v2_work_unit")]
+
+class TenderComputePreparation(models.Model):
+    work_unit=models.ForeignKey(TenderComputeWorkUnit,on_delete=models.CASCADE,related_name="preparations"); engine_key=models.CharField(max_length=100); preparation_key=models.CharField(max_length=100); status=models.CharField(max_length=32,default="queued"); payload=models.JSONField(default=dict,blank=True); freshness=models.CharField(max_length=64,blank=True); cost=models.DecimalField(max_digits=12,decimal_places=4,default=0); attempt_count=models.PositiveIntegerField(default=0); started_at=models.DateTimeField(null=True,blank=True); completed_at=models.DateTimeField(null=True,blank=True); error=models.JSONField(default=dict,blank=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["work_unit","engine_key","preparation_key"],name="unique_v2_preparation")]
+
+class OwnerInteraction(models.Model):
+    tender=models.ForeignKey("tender_selection.Tender",null=True,blank=True,on_delete=models.SET_NULL); source_item=models.ForeignKey(TenderSourceItem,null=True,blank=True,on_delete=models.SET_NULL); compute_line=models.ForeignKey(TenderComputeLine,null=True,blank=True,on_delete=models.SET_NULL); work_unit=models.ForeignKey(TenderComputeWorkUnit,null=True,blank=True,on_delete=models.SET_NULL)
+    status=models.CharField(max_length=24,default="open"); engine_key=models.CharField(max_length=100,blank=True); question=models.TextField(); reason=models.TextField(blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); context=models.JSONField(default=dict,blank=True); possible_answers=models.JSONField(default=dict,blank=True); created_at=models.DateTimeField(auto_now_add=True); answered_at=models.DateTimeField(null=True,blank=True)
+class OwnerFeedbackEvent(models.Model):
+    interaction=models.ForeignKey(OwnerInteraction,on_delete=models.CASCADE,related_name="feedback_events"); actor=models.ForeignKey(settings.AUTH_USER_MODEL,null=True,blank=True,on_delete=models.SET_NULL); raw_text=models.TextField(blank=True); payload=models.JSONField(default=dict,blank=True); scope=models.CharField(max_length=64,default="current_tender"); created_at=models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("OwnerFeedbackEvent is immutable")
+        return super().save(*args, **kwargs)
+class KnowledgeRecord(models.Model):
+    feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
