@@ -111,23 +111,21 @@ class ConfiguredBehaviourTests(TestCase):
         from .models import Tender
 
         filters = FilterSettings.load()
-        filters.incoming_ttl_days = 3
-        filters.save()
         owner = get_user_model().objects.create_user("manager")
         evaluation = Tender.objects.create(
             purchase_number="expired-evaluation", review=Tender.INTERESTING,
-            collecting_finished_at=timezone.now() - timedelta(days=4),
+            collecting_finished_at=timezone.now() - timedelta(minutes=1),
         )
         calculation = Tender.objects.create(
             purchase_number="expired-calculation", status=Tender.PUSHED,
             outcome_status=Tender.OUTCOME_DRAFT,
-            collecting_finished_at=timezone.now() - timedelta(days=4),
+            collecting_finished_at=timezone.now() - timedelta(minutes=1),
         )
         TenderEstimate.objects.create(owner=owner, tender=calculation, tender_number=calculation.purchase_number, name="Расчёт")
         bidding = Tender.objects.create(
             purchase_number="active-bidding", status=Tender.PUSHED,
             outcome_status=Tender.OUTCOME_PENDING,
-            collecting_finished_at=timezone.now() - timedelta(days=4),
+            collecting_finished_at=timezone.now() - timedelta(minutes=1),
         )
 
         services.purge_stale()

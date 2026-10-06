@@ -628,8 +628,8 @@ def purge_stale() -> dict:
     - скрытые фильтром — как и раньше, удаляются, остаётся только след для
       аудита слов (IncomingTrace) — для статистики торгов они бесполезны.
 
-    Просроченные «Оценка» и «Расчёт» уходят в архив тем же сроком. «Торги» и
-    опубликованные результаты остаются на доске до фиксации результата."""
+    Просроченные «Оценка» и «Расчёт» уходят в архив сразу после дедлайна.
+    «Торги» и опубликованные результаты остаются на доске до фиксации результата."""
 
     from .filtering import match_title, parse_terms
     from .models import IncomingTrace
@@ -662,15 +662,14 @@ def purge_stale() -> dict:
             status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
         )
         expired_incoming, _ = Tender.objects.filter(id__in=to_delete_ids).delete()
-        stale_before = now - timedelta(days=settings.incoming_ttl_days)
         archived_evaluation = Tender.objects.filter(
             status=Tender.NEW, review=Tender.INTERESTING,
-            collecting_finished_at__lt=stale_before,
+            collecting_finished_at__lt=now,
         ).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="evaluation")
         archived_calculation = Tender.objects.filter(
             status=Tender.PUSHED,
             outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_NOT_PARTICIPATED),
-            collecting_finished_at__lt=stale_before,
+            collecting_finished_at__lt=now,
         ).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="calculation")
     return {
         "expired_incoming": expired_incoming, "archived_incoming": archived_incoming,
