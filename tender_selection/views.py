@@ -1029,7 +1029,7 @@ def enter_outcome(request, pk):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
             return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
-        outcome = fetch_tender_outcome(estimate)
+        outcome = fetch_tender_outcome(tender)
         if not outcome.get("found"):
             messages.warning(request, "Контракт по этому номеру закупки в реестре пока не найден — попробуйте позже или внесите итог вручную.")
         elif outcome.get("auto_status"):
