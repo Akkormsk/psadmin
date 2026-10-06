@@ -100,6 +100,45 @@ class ConfiguredBehaviourTests(TestCase):
 
         self.assertEqual(list(Tender.objects.values_list("purchase_number", flat=True)), ["fresh"])
 
+    def test_expired_evaluation_and_calculation_leave_the_kanban(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from tenders.models import TenderEstimate
+
+        from . import services
+        from .models import Tender
+
+        filters = FilterSettings.load()
+        filters.incoming_ttl_days = 3
+        filters.save()
+        owner = get_user_model().objects.create_user("manager")
+        evaluation = Tender.objects.create(
+            purchase_number="expired-evaluation", review=Tender.INTERESTING,
+            collecting_finished_at=timezone.now() - timedelta(days=4),
+        )
+        calculation = Tender.objects.create(
+            purchase_number="expired-calculation", status=Tender.PUSHED,
+            outcome_status=Tender.OUTCOME_DRAFT,
+            collecting_finished_at=timezone.now() - timedelta(days=4),
+        )
+        TenderEstimate.objects.create(owner=owner, tender=calculation, tender_number=calculation.purchase_number, name="Расчёт")
+        bidding = Tender.objects.create(
+            purchase_number="active-bidding", status=Tender.PUSHED,
+            outcome_status=Tender.OUTCOME_PENDING,
+            collecting_finished_at=timezone.now() - timedelta(days=4),
+        )
+
+        services.purge_stale()
+
+        evaluation.refresh_from_db()
+        calculation.refresh_from_db()
+        bidding.refresh_from_db()
+        self.assertEqual((evaluation.status, evaluation.archived_from_stage), (Tender.DISMISSED, "evaluation"))
+        self.assertEqual((calculation.status, calculation.archived_from_stage), (Tender.DISMISSED, "calculation"))
+        self.assertEqual(bidding.status, Tender.PUSHED)
+
     def test_forecast_uses_configured_sample_size_and_hint_bounds(self):
         from .models import ContractStat
         from .models import Tender

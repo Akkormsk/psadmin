@@ -621,15 +621,15 @@ def retry_pending_deadlines(*, limit: int = 10, pause: float = None) -> tuple[in
 
 
 def purge_stale() -> dict:
-    """Фоновая уборка «Входящих» по истечении срока подачи:
+    """Фоновая уборка карточек по истечении срока подачи:
     - показанные (прошли плюс/минус-фильтр) — архивируются насовсем, а не
       удаляются: даже нетронутый тендер — источник статистики по торгам
       (см. retry_pending_protocols/_outcomes — обогащают именно архив);
     - скрытые фильтром — как и раньше, удаляются, остаётся только след для
       аудита слов (IncomingTrace) — для статистики торгов они бесполезны.
 
-    Архив (уже переведённый в работу) сюда не попадает — восстановление
-    работает как и раньше."""
+    Просроченные «Оценка» и «Расчёт» уходят в архив тем же сроком. «Торги» и
+    опубликованные результаты остаются на доске до фиксации результата."""
 
     from .filtering import match_title, parse_terms
     from .models import IncomingTrace
@@ -662,9 +662,19 @@ def purge_stale() -> dict:
             status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
         )
         expired_incoming, _ = Tender.objects.filter(id__in=to_delete_ids).delete()
+        stale_before = now - timedelta(days=settings.incoming_ttl_days)
+        archived_evaluation = Tender.objects.filter(
+            status=Tender.NEW, review=Tender.INTERESTING,
+            collecting_finished_at__lt=stale_before,
+        ).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="evaluation")
+        archived_calculation = Tender.objects.filter(
+            status=Tender.PUSHED,
+            outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_NOT_PARTICIPATED),
+            collecting_finished_at__lt=stale_before,
+        ).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="calculation")
     return {
         "expired_incoming": expired_incoming, "archived_incoming": archived_incoming,
-        "archived_found": 0, "archived_estimates": 0,
+        "archived_evaluation": archived_evaluation, "archived_calculation": archived_calculation,
     }
 
 
