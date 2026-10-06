@@ -1011,7 +1011,8 @@ def enter_outcome(request, pk):
         messages.error(request, "Фактическое снижение должно быть числом от 0 до 100.")
         return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
-    if manual_status in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED):
+    lifecycle_changed = manual_status in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED)
+    if lifecycle_changed:
         apply_tender_outcome(
             estimate, status=manual_status, reduction_percent=reduction_percent,
             source=Tender.OUTCOME_MANUAL,
@@ -1039,6 +1040,7 @@ def enter_outcome(request, pk):
                 reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
             )
             tender.refresh_from_db()
+            lifecycle_changed = True
             messages.success(request, f"Итог найден автоматически: {tender.get_outcome_status_display()}.")
         else:
             tender.contract_price = outcome.get("price")
@@ -1047,7 +1049,9 @@ def enter_outcome(request, pk):
             tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
             messages.info(request, "Цена контракта найдена, но выиграли мы или нет — решите сами кнопками ниже (свой ИНН не настроен).")
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
+        if lifecycle_changed:
+            return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
+        return JsonResponse({"lifecycle_changed": False, "refresh_detail": True})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
 

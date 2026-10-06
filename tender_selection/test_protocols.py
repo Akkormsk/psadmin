@@ -304,10 +304,14 @@ class OutcomeAndExtrasRegressionTests(TestCase):
     def test_protocol_check_receives_tender_not_estimate(self):
         with patch("tender_selection.views.check_protocol", return_value=False) as check, \
                 patch("tender_selection.views.fetch_tender_outcome", return_value={"found": False}) as fetch:
-            self.client.post(reverse("tender_selection:enter_outcome", args=[self.estimate.pk]))
+            response = self.client.post(
+                reverse("tender_selection:enter_outcome", args=[self.estimate.pk]),
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
 
         check.assert_called_once_with(self.tender)
         fetch.assert_called_once_with(self.tender)
+        self.assertEqual(response.json(), {"lifecycle_changed": False, "refresh_detail": True})
 
     def test_extras_refresh_records_check_time(self):
         with patch("tender_selection.services.gosplan.fetch_clarifications", return_value=[]), \

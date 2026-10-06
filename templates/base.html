@@ -201,9 +201,16 @@
               return response.json();
             })
             .then(function (data) {
-              if (!data.lifecycle_changed) throw new Error();
-              if (embedded) window.parent.postMessage({type: "ps-tender-transition"}, location.origin);
-              else window.location.reload();
+              if (data.lifecycle_changed) {
+                if (embedded) window.parent.postMessage({type: "ps-tender-transition"}, location.origin);
+                else window.location.reload();
+                return;
+              }
+              if (data.refresh_detail) {
+                window.location.reload();
+                return;
+              }
+              throw new Error();
             })
             .catch(function () { form.submit(); });
         });
