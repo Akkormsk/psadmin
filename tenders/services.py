@@ -2617,7 +2617,7 @@ def _run_name_filter_jev(item, id_names, *, usage=None, intensity="cautious"):
     return keep
 
 
-def _run_name_filter(item, id_names, *, usage=None, model=None, intensity="cautious"):
+def _run_name_filter(item, id_names, *, usage=None, model=None, intensity="cautious", on_valid_batch=None):
     """Step 4: the cheap AI name pass. The cheap model reads each product
     NAME (nothing else) and drops the ones that are not the requested
     `item` — a case / box / holder / cable / a gift set of several things,
@@ -2669,6 +2669,8 @@ def _run_name_filter(item, id_names, *, usage=None, model=None, intensity="cauti
                 continue
             if 1 <= index <= len(batch):
                 rejected.add(batch[index - 1][0])
+        if isinstance(raw, dict) and isinstance(raw.get("not_item"), list) and on_valid_batch:
+            on_valid_batch(batch, rejected)
         return rejected, batch_usage
 
     if len(batches) == 1:

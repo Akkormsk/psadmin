@@ -3,6 +3,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class TenderSettings(models.Model):
@@ -861,3 +862,33 @@ class Proposal(models.Model):
 
     def __str__(self):
         return self.summary
+class Step4DecisionCache(models.Model):
+    class Decision(models.TextChoices):
+        PASS = "pass", "Подходит"
+        REJECT = "reject", "Не подходит"
+
+    target_signature = models.CharField("Нормализованный запрос", max_length=500)
+    supplier = models.ForeignKey(CatalogSupplier, on_delete=models.CASCADE, related_name="step4_decision_cache_entries")
+    product_external_id = models.CharField("ID товара поставщика", max_length=100)
+    candidate_signature = models.CharField("Хеш названия кандидата", max_length=64)
+    decision = models.CharField("Решение", max_length=8, choices=Decision.choices)
+    model_name = models.CharField("Модель", max_length=120)
+    contract_version = models.CharField("Версия контракта", max_length=64)
+    created_at = models.DateTimeField("Создано", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлено", auto_now=True)
+    last_used_at = models.DateTimeField("Последнее использование", null=True, blank=True)
+    last_verified_at = models.DateTimeField("Последняя проверка", default=timezone.now)
+    hit_count = models.PositiveIntegerField("Попаданий в кэш", default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["target_signature", "supplier", "product_external_id", "candidate_signature", "contract_version"],
+                name="unique_step4_decision_cache_identity",
+            ),
+        ]
+        verbose_name = "Решение кэша шага 4"
+        verbose_name_plural = "Решения кэша шага 4"
+
+    def __str__(self):
+        return f"{self.supplier}:{self.product_external_id}:{self.decision}"

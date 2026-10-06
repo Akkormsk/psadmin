@@ -27,6 +27,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from django.conf import settings as django_settings
 from django.db.models import F
 from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
@@ -983,6 +984,8 @@ class Cascade:
         configured_model = settings.get("model")
         model = "jev" if configured_model == "jev" else _selected_model(configured_model, _FAST_MODEL)
         use_cache = settings.get("cache", "yes") != "no"
+        if django_settings.STEP4_DECISION_CACHE_ENABLED and model != "jev":
+            return self._step4_name_filter_with_decision_cache(pool, model=model, intensity=intensity)
 
         ids = sorted(str(p.external_id) for p in pool)
         cache_variant = "" if model == _FAST_MODEL and intensity == "cautious" else f"|{model}|{intensity}"
@@ -1018,6 +1021,110 @@ class Cascade:
         kept = [p for p in pool if str(p.external_id) in keep]
         self.diagnostics["name_filter_removed"] = len(pool) - len(kept)
         return kept
+
+    def _step4_name_filter_with_decision_cache(self, pool, *, model, intensity):
+        from .services import _run_name_filter
+        from .step4_decision_cache import (
+            Step4Decision,
+            Step4DecisionWrite,
+            Step4ProductCandidate,
+            bulk_lookup_step4_decisions,
+            bulk_store_step4_decisions,
+            get_step4_candidate_text,
+        )
+
+        lookup_started = time.monotonic()
+        by_supplier = {}
+        for product in pool:
+            by_supplier.setdefault(product.supplier_id, []).append(product)
+
+        cached_decisions = {}
+        stale_count = 0
+        for supplier_id, products in by_supplier.items():
+            candidates = [
+                Step4ProductCandidate(str(product.external_id), get_step4_candidate_text(product.full_name or product.name))
+                for product in products
+            ]
+            lookup = bulk_lookup_step4_decisions(
+                target=self.item or _cell(self.line.get("name")),
+                supplier=supplier_id,
+                candidates=candidates,
+            )
+            stale_count += sum(
+                str(product.external_id) in lookup.stale_external_ids for product in products
+            )
+            for product in products:
+                entry = lookup.hits.get(str(product.external_id))
+                if entry:
+                    cached_decisions[id(product)] = entry.decision
+
+        misses = [product for product in pool if id(product) not in cached_decisions]
+        self.diagnostics.update({
+            "step4_cache_total_candidates": len(pool),
+            "step4_cache_hits": len(cached_decisions),
+            "step4_cache_misses": len(misses),
+            "step4_cache_stale": stale_count,
+            "step4_cache_hit_rate": len(cached_decisions) / len(pool) if pool else 0,
+            "step4_cache_lookup_ms": round((time.monotonic() - lookup_started) * 1000, 2),
+            "step4_cache_write_count": 0,
+            "step4_gemini_candidates": len(misses),
+        })
+
+        pending_writes = {}
+        miss_keep = set()
+        if misses:
+            miss_by_supplier = {}
+            for product in misses:
+                miss_by_supplier.setdefault(product.supplier_id, []).append(product)
+            nf_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            for supplier_id, products in miss_by_supplier.items():
+                id_names = [(product.external_id, get_step4_candidate_text(product.full_name or product.name)) for product in products]
+
+                def record_valid_batch(batch, rejected, supplier_id=supplier_id):
+                    writes = pending_writes.setdefault(supplier_id, [])
+                    for external_id, candidate_name in batch:
+                        writes.append(
+                            Step4DecisionWrite(
+                                str(external_id),
+                                candidate_name,
+                                Step4Decision.REJECT if external_id in rejected else Step4Decision.PASS,
+                                model,
+                            )
+                        )
+
+                keep = _run_name_filter(
+                    self.item or _cell(self.line.get("name")),
+                    id_names,
+                    usage=nf_usage,
+                    model=model,
+                    intensity=intensity,
+                    on_valid_batch=record_valid_batch,
+                )
+                miss_keep.update(str(external_id) for external_id, _name in id_names if keep is None or external_id in keep)
+            self._add_usage(nf_usage, model)
+
+        write_count = 0
+        for supplier_id, decisions in pending_writes.items():
+            if decisions:
+                bulk_store_step4_decisions(
+                    target=self.item or _cell(self.line.get("name")),
+                    supplier=supplier_id,
+                    decisions=decisions,
+                )
+                write_count += len(decisions)
+        self.diagnostics["step4_cache_write_count"] = write_count
+
+        kept = [
+            product for product in pool
+            if (
+                cached_decisions.get(id(product)) == Step4Decision.PASS
+                or (id(product) not in cached_decisions and str(product.external_id) in miss_keep)
+            )
+        ]
+        self.diagnostics["name_filter"] = "decision_cache"
+        self.diagnostics["name_filter_removed"] = len(pool) - len(kept)
+        return kept
+
 
     # -- шаг 5: цвет + остаток + схлопывание + проверка критериев ----- #
     def step_5_hard_gates_and_collapse(self, pool) -> list[dict]:
