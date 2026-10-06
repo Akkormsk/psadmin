@@ -1019,7 +1019,7 @@ def enter_outcome(request, pk):
         messages.success(request, f"Итог внесён вручную: {tender.get_outcome_status_display()}.")
     else:
         try:
-            protocol_found = check_protocol(estimate)
+            protocol_found = check_protocol(tender)
         except ProtocolError as exc:
             protocol_found = False
             messages.warning(request, f"ЕИС сейчас не ответил ({exc}) — проверю протокол позже автоматически.")

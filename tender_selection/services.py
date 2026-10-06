@@ -699,6 +699,7 @@ def extras_for(tender, *, force: bool = False) -> tuple[list, list]:
     if not extras_need_refresh(tender, force=force):
         return tender.clarifications_raw or [], tender.complaints_raw or []
 
+    now = timezone.now()
     clar = tender.clarifications_raw or []
     comp = tender.complaints_raw or []
     got_any = False

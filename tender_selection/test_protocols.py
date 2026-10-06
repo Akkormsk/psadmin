@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from tenders.models import TenderEstimate
@@ -281,6 +282,39 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, "№ 7")
         self.assertContains(response, "Подведение итогов — 07.10.2026")
         self.assertContains(response, "По срокам извещения: рассмотрение заявок")
+
+
+class OutcomeAndExtrasRegressionTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(self.admin)
+        self.tender = Tender.objects.create(
+            purchase_number="0172200010426000028",
+            eis_url="https://zakupki.gov.ru/epz/order/notice/zk44/view/common-info.html?regNumber=0172200010426000028",
+            law="fz44",
+            outcome_status=Tender.OUTCOME_PENDING,
+        )
+        self.estimate = TenderEstimate.objects.create(
+            owner=self.admin,
+            tender=self.tender,
+            tender_number=self.tender.purchase_number,
+            name="Сувенирная продукция",
+        )
+
+    def test_protocol_check_receives_tender_not_estimate(self):
+        with patch("tender_selection.views.check_protocol", return_value=False) as check, \
+                patch("tender_selection.views.fetch_tender_outcome", return_value={"found": False}):
+            self.client.post(reverse("tender_selection:enter_outcome", args=[self.estimate.pk]))
+
+        check.assert_called_once_with(self.tender)
+
+    def test_extras_refresh_records_check_time(self):
+        with patch("tender_selection.services.gosplan.fetch_clarifications", return_value=[]), \
+                patch("tender_selection.services.gosplan.fetch_complaints", return_value=[]):
+            services.extras_for(self.tender)
+
+        self.tender.refresh_from_db()
+        self.assertIsNotNone(self.tender.extras_checked_at)
 
 
 class ContractWinnerReconciliationTests(TestCase):
