@@ -540,6 +540,7 @@ def tender_detail(request, pk):
         "return_url": return_url,
         "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
+        "bid_reduction_percent": reduction_percent_from(tender.max_price, tender.bid_price),
         "protocol": _protocol_view(tender),
         "show_outcome": bool(
             (estimate and tender.outcome_status != Tender.OUTCOME_DRAFT)

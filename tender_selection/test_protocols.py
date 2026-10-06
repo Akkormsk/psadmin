@@ -261,6 +261,27 @@ class ProtocolCardTests(TestCase):
         self.assertEqual(self.tender.bid_price, Decimal("1070000.00"))
         self.assertEqual(self.tender.outcome_status, Tender.OUTCOME_WON)
 
+    def test_pending_tender_shows_saved_bid_and_result_date(self):
+        self.tender.outcome_status = Tender.OUTCOME_PENDING
+        self.tender.bid_number = "7"
+        self.tender.bid_price = Decimal("1200000.00")
+        self.tender.protocol = {}
+        self.tender.save()
+        notification = {
+            "source": {"notificationInfo": {"procedureInfo": {
+                "collectingInfo": {"endDT": "2026-10-05T09:00:00+03:00"},
+                "summarizingDate": "2026-10-07+03:00",
+            }}},
+        }
+        with patch("tender_selection.views.notification_for", return_value=notification), \
+                patch("tender_selection.views.extras_for", return_value=([], [])):
+            response = self.client.get(f"/tender-selection/{self.tender.pk}/")
+
+        self.assertContains(response, "Наша заявка сохранена")
+        self.assertContains(response, "№ 7")
+        self.assertContains(response, "Подведение итогов — 07.10.2026")
+        self.assertContains(response, "По срокам извещения: рассмотрение заявок")
+
 
 class ContractWinnerReconciliationTests(TestCase):
     OUR_INN = "771978661830"

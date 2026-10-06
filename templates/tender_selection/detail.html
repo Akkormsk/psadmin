@@ -78,7 +78,7 @@
   </section>
 
   <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2><small class="ts-stage-summary">{% if card.items %}{{ card.items|length }} позиций{% elif is_manual %}данные ЕИС не загружены{% else %}основные условия закупки{% endif %}</small></summary>
+    <summary class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--neutral">{% if card.items %}{{ card.items|length }} позиций{% elif is_manual %}данные ЕИС не загружены{% else %}основные условия закупки{% endif %}</span></span></summary>
     {% if is_fz223 %}
     <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
       <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку закупки ↗</a></p>
@@ -153,7 +153,7 @@
 
   {% if not is_fz223 %}
   <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">Оценка рисков</h2><small class="ts-stage-summary">{% if risk.risk_level %}риск: {% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% else %}высокий{% endif %}{% elif not card %}нет данных извещения{% elif risk_needs_fetch %}ожидает оценки{% else %}нет данных{% endif %}</small></summary>
+    <summary class="panel-header"><h2 class="panel-title">Оценка рисков</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--{% if risk.risk_level == 'low' %}positive{% elif risk.risk_level == 'medium' %}warning{% elif risk.risk_level == 'high' %}negative{% else %}neutral{% endif %}">{% if risk.risk_level %}Риск: {% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% else %}высокий{% endif %}{% elif not card %}Нет данных извещения{% elif risk_needs_fetch %}Оценка выполняется{% else %}Нет данных{% endif %}</span></span></summary>
     {% if not card %}
     <p class="ts-warn">Нет данных извещения — оценить риски пока нечем.</p>
     {% else %}
@@ -170,7 +170,7 @@
 
   {% if price_stats %}
   <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках <small class="ts-count">{{ price_stats.median }}%</small></h2></summary>
+    <summary class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--forecast">Прогноз {{ price_stats.median }}%</span></span></summary>
     <p class="ts-stats-lead">
       Медианное снижение <strong>{{ price_stats.median }}%</strong>, разброс {{ price_stats.range_lo }}–{{ price_stats.range_hi }}%.
       Выборка: {{ price_stats.count }}{% if price_stats.won_count %}, из них наших выигранных — {{ price_stats.won_count }}{% endif %}{% if price_stats.same_region %}, в этом регионе — {{ price_stats.same_region }}{% endif %}.
@@ -202,7 +202,7 @@
   </details>
   {% elif price_stats_diag %}
   <details class="panel panel--separated">
-    <summary class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках <small class="ts-count">пока нет данных</small></h2></summary>
+    <summary class="panel-header"><h2 class="panel-title">Снижение цены на похожих закупках</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--neutral">Данных пока мало</span></span></summary>
     <p class="ts-stats-lead">
       Своя история содержит {{ price_stats_diag.count }} похож{{ price_stats_diag.count|pluralize:"ую,их" }} закупк{{ price_stats_diag.count|pluralize:"у,и" }} по этой тематике, а для прогноза нужно минимум {{ price_stats_diag.min_samples }}.
       Появится, когда в архиве наберётся больше тендеров с известным контрактом — это не сбой, просто пока не набралось данных.
@@ -212,7 +212,7 @@
 
   {% if pushed_estimate_id or is_archived %}
   <details class="panel panel--separated" {% if active_stage == "calculation" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><small class="ts-stage-summary">{% if calc_verdict %}прибыль {{ calc_verdict.net_profit|floatformat:0|group_number }} ₽ · ROI {{ calc_verdict.roi|group_number }}%{% else %}расчёт не завершён{% endif %}</small></summary>
+    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><span class="ts-stage-summary">{% if calc_verdict %}<span class="ts-summary-pill ts-summary-pill--positive">Готов</span><span class="ts-summary-value">Прибыль {{ calc_verdict.net_profit|floatformat:0|group_number }} ₽</span><span class="ts-summary-pill ts-summary-pill--roi">ROI {{ calc_verdict.roi|group_number }}%</span>{% else %}<span class="ts-summary-pill ts-summary-pill--neutral">Расчёт не завершён</span>{% endif %}</span></summary>
     {% if calc_verdict %}
     <div class="tender-verdict__stats">
       {% if calc_verdict.purchase_total is not None %}
@@ -249,7 +249,7 @@
 
   {% if show_outcome or is_archived %}
   <details class="panel panel--separated" {% if active_stage == "bidding" or active_stage == "result" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">{% if not is_archived and tender.outcome_status == "pending" %}Торги{% else %}Результат{% endif %}</h2><small class="ts-stage-summary">{% if not is_archived and tender.outcome_status == "pending" %}ожидаем протокол{% else %}{% if not is_archived %}{{ tender.get_outcome_status_display }}{% else %}данные из ЕИС{% endif %}{% if tender.contract_reduction_percent is not None %} · снижение {{ tender.contract_reduction_percent }}%{% endif %}{% endif %}</small></summary>
+    <summary class="panel-header"><h2 class="panel-title">{% if not is_archived and tender.outcome_status == "pending" %}Торги{% else %}Результат{% endif %}</h2><span class="ts-stage-summary">{% if not is_archived and tender.outcome_status == "pending" %}<span class="ts-summary-pill ts-summary-pill--warning">Ожидаем итоги</span>{% else %}<span class="ts-summary-pill ts-summary-pill--neutral">{% if not is_archived %}{{ tender.get_outcome_status_display }}{% else %}Данные из ЕИС{% endif %}</span>{% if tender.contract_reduction_percent is not None %}<span class="ts-summary-pill ts-summary-pill--forecast">Снижение {{ tender.contract_reduction_percent }}%</span>{% endif %}{% endif %}</span></summary>
 
     {% if protocol %}
     {% if estimate %}
@@ -277,7 +277,11 @@
     </table></div>
     {% if tender.contract_reduction_percent is not None %}<p class="settings-description tender-outcome__reduction">Фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} при нашем прогнозе {{ estimate.reduction_percent }}%{% endif %}.</p>{% endif %}
     {% elif tender.outcome_status == "pending" and not is_archived %}
-    <p class="settings-description">Протокол проверяется в ЕИС автоматически каждые 30 минут после окончания подачи заявок{% if tender.protocol_checked_at %} (последняя проверка {{ tender.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m H:i" }}){% endif %}. Как только он выйдет, карточка перейдёт в «Результат».</p>
+    <div class="tender-pending-status">
+      <div class="tender-pending-status__mark" aria-hidden="true"></div>
+      <div><strong>Приём заявок завершён</strong><span>По срокам извещения: рассмотрение заявок{% if card.dates.summarizing %} · Подведение итогов — {{ card.dates.summarizing|timezone:"Europe/Moscow"|date:"d.m.Y" }}{% endif %}.</span></div>
+    </div>
+    <p class="tender-pending-note">Протокол проверяется в ЕИС автоматически каждые 30 минут{% if tender.protocol_checked_at %}; последняя проверка — {{ tender.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% endif %}. После публикации карточка перейдёт в «Результат».</p>
     {% elif tender.outcome_checked_at %}
     <p class="settings-description">
       Данные результата обновлены {% if tender.outcome_source == "auto" %}из ЕИС{% else %}вручную{% endif %}, {{ tender.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% if not is_archived %}: статус «{{ tender.get_outcome_status_display }}»{% endif %}{% if tender.contract_price %}, цена контракта {{ tender.contract_price|floatformat:2 }} ₽{% endif %}{% if tender.contract_reduction_percent is not None %}, фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} (прогноз был {{ estimate.reduction_percent }}%){% endif %}{% endif %}.
@@ -295,13 +299,20 @@
     {% endif %}
 
     {% if estimate and not is_archived %}
+    {% if tender.bid_number or tender.bid_price %}
+    <div class="tender-saved-bid">
+      <div><small>Наша заявка сохранена</small><strong>{% if tender.bid_number %}№ {{ tender.bid_number }}{% endif %}{% if tender.bid_number and tender.bid_price %} · {% endif %}{% if tender.bid_price %}{{ tender.bid_price|floatformat:2|group_number }} ₽{% endif %}</strong>{% if bid_reduction_percent is not None %}<span>на {{ bid_reduction_percent|group_number }}% ниже НМЦК</span>{% endif %}</div>
+      <details class="tender-saved-bid__edit"><summary>Изменить заявку</summary><form method="post" action="{% url 'tender_selection:save_bid' estimate.pk %}" class="ts-bid-form">{% csrf_token %}<label>Номер нашей заявки <input type="text" name="bid_number" maxlength="40" value="{{ tender.bid_number }}" placeholder="например, 127 или ZK-420728"></label><label>Сумма нашей заявки, ₽ <input type="text" name="bid_price" inputmode="decimal" value="{{ tender.bid_price|default_if_none:'' }}" placeholder="1 070 000,00"></label><button type="submit" class="button-secondary">Сохранить изменения</button></form></details>
+    </div>
+    {% else %}
     <form method="post" action="{% url 'tender_selection:save_bid' estimate.pk %}" class="ts-bid-form">
       {% csrf_token %}
       <label>Номер нашей заявки <input type="text" name="bid_number" maxlength="40" value="{{ tender.bid_number }}" placeholder="например, 127 или ZK-420728"></label>
       <label>Сумма нашей заявки, ₽ <input type="text" name="bid_price" inputmode="decimal" value="{{ tender.bid_price|default_if_none:'' }}" placeholder="1 070 000,00"></label>
       <button type="submit" class="button-secondary">Сохранить</button>
-      <small>Необязательно. По номеру или сумме система найдёт нас в протоколе и сама поставит «Выигран» или «Проигран».</small>
+      <small>По номеру или сумме система найдёт нас в протоколе и сама поставит «Выигран» или «Проигран».</small>
     </form>
+    {% endif %}
 
     <div class="tender-outcome__actions">
       <form method="post" action="{% url 'tender_selection:enter_outcome' estimate.pk %}" data-tender-transition>
@@ -417,11 +428,31 @@
   .ts-lifecycle__stage--done { color:var(--positive-ink); }
   .ts-lifecycle__stage--current { background:var(--surface); color:var(--ink); font-weight:700; box-shadow:0 1px 2px rgba(0,0,0,.06), 0 3px 8px rgba(0,0,0,.08); }
   .ts-lifecycle__stage--current b { color:var(--accent-strong); }
-  .ts-stage-summary { margin-left:auto; color:var(--ink-3); font-size:11px; font-weight:400; text-align:right; }
+  .ts-stage-summary { margin-left:auto; display:flex; align-items:center; justify-content:flex-end; gap:6px; flex-wrap:wrap; color:var(--ink-2); font-size:12px; font-weight:500; text-align:right; }
+  .ts-summary-pill { display:inline-flex; align-items:center; min-height:25px; padding:4px 9px; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; }
+  .ts-summary-pill--neutral { background:var(--tint-neutral); color:var(--ink-2); }
+  .ts-summary-pill--positive { background:var(--tint-positive); color:var(--positive-ink); }
+  .ts-summary-pill--warning { background:var(--tint-warning); color:var(--warning-ink); }
+  .ts-summary-pill--negative { background:var(--tint-negative); color:var(--negative-ink); }
+  .ts-summary-pill--forecast { background:var(--tint-cool); color:var(--accent-strong); }
+  .ts-summary-pill--roi { background:var(--tint-positive); color:var(--positive-ink); }
+  .ts-summary-value { color:var(--ink); font-weight:700; white-space:nowrap; }
   .ts-protocol td, .ts-protocol th { vertical-align:top; }
   .ts-protocol td:nth-child(3), .ts-protocol td:nth-child(4) { white-space:nowrap; }
   .ts-protocol__ours td { font-weight:700; }
   .tender-outcome__reduction { margin:16px 0 18px; }
+  .tender-pending-status { display:flex; gap:12px; align-items:flex-start; margin:0 0 10px; padding:14px 16px; border-radius:12px; background:var(--tint-cool); }
+  .tender-pending-status__mark { width:9px; height:9px; flex:0 0 9px; margin-top:5px; border-radius:50%; background:var(--accent-strong); box-shadow:0 0 0 5px var(--accent-ring); }
+  .tender-pending-status strong { display:block; color:var(--ink); font-size:14px; }
+  .tender-pending-status span { display:block; margin-top:3px; color:var(--ink-2); font-size:13px; line-height:1.45; }
+  .tender-pending-note { margin:0 0 14px; color:var(--ink-3); font-size:12px; line-height:1.45; }
+  .tender-saved-bid { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:var(--surface-muted); }
+  .tender-saved-bid small, .tender-saved-bid span { display:block; color:var(--ink-3); font-size:12px; }
+  .tender-saved-bid strong { display:block; margin:3px 0; color:var(--ink); font-size:17px; }
+  .tender-saved-bid__edit { position:relative; }
+  .tender-saved-bid__edit summary { color:var(--ink-2); cursor:pointer; font-size:13px; font-weight:600; }
+  .tender-saved-bid__edit[open] { flex:1 0 100%; }
+  .tender-saved-bid__edit .ts-bid-form { margin:10px 0 0; }
   .ts-bid-form { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin:14px 0 4px; }
   .ts-bid-form label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--ink-2); }
   .ts-bid-form small { flex-basis:100%; color:var(--ink-3); }
@@ -522,7 +553,7 @@
   .ts-risk-factor { margin: 4px 0; }
   .ts-risk-factor--medium { color: var(--warning-ink); }
   .ts-risk-factor--high { color: var(--negative-ink); font-weight: 600; }
-  @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } }
+  @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } .ts-stage-summary { margin-left:22px; justify-content:flex-start; text-align:left; } .tender-saved-bid { align-items:flex-start; } }
 </style>
 <script>
   (function () {
