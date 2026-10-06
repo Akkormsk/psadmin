@@ -281,7 +281,7 @@ class ProtocolCardTests(TestCase):
         }
         with patch("tender_selection.views.notification_for", return_value=notification), \
                 patch("tender_selection.views.extras_for", return_value=([], [])):
-            response = self.client.get(f"/tender-selection/{self.tender.pk}/")
+            response = self.client.get(f"/tender-selection/{self.tender.pk}/", follow=True)
 
         self.assertContains(response, "Наша заявка сохранена")
         self.assertContains(response, "№ 7")
