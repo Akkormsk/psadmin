@@ -91,6 +91,47 @@ def _risk_badge(tender) -> dict:
     }.get((tender.risk_assessment or {}).get("risk_level"), {"state": "ok", "text": "риск: оценён"})
 
 
+def _procurement_status(tender, card=None) -> dict:
+    """Понятная стадия самой закупки, независимо от нашей воронки."""
+    now = timezone.localtime()
+    deadline = tender.collecting_finished_at
+    if deadline and now <= deadline:
+        return {
+            "label": "Подача заявок", "badge_state": "pending", "summary_state": "neutral",
+            "detail": f"Приём заявок открыт до {timezone.localtime(deadline):%d.%m.%Y %H:%M} МСК.",
+        }
+
+    if card is None:
+        card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    summarizing = (card or {}).get("dates", {}).get("summarizing")
+    if summarizing:
+        result_day = timezone.localtime(summarizing).date()
+        if result_day == now.date():
+            return {
+                "label": "Подведение итогов сегодня", "badge_state": "warn", "summary_state": "warning",
+                "detail": "Сегодня по срокам извещения должно состояться подведение итогов.",
+            }
+        if result_day < now.date():
+            return {
+                "label": "Ожидаем протокол", "badge_state": "error", "summary_state": "negative",
+                "detail": f"Подведение итогов было {result_day:%d.%m.%Y}; протокол в ЕИС пока не найден.",
+            }
+        return {
+            "label": "Рассмотрение заявок", "badge_state": "warn", "summary_state": "warning",
+            "detail": f"Приём заявок завершён. Подведение итогов — {result_day:%d.%m.%Y}.",
+        }
+
+    if deadline:
+        return {
+            "label": "Рассмотрение заявок", "badge_state": "warn", "summary_state": "warning",
+            "detail": "Приём заявок завершён; ожидаем публикацию протокола в ЕИС.",
+        }
+    return {
+        "label": "Статус уточняется", "badge_state": "pending", "summary_state": "neutral",
+        "detail": "В извещении пока нет срока подачи заявок.",
+    }
+
+
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
@@ -155,6 +196,9 @@ def _estimate_card(estimate):
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
     tender = estimate.tender
     outcome_status = tender.outcome_status if tender else Tender.OUTCOME_DRAFT
+    procurement_status = _procurement_status(tender) if tender and outcome_status == Tender.OUTCOME_PENDING else None
+    if procurement_status:
+        badges.insert(0, {"state": procurement_status["badge_state"], "text": procurement_status["label"]})
     if tender and tender.outcome_status == Tender.OUTCOME_WON:
         badges.append({"state": "ok", "text": "Выигран"})
     elif tender and tender.outcome_status == Tender.OUTCOME_LOST:
@@ -182,6 +226,7 @@ def _estimate_card(estimate):
         "status": outcome_status,
         "status_label": tender.get_outcome_status_display() if tender else "",
         "status_key": outcome_status,
+        "procurement_status": procurement_status,
         "badges": badges,
         # Внесение итога живёт на странице самого тендера (tenders/home.html,
         # рядом с прогнозом снижения), не на карточке канбана — здесь только
@@ -541,6 +586,7 @@ def tender_detail(request, pk):
         "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
         "bid_reduction_percent": reduction_percent_from(tender.max_price, tender.bid_price),
+        "procurement_status": _procurement_status(tender, card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
         "protocol": _protocol_view(tender),
         "show_outcome": bool(
             (estimate and tender.outcome_status != Tender.OUTCOME_DRAFT)

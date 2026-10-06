@@ -46,6 +46,17 @@ class AccumulatedBadgesTests(TestCase):
         )
         self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "Проигран"])
 
+    def test_bidding_card_shows_procurement_stage(self):
+        self.tender.outcome_status = Tender.OUTCOME_PENDING
+        self.tender.collecting_finished_at = timezone.now() + timedelta(hours=2)
+        self.tender.save()
+
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=self.tender, tender_number="1", name="Расчёт")
+        card = _estimate_card(estimate)
+
+        self.assertEqual(card["procurement_status"]["label"], "Подача заявок")
+        self.assertEqual(card["badges"][0]["text"], "Подача заявок")
+
 
 class LegacyUnreviewedTenderInCalculationTests(TestCase):
     """Тендеры, перенесённые в расчёт по старой схеме без отметки «в работу»."""

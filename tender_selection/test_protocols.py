@@ -280,8 +280,9 @@ class ProtocolCardTests(TestCase):
 
         self.assertContains(response, "Наша заявка сохранена")
         self.assertContains(response, "№ 7")
+        self.assertContains(response, "Рассмотрение заявок")
         self.assertContains(response, "Подведение итогов — 07.10.2026")
-        self.assertContains(response, "По срокам извещения: рассмотрение заявок")
+        self.assertContains(response, "Приём заявок завершён.")
 
 
 class OutcomeAndExtrasRegressionTests(TestCase):
