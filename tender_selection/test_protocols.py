@@ -268,11 +268,16 @@ class ProtocolCardTests(TestCase):
         self.tender.bid_price = Decimal("1200000.00")
         self.tender.protocol = {}
         self.tender.save()
+        bidding_at = timezone.now() + timedelta(days=2)
         notification = {
-            "source": {"notificationInfo": {"procedureInfo": {
-                "collectingInfo": {"endDT": "2026-10-05T09:00:00+03:00"},
-                "summarizingDate": "2026-10-07+03:00",
-            }}},
+            "source": {
+                "commonInfo": {"ETP": {"name": "РТС-тендер", "url": "https://www.rts-tender.ru/"}},
+                "notificationInfo": {"procedureInfo": {
+                    "collectingInfo": {"endDT": "2026-10-05T09:00:00+03:00"},
+                    "biddingDate": bidding_at.isoformat(),
+                    "summarizingDate": "2026-10-07+03:00",
+                }},
+            },
         }
         with patch("tender_selection.views.notification_for", return_value=notification), \
                 patch("tender_selection.views.extras_for", return_value=([], [])):
@@ -283,6 +288,8 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, "Рассмотрение заявок")
         self.assertContains(response, "Подведение итогов — 07.10.2026")
         self.assertContains(response, "Приём заявок завершён.")
+        self.assertContains(response, "Следующее событие")
+        self.assertContains(response, "Перейти на РТС-тендер")
 
 
 class OutcomeAndExtrasRegressionTests(TestCase):

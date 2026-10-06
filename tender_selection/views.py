@@ -132,6 +132,31 @@ def _procurement_status(tender, card=None) -> dict:
     }
 
 
+def _auction_event(card) -> dict | None:
+    dates = (card or {}).get("dates", {})
+    bidding_at = dates.get("bidding")
+    if not bidding_at:
+        return None
+
+    now = timezone.localtime()
+    bidding_at = timezone.localtime(bidding_at)
+    has_time = dates.get("bidding_has_time", False)
+    if (has_time and bidding_at <= now) or (not has_time and bidding_at.date() < now.date()):
+        return None
+
+    if has_time:
+        label = f"Аукцион {bidding_at:%d.%m} · {bidding_at:%H:%M}"
+        state = "error" if bidding_at - now <= timedelta(hours=2) else "warn" if bidding_at.date() == now.date() else "info"
+        detail = f"Электронный аукцион {bidding_at:%d.%m.%Y в %H:%M} МСК"
+    else:
+        label = f"Аукцион {bidding_at:%d.%m}"
+        state = "warn" if bidding_at.date() == now.date() else "info"
+        detail = f"Электронный аукцион {bidding_at:%d.%m.%Y}; время площадка не передала"
+
+    etp = (card or {}).get("etp", {})
+    return {"label": label, "state": state, "detail": detail, "url": etp.get("url", ""), "etp_name": etp.get("name", "")}
+
+
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
@@ -196,9 +221,13 @@ def _estimate_card(estimate):
         badges.append({"state": roi_state, "text": f"ROI {summary['roi']}%"})
     tender = estimate.tender
     outcome_status = tender.outcome_status if tender else Tender.OUTCOME_DRAFT
-    procurement_status = _procurement_status(tender) if tender and outcome_status == Tender.OUTCOME_PENDING else None
+    card = parse_notification(tender.notification_raw) if tender and tender.notification_raw else None
+    procurement_status = _procurement_status(tender, card) if tender and outcome_status == Tender.OUTCOME_PENDING else None
+    auction_event = _auction_event(card) if procurement_status else None
     if procurement_status:
         badges.insert(0, {"state": procurement_status["badge_state"], "text": procurement_status["label"]})
+    if auction_event:
+        badges.insert(1, {"state": auction_event["state"], "text": auction_event["label"]})
     if tender and tender.outcome_status == Tender.OUTCOME_WON:
         badges.append({"state": "ok", "text": "Выигран"})
     elif tender and tender.outcome_status == Tender.OUTCOME_LOST:
@@ -227,6 +256,7 @@ def _estimate_card(estimate):
         "status_label": tender.get_outcome_status_display() if tender else "",
         "status_key": outcome_status,
         "procurement_status": procurement_status,
+        "auction_event": auction_event,
         "badges": badges,
         # Внесение итога живёт на странице самого тендера (tenders/home.html,
         # рядом с прогнозом снижения), не на карточке канбана — здесь только
@@ -587,6 +617,7 @@ def tender_detail(request, pk):
         "estimate": estimate,
         "bid_reduction_percent": reduction_percent_from(tender.max_price, tender.bid_price),
         "procurement_status": _procurement_status(tender, card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
+        "auction_event": _auction_event(card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
         "protocol": _protocol_view(tender),
         "show_outcome": bool(
             (estimate and tender.outcome_status != Tender.OUTCOME_DRAFT)

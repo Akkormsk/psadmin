@@ -1339,6 +1339,7 @@ body.workspace-embedded .app-home > .container > .ts-nav { display: none; }
 .kb-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; background:var(--tint-neutral); color:var(--ink-2); }
 .kb-badge--ok { background:var(--tint-positive); color:var(--positive-ink); }
 .kb-badge--pending { background:var(--tint-neutral); color:var(--ink-2); }
+.kb-badge--info { background:var(--tint-info); color:var(--accent-strong); }
 .kb-badge--warn { background:var(--tint-warning); color:var(--warning-ink); }
 .kb-badge--error { background:var(--tint-negative); color:var(--negative-ink); }
 .tender-apply-return { display:flex; justify-content:flex-end; margin-top:12px; }

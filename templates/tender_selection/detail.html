@@ -277,6 +277,12 @@
     </table></div>
     {% if tender.contract_reduction_percent is not None %}<p class="settings-description tender-outcome__reduction">Фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} при нашем прогнозе {{ estimate.reduction_percent }}%{% endif %}.</p>{% endif %}
     {% elif tender.outcome_status == "pending" and not is_archived %}
+    {% if auction_event %}
+    <div class="tender-auction-event tender-auction-event--{{ auction_event.state }}">
+      <div><small>Следующее событие</small><strong>{{ auction_event.detail }}</strong></div>
+      {% if auction_event.url %}<a href="{{ auction_event.url }}" target="_blank" rel="noopener">Перейти на {{ auction_event.etp_name|default:"площадку" }} ↗</a>{% endif %}
+    </div>
+    {% endif %}
     <div class="tender-pending-status">
       <div class="tender-pending-status__mark" aria-hidden="true"></div>
       <div><strong>{{ procurement_status.label }}</strong><span>{{ procurement_status.detail }}</span></div>
@@ -446,6 +452,12 @@
   .tender-pending-status strong { display:block; color:var(--ink); font-size:14px; }
   .tender-pending-status span { display:block; margin-top:3px; color:var(--ink-2); font-size:13px; line-height:1.45; }
   .tender-pending-note { margin:0 0 14px; color:var(--ink-3); font-size:12px; line-height:1.45; }
+  .tender-auction-event { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; margin:0 0 10px; padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:var(--tint-info); }
+  .tender-auction-event small { display:block; margin-bottom:3px; color:var(--ink-3); font-size:12px; }
+  .tender-auction-event strong { display:block; color:var(--ink); font-size:14px; }
+  .tender-auction-event a { color:var(--accent-strong); font-size:13px; font-weight:700; text-decoration:none; white-space:nowrap; }
+  .tender-auction-event--warn { background:var(--tint-warning); border-color:var(--border-warning); }
+  .tender-auction-event--error { background:var(--tint-negative); border-color:var(--border-negative); }
   .tender-saved-bid { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:var(--surface-muted); }
   .tender-saved-bid small, .tender-saved-bid span { display:block; color:var(--ink-3); font-size:12px; }
   .tender-saved-bid strong { display:block; margin:3px 0; color:var(--ink); font-size:17px; }

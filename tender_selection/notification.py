@@ -129,6 +129,7 @@ def parse_notification(payload: dict) -> dict:
     proc = _dig(source, "notificationInfo", "procedureInfo", default={}) or {}
     contract_conditions = cr.get("contractConditionsInfo") or {}
 
+    bidding_raw = proc.get("biddingDate")
     return {
         "doc_type": payload.get("doc_type", ""),
         "title": common.get("purchaseObjectInfo", ""),
@@ -153,7 +154,8 @@ def parse_notification(payload: dict) -> dict:
         "dates": {
             "collect_start": _dt(_dig(proc, "collectingInfo", "startDT")),
             "collect_end": _dt(_dig(proc, "collectingInfo", "endDT")),
-            "bidding": _dt(proc.get("biddingDate")),
+            "bidding": _dt(bidding_raw),
+            "bidding_has_time": "T" in str(bidding_raw),
             "summarizing": _dt(proc.get("summarizingDate")),
             "execution_end": _dt(
                 _dig(contract_conditions, "contractExecutionPaymentPlan", "contractExecutionTermsInfo",

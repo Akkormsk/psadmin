@@ -57,6 +57,22 @@ class AccumulatedBadgesTests(TestCase):
         self.assertEqual(card["procurement_status"]["label"], "Подача заявок")
         self.assertEqual(card["badges"][0]["text"], "Подача заявок")
 
+    def test_bidding_card_shows_upcoming_auction_with_exact_time(self):
+        auction_at = timezone.now() + timedelta(days=2)
+        self.tender.outcome_status = Tender.OUTCOME_PENDING
+        self.tender.notification_raw = {
+            "source": {"commonInfo": {"ETP": {"name": "РТС-тендер", "url": "https://www.rts-tender.ru/"}},
+                       "notificationInfo": {"procedureInfo": {"biddingDate": auction_at.isoformat()}}},
+        }
+        self.tender.save()
+
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=self.tender, tender_number="1", name="Расчёт")
+        card = _estimate_card(estimate)
+
+        self.assertEqual(card["auction_event"]["label"], f"Аукцион {timezone.localtime(auction_at):%d.%m} · {timezone.localtime(auction_at):%H:%M}")
+        self.assertEqual(card["auction_event"]["url"], "https://www.rts-tender.ru/")
+        self.assertIn(card["auction_event"]["label"], [badge["text"] for badge in card["badges"]])
+
 
 class LegacyUnreviewedTenderInCalculationTests(TestCase):
     """Тендеры, перенесённые в расчёт по старой схеме без отметки «в работу»."""
