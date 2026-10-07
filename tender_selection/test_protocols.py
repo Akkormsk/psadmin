@@ -258,7 +258,7 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, "Наша заявка отклонена")
         self.assertContains(response, "Причина из протокола")
         self.assertContains(response, "Несоответствие требованиям ст. 14 Закона № 44-ФЗ")
-        self.assertContains(response, "национальный режим")
+        self.assertContains(response, "национального режима")
         self.assertContains(response, "Постановление Правительства № 1875")
 
     def test_result_compares_fact_with_saved_market_forecast(self):
