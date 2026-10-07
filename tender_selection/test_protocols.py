@@ -275,7 +275,10 @@ class ProtocolCardTests(TestCase):
         self.tender.bid_number = ""
         self.tender.save()
 
-        self.client.post(f"/tender-selection/estimate/{self.estimate.pk}/bid/", {"bid_number": "", "bid_price": "1 070 000,00"})
+        self.client.post(
+            f"/tender-selection/estimate/{self.estimate.pk}/bid/",
+            {"bid_number": "", "bid_price": "1 070 000,00"}, secure=True,
+        )
         self.tender.refresh_from_db()
 
         self.assertEqual(self.tender.bid_price, Decimal("1070000.00"))
