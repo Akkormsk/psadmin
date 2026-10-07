@@ -230,7 +230,7 @@ class ProtocolCardTests(TestCase):
     def _card(self):
         with patch("tender_selection.views.notification_for", return_value=None), \
                 patch("tender_selection.views.extras_for", return_value=([], [])):
-            return self.client.get(f"/tender-selection/{self.tender.pk}/")
+            return self.client.get(f"/tender-selection/{self.tender.pk}/", follow=True)
 
     def test_result_card_lists_participants_and_marks_ours(self):
         response = self._card()
@@ -239,6 +239,25 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, '<tr class="ts-protocol__ours">', count=1)
         self.assertContains(response, "ZK-421419 · мы")
         self.assertContains(response, "40.60%")
+
+    def test_rejected_our_bid_shows_reason_before_protocol_table(self):
+        self.tender.outcome_status = Tender.OUTCOME_LOST
+        self.tender.bid_number = "2"
+        self.tender.protocol = {
+            "url": "https://example.test/protocol",
+            "name": "Протокол",
+            "participants": [{
+                "id": "2", "rank": None, "price": "", "result": "Отклонена",
+                "rejected": True, "reject_reason": "Несоответствие требованиям ст. 14 Закона № 44-ФЗ",
+            }],
+        }
+        self.tender.save()
+
+        response = self._card()
+
+        self.assertContains(response, "Наша заявка отклонена")
+        self.assertContains(response, "Причина из протокола")
+        self.assertContains(response, "Несоответствие требованиям ст. 14 Закона № 44-ФЗ")
 
     def test_result_card_shows_winner_and_contract_dates(self):
         self.tender.contract_winner_inn = "771978661830"

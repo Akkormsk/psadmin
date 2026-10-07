@@ -253,6 +253,12 @@
 
     {% if protocol %}
     {% if estimate %}
+    {% if protocol.ours.rejected %}
+    <div class="tender-rejection">
+      <div><small>Причина из протокола</small><strong>Наша заявка отклонена</strong><span>{{ protocol.ours.reject_reason|default:"Причина в протоколе не расшифрована." }}</span></div>
+      <a href="{{ protocol.url }}" target="_blank" rel="noopener">Открыть протокол ↗</a>
+    </div>
+    {% endif %}
     <p class="settings-description">
       <a href="{{ protocol.url }}" target="_blank" rel="noopener">{{ protocol.name }}</a>{% if protocol.applications_total %} · подано заявок: {{ protocol.applications_total }}{% endif %}.
       {% if protocol.ours %}Наша заявка — {% if protocol.ours.rejected %}отклонена{% else %}{{ protocol.ours.rank }}-е место{% endif %}.{% elif tender.bid_number or tender.bid_price %}Нашу заявку в протоколе не нашли — проверьте номер и сумму.{% elif tender.outcome_status == "published" %}Выиграли или нет — система узнает сама, когда в ЕИС появится контракт. Чтобы узнать сразу и увидеть наше место, внесите номер или сумму заявки ниже.{% else %}Чтобы отметить нашу заявку, внесите её номер или сумму ниже.{% endif %}
@@ -452,6 +458,11 @@
   .tender-pending-status strong { display:block; color:var(--ink); font-size:14px; }
   .tender-pending-status span { display:block; margin-top:3px; color:var(--ink-2); font-size:13px; line-height:1.45; }
   .tender-pending-note { margin:0 0 14px; color:var(--ink-3); font-size:12px; line-height:1.45; }
+  .tender-rejection { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; margin:0 0 12px; padding:14px 16px; border:1px solid var(--border-negative); border-radius:12px; background:var(--tint-negative); }
+  .tender-rejection small { display:block; margin-bottom:3px; color:var(--negative-ink); font-size:12px; }
+  .tender-rejection strong { display:block; color:var(--negative-ink); font-size:14px; }
+  .tender-rejection span { display:block; margin-top:3px; color:var(--ink-2); font-size:13px; line-height:1.45; }
+  .tender-rejection a { color:var(--negative-ink); font-size:13px; font-weight:700; text-decoration:none; white-space:nowrap; }
   .tender-auction-event { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; margin:0 0 10px; padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:var(--tint-info); }
   .tender-auction-event small { display:block; margin-bottom:3px; color:var(--ink-3); font-size:12px; }
   .tender-auction-event strong { display:block; color:var(--ink); font-size:14px; }

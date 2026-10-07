@@ -231,7 +231,8 @@ def _estimate_card(estimate):
     if tender and tender.outcome_status == Tender.OUTCOME_WON:
         badges.append({"state": "ok", "text": "Выигран"})
     elif tender and tender.outcome_status == Tender.OUTCOME_LOST:
-        badges.append({"state": "error", "text": "Проигран"})
+        ours = find_ours(tender.protocol or {}, bid_number=tender.bid_number, bid_price=tender.bid_price)
+        badges.append({"state": "error", "text": "Отклонена" if ours and ours.get("rejected") else "Проигран"})
     # Карточка ведёт на страницу ТЕНДЕРА (с растущими блоками по стадиям), а не
     # сразу в рабочее пространство расчёта — туда только через кнопку «Перейти
     # в расчёт» внутри блока «Расчёт» на самой странице тендера.

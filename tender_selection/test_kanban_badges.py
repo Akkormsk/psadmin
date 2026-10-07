@@ -46,6 +46,20 @@ class AccumulatedBadgesTests(TestCase):
         )
         self.assertEqual(texts, ["риск: высокий", "ROI 25.00%", "Проигран"])
 
+    def test_rejected_our_bid_is_labelled_on_result_card(self):
+        texts = self._texts(
+            tender_fields={
+                "outcome_status": Tender.OUTCOME_LOST,
+                "bid_number": "7",
+                "protocol": {"participants": [{
+                    "id": "7", "rank": None, "price": "", "result": "Отклонена",
+                    "rejected": True, "reject_reason": "Несоответствие требованиям извещения",
+                }]},
+            },
+        )
+
+        self.assertEqual(texts[-1], "Отклонена")
+
     def test_bidding_card_shows_procurement_stage(self):
         self.tender.outcome_status = Tender.OUTCOME_PENDING
         self.tender.collecting_finished_at = timezone.now() + timedelta(hours=2)
