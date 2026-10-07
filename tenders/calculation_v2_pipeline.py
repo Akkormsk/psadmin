@@ -541,9 +541,13 @@ def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
 
 def _component_conflicts(commercial: TenderCommercialItem) -> list[str]:
     values: dict[str, set[str]] = {}
-    for source in commercial.source_items.all():
-        for name, value in _characteristic_values(_commercial_requirements(source)).items():
-            values.setdefault(name, set()).add(_normal(str(value)))
+    for row in (_commercial_requirements(commercial.source_items.order_by("pk").first()).get("characteristics") or []):
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or row.get("characteristicName") or "").strip()
+        value = row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue")
+        if name and value not in (None, "", [], {}):
+            values.setdefault(_normal(name), set()).add(_normal(str(value)))
     return [name for name, choices in values.items() if len(choices) > 1]
 
 

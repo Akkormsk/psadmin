@@ -4,7 +4,7 @@ from django.test import TestCase
 
 from tender_selection.models import Tender
 from .calculation_v2_pipeline import ExtractedItem, RouteDecision, assess_quality, build_commercial_items, enrich_suspicious_tender, ingest_source_items, route_tender_batch
-from .models import CalculationComponent, ComponentOperationStep, ProcessDefinition, TenderComputeJob, TenderCommercialItem
+from .models import CalculationComponent, ComponentOperationStep, OwnerInteraction, ProcessDefinition, TenderComputeJob, TenderCommercialItem
 from .test_calculation_v2_pipeline import notification, raw_item
 
 
@@ -74,3 +74,16 @@ class CommercialItemModelTests(TestCase):
         route_tender_batch(job, Router())
         component = commercial.components.get()
         self.assertEqual(list(component.route_plans.get().steps.values_list("process_id", flat=True)), [first.pk, second.pk])
+
+    def test_conflicting_source_facts_are_preserved_and_request_owner_input(self):
+        tender = self.tender("Paper item", "1")
+        source = ingest_source_items(tender)[0]
+        source.requirements = {"characteristics": [{"name": "Material", "value": "paper"}]}
+        source.save(update_fields=["requirements"])
+        rows = self.materialize(tender, [ExtractedItem("Paper item", Decimal("1"), "шт", {"Material": "plastic"}, {"document_url": "https://example.test/spec"}, Decimal(".9"), "enrich")])
+        process = ProcessDefinition.objects.create(name="Generic", role=ProcessDefinition.ROLE_SUPPLY)
+        class Router:
+            def route(self, *, items, **kwargs):
+                return [RouteDecision(item.pk, (process.pk,), Decimal(".9"), {}) for item in items]
+        route_tender_batch(rows[0].job, Router())
+        self.assertTrue(OwnerInteraction.objects.filter(tender=tender, status="open").exists())
