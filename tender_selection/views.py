@@ -170,6 +170,20 @@ def _market_forecast_comparison(tender) -> dict | None:
     }
 
 
+def _rejection_explanation(protocol) -> str:
+    reason = ((protocol or {}).get("ours") or {}).get("reject_reason", "")
+    if "ст. 14" not in reason.lower():
+        return ""
+    return (
+        "Простыми словами: заявка не подтвердила соответствие правилам национального режима — "
+        "требованиям к происхождению товара и документам, которые это подтверждают. "
+        "На практике для таких закупок обычно применяют Постановление Правительства № 1875: "
+        "для отдельных товаров нужны страна происхождения и, когда это указано в извещении, "
+        "номер записи в реестре российской промышленной продукции или реестре ЕАЭС. "
+        "Протокол не уточняет, какого именно подтверждения не хватило — это нужно сверить с извещением."
+    )
+
+
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
@@ -611,6 +625,7 @@ def tender_detail(request, pk):
         risk = None if risk_needs_fetch else (tender.risk_assessment or None)
         risk_error = "" if risk_needs_fetch else tender.risk_error
 
+    protocol = _protocol_view(tender)
     return render(request, "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
@@ -636,7 +651,8 @@ def tender_detail(request, pk):
         "forecast_comparison": _market_forecast_comparison(tender),
         "procurement_status": _procurement_status(tender, card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
         "auction_event": _auction_event(card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
-        "protocol": _protocol_view(tender),
+        "protocol": protocol,
+        "rejection_explanation": _rejection_explanation(protocol),
         "show_outcome": bool(
             (estimate and tender.outcome_status != Tender.OUTCOME_DRAFT)
             or (is_archived and (

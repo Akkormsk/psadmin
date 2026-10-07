@@ -255,7 +255,7 @@
     {% if estimate %}
     {% if protocol.ours.rejected %}
     <div class="tender-rejection">
-      <div><small>Причина из протокола</small><strong>Наша заявка отклонена</strong><span>{{ protocol.ours.reject_reason|default:"Причина в протоколе не расшифрована." }}</span></div>
+      <div><small>Причина из протокола</small><strong>Наша заявка отклонена</strong><span>{{ protocol.ours.reject_reason|default:"Причина в протоколе не расшифрована." }}</span>{% if rejection_explanation %}<p>{{ rejection_explanation }}</p>{% endif %}</div>
       <a href="{{ protocol.url }}" target="_blank" rel="noopener">Открыть протокол ↗</a>
     </div>
     {% endif %}
@@ -465,6 +465,7 @@
   .tender-rejection small { display:block; margin-bottom:3px; color:var(--negative-ink); font-size:12px; }
   .tender-rejection strong { display:block; color:var(--negative-ink); font-size:14px; }
   .tender-rejection span { display:block; margin-top:3px; color:var(--ink-2); font-size:13px; line-height:1.45; }
+  .tender-rejection p { max-width:880px; margin:8px 0 0; color:var(--ink-2); font-size:13px; line-height:1.5; }
   .tender-rejection a { color:var(--negative-ink); font-size:13px; font-weight:700; text-decoration:none; white-space:nowrap; }
   .tender-auction-event { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; margin:0 0 10px; padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:var(--tint-info); }
   .tender-auction-event small { display:block; margin-bottom:3px; color:var(--ink-3); font-size:12px; }
