@@ -240,3 +240,41 @@ class ConfiguredBehaviourTests(TestCase):
 
         estimate = TenderEstimate.objects.get(pk=push_to_estimate(tender, user))
         self.assertEqual(estimate.reduction_percent, Decimal("22.00"))
+
+    def test_market_forecast_survives_manual_calculation_change(self):
+        from .models import ContractStat, Tender
+        from .services import push_to_estimate
+
+        ContractStat.objects.create(
+            law="fz44", purchase_number="past", contract_reg_num="past", subject="Поставка кружек", discount_pct=Decimal("13"),
+            own_funnel=True,
+        )
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 1
+        filters.save()
+        user = get_user_model().objects.create_user("manager")
+        tender = Tender.objects.create(purchase_number="new", title="Поставка кружек")
+
+        from tenders.models import TenderEstimate
+
+        estimate = TenderEstimate.objects.get(pk=push_to_estimate(tender, user))
+        estimate.reduction_percent = Decimal("30")
+        estimate.save(update_fields=["reduction_percent"])
+        tender.refresh_from_db()
+
+        self.assertEqual(tender.market_forecast_percent, Decimal("13"))
+        self.assertEqual(tender.market_forecast_sample_count, 1)
+
+    def test_current_tender_can_be_excluded_from_its_live_forecast(self):
+        from .models import ContractStat, Tender
+        from .stats import price_stats_for
+
+        ContractStat.objects.create(law="fz44", purchase_number="past", contract_reg_num="past", subject="Поставка кружек", discount_pct=Decimal("13"), own_funnel=True)
+        ContractStat.objects.create(law="fz44", purchase_number="current", contract_reg_num="current", subject="Поставка кружек", discount_pct=Decimal("24"), own_funnel=True)
+        filters = FilterSettings.load()
+        filters.stats_min_samples = 1
+        filters.save()
+
+        stats = price_stats_for(Tender(purchase_number="current", title="Поставка кружек"), exclude_purchase_number="current")
+
+        self.assertEqual(stats["median"], 13)

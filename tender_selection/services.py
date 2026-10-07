@@ -911,6 +911,11 @@ def push_to_estimate(tender, user):
         _D(f"{stats['suggested_reduction']}.00") if stats
         else TenderSettings.objects.get_or_create(pk=1)[0].default_reduction_percent
     )
+    if stats:
+        tender.market_forecast_percent = reduction
+        tender.market_forecast_sample_count = stats["count"]
+        tender.market_forecast_at = timezone.now()
+        tender.save(update_fields=["market_forecast_percent", "market_forecast_sample_count", "market_forecast_at"])
     snapshot = {"is_incomplete": True}
     if stats:
         snapshot["price_stats"] = {

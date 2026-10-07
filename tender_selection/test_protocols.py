@@ -259,6 +259,19 @@ class ProtocolCardTests(TestCase):
         self.assertContains(response, "Причина из протокола")
         self.assertContains(response, "Несоответствие требованиям ст. 14 Закона № 44-ФЗ")
 
+    def test_result_compares_fact_with_saved_market_forecast(self):
+        self.tender.outcome_status = Tender.OUTCOME_LOST
+        self.tender.contract_reduction_percent = Decimal("23.78")
+        self.tender.market_forecast_percent = Decimal("13")
+        self.tender.market_forecast_sample_count = 4
+        self.tender.save()
+
+        response = self._card()
+
+        self.assertContains(response, "Прогноз рынка")
+        self.assertContains(response, "13.00%")
+        self.assertContains(response, "выше прогноза на 10.78 п.п.")
+
     def test_result_card_shows_winner_and_contract_dates(self):
         self.tender.contract_winner_inn = "771978661830"
         self.tender.contract_exe_start = "2026-11-01"

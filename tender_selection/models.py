@@ -136,6 +136,9 @@ class Tender(models.Model):
     profile_checked_at = models.DateTimeField("Jev проверил профиль", null=True, blank=True)
 
     outcome_status = models.CharField("Стадия сделки", max_length=16, choices=OUTCOME_STATUS_CHOICES, default=OUTCOME_DRAFT)
+    market_forecast_percent = models.DecimalField("Прогноз рынка по снижению, %", max_digits=5, decimal_places=2, null=True, blank=True)
+    market_forecast_sample_count = models.PositiveIntegerField("Закупок в прогнозе рынка", null=True, blank=True)
+    market_forecast_at = models.DateTimeField("Прогноз рынка рассчитан", null=True, blank=True)
     contract_price = models.DecimalField("Фактическая цена контракта", max_digits=16, decimal_places=2, null=True, blank=True)
     contract_reduction_percent = models.DecimalField("Фактическое снижение, %", max_digits=5, decimal_places=2, null=True, blank=True)
     outcome_checked_at = models.DateTimeField("Итог внесён", null=True, blank=True)

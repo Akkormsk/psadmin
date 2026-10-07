@@ -281,7 +281,8 @@
       {% endfor %}
       </tbody>
     </table></div>
-    {% if tender.contract_reduction_percent is not None %}<p class="settings-description tender-outcome__reduction">Фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} при нашем прогнозе {{ estimate.reduction_percent }}%{% endif %}.</p>{% endif %}
+    {% if tender.contract_reduction_percent is not None %}<p class="settings-description tender-outcome__reduction">Фактическое снижение {{ tender.contract_reduction_percent }}%.</p>{% endif %}
+    {% if forecast_comparison %}<p class="tender-forecast-comparison">Прогноз рынка: <strong>{{ forecast_comparison.forecast|floatformat:2 }}%</strong>{% if forecast_comparison.sample_count %} по {{ forecast_comparison.sample_count }} похожим закупкам{% endif %} · факт: <strong>{{ forecast_comparison.actual|floatformat:2 }}%</strong> · {% if forecast_comparison.direction == "exact" %}совпал{% else %}{{ forecast_comparison.direction }} прогноза на {{ forecast_comparison.delta|floatformat:2 }} п.п.{% endif %}</p>{% endif %}
     {% elif tender.outcome_status == "pending" and not is_archived %}
     {% if auction_event %}
     <div class="tender-auction-event tender-auction-event--{{ auction_event.state }}">
@@ -296,7 +297,7 @@
     <p class="tender-pending-note">Протокол проверяется в ЕИС автоматически каждые 30 минут{% if tender.protocol_checked_at %}; последняя проверка — {{ tender.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }} МСК{% endif %}. После публикации карточка перейдёт в «Результат».</p>
     {% elif tender.outcome_checked_at %}
     <p class="settings-description">
-      Данные результата обновлены {% if tender.outcome_source == "auto" %}из ЕИС{% else %}вручную{% endif %}, {{ tender.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% if not is_archived %}: статус «{{ tender.get_outcome_status_display }}»{% endif %}{% if tender.contract_price %}, цена контракта {{ tender.contract_price|floatformat:2 }} ₽{% endif %}{% if tender.contract_reduction_percent is not None %}, фактическое снижение {{ tender.contract_reduction_percent }}%{% if estimate %} (прогноз был {{ estimate.reduction_percent }}%){% endif %}{% endif %}.
+      Данные результата обновлены {% if tender.outcome_source == "auto" %}из ЕИС{% else %}вручную{% endif %}, {{ tender.outcome_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% if not is_archived %}: статус «{{ tender.get_outcome_status_display }}»{% endif %}{% if tender.contract_price %}, цена контракта {{ tender.contract_price|floatformat:2 }} ₽{% endif %}{% if tender.contract_reduction_percent is not None %}, фактическое снижение {{ tender.contract_reduction_percent }}%{% endif %}.
     </p>
     {% elif is_archived %}
     <p class="settings-description">Данные результата ещё не найдены. Последняя проверка протокола: {% if tender.protocol_checked_at %}{{ tender.protocol_checked_at|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}{% else %}ещё не выполнялась{% endif %}.</p>
@@ -453,6 +454,8 @@
   .ts-protocol td:nth-child(3), .ts-protocol td:nth-child(4) { white-space:nowrap; }
   .ts-protocol__ours td { font-weight:700; }
   .tender-outcome__reduction { margin:16px 0 18px; }
+  .tender-forecast-comparison { margin:0 0 18px; color:var(--ink-2); font-size:13px; }
+  .tender-forecast-comparison strong { color:var(--ink); }
   .tender-pending-status { display:flex; gap:12px; align-items:flex-start; margin:0 0 10px; padding:14px 16px; border-radius:12px; background:var(--tint-cool); }
   .tender-pending-status__mark { width:9px; height:9px; flex:0 0 9px; margin-top:5px; border-radius:50%; background:var(--accent-strong); box-shadow:0 0 0 5px var(--accent-ring); }
   .tender-pending-status strong { display:block; color:var(--ink); font-size:14px; }

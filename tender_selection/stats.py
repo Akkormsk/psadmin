@@ -255,7 +255,7 @@ def _tender_keywords(tender, card=None) -> set[str]:
     return kws
 
 
-def price_stats_for(tender, card=None, *, diag: dict | None = None) -> dict | None:
+def price_stats_for(tender, card=None, *, diag: dict | None = None, exclude_purchase_number: str | None = None) -> dict | None:
     """Сводка по снижению цен на похожих закупках — для раздела карточки.
 
     Источник один — своя воронка (ContractStat, own_funnel=True: любой
@@ -288,6 +288,8 @@ def price_stats_for(tender, card=None, *, diag: dict | None = None) -> dict | No
         law="fz44", own_funnel=True, forecast_included=True,
         shared_purchase=False, discount_pct__isnull=False,
     )
+    if exclude_purchase_number:
+        pool = pool.exclude(purchase_number=exclude_purchase_number)
     if cats:
         # У старых карточек воронки категория ещё не сохранялась. Их можно
         # безопасно сопоставить по названию ниже, но нельзя отсеивать заранее.

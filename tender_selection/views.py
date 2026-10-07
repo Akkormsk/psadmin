@@ -157,6 +157,19 @@ def _auction_event(card) -> dict | None:
     return {"label": label, "state": state, "detail": detail, "url": etp.get("url", ""), "etp_name": etp.get("name", "")}
 
 
+def _market_forecast_comparison(tender) -> dict | None:
+    if tender.market_forecast_percent is None or tender.contract_reduction_percent is None:
+        return None
+    delta = tender.contract_reduction_percent - tender.market_forecast_percent
+    return {
+        "forecast": tender.market_forecast_percent,
+        "actual": tender.contract_reduction_percent,
+        "delta": abs(delta),
+        "direction": "выше" if delta > 0 else "ниже" if delta < 0 else "exact",
+        "sample_count": tender.market_forecast_sample_count,
+    }
+
+
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
@@ -563,7 +576,10 @@ def tender_detail(request, pk):
     # ещё не решили, что тендер вообще стоит смотреть; появляются вместе,
     # начиная с «Проверки» (review != unreviewed).
     stats_diag = {}
-    stats = price_stats_for(tender, card, diag=stats_diag) if (is_archived or tender.review != Tender.UNREVIEWED) else None
+    stats = price_stats_for(
+        tender, card, diag=stats_diag,
+        exclude_purchase_number=tender.purchase_number if tender.outcome_status not in (Tender.OUTCOME_DRAFT, Tender.OUTCOME_PENDING) else None,
+    ) if (is_archived or tender.review != Tender.UNREVIEWED) else None
     if stats:
         for row in stats["examples"]:
             row["region_label"] = region_name(row["region"]) if row["region"] else ""
@@ -617,6 +633,7 @@ def tender_detail(request, pk):
         "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
         "bid_reduction_percent": reduction_percent_from(tender.max_price, tender.bid_price),
+        "forecast_comparison": _market_forecast_comparison(tender),
         "procurement_status": _procurement_status(tender, card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
         "auction_event": _auction_event(card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
         "protocol": _protocol_view(tender),
