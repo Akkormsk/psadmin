@@ -121,15 +121,19 @@
       {% if is_fz223 and tender.okpd2 %}<div><dt>ОКПД2</dt><dd class="ts-sub">{{ tender.okpd2|join:", " }}</dd></div>{% endif %}
     </dl>
 
-    {% if card.items %}
-    <h3 class="settings-subtitle">Перечень товаров ({{ card.items|length }})</h3>
+    {% if display_items %}
+    {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
+    <h3 class="settings-subtitle">Перечень товаров ({{ display_items|length }})</h3>
+    {% if document_item_count %}<div class="ts-derived-note">{{ document_item_count }} позиц. найдено в ТЗ · <details class="ts-original-toggle"><summary>Показать исходную запись</summary><span>{{ original_source_texts|join:"; " }}</span></details></div>{% endif %}
     <div class="table-wrapper"><table class="table ts-items">
       <thead><tr><th>Наименование</th><th>ОКПД2 / КТРУ</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
       <tbody>
-        {% for item in card.items %}
+        {% for item in display_items %}
         <tr>
           <td>
-            <strong>{{ item.name }}</strong>
+            <strong>{{ item.name }}</strong>{% if item.source_mark %} <details class="ts-position-source"><summary class="ts-position-mark ts-position-mark--{{ item.source_mark_kind }}">{{ item.source_mark }}</summary><div class="ts-source-details"><strong>Источник</strong><span>{{ item.source_details }}</span>{% if item.source_evidence %}<span>{{ item.source_evidence }}</span>{% endif %}{% if item.source_changes %}<strong>Добавлено из ТЗ</strong><ul>{% for change in item.source_changes %}<li>{{ change.name }}: {{ change.value }}</li>{% endfor %}</ul>{% endif %}{% if item.original_source_text %}<strong>Исходная запись</strong><span>{{ item.original_source_text }}</span>{% endif %}</div></details>{% endif %}
+            {% if item.composition_question %}<div class="ts-position-question" id="owner-question-{{ item.composition_question_id }}"><div class="ts-position-question__label"><span class="ts-position-mark ts-position-mark--review">Проверить</span><strong>Нужно уточнить</strong></div><p>{{ item.composition_question }}</p><form method="post" action="{% url 'tender_selection:owner_interaction_answer' tender.pk item.composition_question_id %}">{% csrf_token %}{% if item.composition_options %}<div class="ts-question-options">{% for option in item.composition_options %}<button type="submit" name="answer" value="{{ option }}" class="button-secondary">{{ option }}</button>{% endfor %}</div>{% endif %}<div class="ts-question-reply"><input type="text" name="answer" aria-label="Другой ответ" placeholder="Другой ответ…"><button type="submit" class="button-primary">Ответить</button></div></form></div>{% endif %}
+            {% if item.components %}<ul class="ts-components">{% for component in item.components %}<li>{{ component.name }} <span>×{{ component.quantity_per_parent|floatformat:"-4" }}{% if component.unit %} {{ component.unit }}{% endif %}</span></li>{% endfor %}</ul>{% endif %}
             {% if item.characteristics %}
             <ul class="ts-chars">{% for ch in item.characteristics %}<li>{% if ch.name %}<span class="ts-sub">{{ ch.name }}:</span> {% endif %}{{ ch.value }}</li>{% endfor %}</ul>
             {% endif %}
@@ -150,6 +154,7 @@
     </div>
     {% endif %}
   </details>
+
 
   {% if not is_fz223 %}
   <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>

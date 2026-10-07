@@ -221,6 +221,7 @@ def run_pull(
 
     created = updated = 0
     triage_ids = []
+    v2_candidate_ids = []
     seen: set[str] = set()
     bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law) for law in laws}
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
@@ -250,6 +251,7 @@ def run_pull(
                 updated += int(not is_created)
                 if is_created:
                     triage_ids.append(tender.pk)
+                v2_candidate_ids.append(tender.pk)
         run.ok = True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
@@ -265,8 +267,11 @@ def run_pull(
 
     if run.ok:
         from .profile_triage import start_profile_triage_in_background
+        from tenders.calculation_v2_pipeline import trigger_visible_tender
 
         start_profile_triage_in_background(triage_ids)
+        for tender in Tender.objects.filter(pk__in=set(v2_candidate_ids)):
+            trigger_visible_tender(tender)
 
     return run
 
@@ -465,6 +470,8 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     tender.notification_checked_at = timezone.now()
     tender.notification_error = ""
     tender.save(update_fields=["notification_raw", "notification_checked_at", "notification_error"])
+    from tenders.calculation_v2_pipeline import trigger_visible_tender
+    trigger_visible_tender(tender)
 
     resp_org = (
         (payload.get("source") or {}).get("purchaseResponsibleInfo") or {}

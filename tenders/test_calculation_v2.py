@@ -139,6 +139,17 @@ class CalculationV2TestCase(TestCase):
         )
         self.assertEqual(knowledge.status, "draft")
 
+    def test_stale_preparation_phase_is_retryable_after_worker_crash(self):
+        job, _ = self.make_job_and_line()
+        TenderComputeJob.objects.filter(pk=job.pk).update(
+            status=TenderComputeJob.Status.ROUTING,
+            started_at=timezone.now() - timedelta(minutes=16),
+        )
+        self.assertEqual(requeue_stale_jobs(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, TenderComputeJob.Status.QUEUED)
+        self.assertIsNone(job.started_at)
+
     def test_claim_and_stale_retry_are_persisted(self):
         job, line = self.make_job_and_line()
         claimed = claim_next_job()

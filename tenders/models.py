@@ -927,12 +927,16 @@ class TenderComputeJob(models.Model):
 class TenderComputeLine(models.Model):
     job=models.ForeignKey(TenderComputeJob,on_delete=models.CASCADE,related_name="lines")
     source_item=models.ForeignKey(TenderSourceItem,on_delete=models.PROTECT,related_name="compute_lines")
+    commercial_item=models.ForeignKey("TenderCommercialItem",null=True,blank=True,on_delete=models.SET_NULL,related_name="compute_lines")
+    component=models.ForeignKey("CalculationComponent",null=True,blank=True,on_delete=models.SET_NULL,related_name="compute_lines")
     input_snapshot=models.JSONField(default=dict,blank=True); route_key=models.CharField(max_length=100,blank=True); engine_key=models.CharField(max_length=100,blank=True); route_confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); route_metadata=models.JSONField(default=dict,blank=True)
     status=models.CharField(max_length=32,default="queued"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=["job","source_item"],name="unique_v2_compute_line")]
 
 class TenderComputeWorkUnit(models.Model):
     job=models.ForeignKey(TenderComputeJob,on_delete=models.CASCADE,related_name="work_units")
+    component=models.ForeignKey("CalculationComponent",null=True,blank=True,on_delete=models.SET_NULL,related_name="work_units")
+    operation_step=models.ForeignKey("ComponentOperationStep",null=True,blank=True,on_delete=models.SET_NULL,related_name="work_units")
     engine_key=models.CharField(max_length=100); dedupe_key=models.CharField(max_length=128); input_fingerprint=models.CharField(max_length=128); status=models.CharField(max_length=32,default="queued")
     lines=models.ManyToManyField(TenderComputeLine,related_name="work_units"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True); attempt_count=models.PositiveIntegerField(default=0); error=models.JSONField(default=dict,blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=["job","engine_key","dedupe_key"],name="unique_v2_work_unit")]
@@ -953,3 +957,76 @@ class OwnerFeedbackEvent(models.Model):
         return super().save(*args, **kwargs)
 class KnowledgeRecord(models.Model):
     feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
+
+class TenderCommercialItem(models.Model):
+    class Structure(models.TextChoices):
+        SIMPLE = "simple", "Simple"
+        AGGREGATE = "aggregate", "Aggregate"
+        COMPOSITE = "composite", "Composite"
+
+    tender = models.ForeignKey("tender_selection.Tender", on_delete=models.CASCADE, related_name="v2_commercial_items")
+    job = models.ForeignKey(TenderComputeJob, null=True, blank=True, on_delete=models.SET_NULL, related_name="commercial_items")
+    source_items = models.ManyToManyField(TenderSourceItem, related_name="commercial_items")
+    source_key = models.CharField(max_length=160)
+    display_name = models.TextField()
+    quantity = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    unit = models.CharField(max_length=64, blank=True)
+    requirements = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+    structure = models.CharField(max_length=24, choices=Structure.choices, default=Structure.SIMPLE)
+    status = models.CharField(max_length=32, default="active")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["tender", "source_key"], name="unique_v2_commercial_item")]
+        ordering = ["pk"]
+
+
+class CalculationComponent(models.Model):
+    commercial_item = models.ForeignKey(TenderCommercialItem, on_delete=models.CASCADE, related_name="components")
+    source_item = models.ForeignKey(TenderSourceItem, null=True, blank=True, on_delete=models.SET_NULL, related_name="calculation_components")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
+    name = models.TextField()
+    quantity_per_parent = models.DecimalField(max_digits=14, decimal_places=4, default=1)
+    unit = models.CharField(max_length=64, blank=True)
+    requirements = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=32, default="active")
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "pk"]
+
+    @property
+    def effective_quantity(self):
+        return (self.commercial_item.quantity or 0) * self.quantity_per_parent
+
+
+class ComponentRoutePlan(models.Model):
+    class Scope(models.TextChoices):
+        COMPONENT = "component", "Component"
+        SHARED = "shared", "Shared"
+
+    commercial_item = models.ForeignKey(TenderCommercialItem, on_delete=models.CASCADE, related_name="route_plans")
+    component = models.ForeignKey(CalculationComponent, null=True, blank=True, on_delete=models.CASCADE, related_name="route_plans")
+    scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.COMPONENT)
+    status = models.CharField(max_length=32, default="planned")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class ComponentOperationStep(models.Model):
+    route_plan = models.ForeignKey(ComponentRoutePlan, on_delete=models.CASCADE, related_name="steps")
+    process = models.ForeignKey(ProcessDefinition, on_delete=models.PROTECT, related_name="v2_operation_steps")
+    position = models.PositiveIntegerField()
+    details = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=32, default="planned")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["route_plan", "position"], name="unique_v2_route_step_position")]
+        ordering = ["position", "pk"]

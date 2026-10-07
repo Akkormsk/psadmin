@@ -57,16 +57,15 @@ def _fingerprint(value: dict[str, Any]) -> str:
 
 
 def enqueue_tender_compute(tender, *, trigger: str = "incoming_visible", version: str = "v2") -> TenderComputeJob | None:
-    """Future Tender lifecycle boundary; it is intentionally not wired to V1 yet."""
-    if not settings.CALCULATION_V2_ENABLED:
-        return None
-    return TenderComputeJob.objects.create(tender=tender, trigger=trigger, version=version)
+    """Compatibility boundary: V2 intake has one idempotent implementation."""
+    from .calculation_v2_pipeline import trigger_visible_tender
+    return trigger_visible_tender(tender, trigger=trigger, version=version)
 
 
 def plan_work_units(job: TenderComputeJob, registry: EngineRegistry = engine_registry) -> list[TenderComputeWorkUnit]:
     """Group routed compute lines using only the engine selected by each line."""
     work_units: list[TenderComputeWorkUnit] = []
-    for line in job.lines.select_related("source_item").order_by("pk"):
+    for line in job.lines.select_related("source_item", "component").order_by("pk"):
         if not line.engine_key:
             continue
         engine = registry.get(line.engine_key)
@@ -76,7 +75,7 @@ def plan_work_units(job: TenderComputeJob, registry: EngineRegistry = engine_reg
             job=job,
             engine_key=engine.key,
             dedupe_key=dedupe_key,
-            defaults={"input_fingerprint": _fingerprint(work_input)},
+            defaults={"input_fingerprint": _fingerprint(work_input), "component": line.component},
         )
         work_unit.lines.add(line)
         if work_unit not in work_units:
@@ -121,6 +120,23 @@ def requeue_stale_jobs(*, now=None, lease: timedelta = timedelta(minutes=15)) ->
     """Make interrupted jobs retryable after a worker crash or restart."""
     now = now or timezone.now()
     return TenderComputeJob.objects.filter(
-        status=TenderComputeJob.Status.RUNNING,
+        status__in=[
+            TenderComputeJob.Status.RUNNING,
+            TenderComputeJob.Status.PREPARING_INPUT,
+            TenderComputeJob.Status.ROUTING,
+            TenderComputeJob.Status.PREPARING,
+        ],
         started_at__lt=now - lease,
     ).update(status=TenderComputeJob.Status.QUEUED, started_at=None)
+
+def aggregate_component_costs(commercial_item) -> dict[str, object]:
+    """Pricing boundary only: later engines may publish numeric costs in work-unit results."""
+    total = 0
+    found = False
+    for work_unit in TenderComputeWorkUnit.objects.filter(component__commercial_item=commercial_item):
+        value = (work_unit.result or {}).get("cost")
+        if value is None:
+            continue
+        total += float(value)
+        found = True
+    return {"commercial_item_id": commercial_item.pk, "total_cost": total if found else None}

@@ -158,3 +158,44 @@
 .ts-risk-factor { margin: 4px 0; color: var(--ink-2); }
 .ts-risk-factor--medium { color: var(--warning-ink); }
 .ts-risk-factor--high { color: var(--negative-ink); font-weight: 600; }
+
+
+/* Compact composition-analysis signals; details remain in the tender card. */
+.ts-v2-badge { display: inline-block; margin-top: 5px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.25; }
+.ts-v2-badge--enriched { color: var(--positive-ink); background: var(--tint-positive); }
+.ts-v2-badge--review, .ts-v2-badge--incomplete { color: var(--warning-ink); background: var(--tint-warning); }
+.ts-v2-badge--processing { color: var(--info-ink); background: var(--tint-info); }
+.ts-v2-badge--checked { color: var(--ink-2); background: var(--surface-muted); }
+.ts-v2-badge--not-checked { color: var(--ink-2); background: var(--surface-muted); border: 1px solid var(--border); }
+
+.ts-position-mark { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; font-size: 11px; font-weight: 700; vertical-align: middle; }
+.ts-position-mark--enriched { color: var(--positive-ink); background: var(--tint-positive); }
+.ts-position-mark--review { color: var(--warning-ink); background: var(--tint-warning); }
+.ts-position-question { margin-top: 6px; color: var(--warning-ink); font-size: 13px; font-weight: 600; }
+
+.ts-derived-note { margin: -4px 0 10px; color: var(--ink-3); font-size: 13px; }
+.ts-original-toggle, .ts-position-source { display: inline; }
+.ts-original-toggle > summary, .ts-position-source > summary { display: inline; cursor: pointer; }
+.ts-original-toggle > span { margin-left: 6px; color: var(--ink-3); font-size: 12px; }
+.ts-position-source { margin-left: 6px; }
+.ts-position-source .ts-position-mark { margin-left: 0; }
+
+.ts-question-indicator { margin: 0 0 10px; }
+.ts-question-indicator a { color: var(--warning-ink); font-size: 13px; font-weight: 700; text-decoration: none; }
+.ts-position-question { margin: 10px 0 2px; padding: 10px 12px; border-left: 3px solid var(--warning-ink); background: var(--tint-warning); color: var(--ink); }
+.ts-position-question__label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.ts-position-question__label .ts-position-mark { margin-left: 0; }
+.ts-position-question p { margin: 8px 0; font-size: 14px; font-weight: 500; }
+.ts-question-options { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.ts-question-reply { display: flex; gap: 8px; }
+.ts-question-reply input { min-width: 0; flex: 1; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; }
+.ts-question-reply .button-primary { white-space: nowrap; }
+@media (max-width: 620px) { .ts-question-reply { display: grid; grid-template-columns: 1fr; } }
+
+.ts-source-details { display: grid; gap: 4px; max-width: 520px; margin: 7px 0 2px; padding: 9px 10px; border-left: 2px solid var(--border); color: var(--ink-2); font-size: 12px; font-weight: 400; }
+.ts-source-details strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+.ts-source-details ul { margin: 0; padding-left: 17px; }
+
+.ts-components { margin: 8px 0 2px; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
+.ts-components li { margin: 3px 0; }
+.ts-components span { color: var(--ink-3); }

@@ -73,8 +73,8 @@
         <input type="checkbox" class="ts-check" data-bulk-select
                data-review-url="{% url 'tender_selection:review' tender.pk %}" data-dismiss-url="{% url 'tender_selection:dismiss' tender.pk %}"
                aria-label="Выбрать тендер {{ tender.purchase_number }}">
-        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">
-          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>
+        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}">
+          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>{% if tender.analysis_status.code != "CHECKED_NO_CHANGES" %}<span class="ts-v2-badge ts-v2-badge--{{ tender.analysis_status.kind }}">{{ tender.analysis_status.label }}</span>{% endif %}
           <span class="ts-row__meta">
             <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span> № {{ tender.purchase_number }}</span>
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
@@ -104,7 +104,7 @@
           <details class="ts-menu ts-menu--icon">
             <summary aria-label="Ещё действия">⋮</summary>
             <div class="ts-menu__list">
-              <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">Открыть тендер</a>
+              <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming">Открыть тендер</a>
               {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
               <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
               <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="other"><button type="submit">Скрыть по другой причине</button></form>

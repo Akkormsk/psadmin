@@ -491,7 +491,10 @@ def tender_list(request):
         ]).casefold()]
 
     page = Paginator(rows, 100).get_page(request.GET.get("page"))
+    from tenders.analysis_presentation import resolve_tender_analysis_statuses
+    presentations = resolve_tender_analysis_statuses(page.object_list)
     for tender in page.object_list:
+        tender.analysis_status = presentations[tender.pk]
         tender.region_label = region_name(tender.region) if tender.region else ""
         tender.law_label = LAW_LABELS.get(tender.law, tender.law)
         tender.days_left, tender.deadline_state = _deadline_urgency(tender.collecting_finished_at, now)
@@ -551,6 +554,94 @@ def tender_detail(request, pk):
     card = parse_notification(payload) if payload else None
     detail_document = detail_document_candidate(card.get("items", []), card.get("documents", [])) if card else None
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
+    from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
+    v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
+    v2_lines = TenderComputeLine.objects.filter(job__tender=tender).select_related("source_item").order_by("job_id", "pk")
+    v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
+    v2_job = TenderComputeJob.objects.filter(tender=tender).order_by("-pk").first()
+    display_items = card.get("items", []) if card else []
+    has_document_items = False
+    document_item_count = 0
+    original_source_texts = []
+    if card:
+        from tenders.analysis_presentation import document_item_has_change
+        from tenders.calculation_v2_pipeline import active_calculation_items
+
+        notification_items = card.get("items", [])
+        notification_by_index = {index: item for index, item in enumerate(notification_items)}
+        questions_by_source = {question.source_item_id: question for question in v2_questions if question.source_item_id}
+        document_names = {document.get("url"): document.get("name", "Документация") for document in card.get("documents", [])}
+        active_sources = active_calculation_items(tender) if v2_source_items else []
+        from tenders.models import TenderCommercialItem
+        commercial_items = list(tender.v2_commercial_items.prefetch_related("components__source_item", "source_items").filter(status="active").order_by("pk"))
+        if commercial_items:
+            display_items = []
+            for commercial in commercial_items:
+                source = commercial.source_items.order_by("pk").first()
+                requirements = commercial.requirements if isinstance(commercial.requirements, dict) else {}
+                rows = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
+                details = [{"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or "")} for row in rows if isinstance(row, dict)]
+                components = [{"name": component.name, "quantity_per_parent": component.quantity_per_parent, "unit": component.unit} for component in commercial.components.filter(status="active").order_by("sort_order", "pk")]
+                changed = commercial.structure != TenderCommercialItem.Structure.SIMPLE or (source and source.source_type in {"document_enrichment", "document_extraction"})
+                display_items.append({"name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": "", "code_name": "", "price": None, "sum": None,
+                    "characteristics": details, "components": components if commercial.structure == TenderCommercialItem.Structure.COMPOSITE else [],
+                    "source_mark": "Уточнено по ТЗ" if changed else "", "source_mark_kind": "enriched", "source_details": "Документация" if changed else "", "source_evidence": "", "source_changes": [], "original_source_text": "",
+                    "composition_question": "", "composition_question_id": None, "composition_options": []})
+        elif active_sources:
+            display_items = []
+            for source in active_sources:
+                requirements = source.requirements if isinstance(source.requirements, dict) else {}
+                provenance = source.provenance if isinstance(source.provenance, dict) else {}
+                question = questions_by_source.get(source.pk)
+                is_document_item = source.source_type in {"document_extraction", "document_enrichment"} and document_item_has_change(source)
+                raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
+                if raw_characteristics:
+                    details = [
+                        {"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or "")}
+                        for row in raw_characteristics if isinstance(row, dict)
+                    ]
+                else:
+                    details = [{"name": str(key), "value": str(value)} for key, value in requirements.get("document_requirements", requirements).items() if value not in (None, "", [], {})]
+                metadata = source.metadata if isinstance(source.metadata, dict) else {}
+                notification_item = notification_by_index.get(metadata.get("notification_index"), {})
+                source_name = document_names.get(provenance.get("document_url"), "Документация")
+                source_bits = [source_name, provenance.get("page_or_section")]
+                evidence = str(provenance.get("evidence") or "").strip()
+                parent_text = source.parent.original_text if source.parent_id and source.parent else ""
+                if source.source_type == "document_extraction":
+                    document_item_count += 1
+                    original_source_texts.append(parent_text)
+                if is_document_item:
+                    has_document_items = True
+                display_items.append({
+                    "name": source.original_text,
+                    "quantity": source.quantity if source.quantity is not None else notification_item.get("quantity"),
+                    "unit": source.unit or notification_item.get("unit", ""),
+                    "code": notification_item.get("code", "") if source.source_type == "notification" else "",
+                    "code_name": notification_item.get("code_name", "") if source.source_type == "notification" else "",
+                    "price": notification_item.get("price") if source.source_type == "notification" else None,
+                    "sum": notification_item.get("sum") if source.source_type == "notification" else None,
+                    "characteristics": details,
+                    "source_mark": "Уточнено по ТЗ" if source.source_type == "document_enrichment" and is_document_item else "Из ТЗ" if source.source_type == "document_extraction" and is_document_item else "",
+                    "source_mark_kind": "enriched",
+                    "source_details": " · ".join(str(part) for part in source_bits if part),
+                    "source_evidence": evidence,
+                    "original_source_text": parent_text,
+                    "source_changes": [detail for detail, raw in zip(details, raw_characteristics) if isinstance(raw, dict) and raw.get("source") == "document"],
+                    "composition_question": question.question if question else "",
+                    "composition_question_id": question.pk if question else None,
+                    "composition_options": list((question.possible_answers or {}).get("options", [])) if question and isinstance(question.possible_answers, dict) else [],
+                })
+        else:
+            notification_sources = {item.metadata.get("notification_index"): item for item in v2_source_items if item.source_type == "notification"}
+            for index, item in enumerate(display_items):
+                source = notification_sources.get(index)
+                question = questions_by_source.get(source.pk) if source else None
+                if question:
+                    item["composition_question"] = question.question
+                    item["composition_question_id"] = question.pk
+                    item["composition_options"] = list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else []
+    v2_job_label = {"queued": "Обрабатывается", "running": "Обрабатывается", "preparing_input": "Собираем данные", "routing": "Определяем маршрут", "needs_review": "Нужна проверка", "ready": "Готово", "partial": "Нужна проверка", "failed": "Нужна проверка"}.get(v2_job.status, "") if v2_job else ""
 
     # Компактная сводка расчёта прямо на странице тендера (см. концепцию: блок
     # с данными остаётся на каждом пройденном этапе) — цена/прибыль/ROI с учётом
@@ -647,6 +738,15 @@ def tender_detail(request, pk):
         "return_url": return_url,
         "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
+        "v2_source_items": v2_source_items,
+        "v2_lines": v2_lines,
+        "v2_questions": v2_questions,
+        "v2_job": v2_job,
+        "v2_job_label": v2_job_label,
+        "display_items": display_items,
+        "has_document_items": has_document_items,
+        "document_item_count": document_item_count,
+        "original_source_texts": sorted({text for text in original_source_texts if text}),
         "bid_reduction_percent": reduction_percent_from(tender.max_price, tender.bid_price),
         "forecast_comparison": _market_forecast_comparison(tender),
         "procurement_status": _procurement_status(tender, card) if tender.outcome_status == Tender.OUTCOME_PENDING else None,
@@ -704,6 +804,32 @@ def _tender_lifecycle(tender, estimate):
         {"label": labels[key], "state": "done" if index < current_index else "current" if index == current_index else "future"}
         for index, key in enumerate(order)
     ]
+
+
+@tender_viewer_required
+@require_POST
+def owner_interaction_answer(request, pk, interaction_pk):
+    tender = get_object_or_404(Tender, pk=pk)
+    from tenders.models import OwnerFeedbackEvent, OwnerInteraction
+
+    interaction = get_object_or_404(OwnerInteraction, pk=interaction_pk, tender=tender, status="open")
+    answer = request.POST.get("answer", "").strip()
+    redirect_url = f"{reverse('tender_selection:detail', args=[tender.pk])}#owner-question-{interaction.pk}"
+    if not answer:
+        messages.error(request, "Введите ответ, чтобы закрыть вопрос.")
+        return redirect(redirect_url)
+    OwnerFeedbackEvent.objects.create(
+        interaction=interaction,
+        actor=request.user,
+        raw_text=answer,
+        payload={"answer": answer},
+        scope="current_tender",
+    )
+    interaction.status = "resolved"
+    interaction.answered_at = timezone.now()
+    interaction.save(update_fields=["status", "answered_at"])
+    messages.success(request, "Ответ сохранён для этого тендера.")
+    return redirect(redirect_url)
 
 
 @tender_viewer_required
