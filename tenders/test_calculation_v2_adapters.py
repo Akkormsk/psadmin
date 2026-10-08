@@ -5,30 +5,34 @@ from django.test import TestCase
 
 from tender_selection.models import Tender
 from .calculation_v2_pipeline import GatewayBatchRouter, GatewayDocumentEnricher
-from .models import ProcessDefinition, TenderSourceItem
+from .models import CalculationComponent, ProcessDefinition, TenderCommercialItem, TenderSourceItem
 
 
 class GatewayAdapterTests(TestCase):
     def setUp(self):
         self.tender = Tender.objects.create(purchase_number="adapter-1", title="Adapter")
         self.item = TenderSourceItem.objects.create(tender=self.tender, source_key="n:1", original_text="Item")
+        commercial = TenderCommercialItem.objects.create(tender=self.tender, source_key="n:1", display_name="Item")
+        commercial.source_items.add(self.item)
+        self.component = CalculationComponent.objects.create(commercial_item=commercial, source_item=self.item, name="Item")
         self.process = ProcessDefinition.objects.create(name="Adapter process", role="supply")
 
     @patch("tenders.services._ai_gateway_json")
     def test_router_accepts_valid_structured_batch(self, gateway):
-        gateway.return_value = ({"items": [{"source_item_id": self.item.pk, "process_id": self.process.pk, "confidence": 0.9, "reason": "known", "needs_review": False}]}, {"prompt_tokens": 10, "completion_tokens": 2})
-        decisions = GatewayBatchRouter().route(tender=self.tender, items=[self.item], processes=[self.process], knowledge=[])
-        self.assertEqual(decisions[0].process_id, self.process.pk)
+        gateway.return_value = ({"items": [{"component_id": self.component.pk, "process_ids": [self.process.pk], "confidence": 0.9, "reason": "known", "needs_review": False}]}, {"prompt_tokens": 10, "completion_tokens": 2})
+        decisions = GatewayBatchRouter().route(tender=self.tender, items=[self.component], processes=[self.process], knowledge=[])
+        self.assertEqual(decisions[0].process_ids, (self.process.pk,))
         self.assertFalse(decisions[0].needs_review)
         self.assertEqual(gateway.call_count, 1)
+        self.assertIn('"component_id"', gateway.call_args.args[0])
 
     @patch("tenders.services._ai_gateway_json")
     def test_router_rejects_unknown_and_omitted_items(self, gateway):
-        gateway.return_value = ({"items": [{"source_item_id": self.item.pk, "process_id": 999999, "confidence": 0.9}]}, {})
-        decision = GatewayBatchRouter().route(tender=self.tender, items=[self.item], processes=[self.process], knowledge=[])[0]
+        gateway.return_value = ({"items": [{"component_id": self.component.pk, "process_ids": [999999], "confidence": 0.9}]}, {})
+        decision = GatewayBatchRouter().route(tender=self.tender, items=[self.component], processes=[self.process], knowledge=[])[0]
         self.assertTrue(decision.needs_review)
         gateway.return_value = ({"items": []}, {})
-        omitted = GatewayBatchRouter().route(tender=self.tender, items=[self.item], processes=[self.process], knowledge=[])[0]
+        omitted = GatewayBatchRouter().route(tender=self.tender, items=[self.component], processes=[self.process], knowledge=[])[0]
         self.assertTrue(omitted.needs_review)
 
     @patch("tenders.calculation_v2_pipeline.DocumentPreview.objects.filter")

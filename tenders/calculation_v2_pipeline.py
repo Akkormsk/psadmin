@@ -107,7 +107,7 @@ class GatewayBatchRouter:
             "processes": [{"id": process.pk, "name": process.name, "description": process.description, "when_to_use": process.when_to_use, "when_not_to_use": process.when_not_to_use} for process in processes],
             "knowledge": knowledge,
         }
-        prompt = """Route every tender item in one batch. Use only a listed process id. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"source_item_id\":integer,\"process_id\":integer|null,\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string}]}. A question is allowed only for material uncertainty. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Route every tender item in one batch. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string}]}. A question is allowed only for material uncertainty. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=4000, timeout=90, network_attempts=2)
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
         rows = raw.get("items") if isinstance(raw, dict) else None
@@ -614,6 +614,12 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
         job.diagnostics = {"source_item_count": len(source_items), "active_item_count": len(active_calculation_items(job.tender)), "derived_item_count": len(derived), "documents_inspected": len(quality["documents"]), "enrichment_used": bool(derived), "quality": quality, "enrichment": enrichment["diagnostics"], "enrichment_state": enrichment["state"], "routing_item_count": len(decisions), "routing_batch_count": 1, "questions_created": question_count, "ai_cost_rub": str(getattr(router, "cost_rub", 0) + getattr(enricher, "cost_rub", 0)), "document_enrichment_ms": round((time.monotonic() - enrichment_started) * 1000, 2), "total_ms": round((time.monotonic() - started) * 1000, 2)}
         job.total_cost = Decimal(str(getattr(router, "cost_rub", 0) + getattr(enricher, "cost_rub", 0)))
         job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
+        from django.conf import settings
+        if settings.CALCULATION_V2_PREPARATION_ENABLED:
+            from .preparation import plan_tender_preparation
+            preparations, reused = plan_tender_preparation(job)
+            job.diagnostics["preparation"] = {"task_count": len(preparations), "reused": reused}
+            job.save(update_fields=["diagnostics", "updated_at"])
     except Exception as exc:
         job.status = TenderComputeJob.Status.QUEUED
         job.error = {"class": type(exc).__name__, "message": str(exc)}

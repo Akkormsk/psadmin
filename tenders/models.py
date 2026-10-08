@@ -939,6 +939,7 @@ class TenderComputeWorkUnit(models.Model):
     operation_step=models.ForeignKey("ComponentOperationStep",null=True,blank=True,on_delete=models.SET_NULL,related_name="work_units")
     engine_key=models.CharField(max_length=100); dedupe_key=models.CharField(max_length=128); input_fingerprint=models.CharField(max_length=128); status=models.CharField(max_length=32,default="queued")
     lines=models.ManyToManyField(TenderComputeLine,related_name="work_units"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True); attempt_count=models.PositiveIntegerField(default=0); error=models.JSONField(default=dict,blank=True)
+    operation_steps=models.ManyToManyField("ComponentOperationStep", related_name="preparation_work_units", blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=["job","engine_key","dedupe_key"],name="unique_v2_work_unit")]
 
 class TenderComputePreparation(models.Model):
