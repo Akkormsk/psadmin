@@ -67,6 +67,15 @@ def canonical_data_from_rows(rows: list[list[Any]]) -> dict[str, Any]:
         "requires_confirmation": True,
         "formula_status": "unresolved",
         "formula_note": "XLS содержит только кэшированные результаты формул; валюта и формула требуют подтверждения владельцем.",
+        "input_schema": [
+            {
+                "key": "variant",
+                "label": "Модель пошива",
+                "required": True,
+                "type": "select",
+                "options": sorted(variants),
+            }
+        ],
         "pricing": {
             "currency": None,
             "exchange_rate": exchange_rate,

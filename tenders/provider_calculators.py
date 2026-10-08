@@ -33,6 +33,35 @@ def _structured_rules(binding, spec):
     data = binding.knowledge_version.canonical_data if binding.knowledge_version else binding.configuration
     rules = data.get("pricing", data)
     quantity = _decimal(spec.get("quantity"))
+    if data.get("requires_confirmation") or data.get("formula_status") == "unresolved":
+        raise ProviderCalculatorError("Правила прайс-листа требуют подтверждения валюты и формулы")
+    variants = rules.get("variants", {})
+    if variants:
+        variant_key = str(spec.get("variant", "")).strip()
+        variant = variants.get(variant_key)
+        if not variant:
+            raise ProviderCalculatorError("Выберите вариант пошива из подтверждённого прайс-листа")
+        minimum_value = variant.get("minimum_quantity")
+        if minimum_value not in (None, "") and quantity < _decimal(minimum_value):
+            raise ProviderCalculatorError("Количество меньше минимального тиража для выбранного варианта")
+        unit_price = _decimal(variant.get("unit_price"))
+        total = quantity * unit_price
+        currency = rules.get("currency")
+        if not currency:
+            raise ProviderCalculatorError("Для прайс-листа не подтверждена валюта")
+        return {
+            "status": ProviderCalculationQuote.STATUS_READY,
+            "currency": currency,
+            "total": str(total),
+            "unit_price": str(unit_price),
+            "breakdown": {
+                "variant": variant_key,
+                "source_row": variant.get("source_row"),
+                "minimum_quantity": str(minimum_value or ""),
+                "exchange_rate": rules.get("exchange_rate"),
+                "exchange_rate_with_markup": rules.get("exchange_rate_with_markup"),
+            },
+        }
     tiers = rules.get("tiers", [])
     tier = next((row for row in tiers if _decimal(row.get("min", 0)) <= quantity and (row.get("max") in (None, "") or quantity <= _decimal(row["max"]))), None)
     if not tier:
