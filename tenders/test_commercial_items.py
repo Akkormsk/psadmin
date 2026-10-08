@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.test import TestCase
 
 from tender_selection.models import Tender
+from .catalog_preparation import CatalogPreparationEngine
 from .calculation_v2_pipeline import ExtractedItem, RouteDecision, assess_quality, build_commercial_items, enrich_suspicious_tender, ingest_source_items, route_tender_batch
 from .models import CalculationComponent, ComponentOperationStep, OwnerInteraction, ProcessDefinition, TenderComputeJob, TenderCommercialItem
 from .test_calculation_v2_pipeline import notification, raw_item
@@ -87,3 +88,39 @@ class CommercialItemModelTests(TestCase):
                 return [RouteDecision(item.pk, (process.pk,), Decimal(".9"), {}) for item in items]
         route_tender_batch(rows[0].job, Router())
         self.assertTrue(OwnerInteraction.objects.filter(tender=tender, status="open").exists())
+
+    def test_turnkey_printing_capability_is_a_complete_one_step_execution_plan(self):
+        tender = self.tender("Custom printed forms", "500")
+        commercial = self.materialize(tender, [])[0]
+        printing = ProcessDefinition.objects.create(
+            name="Turnkey printing contractor", role=ProcessDefinition.ROLE_PRODUCTION,
+            performs_production=True,
+        )
+
+        class Router:
+            def route(self, *, items, **kwargs):
+                return [RouteDecision(item.pk, (printing.pk,), Decimal(".9"), {}) for item in items]
+
+        decisions = route_tender_batch(commercial.job, Router())
+        self.assertEqual(decisions[0].process_ids, (printing.pk,))
+        self.assertEqual(list(commercial.components.get().route_plans.get().steps.values_list("process_id", flat=True)), [printing.pk])
+
+    def test_ready_product_and_branding_are_two_external_execution_requirements(self):
+        tender = self.tender("Branded pen", "100")
+        commercial = self.materialize(tender, [])[0]
+        supply = ProcessDefinition.objects.create(name="Ready product supplier", role=ProcessDefinition.ROLE_SUPPLY, supplies_input=True)
+        branding = ProcessDefinition.objects.create(name="Branding contractor", role=ProcessDefinition.ROLE_PRODUCTION, performs_production=True)
+
+        class Router:
+            def route(self, *, items, **kwargs):
+                return [RouteDecision(item.pk, (supply.pk, branding.pk), Decimal(".9"), {}) for item in items]
+
+        route_tender_batch(commercial.job, Router())
+        self.assertEqual(list(commercial.components.get().route_plans.get().steps.values_list("process_id", flat=True)), [supply.pk, branding.pk])
+
+    def test_catalog_engine_only_supports_capabilities_explicitly_marked_as_supplier_input(self):
+        catalog = CatalogPreparationEngine()
+        supply = ProcessDefinition.objects.create(name="Ready-made supplier", role=ProcessDefinition.ROLE_SUPPLY, supplies_input=True)
+        service = ProcessDefinition.objects.create(name="Installation contractor", role=ProcessDefinition.ROLE_PRODUCTION, performs_production=True)
+        self.assertTrue(catalog.supports_preparation(type("Step", (), {"process": supply})()))
+        self.assertFalse(catalog.supports_preparation(type("Step", (), {"process": service})()))

@@ -7,12 +7,15 @@ from tender_selection.models import FilterSettings, Tender
 from .calculation_v2_pipeline import (
     ExistingKnowledgeBatchRouter,
     ExtractedItem,
+    RouteDecision,
     active_calculation_items,
     assess_quality,
+    build_commercial_items,
     eligible_backfill_tenders,
     enrich_suspicious_tender,
     ingest_source_items,
     queue_visible_backfill,
+    route_tender_batch,
     run_next_tender_understanding_job,
     trigger_visible_tender,
 )
@@ -135,6 +138,91 @@ class CalculationV2PipelineTests(TestCase):
             self.assertEqual(job.diagnostics["source_item_count"], count)
             self.assertEqual(job.diagnostics["routing_item_count"], count)
             self.assertEqual(job.diagnostics["routing_batch_count"], 1)
+
+
+class OwnerQuestionEvidenceTests(TestCase):
+    def component(self, requirements, *, quantity="1", commercial_requirements=None):
+        tender = Tender.objects.create(
+            purchase_number=f"question-evidence-{Tender.objects.count() + 1}",
+            title="Evidence item",
+            notification_raw=notification([raw_item("Evidence item", quantity)]),
+        )
+        source = ingest_source_items(tender)[0]
+        source.requirements = requirements
+        source.save(update_fields=["requirements"])
+        job = TenderComputeJob.objects.create(tender=tender)
+        commercial = build_commercial_items(job)[0]
+        if commercial_requirements is not None:
+            commercial.requirements = commercial_requirements
+            commercial.save(update_fields=["requirements"])
+        return job
+
+    def route(self, job, *, missing, question="Уточните характеристику."):
+        process = ProcessDefinition.objects.create(
+            name=f"Execution capability {ProcessDefinition.objects.count() + 1}",
+            role=ProcessDefinition.ROLE_PRODUCTION,
+            performs_production=True,
+        )
+
+        class Router:
+            def route(self, *, items, **kwargs):
+                return [RouteDecision(
+                    item.pk, (process.pk,), Decimal(".9"), {}, True, question,
+                    "missing_information", tuple(missing),
+                ) for item in items]
+
+        return route_tender_batch(job, Router())
+
+    def test_known_document_fact_suppresses_missing_fact_question(self):
+        job = self.component({"Высота": "32 см"})
+        decisions = self.route(job, missing=["Высота"], question="Укажите высоту изделия.")
+        self.assertFalse(decisions[0].needs_review)
+        self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
+    def test_agreed_quantity_does_not_create_question(self):
+        job = self.component({}, quantity="500")
+        self.route(job, missing=["Количество"], question="Укажите количество.")
+        self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
+    def test_conflicting_evidence_keeps_owner_question(self):
+        job = self.component({"characteristics": [
+            {"name": "Материал", "value": "бумага"},
+            {"name": "Материал", "value": "пластик"},
+        ]})
+        decisions = self.route(job, missing=["Материал"], question="Уточните материал.")
+        self.assertTrue(decisions[0].needs_review)
+        self.assertTrue(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
+    def test_missing_fact_keeps_owner_question(self):
+        job = self.component({})
+        self.route(job, missing=["Плотность"], question="Укажите плотность.")
+        self.assertTrue(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
+    def test_resolvable_alternate_label_suppresses_duplicate_question(self):
+        job = self.component({"Плотность бумаги, г/м2": "200"})
+        self.route(job, missing=["Плотность бумаги"], question="Укажите плотность бумаги.")
+        self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
+    @override_settings(CALCULATION_V2_ENABLED=True)
+    def test_extraction_failure_is_partial_without_owner_question(self):
+        class FailingEnricher:
+            diagnostics = {"outcome": "system_extraction_failure"}
+            cost_rub = 0
+
+            def extract(self, **kwargs):
+                return []
+
+        tender = Tender.objects.create(
+            purchase_number=f"question-failure-{Tender.objects.count() + 1}",
+            title="Sparse item",
+            notification_raw=notification([raw_item("Sparse item")], [{"fileName": "Spec", "url": "https://zakupki.gov.ru/spec"}]),
+        )
+        TenderComputeJob.objects.create(tender=tender)
+        job = run_next_tender_understanding_job(router=ExistingKnowledgeBatchRouter(), enricher=FailingEnricher())
+        self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)
+        self.assertFalse(OwnerInteraction.objects.filter(tender=tender, status="open").exists())
+
+
 class FullCompositionRegressionTests(TestCase):
     def setUp(self):
         settings = FilterSettings.load()

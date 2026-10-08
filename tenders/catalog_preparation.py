@@ -1,4 +1,9 @@
-"""Catalog preparation adapter; the V2 core does not know catalog semantics."""
+"""Ready-made supplier catalog adapter; the V2 core does not know catalog semantics.
+
+It is intentionally mapped only to capabilities explicitly marked
+``supplies_input``. Contractor capabilities need their own adapters; they are
+not coerced into catalog search merely to create a preparation task.
+"""
 from __future__ import annotations
 
 from collections import defaultdict

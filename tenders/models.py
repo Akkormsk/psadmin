@@ -70,14 +70,13 @@ class ProductionTrainingExample(models.Model):
 
 
 class ProcessDefinition(models.Model):
-    """Технологический этап («База производства»).
+    """Внешняя capability исполнения («База производства»).
 
-    `role` — прежнее техническое поле: его по-прежнему читает код маршрута
-    (`routes.py`) и лаборатория каскада при создании нового процесса из
-    предложения ассистента. Пользователю в новом UI «Базы производства» роль
-    не показывается — вместо неё видны `supplies_input`/`performs_production`/
-    `terminal_mode`. Обе группы полей сосуществуют на переходный период,
-    вторая не подменяет первую в коде, который её уже использует."""
+    Она означает коммерчески наблюдаемую способность внешнего исполнителя,
+    а не обязательную внутреннюю операцию его производства. Один capability
+    может закрывать готовое изделие целиком. Legacy-поля role/flags остаются
+    совместимыми с V1 и служат hints для engine mapping, не physical dependency
+    graph."""
 
     ROLE_SUPPLY = "supply"
     ROLE_PRODUCTION = "production"
@@ -1007,6 +1006,7 @@ class CalculationComponent(models.Model):
 
 
 class ComponentRoutePlan(models.Model):
+    """План внешнего исполнения component; поддерживает component/shared scope."""
     class Scope(models.TextChoices):
         COMPONENT = "component", "Component"
         SHARED = "shared", "Shared"
@@ -1021,6 +1021,11 @@ class ComponentRoutePlan(models.Model):
 
 
 class ComponentOperationStep(models.Model):
+    """Одно внешнее execution requirement в плане.
+
+    `position` задаёт порядок только если несколько providers действительно
+    должны исполняться последовательно; один step является полным valid route.
+    """
     route_plan = models.ForeignKey(ComponentRoutePlan, on_delete=models.CASCADE, related_name="steps")
     process = models.ForeignKey(ProcessDefinition, on_delete=models.PROTECT, related_name="v2_operation_steps")
     position = models.PositiveIntegerField()

@@ -1,7 +1,7 @@
 """Milestone 2: durable tender understanding and tender-wide batch routing."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from hashlib import sha256
 import json
@@ -24,6 +24,7 @@ from .models import (
     KnowledgeRecord,
     Lesson,
     ProcessDefinition,
+    OwnerFeedbackEvent,
     OwnerInteraction,
     TenderComputeJob,
     TenderComputeLine,
@@ -51,6 +52,8 @@ class RouteDecision:
     rationale: dict
     needs_review: bool = False
     question: str = ""
+    question_kind: str = "unspecified"
+    missing_requirement_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -104,10 +107,10 @@ class GatewayBatchRouter:
         payload = {
             "tender": {"id": tender.pk, "title": tender.title, "subject": tender.object_info},
             "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": item.requirements} for item in items],
-            "processes": [{"id": process.pk, "name": process.name, "description": process.description, "when_to_use": process.when_to_use, "when_not_to_use": process.when_not_to_use} for process in processes],
+            "processes": [{"id": process.pk, "name": process.name, "description": process.description, "when_to_use": process.when_to_use, "when_not_to_use": process.when_not_to_use, "role": process.role, "supplies_input": process.supplies_input, "performs_production": process.performs_production, "terminal_mode": process.terminal_mode, "scope_tags": process.scope_tags} for process in processes],
             "knowledge": knowledge,
         }
-        prompt = """Route every tender item in one batch. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string}]}. A question is allowed only for material uncertainty. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Route every tender item in one batch. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string]}]}. Ask only for material uncertainty. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=4000, timeout=90, network_attempts=2)
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
         rows = raw.get("items") if isinstance(raw, dict) else None
@@ -129,7 +132,12 @@ class GatewayBatchRouter:
             confidence = _as_decimal(row.get("confidence"))
             confidence = confidence if confidence is not None and Decimal("0") <= confidence <= Decimal("1") else Decimal("0")
             needs_review = bool(row.get("needs_review")) or not valid
-            output.append(RouteDecision(item_id, selected_process_ids if valid else (), confidence, {"reason": str(row.get("reason") or "")[:1000], "alternatives": row.get("alternatives") if isinstance(row.get("alternatives"), list) else []}, needs_review, str(row.get("question") or "Уточните способ выполнения позиции.")[:500]))
+            question_kind = str(row.get("question_kind") or "unspecified")
+            if question_kind not in {"missing_information", "conflicting_information", "execution_choice", "unspecified"}:
+                question_kind = "unspecified"
+            missing_names = row.get("missing_requirement_names")
+            missing_names = tuple(str(name).strip()[:200] for name in missing_names if str(name).strip()) if isinstance(missing_names, list) else ()
+            output.append(RouteDecision(item_id, selected_process_ids if valid else (), confidence, {"reason": str(row.get("reason") or "")[:1000], "alternatives": row.get("alternatives") if isinstance(row.get("alternatives"), list) else []}, needs_review, str(row.get("question") or "Уточните способ выполнения позиции.")[:500], question_kind, missing_names))
         for item in items:
             if item.pk not in seen:
                 output.append(RouteDecision(item.pk, (), Decimal("0"), {"reason": "Model omitted item"}, True, "Нужна проверка маршрута позиции."))
@@ -512,7 +520,7 @@ def _commercial_requirements(source: TenderSourceItem) -> dict:
 
 
 def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
-    """Turn immutable source evidence into logical sellable items and internal components."""
+    """Turn immutable source evidence into commercial items and calculation components."""
     tender = job.tender
     active = active_calculation_items(tender)
     result = []
@@ -551,6 +559,78 @@ def _component_conflicts(commercial: TenderCommercialItem) -> list[str]:
     return [name for name, choices in values.items() if len(choices) > 1]
 
 
+QUESTION_KNOWN = "known"
+QUESTION_MISSING = "missing"
+QUESTION_CONFLICTING = "conflicting"
+
+
+def _requirement_facts(requirements: object) -> list[tuple[str, str]]:
+    if not isinstance(requirements, dict):
+        return []
+    facts = []
+    for entry in requirements.get("characteristics") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or entry.get("characteristicName") or "").strip()
+        value = entry.get("value") if entry.get("value") not in (None, "") else entry.get("characteristicValue")
+        if name and value not in (None, "", [], {}):
+            facts.append((name, str(value)))
+    for name, value in requirements.items():
+        if name in {"characteristics", "document_requirements"} or value in (None, "", [], {}):
+            continue
+        if isinstance(value, (str, int, float, Decimal)):
+            facts.append((str(name), str(value)))
+    if isinstance(requirements.get("document_requirements"), dict):
+        facts.extend(_requirement_facts(requirements["document_requirements"]))
+    return facts
+
+
+def _labels_match(left: str, right: str) -> bool:
+    left, right = _normal(left), _normal(right)
+    if not left or not right:
+        return False
+    if left in right or right in left:
+        return True
+    left_words = set(re.findall(r"[\wа-я]+", left))
+    right_words = set(re.findall(r"[\wа-я]+", right))
+    return bool(left_words) and left_words <= right_words
+
+
+def _question_evidence_state(item: CalculationComponent, decision: RouteDecision, conflicts: list[str]) -> tuple[str, list[str]]:
+    if conflicts:
+        return QUESTION_CONFLICTING, conflicts
+    local_facts = _requirement_facts(item.requirements) + _requirement_facts(item.commercial_item.requirements)
+    if item.source_item_id:
+        local_facts.extend(_requirement_facts(item.source_item.requirements))
+    local_values: dict[str, set[str]] = {}
+    for label, value in local_facts:
+        local_values.setdefault(_normal(label), set()).add(_normal(value))
+    if any(len(values) > 1 for values in local_values.values()):
+        return QUESTION_CONFLICTING, []
+    facts = list(local_facts)
+    facts.append(("quantity", str(item.effective_quantity)))
+    facts.append(("количество", str(item.effective_quantity)))
+    for sibling in CalculationComponent.objects.filter(commercial_item__tender=item.commercial_item.tender, status="active").select_related("source_item"):
+        facts.extend(_requirement_facts(sibling.requirements))
+        if sibling.source_item_id:
+            facts.extend(_requirement_facts(sibling.source_item.requirements))
+    for source in item.commercial_item.tender.v2_source_items.filter(is_active=True):
+        facts.extend(_requirement_facts(source.requirements))
+    for payload in OwnerFeedbackEvent.objects.filter(interaction__tender=item.commercial_item.tender).values_list("payload", flat=True):
+        if isinstance(payload, dict):
+            facts.extend(_requirement_facts(payload.get("requirements") or payload.get("answers") or {}))
+    for record in KnowledgeRecord.objects.filter(status="active", scope_type__in=["current_tender", "tender"]).only("scope_context", "payload"):
+        if str(record.scope_context.get("tender_id", "")) == str(item.commercial_item.tender_id):
+            facts.extend(_requirement_facts(record.payload.get("requirements") if isinstance(record.payload, dict) else {}))
+    claimed = list(decision.missing_requirement_names)
+    if not claimed:
+        question = _normal(decision.question)
+        claimed = [label for label, _ in facts if _normal(label) in question]
+    if claimed and all(any(_labels_match(label, known_label) for known_label, _ in facts) for label in claimed):
+        return QUESTION_KNOWN, claimed
+    return QUESTION_MISSING, claimed
+
+
 def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[RouteDecision]:
     commercials = build_commercial_items(job)
     items = list(CalculationComponent.objects.filter(commercial_item__in=commercials, status="active").select_related("commercial_item", "source_item").order_by("commercial_item_id", "sort_order", "pk"))
@@ -559,29 +639,36 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
     by_item = {decision.component_id: decision for decision in decisions}
     if set(by_item) != {item.pk for item in items}:
         raise ValueError("Batch router must return exactly one decision per calculation component")
+    effective_decisions = []
     for item in items:
         decision = by_item[item.pk]
+        conflicts = _component_conflicts(item.commercial_item)
+        evidence_state, evidence_labels = _question_evidence_state(item, decision, conflicts)
+        needs_review = decision.needs_review or bool(conflicts)
+        if needs_review and decision.process_ids and evidence_state == QUESTION_KNOWN:
+            needs_review = False
+        effective = replace(decision, needs_review=needs_review)
         line, _ = TenderComputeLine.objects.update_or_create(
             job=job, source_item=item.source_item, component=item,
-            defaults={"commercial_item": item.commercial_item, "route_key": ",".join(map(str, decision.process_ids)), "route_confidence": decision.confidence,
-                      "route_metadata": decision.rationale, "status": "needs_review" if decision.needs_review else "routed",
+            defaults={"commercial_item": item.commercial_item, "route_key": ",".join(map(str, effective.process_ids)), "route_confidence": effective.confidence,
+                      "route_metadata": effective.rationale, "status": "needs_review" if effective.needs_review else "routed",
                       "input_snapshot": {"name": item.name, "quantity": str(item.effective_quantity), "requirements": item.requirements}},
         )
         plan, _ = ComponentRoutePlan.objects.update_or_create(
             commercial_item=item.commercial_item, component=item, scope=ComponentRoutePlan.Scope.COMPONENT,
-            defaults={"status": "needs_review" if decision.needs_review else "planned", "metadata": decision.rationale},
+            defaults={"status": "needs_review" if effective.needs_review else "planned", "metadata": effective.rationale},
         )
         plan.steps.all().delete()
-        for position, process_id in enumerate(decision.process_ids, start=1):
+        for position, process_id in enumerate(effective.process_ids, start=1):
             ComponentOperationStep.objects.create(route_plan=plan, process_id=process_id, position=position)
-        conflicts = _component_conflicts(item.commercial_item)
-        question = decision.question
+        question = effective.question
         if conflicts:
             question = f"Уточните противоречивые характеристики: {', '.join(conflicts)}."
-        if (decision.needs_review or conflicts) and not OwnerInteraction.objects.filter(compute_line=line, status="open").exists():
-            OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, compute_line=line, question=question, reason=decision.rationale.get("reason", ""), confidence=decision.confidence,
-                                            context={"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "conflicts": conflicts})
-    return decisions
+        if effective.needs_review and not OwnerInteraction.objects.filter(compute_line=line, status="open").exists():
+            OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, compute_line=line, question=question, reason=effective.rationale.get("reason", ""), confidence=effective.confidence,
+                                            context={"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "conflicts": conflicts, "evidence_state": evidence_state, "evidence_labels": evidence_labels, "question_kind": effective.question_kind})
+        effective_decisions.append(effective)
+    return effective_decisions
 
 def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enricher: DocumentEnricher | None = None) -> TenderComputeJob | None:
     router = router or GatewayBatchRouter()
