@@ -2,6 +2,7 @@ from decimal import Decimal
 import json
 
 from django.test import TestCase, override_settings
+from unittest.mock import patch
 
 from tender_selection.models import FilterSettings, Tender
 from .calculation_v2_pipeline import (
@@ -20,6 +21,7 @@ from .calculation_v2_pipeline import (
     trigger_visible_tender,
 )
 from .models import Lesson, OwnerInteraction, ProcessDefinition, TenderComputeJob, TenderSourceItem
+from .services import TenderAIError
 
 
 def notification(items, documents=None):
@@ -157,17 +159,18 @@ class OwnerQuestionEvidenceTests(TestCase):
             commercial.save(update_fields=["requirements"])
         return job
 
-    def route(self, job, *, missing, question="Уточните характеристику."):
+    def route(self, job, *, missing, question="Уточните характеристику.", process_parameters=None, needs_review=True):
         process = ProcessDefinition.objects.create(
             name=f"Execution capability {ProcessDefinition.objects.count() + 1}",
             role=ProcessDefinition.ROLE_PRODUCTION,
             performs_production=True,
+            parameters=process_parameters or {},
         )
 
         class Router:
             def route(self, *, items, **kwargs):
                 return [RouteDecision(
-                    item.pk, (process.pk,), Decimal(".9"), {}, True, question,
+                    item.pk, (process.pk,), Decimal(".9"), {}, needs_review, question,
                     "missing_information", tuple(missing),
                 ) for item in items]
 
@@ -203,6 +206,19 @@ class OwnerQuestionEvidenceTests(TestCase):
         self.route(job, missing=["Плотность бумаги"], question="Укажите плотность бумаги.")
         self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
 
+    def test_process_required_input_present_in_tz_never_creates_question(self):
+        job = self.component({"Размер": "A4"})
+        decisions = self.route(job, missing=[], process_parameters={"required": ["Размер"]}, needs_review=False)
+        self.assertFalse(decisions[0].needs_review)
+        self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
+    def test_process_required_input_missing_creates_question(self):
+        job = self.component({})
+        decisions = self.route(job, missing=[], process_parameters={"required": ["Размер"]}, needs_review=False)
+        self.assertTrue(decisions[0].needs_review)
+        self.assertIn("Размер", decisions[0].question)
+        self.assertTrue(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+
     @override_settings(CALCULATION_V2_ENABLED=True)
     def test_extraction_failure_is_partial_without_owner_question(self):
         class FailingEnricher:
@@ -220,6 +236,30 @@ class OwnerQuestionEvidenceTests(TestCase):
         TenderComputeJob.objects.create(tender=tender)
         job = run_next_tender_understanding_job(router=ExistingKnowledgeBatchRouter(), enricher=FailingEnricher())
         self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)
+        self.assertFalse(OwnerInteraction.objects.filter(tender=tender, status="open").exists())
+
+    @override_settings(CALCULATION_V2_ENABLED=True)
+    def test_malformed_gateway_response_is_partial_and_cost_is_kept(self):
+        class FailingEnricher:
+            cost_rub = Decimal("0.12")
+            diagnostics = {"outcome": "system_extraction_failure", "provider_call_happened": True,
+                           "validation_failed": True, "retry_count": 1}
+
+            def extract(self, **kwargs):
+                error = TenderAIError("bad JSON")
+                error.usage = {"prompt_tokens": 10, "completion_tokens": 20}
+                raise error
+
+        tender = Tender.objects.create(
+            purchase_number=f"question-malformed-{Tender.objects.count() + 1}",
+            title="Sparse item",
+            notification_raw=notification([raw_item("Sparse item")], [{"fileName": "Spec", "url": "https://zakupki.gov.ru/spec"}]),
+        )
+        TenderComputeJob.objects.create(tender=tender)
+        job = run_next_tender_understanding_job(router=ExistingKnowledgeBatchRouter(), enricher=FailingEnricher())
+        self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)
+        self.assertEqual(job.total_cost, Decimal("0.12"))
+        self.assertTrue(job.error["retryable"])
         self.assertFalse(OwnerInteraction.objects.filter(tender=tender, status="open").exists())
 
 

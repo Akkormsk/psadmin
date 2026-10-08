@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
-from tender_selection.models import Tender
+from tender_selection.models import FilterSettings, Tender
 from .calculation_v2 import (
     EngineRegistry,
     PreparationPlan,
@@ -41,6 +41,13 @@ class FakeEngine:
 
 
 class CalculationV2TestCase(TestCase):
+    def setUp(self):
+        settings = FilterSettings.load()
+        settings.min_price = 0
+        settings.include_words = ""
+        settings.exclude_words = ""
+        settings.save()
+
     def make_tender(self):
         return Tender.objects.create(purchase_number=f"v2-{Tender.objects.count() + 1}", title="V2 test")
 

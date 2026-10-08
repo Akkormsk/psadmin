@@ -100,6 +100,7 @@ class GatewayBatchRouter:
         self.model = model or os.getenv("TIMEWEB_AI_V2_ROUTER_MODEL", "gemini/gemini-3.1-flash-lite")
         self.usage = {}
         self.cost_rub = 0.0
+        self.diagnostics = {}
 
     def route(self, *, tender, items, processes, knowledge):
         from .gateway_budget import spend_rub
@@ -107,12 +108,26 @@ class GatewayBatchRouter:
         payload = {
             "tender": {"id": tender.pk, "title": tender.title, "subject": tender.object_info},
             "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": item.requirements} for item in items],
-            "processes": [{"id": process.pk, "name": process.name, "description": process.description, "when_to_use": process.when_to_use, "when_not_to_use": process.when_not_to_use, "role": process.role, "supplies_input": process.supplies_input, "performs_production": process.performs_production, "terminal_mode": process.terminal_mode, "scope_tags": process.scope_tags} for process in processes],
+            "processes": [{"id": process.pk, "name": process.name, "description": process.description, "when_to_use": process.when_to_use, "when_not_to_use": process.when_not_to_use, "role": process.role, "supplies_input": process.supplies_input, "performs_production": process.performs_production, "terminal_mode": process.terminal_mode, "scope_tags": process.scope_tags, "parameters": process.parameters} for process in processes],
             "knowledge": knowledge,
         }
         prompt = """Route every tender item in one batch. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string]}]}. Ask only for material uncertainty. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
-        raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=4000, timeout=90, network_attempts=2)
+        try:
+            raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=4000, timeout=90, network_attempts=2)
+        except Exception as exc:
+            self.usage = dict(getattr(exc, "usage", {}) or {})
+            self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
+            self.diagnostics = {
+                "provider_call_happened": True,
+                "validation_failed": True,
+                "retry_count": 1,
+                "final_failure_reason": str(exc)[:1000],
+                "usage": self.usage,
+                "cost_rub": str(self.cost_rub),
+            }
+            raise
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
+        self.diagnostics = {"provider_call_happened": True, "retry_count": 0, "usage": self.usage, "cost_rub": str(self.cost_rub)}
         rows = raw.get("items") if isinstance(raw, dict) else None
         rows = rows if isinstance(rows, list) else []
         process_ids = {process.pk for process in processes}
@@ -152,6 +167,28 @@ class GatewayDocumentEnricher:
         self.cost_rub = 0.0
         self.diagnostics = {}
 
+    def _record_gateway_failure(self, exc, *, usage, phase, started):
+        failure_usage = dict(getattr(exc, "usage", {}) or {})
+        total_usage = {
+            key: (usage.get(key, 0) or 0) + (failure_usage.get(key, 0) or 0)
+            for key in {**usage, **failure_usage}
+        }
+        self.usage = total_usage
+        from .gateway_budget import spend_rub
+        self.cost_rub = float(spend_rub(total_usage, self.model) or 0)
+        self.diagnostics = {
+            "outcome": "system_extraction_failure",
+            "model": self.model,
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
+            "cost_rub": str(self.cost_rub),
+            "provider_call_happened": True,
+            "validation_failed": True,
+            "retry_count": 1,
+            "final_failure_reason": str(exc)[:1000],
+            "failure_phase": phase,
+            "usage": total_usage,
+        }
+
     def extract(self, *, tender, aggregate, documents):
         from .gateway_budget import spend_rub
         from .services import _ai_gateway_json
@@ -167,7 +204,11 @@ class GatewayDocumentEnricher:
             self.diagnostics = {"outcome": "system_extraction_failure", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         triage_prompt = "Return JSON only {\"relevant_urls\":[string]}. Select only documents containing an item/specification/table. Documents:\n" + json.dumps(available, ensure_ascii=False)
-        triage, triage_usage = _ai_gateway_json(triage_prompt, model=self.model, max_tokens=800, timeout=90, network_attempts=2)
+        try:
+            triage, triage_usage = _ai_gateway_json(triage_prompt, model=self.model, max_tokens=800, timeout=90, network_attempts=2)
+        except Exception as exc:
+            self._record_gateway_failure(exc, usage={}, phase="triage", started=started)
+            raise
         urls = set(triage.get("relevant_urls", [])) if isinstance(triage, dict) else set()
         selected = [doc for doc in available if doc["url"] in urls and doc["text"]]
         if not selected:
@@ -176,7 +217,11 @@ class GatewayDocumentEnricher:
             self.diagnostics = {"outcome": "no_data", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "no_relevant_document_selected", "usage": triage_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         prompt = """Extract only explicitly evidenced tender items. Return JSON only {\"items\":[{\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string}]}. Do not invent missing facts. Preserve all explicit requirements. If documentation decomposes one aggregate into components, grades, variants, or separately named goods, emit one row for every distinct product; never collapse them back into one generic row. Do not copy a requirement that applies only to the aggregate into every child.\n""" + json.dumps({"aggregate": aggregate.original_text, "documents": selected}, ensure_ascii=False)
-        raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=5000, timeout=120, network_attempts=2)
+        try:
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=5000, timeout=120, network_attempts=2)
+        except Exception as exc:
+            self._record_gateway_failure(exc, usage=triage_usage, phase="extraction", started=started)
+            raise
         self.usage = {key: (triage_usage.get(key, 0) or 0) + (extract_usage.get(key, 0) or 0) for key in {**triage_usage, **extract_usage}}
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
         output, rejections = [], []
@@ -647,6 +692,28 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
         needs_review = decision.needs_review or bool(conflicts)
         if needs_review and decision.process_ids and evidence_state == QUESTION_KNOWN:
             needs_review = False
+        required_inputs = []
+        for process in (process for process in processes if process.pk in decision.process_ids):
+            required_inputs.extend(
+                str(value).strip() for value in (process.parameters or {}).get("required", [])
+                if str(value).strip()
+            )
+        missing_inputs = [
+            required for required in required_inputs
+            if _question_evidence_state(
+                item,
+                replace(decision, missing_requirement_names=(required,)),
+                conflicts,
+            )[0] != QUESTION_KNOWN
+        ]
+        if missing_inputs:
+            needs_review = True
+            decision = replace(
+                decision,
+                question=f"Нужны данные для выбранного способа выполнения: {', '.join(missing_inputs)}.",
+                question_kind="missing_information",
+                missing_requirement_names=tuple(missing_inputs),
+            )
         effective = replace(decision, needs_review=needs_review)
         line, _ = TenderComputeLine.objects.update_or_create(
             job=job, source_item=item.source_item, component=item,
@@ -708,6 +775,22 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
             job.diagnostics["preparation"] = {"task_count": len(preparations), "reused": reused}
             job.save(update_fields=["diagnostics", "updated_at"])
     except Exception as exc:
+        total_cost = Decimal(str(getattr(router, "cost_rub", 0) or 0)) + Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
+        if getattr(enricher, "diagnostics", {}).get("outcome") == "system_extraction_failure" or getattr(router, "diagnostics", {}).get("validation_failed"):
+            job.status = TenderComputeJob.Status.PARTIAL
+            job.completed_at = timezone.now()
+            job.total_cost = total_cost
+            job.error = {"class": type(exc).__name__, "message": str(exc)[:1000], "retryable": True}
+            job.diagnostics = {
+                "source_item_count": len(source_items) if "source_items" in locals() else 0,
+                "questions_created": 0,
+                "ai_cost_rub": str(total_cost),
+                "enrichment": getattr(enricher, "diagnostics", {}),
+                "routing": getattr(router, "diagnostics", {}),
+                "total_ms": round((time.monotonic() - started) * 1000, 2),
+            }
+            job.save(update_fields=["status", "completed_at", "total_cost", "error", "diagnostics", "updated_at"])
+            return job
         job.status = TenderComputeJob.Status.QUEUED
         job.error = {"class": type(exc).__name__, "message": str(exc)}
         job.save(update_fields=["status", "error", "updated_at"])

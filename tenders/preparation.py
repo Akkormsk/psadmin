@@ -80,6 +80,7 @@ def preparation_job_for(tender: Tender) -> TenderComputeJob | None:
 
 def _preparation_engines():
     from . import catalog_preparation  # noqa: F401
+    from . import provider_capabilities  # noqa: F401
 
     return [engine_registry.get(key) for key in engine_registry.keys() if hasattr(engine_registry.get(key), "supports_preparation")]
 
