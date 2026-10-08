@@ -808,6 +808,98 @@ class StageCounterpartyLink(models.Model):
         return f"{self.stage.name} ↔ {self.counterparty.name}"
 
 
+class ProviderKnowledgeStaging(models.Model):
+    """Short-lived ingestion input. Confirmed pricing never depends on it."""
+
+    counterparty = models.ForeignKey(Counterparty, on_delete=models.CASCADE, related_name="knowledge_staging")
+    source_type = models.CharField(max_length=24)
+    original_filename = models.CharField(max_length=255, blank=True)
+    source_hash = models.CharField(max_length=64, blank=True)
+    extracted_text = models.TextField(blank=True)
+    raw_content = models.BinaryField(null=True, blank=True, editable=False)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+    purged_at = models.DateTimeField(null=True, blank=True)
+
+    def purge_raw(self):
+        self.raw_content = None
+        self.extracted_text = ""
+        self.purged_at = timezone.now()
+        self.save(update_fields=["raw_content", "extracted_text", "purged_at"])
+
+
+class CounterpartyKnowledgeVersion(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_SUPERSEDED = "superseded"
+    STATUS_INACTIVE = "inactive"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Черновик"),
+        (STATUS_CONFIRMED, "Подтверждено"),
+        (STATUS_SUPERSEDED, "Заменено"),
+        (STATUS_INACTIVE, "Неактивно"),
+    ]
+
+    counterparty = models.ForeignKey(Counterparty, on_delete=models.CASCADE, related_name="knowledge_versions")
+    stage = models.ForeignKey(ProcessDefinition, on_delete=models.CASCADE, null=True, blank=True, related_name="counterparty_knowledge_versions")
+    staging = models.ForeignKey(ProviderKnowledgeStaging, on_delete=models.SET_NULL, null=True, blank=True, related_name="draft_versions")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    version_number = models.PositiveIntegerField(default=1)
+    canonical_data = models.JSONField(default=dict)
+    source_metadata = models.JSONField(default=dict, blank=True)
+    confidence = models.DecimalField(max_digits=4, decimal_places=3, null=True, blank=True)
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    confirmation_note = models.TextField(blank=True)
+    supersedes = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="replaced_by")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="provider_knowledge_created")
+    confirmed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="provider_knowledge_confirmed")
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class ProviderCalculatorBinding(models.Model):
+    TYPE_STRUCTURED_RULES = "structured_rules"
+    TYPE_INTERNAL_CALCULATOR = "internal_calculator"
+    TYPE_EXTERNAL_ADAPTER = "external_adapter"
+    TYPE_CATALOG = "catalog"
+    TYPE_MANUAL_QUOTE = "manual_quote"
+    TYPE_CHOICES = [
+        (TYPE_STRUCTURED_RULES, "Правила прайса"),
+        (TYPE_INTERNAL_CALCULATOR, "Внутренний калькулятор"),
+        (TYPE_EXTERNAL_ADAPTER, "Внешний калькулятор"),
+        (TYPE_CATALOG, "Каталог"),
+        (TYPE_MANUAL_QUOTE, "Ручной запрос"),
+    ]
+    link = models.ForeignKey(StageCounterpartyLink, on_delete=models.CASCADE, related_name="calculator_bindings")
+    knowledge_version = models.ForeignKey(CounterpartyKnowledgeVersion, on_delete=models.SET_NULL, null=True, blank=True, related_name="calculator_bindings")
+    calculator_type = models.CharField(max_length=24, choices=TYPE_CHOICES)
+    name = models.CharField(max_length=200, blank=True)
+    configuration = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["link_id", "-is_default", "id"]
+
+
+class ProviderCalculationQuote(models.Model):
+    STATUS_READY = "ready"
+    STATUS_REQUIRES_QUOTE = "requires_quote"
+    STATUS_ERROR = "error"
+    binding = models.ForeignKey(ProviderCalculatorBinding, on_delete=models.PROTECT, related_name="quotes")
+    knowledge_version = models.ForeignKey(CounterpartyKnowledgeVersion, on_delete=models.SET_NULL, null=True, blank=True, related_name="quotes")
+    calculation_spec = models.JSONField(default=dict)
+    result = models.JSONField(default=dict)
+    status = models.CharField(max_length=24)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class Proposal(models.Model):
     """Предложение глобального изменения «Базы производства». Ничего не
     меняет само по себе — только после `status=accepted` бэкенд выполняет

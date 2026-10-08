@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block content %}
+<h1>База подрядчиков</h1><p><a class="btn btn-primary" href="{% url 'provider_create' %}">Добавить подрядчика</a></p>
+{% for provider in providers %}<article class="card mb-3"><h3><a href="{% url 'provider_detail' provider.pk %}">{{ provider.name }}</a></h3><p>{{ provider.stage_links.all|join:", " }}</p><small>{% if provider.confirmed %}Информация подтверждена{% else %}Нужно добавить информацию{% endif %}</small></article>{% empty %}<p>Подрядчиков пока нет.</p>{% endfor %}
+{% endblock %}

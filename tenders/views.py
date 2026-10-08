@@ -27,7 +27,9 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, CounterpartyKnowledgeVersion, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, ProviderCalculatorBinding
+from .provider_calculators import ProviderCalculatorError, calculate_provider, get_provider_calculator_schema
+from .provider_knowledge import confirm_knowledge, create_knowledge_draft, create_provider
 from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
@@ -37,6 +39,67 @@ from .services import TenderAIError, _normalized_text as _normalized_requirement
 
 
 logger = logging.getLogger(__name__)
+
+
+@login_required
+def provider_list(request):
+    providers = Counterparty.objects.filter(is_active=True).prefetch_related("stage_links__stage", "stage_links__calculator_bindings", "knowledge_versions")
+    for provider in providers:
+        provider.confirmed = any(item.status == CounterpartyKnowledgeVersion.STATUS_CONFIRMED for item in provider.knowledge_versions.all())
+    return render(request, "tenders/provider_list.html", {"providers": providers})
+
+
+@login_required
+def provider_create(request):
+    stages = ProcessDefinition.objects.filter(is_active=True)
+    if request.method == "POST":
+        selected = list(stages.filter(pk__in=request.POST.getlist("stages")))
+        if not request.POST.get("name", "").strip() or not selected:
+            messages.error(request, "Укажите название и хотя бы одну возможность.")
+        else:
+            uploaded = request.FILES.get("source")
+            text = request.POST.get("text", "").strip()
+            extracted = extract_calculation_source(source_text=text, upload=uploaded)
+            source_text = extracted.get("content", text)
+            if uploaded:
+                uploaded.seek(0)
+            raw = uploaded.read() if uploaded else text.encode()
+            provider, staging = create_provider(request.user, request.POST["name"], selected, "file" if uploaded else "text", raw, source_text)
+            ai_draft = parse_counterparty_draft(source_text, [stage.name for stage in selected]) if source_text else {}
+            # It remains a non-authoritative draft even when AI successfully parsed it.
+            draft = create_knowledge_draft(provider, request.user, {"summary": ai_draft.get("summary", source_text[:4000]), "input_schema": [], "pricing": {}, "ambiguities": ai_draft.get("ambiguities", [])}, staging=staging)
+            return redirect("provider_knowledge_review", version_id=draft.pk)
+    return render(request, "tenders/provider_form.html", {"stages": stages})
+
+
+@login_required
+def provider_detail(request, provider_id):
+    provider = get_object_or_404(Counterparty.objects.prefetch_related("stage_links__stage", "stage_links__calculator_bindings", "knowledge_versions"), pk=provider_id)
+    return render(request, "tenders/provider_detail.html", {"provider": provider})
+
+
+@login_required
+def provider_knowledge_review(request, version_id):
+    version = get_object_or_404(CounterpartyKnowledgeVersion, pk=version_id)
+    if request.method == "POST":
+        confirm_knowledge(version, request.user, request.POST.get("note", ""))
+        messages.success(request, "Информация подтверждена.")
+        return redirect("provider_detail", provider_id=version.counterparty_id)
+    return render(request, "tenders/provider_review.html", {"version": version})
+
+
+@login_required
+def provider_calculator(request, binding_id):
+    binding = get_object_or_404(ProviderCalculatorBinding.objects.select_related("link__counterparty", "link__stage", "knowledge_version"), pk=binding_id, is_active=True)
+    schema = get_provider_calculator_schema(binding)
+    result = error = None
+    if request.method == "POST":
+        spec = {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}
+        try:
+            result = calculate_provider(binding, spec)
+        except ProviderCalculatorError as exc:
+            error = str(exc)
+    return render(request, "tenders/provider_calculator.html", {"binding": binding, "schema": schema, "result": result, "error": error})
 
 
 SUPPORTED_TENDER_DOCUMENTS = {".xlsx", ".xls", ".doc", ".docx", ".pdf"}
