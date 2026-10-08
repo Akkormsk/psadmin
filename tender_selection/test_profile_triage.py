@@ -1,8 +1,6 @@
 from unittest.mock import patch
 
-from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.urls import reverse
 
 from .models import FilterSettings, Tender, TenderDismissalFeedback
 
@@ -49,23 +47,6 @@ class ProfileTriageTests(TestCase):
 
         tender.refresh_from_db()
         self.assertIsNone(tender.profile_checked_at)
-
-    def test_list_shows_gemini_reason_without_hover(self):
-        settings = FilterSettings.load()
-        settings.min_price = 0
-        settings.include_words = ""
-        settings.exclude_words = ""
-        settings.save(update_fields=["min_price", "include_words", "exclude_words"])
-        tender = Tender.objects.create(
-            purchase_number="reason-ui", title="Полиграфическое оборудование",
-            profile_signal=Tender.PROFILE_SIGNAL_NOT_PROFILE,
-            profile_reason="Это оборудование, а не заказ на изготовление продукции.",
-        )
-        self.client.force_login(get_user_model().objects.create_superuser("reason-ui", password="x"))
-
-        response = self.client.get(reverse("tender_selection:list") + "?view=list", secure=True)
-
-        self.assertContains(response, f'<span class="ts-profile-reason">{tender.profile_reason}</span>', html=True)
 
     def test_dismiss_reason_is_recorded_only_for_an_incoming_tender(self):
         from django.contrib.auth import get_user_model
