@@ -1182,7 +1182,7 @@ def word_audit_apply(request):
 def profile_triage_run(request):
     settings = FilterSettings.load()
     if not settings.profile_triage_enabled:
-        messages.info(request, "Сначала включите Jev-проверку в настройках отбора.")
+        messages.info(request, "Сначала включите ИИ-проверку в настройках отбора.")
         return redirect("tender_selection:list")
     rows, _hidden, _expired = _visible_found_tenders(
         Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED, profile_checked_at__isnull=True),
@@ -1190,7 +1190,7 @@ def profile_triage_run(request):
     )
     ids = [tender.pk for tender in rows[:100]]
     start_profile_triage_in_background(ids)
-    messages.success(request, f"Jev начал проверку {len(ids)} входящих. Отметки появятся после обновления страницы.")
+    messages.success(request, f"Gemini начал проверку {len(ids)} входящих. Рекомендации появятся после обновления страницы; тендеры не будут скрыты автоматически.")
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
 

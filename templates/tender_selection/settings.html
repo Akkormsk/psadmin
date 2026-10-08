@@ -32,8 +32,8 @@
         <label for="exclude_words">Минус-слова — скрываем, если сработало хотя бы одно</label>
         <textarea id="exclude_words" name="exclude_words" rows="8">{{ settings.exclude_words }}</textarea>
       </div>
-      <label class="ts-check ts-profile-triage"><input type="checkbox" name="profile_triage_enabled" value="1" {% if settings.profile_triage_enabled %}checked{% endif %}> Помечать новые входящие, по которым Jev сомневается</label>
-      <p class="settings-description">Jev не скрывает тендеры и не меняет слова. Он только ставит отметку для ручной проверки после того, как тендер уже прошёл фильтр.</p>
+      <label class="ts-check ts-profile-triage"><input type="checkbox" name="profile_triage_enabled" value="1" {% if settings.profile_triage_enabled %}checked{% endif %}> Проверять новые входящие через Gemini</label>
+      <p class="settings-description">Gemini видит предмет закупки, ОКПД2 и сработавшие слова, даёт объяснимую рекомендацию, но не скрывает тендеры и не меняет слова автоматически.</p>
     </section>
 
     <section class="panel">

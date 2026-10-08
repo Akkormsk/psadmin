@@ -80,7 +80,7 @@
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
             {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠ нет данных</span>{% endif %}
             {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠ жалоба</span>{% endif %}
-            {% if tender.profile_signal == "doubt" %}<span class="ts-flag ts-flag--profile" title="Jev не уверен, что закупка соответствует вашему профилю">✦ проверить профиль</span>{% elif tender.profile_signal == "not_profile" %}<span class="ts-flag ts-flag--profile" title="Jev считает тему, вероятно, не вашей; решение остаётся за вами">✦ возможно не по профилю</span>{% endif %}
+            {% if tender.profile_signal == "doubt" %}<span class="ts-flag ts-flag--profile" title="{{ tender.profile_reason|default:'Gemini не уверен: проверьте предмет закупки.' }}">✦ Gemini: проверьте профиль</span>{% elif tender.profile_signal == "not_profile" %}<span class="ts-flag ts-flag--profile" title="{{ tender.profile_reason|default:'Gemini считает тему, вероятно, не вашей; решение остаётся за вами.' }}">✦ Gemini: вероятно не по профилю</span>{% endif %}
           </span>
           {% if tender.org.city or tender.region_label or tender.match_hits %}
           <span class="ts-row__sub">

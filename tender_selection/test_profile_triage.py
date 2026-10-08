@@ -6,7 +6,7 @@ from .models import FilterSettings, Tender, TenderDismissalFeedback
 
 
 class ProfileTriageTests(TestCase):
-    def test_marks_only_uncertain_or_unrelated_tenders(self):
+    def test_gemini_marks_explainable_profile_verdicts_without_hiding(self):
         from .profile_triage import triage_tenders
 
         settings = FilterSettings.load()
@@ -15,9 +15,11 @@ class ProfileTriageTests(TestCase):
         clear = Tender.objects.create(purchase_number="1", title="Поставка сувенирной продукции")
         doubt = Tender.objects.create(purchase_number="2", title="Изготовление брендированных материалов")
         unrelated = Tender.objects.create(purchase_number="3", title="Поставка полиграфического оборудования")
-        with patch("tender_selection.profile_triage.decide_matrix", return_value=({
-            f"t{clear.pk}": {"noul": 0.92}, f"t{doubt.pk}": {"noul": 0.51}, f"t{unrelated.pk}": {"noul": 0.08},
-        }, {"prompt_tokens": 1, "completion_tokens": 1})):
+        with patch("tender_selection.profile_triage.chat_json", return_value={"data": {"items": [
+            {"id": clear.pk, "verdict": "fit", "confidence": 0.92, "reason": "Сувенирная продукция входит в профиль."},
+            {"id": doubt.pk, "verdict": "review", "confidence": 0.51, "reason": "Нужен состав продукции."},
+            {"id": unrelated.pk, "verdict": "not_fit", "confidence": 0.08, "reason": "Оборудование, а не полиграфическая продукция."},
+        ]}, "usage": {"prompt_tokens": 1, "completion_tokens": 1}}):
             triage_tenders([clear.pk, doubt.pk, unrelated.pk])
 
         clear.refresh_from_db()
@@ -27,6 +29,24 @@ class ProfileTriageTests(TestCase):
         self.assertEqual(doubt.profile_signal, Tender.PROFILE_SIGNAL_DOUBT)
         self.assertEqual(unrelated.profile_signal, Tender.PROFILE_SIGNAL_NOT_PROFILE)
         self.assertIsNotNone(unrelated.profile_checked_at)
+        self.assertEqual(unrelated.profile_model, "gemini/gemini-3.1-flash-lite")
+        self.assertIn("Оборудование", unrelated.profile_reason)
+        self.assertEqual(unrelated.status, Tender.NEW)
+
+    def test_invalid_agent_item_is_left_unchecked_for_safe_retry(self):
+        from .profile_triage import triage_tenders
+
+        settings = FilterSettings.load()
+        settings.profile_triage_enabled = True
+        settings.save(update_fields=["profile_triage_enabled"])
+        tender = Tender.objects.create(purchase_number="bad-agent", title="Поставка пакетов для стерилизации")
+        with patch("tender_selection.profile_triage.chat_json", return_value={"data": {"items": [
+            {"id": tender.pk, "verdict": "other", "confidence": "unknown"},
+        ]}, "usage": {}}):
+            self.assertEqual(triage_tenders([tender.pk]), 0)
+
+        tender.refresh_from_db()
+        self.assertIsNone(tender.profile_checked_at)
 
     def test_dismiss_reason_is_recorded_only_for_an_incoming_tender(self):
         from django.contrib.auth import get_user_model

@@ -35,8 +35,8 @@ class FilterSettings(models.Model):
     # продолжить в следующий раз.
     keyword_pull_cursor = models.PositiveIntegerField(default=0)
     profile_triage_enabled = models.BooleanField(
-        "Jev: помечать сомнительные входящие", default=False,
-        help_text="Проверяет только новые тендеры, уже прошедшие плюс/минус-слова.",
+        "ИИ: проверять новые входящие по профилю", default=False,
+        help_text="Gemini ставит объяснимую рекомендацию после плюс/минус-слов, но ничего не скрывает автоматически.",
     )
 
     class Meta:
@@ -131,9 +131,11 @@ class Tender(models.Model):
         (PROFILE_SIGNAL_DOUBT, "Нужно проверить"),
         (PROFILE_SIGNAL_NOT_PROFILE, "Возможно, не по профилю"),
     )
-    profile_signal = models.CharField("Сигнал Jev по профилю", max_length=16, choices=PROFILE_SIGNAL_CHOICES, blank=True)
-    profile_confidence = models.DecimalField("Уверенность Jev по профилю", max_digits=4, decimal_places=3, null=True, blank=True)
-    profile_checked_at = models.DateTimeField("Jev проверил профиль", null=True, blank=True)
+    profile_signal = models.CharField("Сигнал ИИ по профилю", max_length=16, choices=PROFILE_SIGNAL_CHOICES, blank=True)
+    profile_confidence = models.DecimalField("Уверенность ИИ по профилю", max_digits=4, decimal_places=3, null=True, blank=True)
+    profile_reason = models.CharField("Причина рекомендации ИИ", max_length=500, blank=True)
+    profile_model = models.CharField("Модель проверки профиля", max_length=100, blank=True)
+    profile_checked_at = models.DateTimeField("ИИ проверил профиль", null=True, blank=True)
 
     outcome_status = models.CharField("Стадия сделки", max_length=16, choices=OUTCOME_STATUS_CHOICES, default=OUTCOME_DRAFT)
     market_forecast_percent = models.DecimalField("Прогноз рынка по снижению, %", max_digits=5, decimal_places=2, null=True, blank=True)
