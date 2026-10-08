@@ -24,7 +24,6 @@
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
           {% csrf_token %}<button type="submit">↻ Обновить</button>
         </form>
-        {% if settings.profile_triage_enabled %}<form method="post" action="{% url 'tender_selection:profile_triage_run' %}">{% csrf_token %}<button type="submit">✦ Проверить профиль</button></form>{% endif %}
         <a class="ts-refresh__settings" href="{% url 'tender_selection:settings' %}">☷ Настроить отбор</a>
         <span class="ts-refresh__params">Сейчас: от {{ settings.min_price|rub }} · за {{ settings.window_days }} дн.</span>
       </div>
