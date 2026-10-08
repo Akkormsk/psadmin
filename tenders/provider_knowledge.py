@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import Counterparty, CounterpartyKnowledgeVersion, ProviderKnowledgeStaging, StageCounterpartyLink
+from .sewing_price_list import parse_sewing_workbook_bytes
 
 
 def create_provider(user, name, stages, source_type="text", raw_content=b"", extracted_text=""):
@@ -18,6 +19,15 @@ def create_provider(user, name, stages, source_type="text", raw_content=b"", ext
 def create_knowledge_draft(counterparty, user, canonical_data, staging=None, stage=None, metadata=None):
     number = CounterpartyKnowledgeVersion.objects.filter(counterparty=counterparty, stage=stage).count() + 1
     return CounterpartyKnowledgeVersion.objects.create(counterparty=counterparty, stage=stage, staging=staging, version_number=number, canonical_data=canonical_data, source_metadata=metadata or {}, created_by=user)
+
+
+def create_sewing_provider_draft(user, name, stage, raw_content, original_filename="Пошив.xls"):
+    data = parse_sewing_workbook_bytes(raw_content)
+    provider, staging = create_provider(user, name, [stage], "file", raw_content, "Пошив.xls")
+    staging.original_filename = original_filename[:255]
+    staging.save(update_fields=["original_filename"])
+    version = create_knowledge_draft(provider, user, data, staging=staging, stage=stage, metadata={"source_kind": "sewing_xls"})
+    return provider, version
 
 
 def confirm_knowledge(version, user, note=""):

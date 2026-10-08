@@ -90,3 +90,9 @@ def parse_sewing_workbook(path: str | Path) -> dict[str, Any]:
     sheet = workbook.sheet_by_index(0)
     rows = [sheet.row_values(row_index) for row_index in range(sheet.nrows)]
     return canonical_data_from_rows(rows)
+
+
+def parse_sewing_workbook_bytes(raw_content: bytes) -> dict[str, Any]:
+    workbook = xlrd.open_workbook(file_contents=raw_content, formatting_info=False)
+    sheet = workbook.sheet_by_index(0)
+    return canonical_data_from_rows([sheet.row_values(index) for index in range(sheet.nrows)])
