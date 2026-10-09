@@ -100,3 +100,4 @@ class AssistantConversationTests(TestCase):
         self.assertContains(response, 'data-assistant-suggestion=', count=2)
         self.assertContains(response, 'event.key === "Enter" && !event.shiftKey')
         self.assertContains(response, 'assistant-tool-result')
+        self.assertContains(response, 'assistant-message--pending')
