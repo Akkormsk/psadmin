@@ -1,10 +1,13 @@
 import copy
+import json
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .assistant_tools import available_tools
+from .assistant_conversations import conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
 from .models import CounterpartyKnowledgeVersion, ProcessDefinition
 from .provider_knowledge import create_knowledge_draft, create_sewing_provider_draft, confirm_knowledge, initialize_structured_rules_binding
 
@@ -45,3 +48,43 @@ def console(request):
         version.save(update_fields=["status"])
         return redirect("provider_calculator", binding_id=binding.pk)
     return redirect("assistant_console")
+
+
+@login_required
+def conversations(request):
+    from .models import OwnerInteraction
+    items = OwnerInteraction.objects.filter(context__kind="assistant_conversation", context__owner_id=request.user.pk).order_by("-created_at")[:30]
+    return JsonResponse({"conversations": [serialize_conversation(item) for item in items]})
+
+
+@login_required
+def conversation_new(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    conversation = create_conversation(request.user, request.POST.get("title", ""))
+    return JsonResponse({"conversation": serialize_conversation(conversation)}, status=201)
+
+
+@login_required
+def conversation_detail(request, conversation_id):
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    return JsonResponse({"conversation": serialize_conversation(conversation), "messages": serialize_messages(conversation)})
+
+
+@login_required
+def conversation_message(request, conversation_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    try:
+        payload = json.loads(request.body)
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("Некорректное сообщение")
+    message = payload.get("message", "") if isinstance(payload, dict) else ""
+    if not isinstance(message, str) or not message.strip():
+        return HttpResponseBadRequest("Введите сообщение")
+    return JsonResponse({"messages": respond(conversation, request.user, message)})

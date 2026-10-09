@@ -2078,3 +2078,22 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
   .button-secondary:active,
   .button-success:active { transform: none; }
 }
+
+.assistant-launcher { position:fixed; right:24px; bottom:24px; z-index:70; border:0; border-radius:999px; padding:11px 16px; background:var(--ink); color:var(--surface); box-shadow:0 8px 24px rgba(15,23,42,.2); font:inherit; font-weight:600; cursor:pointer; }
+.assistant-drawer { position:fixed; z-index:80; top:0; right:0; display:grid; grid-template-rows:auto auto 1fr auto; width:min(430px,calc(100vw - 24px)); height:100dvh; background:var(--surface); box-shadow:-18px 0 48px rgba(15,23,42,.22); transform:translateX(105%); transition:transform .18s ease; }
+.assistant-drawer.is-open { transform:translateX(0); }
+.assistant-drawer__header { display:flex; justify-content:space-between; align-items:start; padding:18px 20px 12px; border-bottom:1px solid var(--line); }
+.assistant-drawer__header strong, .assistant-drawer__header small { display:block; }
+.assistant-drawer__header small { margin-top:3px; color:var(--ink-3); font-size:12px; }
+.assistant-drawer__history { display:flex; gap:8px; padding:12px 20px; border-bottom:1px solid var(--line); }
+.assistant-drawer__history button { white-space:nowrap; }
+.assistant-drawer__history select { min-width:0; flex:1; }
+.assistant-drawer__messages { min-height:0; overflow:auto; padding:16px 20px; background:var(--canvas); }
+.assistant-message { max-width:90%; margin:0 0 10px; padding:10px 12px; border-radius:12px; color:var(--ink); background:var(--surface); box-shadow:0 1px 2px rgba(15,23,42,.06); overflow-wrap:anywhere; }
+.assistant-message p { margin:0; line-height:1.45; }
+.assistant-message ul { margin:9px 0 0; padding-left:18px; }
+.assistant-message li + li { margin-top:7px; }
+.assistant-message--user { margin-left:auto; background:var(--tint-positive); }
+.assistant-drawer__composer { display:flex; gap:8px; align-items:end; padding:12px 20px 18px; border-top:1px solid var(--line); }
+.assistant-drawer__composer textarea { min-width:0; flex:1; resize:vertical; }
+@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:16px; bottom:16px; } }
