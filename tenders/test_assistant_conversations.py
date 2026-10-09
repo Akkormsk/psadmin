@@ -51,3 +51,4 @@ class AssistantConversationTests(TestCase):
         response = self.client.get(reverse("tender_home"), secure=True)
         self.assertContains(response, 'assistant-context-chips')
         self.assertContains(response, 'data-assistant-suggestion=', count=2)
+        self.assertContains(response, 'event.key === "Enter" && !event.shiftKey')
