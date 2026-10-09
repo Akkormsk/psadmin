@@ -22,13 +22,29 @@ def _request(prompt):
     return result
 
 
+def _planning_tools(tools, user):
+    prepared = []
+    for tool in tools:
+        item = dict(tool)
+        if tool.get("ui"):
+            ui = dict(tool["ui"])
+            options = {}
+            for name, source in ui.get("options", {}).items():
+                options[name] = execute_tool(source["tool"], user, {}).get(source["field"], [])
+            ui["options"] = options
+            item["ui"] = ui
+        prepared.append(item)
+    return prepared
+
+
 def reply(conversation, user, message):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
+    planning_tools = _planning_tools(tools, user)
     prompt = json.dumps(
         {
-            "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. When the user asks to start a tool with ui, select that tool immediately: its declared form collects the required inputs and the tool is not executed until that form is confirmed. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
-            "tools": tools,
+            "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. When the user asks to start a tool with ui, select that tool immediately: its declared form collects the required inputs and the tool is not executed until that form is confirmed. Copy values explicitly stated by the user into ui action arguments; select an option only by its exact id from the supplied ui options. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
+            "tools": planning_tools,
             "context": conversation.context.get("business_context", {}),
             "history": _history(conversation),
             "message": message,
@@ -55,6 +71,12 @@ def reply(conversation, user, message):
         for name, source in selected_tool["ui"].get("options", {}).items():
             values = execute_tool(source["tool"], user, {})
             data[name] = values.get(source["field"], [])
+        for name, field_type in selected_tool["ui"].get("fields", {}).items():
+            value = arguments.get(name)
+            if field_type == "string" and isinstance(value, str) and value.strip():
+                data[name] = value.strip()
+            if field_type == "integer" and isinstance(value, int) and any(item.get("id") == value for item in data.get("stages", [])):
+                data[name] = value
         return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
     try:
         result = execute_tool(identifier, user, arguments)

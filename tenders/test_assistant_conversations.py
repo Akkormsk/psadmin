@@ -78,9 +78,10 @@ class AssistantConversationTests(TestCase):
         self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["result"]["stages"])
 
     @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request", return_value={"reply": "Прикрепите прайс XLS и укажите название.", "action": {"id": "provider.create_draft", "arguments": {}}})
+    @patch("tenders.assistant_agent._request")
     def test_model_opens_registered_provider_form_without_creating_a_draft(self, _request, _preflight):
         stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
+        _request.return_value = {"reply": "Проверьте данные и прикрепите XLS.", "action": {"id": "provider.create_draft", "arguments": {"name": "Атекс", "stage_id": stage.pk}}}
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Контрагент"}, secure=True).json()["conversation"]["id"]
 
         reply = self.client.post(
@@ -93,6 +94,8 @@ class AssistantConversationTests(TestCase):
         message = reply.json()["messages"][-1]
         self.assertEqual(message["kind"], "provider_upload")
         self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["stages"])
+        self.assertEqual(message["data"]["name"], "Атекс")
+        self.assertEqual(message["data"]["stage_id"], stage.pk)
 
     def test_global_drawer_has_context_chips_and_real_suggestion_actions(self):
         response = self.client.get(reverse("tender_home"), secure=True)
