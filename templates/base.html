@@ -72,8 +72,9 @@
         }
         function showContext(conversation) {
           const value = conversation.business_context || {};
-          context.textContent = value.label || "Общая беседа";
-          contextMeta.textContent = value.tender_id ? "Расчёт #" + value.tender_id : value.page || "Без привязки к объекту";
+          const current = pageContext();
+          context.textContent = value.label ? "Обсуждается: " + value.label : "Общая беседа";
+          contextMeta.textContent = "Сейчас: " + current.label + (current.tender_id ? " · расчёт #" + current.tender_id : "");
         }
         function load(id) {
           return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); showContext(data.conversation); render(data.messages); });
