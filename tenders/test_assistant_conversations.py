@@ -13,7 +13,7 @@ class AssistantConversationTests(TestCase):
         self.client.force_login(self.user)
 
     def test_new_conversation_is_persistent_and_lists_real_capabilities(self):
-        created = self.client.post(reverse("assistant_conversation_new"), {"title": "Создание контрагента — Пошив"})
+        created = self.client.post(reverse("assistant_conversation_new"), {"title": "Создание контрагента — Пошив"}, secure=True)
         self.assertEqual(created.status_code, 201)
         conversation_id = created.json()["conversation"]["id"]
 
@@ -21,6 +21,7 @@ class AssistantConversationTests(TestCase):
             reverse("assistant_conversation_message", args=[conversation_id]),
             data=json.dumps({"message": "Что ты умеешь?"}),
             content_type="application/json",
+            secure=True,
         )
         self.assertEqual(reply.status_code, 200)
         messages = reply.json()["messages"]
@@ -31,15 +32,16 @@ class AssistantConversationTests(TestCase):
         interaction = OwnerInteraction.objects.get(pk=conversation_id)
         self.assertEqual(interaction.context["kind"], "assistant_conversation")
         self.assertEqual(OwnerFeedbackEvent.objects.filter(interaction=interaction).count(), 2)
-        listed = self.client.get(reverse("assistant_conversations"))
+        listed = self.client.get(reverse("assistant_conversations"), secure=True)
         self.assertEqual(listed.json()["conversations"][0]["id"], conversation_id)
 
     def test_unknown_request_is_not_presented_as_a_supported_action(self):
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Проверка"}).json()["conversation"]["id"]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Проверка"}, secure=True).json()["conversation"]["id"]
         reply = self.client.post(
             reverse("assistant_conversation_message", args=[conversation_id]),
             data=json.dumps({"message": "Отправь email подрядчику"}),
             content_type="application/json",
+            secure=True,
         )
         self.assertEqual(reply.status_code, 200)
         self.assertEqual(reply.json()["messages"][-1]["kind"], "unsupported")
