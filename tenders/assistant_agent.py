@@ -27,7 +27,7 @@ def reply(conversation, user, message):
     tools = available_tools(user)
     prompt = json.dumps(
         {
-            "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Never claim an action happened until tool_result is supplied. A tool with ui opens its declared form and is not executed until that form is confirmed. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
+            "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. A tool with ui opens its declared form and is not executed until that form is confirmed. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
             "tools": tools,
             "context": conversation.context.get("business_context", {}),
             "history": _history(conversation),
