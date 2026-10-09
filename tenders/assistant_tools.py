@@ -26,6 +26,7 @@ class AssistantTool:
     requires_confirmation: bool
     requires_superuser: bool
     executor: Callable[[Any, dict[str, Any]], dict[str, Any]]
+    ui: dict[str, Any] | None = None
 
 
 _TOOLS: dict[str, AssistantTool] = {}
@@ -48,6 +49,7 @@ def available_tools(user) -> list[dict[str, Any]]:
             "read_only": tool.read_only,
             "requires_confirmation": tool.requires_confirmation,
             "available": not tool.requires_superuser or user.is_superuser,
+            "ui": tool.ui,
         }
         for tool in _TOOLS.values()
     ]
@@ -112,6 +114,6 @@ def _calculate_provider(_user, payload):
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("provider.find", "Найти контрагента", "Ищет активных контрагентов.", {"query": "string"}, True, False, False, _find_counterparty))
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
-register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft))
+register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
 register_tool(AssistantTool("provider.calculator_schema", "Входы калькулятора", "Показывает подтверждённую схему калькулятора.", {"binding_id": "integer"}, True, False, False, _calculator_schema))
 register_tool(AssistantTool("provider.calculate", "Рассчитать у контрагента", "Запускает детерминированный калькулятор с заданными входами.", {"binding_id": "integer", "spec": "object"}, False, False, False, _calculate_provider))

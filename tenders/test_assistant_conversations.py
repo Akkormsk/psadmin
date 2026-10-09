@@ -77,6 +77,23 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(message["text"], "Доступен этап: Швейный этап.")
         self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["result"]["stages"])
 
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Прикрепите прайс XLS и укажите название.", "action": {"id": "provider.create_draft", "arguments": {}}})
+    def test_model_opens_registered_provider_form_without_creating_a_draft(self, _request, _preflight):
+        stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Контрагент"}, secure=True).json()["conversation"]["id"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Создай контрагента по пошиву"}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        message = reply.json()["messages"][-1]
+        self.assertEqual(message["kind"], "provider_upload")
+        self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["stages"])
+
     def test_global_drawer_has_context_chips_and_real_suggestion_actions(self):
         response = self.client.get(reverse("tender_home"), secure=True)
         self.assertContains(response, 'assistant-context-chips')

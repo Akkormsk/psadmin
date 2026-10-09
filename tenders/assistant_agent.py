@@ -27,7 +27,7 @@ def reply(conversation, user, message):
     tools = available_tools(user)
     prompt = json.dumps(
         {
-            "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Never claim an action happened until tool_result is supplied. If required inputs or confirmation are missing, explain what is needed and action must be null.",
+            "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Never claim an action happened until tool_result is supplied. A tool with ui opens its declared form and is not executed until that form is confirmed. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
             "tools": tools,
             "context": conversation.context.get("business_context", {}),
             "history": _history(conversation),
@@ -49,6 +49,13 @@ def reply(conversation, user, message):
         raise TenderAIError("Ассистент вернул некорректное действие.")
     if identifier not in {tool["id"] for tool in tools}:
         raise TenderAIError("Ассистент запросил действие вне реестра.")
+    selected_tool = next(tool for tool in tools if tool["id"] == identifier)
+    if selected_tool.get("ui"):
+        data = {"tool_id": identifier}
+        for name, source in selected_tool["ui"].get("options", {}).items():
+            values = execute_tool(source["tool"], user, {})
+            data[name] = values.get(source["field"], [])
+        return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
     try:
         result = execute_tool(identifier, user, arguments)
     except AssistantToolConfirmationRequired:
@@ -60,7 +67,7 @@ def reply(conversation, user, message):
             {
                 "task": "Answer in concise Russian using only tool_result. Do not invent data or promise further execution.",
                 "draft": plan["reply"],
-                "tool": next(tool for tool in tools if tool["id"] == identifier),
+                "tool": selected_tool,
                 "tool_result": result,
                 "response_schema": {"reply": "Russian text"},
             },
