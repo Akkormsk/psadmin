@@ -38,7 +38,7 @@
     {% if request.user.is_authenticated %}
     <button type="button" class="assistant-launcher" id="assistant-launcher" aria-controls="assistant-drawer" aria-expanded="false">Ассистент</button>
     <aside class="assistant-drawer" id="assistant-drawer" aria-label="Ассистент" aria-hidden="true">
-        <header class="assistant-drawer__header"><div><strong>Ассистент</strong><small id="assistant-context">Рабочая беседа</small></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
+        <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Рабочий контекст</small><strong>Ассистент</strong><span id="assistant-context">Откройте или создайте беседу</span><small id="assistant-context-meta"></small></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
         <div class="assistant-drawer__history"><button type="button" id="assistant-new">+ Новая беседа</button><select id="assistant-history" aria-label="История бесед"></select></div>
         <main class="assistant-drawer__messages" id="assistant-messages" aria-live="polite"></main>
         <form class="assistant-drawer__composer" id="assistant-composer"><textarea id="assistant-input" rows="2" placeholder="Напишите сообщение…"></textarea><button type="submit">Отправить</button></form>
@@ -47,7 +47,7 @@
       (function () {
         const launcher = document.getElementById("assistant-launcher"), drawer = document.getElementById("assistant-drawer");
         const close = document.getElementById("assistant-close"), fresh = document.getElementById("assistant-new");
-        const history = document.getElementById("assistant-history"), messages = document.getElementById("assistant-messages");
+        const history = document.getElementById("assistant-history"), messages = document.getElementById("assistant-messages"), context = document.getElementById("assistant-context"), contextMeta = document.getElementById("assistant-context-meta");
         const composer = document.getElementById("assistant-composer"), input = document.getElementById("assistant-input");
         const key = "psadmin-assistant-conversation";
         let active = null;
@@ -64,8 +64,19 @@
           }).join("");
           messages.scrollTop = messages.scrollHeight;
         }
+        function pageContext() {
+          const heading = document.querySelector("main h1, .page-title h1, h1");
+          const label = heading && heading.textContent.trim() ? heading.textContent.trim().replace(/\s+/g, " ").slice(0, 120) : "Текущий экран";
+          const match = location.pathname.match(/(?:tender|order)\/(\d+)\//);
+          return {page: location.pathname + location.search, label: label, tender_id: match ? match[1] : ""};
+        }
+        function showContext(conversation) {
+          const value = conversation.business_context || {};
+          context.textContent = value.label || "Общая беседа";
+          contextMeta.textContent = value.tender_id ? "Расчёт #" + value.tender_id : value.page || "Без привязки к объекту";
+        }
         function load(id) {
-          return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); render(data.messages); });
+          return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); showContext(data.conversation); render(data.messages); });
         }
         function refreshHistory() {
           return fetch("/tenders/assistant/conversations/").then(function (response) { return response.json(); }).then(function (data) {
@@ -77,10 +88,11 @@
           });
         }
         function create() {
-          return fetch("/tenders/assistant/conversations/new/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/x-www-form-urlencoded"}, body:"title=" + encodeURIComponent("Новая рабочая беседа")}).then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); return refreshHistory(); });
+          const data = pageContext(); data.title = data.label;
+          return fetch("/tenders/assistant/conversations/new/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams(data)}).then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); return refreshHistory(); });
         }
-        function open() { drawer.classList.add("is-open"); drawer.setAttribute("aria-hidden", "false"); launcher.setAttribute("aria-expanded", "true"); refreshHistory().then(function () { input.focus(); }); }
-        function shut() { drawer.classList.remove("is-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); launcher.focus(); }
+        function open() { drawer.classList.add("is-open"); document.body.classList.add("assistant-open"); drawer.setAttribute("aria-hidden", "false"); launcher.setAttribute("aria-expanded", "true"); refreshHistory().then(function () { input.focus(); }); }
+        function shut() { drawer.classList.remove("is-open"); document.body.classList.remove("assistant-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); launcher.focus(); }
         launcher.addEventListener("click", open); close.addEventListener("click", shut); fresh.addEventListener("click", create);
         history.addEventListener("change", function () { active = Number(history.value); localStorage.setItem(key, String(active)); load(active); });
         composer.addEventListener("submit", function (event) { event.preventDefault(); const text = input.value.trim(); if (!text || !active) return; input.value = ""; input.disabled = true; fetch("/tenders/assistant/conversations/" + active + "/message/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/json"}, body:JSON.stringify({message:text})}).then(function (response) { return response.json(); }).then(function (data) { render(data.messages); }).catch(function () { messages.insertAdjacentHTML("beforeend", "<article class=\"assistant-message assistant-message--assistant\"><p>Не удалось обработать сообщение. Повторите попытку.</p></article>"); }).finally(function () { input.disabled = false; input.focus(); }); });

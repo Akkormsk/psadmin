@@ -13,9 +13,10 @@ class AssistantConversationTests(TestCase):
         self.client.force_login(self.user)
 
     def test_new_conversation_is_persistent_and_lists_real_capabilities(self):
-        created = self.client.post(reverse("assistant_conversation_new"), {"title": "Создание контрагента — Пошив"}, secure=True)
+        created = self.client.post(reverse("assistant_conversation_new"), {"title": "Создание контрагента — Пошив", "page": "/tenders/tender/42/", "label": "Расчёт №42", "tender_id": "42"}, secure=True)
         self.assertEqual(created.status_code, 201)
         conversation_id = created.json()["conversation"]["id"]
+        self.assertEqual(created.json()["conversation"]["business_context"]["label"], "Расчёт №42")
 
         reply = self.client.post(
             reverse("assistant_conversation_message", args=[conversation_id]),

@@ -53,7 +53,11 @@ def conversations(request):
 def conversation_new(request):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required")
-    conversation = create_conversation(request.user, request.POST.get("title", ""))
+    context = {}
+    for field in ("page", "label", "tender_id", "line_id"):
+        if request.POST.get(field):
+            context[field] = request.POST[field]
+    conversation = create_conversation(request.user, request.POST.get("title", ""), context)
     return JsonResponse({"conversation": serialize_conversation(conversation)}, status=201)
 
 

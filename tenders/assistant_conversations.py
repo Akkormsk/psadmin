@@ -13,12 +13,14 @@ def _conversations(user):
     return OwnerInteraction.objects.filter(context__kind=CONVERSATION_KIND, context__owner_id=user.pk).order_by("-created_at")
 
 
-def create_conversation(user, title=""):
+def create_conversation(user, title="", context=None):
     title = title.strip() or "Новая рабочая беседа"
+    context = context if isinstance(context, dict) else {}
+    context = {key: str(value)[:240] for key, value in context.items() if key in {"page", "label", "tender_id", "line_id"} and value not in (None, "")}
     return OwnerInteraction.objects.create(
         status="open",
         question=title,
-        context={"kind": CONVERSATION_KIND, "title": title, "owner_id": user.pk},
+        context={"kind": CONVERSATION_KIND, "title": title, "owner_id": user.pk, "business_context": context},
     )
 
 
@@ -30,6 +32,7 @@ def serialize_conversation(conversation):
     return {
         "id": conversation.pk,
         "title": conversation.context.get("title") or conversation.question,
+        "business_context": conversation.context.get("business_context", {}),
         "created_at": conversation.created_at.isoformat(),
     }
 
