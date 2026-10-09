@@ -2108,6 +2108,10 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-message p { margin:0; line-height:1.45; }
 .assistant-message ul { margin:9px 0 0; padding-left:18px; }
 .assistant-message li + li { margin-top:7px; }
+.assistant-tool-result { margin-top:10px; border-top:1px solid var(--border); padding-top:8px; }
+.assistant-tool-result section + section { margin-top:8px; }
+.assistant-tool-result small { color:var(--ink-3); text-transform:capitalize; }
+.assistant-tool-result p { margin-top:3px; }
 .assistant-message--user { margin-left:auto; border-color:var(--border-positive); background:var(--tint-positive); }
 .assistant-drawer__composer { display:flex; gap:9px; align-items:center; padding:14px 22px 18px; border-top:1px solid var(--border); background:var(--surface); }
 .assistant-drawer__composer textarea { min-width:0; flex:1; min-height:42px; box-sizing:border-box; border:1px solid var(--field-border); border-radius:10px; padding:10px 12px; background:var(--surface); color:var(--ink); font:inherit; font-size:12px; line-height:1.35; resize:vertical; }

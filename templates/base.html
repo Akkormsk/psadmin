@@ -53,6 +53,14 @@
         let active = null;
         function csrf() { return document.cookie.split("; ").find(function (item) { return item.startsWith("csrftoken="); })?.split("=")[1] || ""; }
         function escape(value) { const node = document.createElement("span"); node.textContent = value || ""; return node.innerHTML; }
+        function toolResult(result) {
+          return Object.entries(result || {}).map(function (entry) {
+            const label = escape(entry[0].replace(/_/g, " "));
+            const value = entry[1];
+            if (Array.isArray(value)) return "<section><small>" + label + "</small><ul>" + value.map(function (item) { return "<li>" + escape(typeof item === "object" ? (item.name || item.id || JSON.stringify(item)) : item) + "</li>"; }).join("") + "</ul></section>";
+            return "<section><small>" + label + "</small><p>" + escape(typeof value === "object" ? JSON.stringify(value) : value) + "</p></section>";
+          }).join("");
+        }
         function render(items) {
           if (!items.length) {
             messages.innerHTML = "<section class=\"assistant-empty\"><span class=\"assistant-empty__mark\">✦</span><h2>Начните рабочую беседу</h2><p>Контекст текущего экрана сохранится. Я помогу с расчётом, контрагентом и подтверждённым прайсом.</p><div class=\"assistant-suggestions\"><button type=\"button\" data-assistant-suggestion=\"Что ты умеешь?\">Что ты умеешь?</button><button type=\"button\" data-assistant-suggestion=\"Создать контрагента по пошиву\">Создать контрагента по пошиву</button></div></section>";
@@ -61,6 +69,7 @@
           messages.innerHTML = items.map(function (item) {
             let extra = "";
             if (item.kind === "capabilities") extra = "<ul>" + item.data.tools.filter(function (tool) { return tool.available; }).map(function (tool) { return "<li><strong>" + escape(tool.name) + "</strong><br><small>" + escape(tool.description) + "</small></li>"; }).join("") + "</ul>";
+            if (item.kind === "tool_result") extra = "<div class=\"assistant-tool-result\">" + toolResult(item.data.result) + "</div>";
             if (item.kind === "provider_upload") extra = "<form class=\"assistant-card\" data-sewing-upload><label>Название<input name=\"name\" required></label><label>Этап<select name=\"stage_id\" required>" + item.data.stages.map(function (stage) { return "<option value=\"" + stage.id + "\">" + escape(stage.name) + "</option>"; }).join("") + "</select></label><label>Прайс XLS<input type=\"file\" name=\"source\" accept=\".xls\" required></label><button type=\"submit\">Создать черновик</button></form>";
             if (item.kind === "sewing_review") extra = "<form class=\"assistant-card\" data-sewing-confirm><p><small>" + escape(item.data.formula_note) + "</small></p><input type=\"hidden\" name=\"version_id\" value=\"" + item.data.version_id + "\"><label>Валюта<select name=\"currency\"><option value=\"RUB\">RUB</option></select></label><label><input type=\"checkbox\" name=\"formula_confirmed\" value=\"yes\" required> Кэшированные значения XLS — цены за единицу</label><button type=\"submit\">Подтвердить прайс</button></form>";
             if (item.kind === "sewing_confirmed") extra = "<p><a href=\"" + item.data.calculator_url + "\">Открыть калькулятор</a></p>";

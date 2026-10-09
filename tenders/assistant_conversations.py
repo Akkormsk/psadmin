@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.utils import timezone
 
-from .assistant_tools import available_tools, execute_tool
+from .assistant_agent import reply
 from .models import OwnerFeedbackEvent, OwnerInteraction
 
 
@@ -69,31 +69,8 @@ def add_assistant_message(conversation, text, kind="text", data=None):
 def respond(conversation, user, text):
     text = text.strip()
     _add_message(conversation, user, "user", text)
-    normalized = text.casefold()
-    if any(phrase in normalized for phrase in ("что ты умеешь", "какие функции", "какие возможности", "можешь создать", "можешь рассчитать")):
-        tools = execute_tool("assistant.capabilities", user, {})["tools"]
-        _add_message(
-            conversation,
-            user,
-            "assistant",
-            "Вот функции, которые доступны вам сейчас.",
-            "capabilities",
-            {"tools": tools},
-        )
-    elif "email" in normalized or "письм" in normalized:
-        _add_message(conversation, user, "assistant", "Отправка email подрядчику пока не подключена. Я не буду обещать действие, которого нет в реестре.", "unsupported")
-    elif "контрагент" in normalized or "пошив" in normalized:
-        stages = execute_tool("process.list", user, {})["stages"]
-        _add_message(
-            conversation,
-            user,
-            "assistant",
-            "Готов создать черновик контрагента по пошиву. Укажите название и прикрепите XLS-прайс; затем я покажу распознанные условия для подтверждения.",
-            "provider_upload",
-            {"stages": stages},
-        )
-    else:
-        _add_message(conversation, user, "assistant", "Я могу показать доступные функции, создать черновик контрагента по пошиву или рассчитать подтверждённый прайс. Спросите «Что ты умеешь?».", "help")
+    response = reply(conversation, user, text)
+    _add_message(conversation, user, "assistant", response["text"], response["kind"], response["data"])
     return serialize_messages(conversation)
 
 
