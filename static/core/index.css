@@ -2125,11 +2125,19 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-composer__send { display:grid; width:40px; height:40px; flex:0 0 40px; place-items:center; border:0; border-radius:50%; padding:0; background:var(--positive-ink); color:var(--surface); font-size:18px; line-height:1; cursor:pointer; }
 .assistant-composer__send:hover { background:var(--accent); }
 .assistant-composer__send:disabled { opacity:.5; cursor:wait; }
-.assistant-card button { min-height:34px; padding:6px 11px; font-size:11px; }
-.assistant-card { display:grid; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
-.assistant-card label { display:grid; gap:4px; font-size:12px; }
-.assistant-card button { justify-self:start; }
-.assistant-card__error { color:var(--negative-ink); }
+.assistant-card { display:grid; gap:12px; margin-top:12px; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:0 1px 2px rgba(15,23,42,.04); }
+.assistant-card label { display:grid; gap:6px; color:var(--ink-2); font-size:11px; font-weight:750; }
+.assistant-card :is(input:not([type="checkbox"]):not([type="file"]), select, textarea) { width:100%; min-height:38px; box-sizing:border-box; border:1px solid var(--field-border); border-radius:8px; padding:8px 10px; background:var(--surface); color:var(--ink); font:inherit; font-size:12px; font-weight:500; }
+.assistant-card select { cursor:pointer; }
+.assistant-card :is(input, select, textarea):focus { outline:2px solid var(--accent-ring); border-color:var(--border-positive); }
+.assistant-card input[type="file"] { width:100%; box-sizing:border-box; border:1px dashed var(--field-border); border-radius:8px; padding:7px; background:var(--tint-neutral); color:var(--ink-3); font:inherit; font-size:11px; }
+.assistant-card input[type="file"]::file-selector-button { margin-right:8px; border:0; border-radius:6px; padding:6px 8px; background:var(--surface); color:var(--ink-2); font:inherit; font-size:11px; font-weight:750; cursor:pointer; }
+.assistant-card label:has(input[type="checkbox"]) { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:var(--tint-neutral); font-weight:600; line-height:1.4; }
+.assistant-card input[type="checkbox"] { width:16px; height:16px; flex:0 0 auto; margin:0; accent-color:var(--positive-ink); }
+.assistant-card button { min-height:38px; justify-self:start; border:1px solid var(--border-positive); border-radius:8px; padding:8px 12px; background:var(--positive-ink); color:var(--surface); font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
+.assistant-card button:hover { background:var(--accent); }
+.assistant-card button:disabled { opacity:.55; cursor:wait; }
+.assistant-card__error { margin:0; color:var(--negative-ink); font-size:11px; font-weight:700; }
 body.assistant-open .tender-requirements-overlay { right:min(480px,calc(100vw - 32px)); }
 body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - min(480px,calc(100vw - 32px)) - 16px)); }
 @media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:16px; bottom:16px; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
