@@ -59,6 +59,10 @@ def _add_message(conversation, user, role, text, kind="text", data=None):
     )
 
 
+def add_assistant_message(conversation, text, kind="text", data=None):
+    return _add_message(conversation, None, "assistant", text, kind, data)
+
+
 def respond(conversation, user, text):
     text = text.strip()
     _add_message(conversation, user, "user", text)
@@ -76,13 +80,14 @@ def respond(conversation, user, text):
     elif "email" in normalized or "письм" in normalized:
         _add_message(conversation, user, "assistant", "Отправка email подрядчику пока не подключена. Я не буду обещать действие, которого нет в реестре.", "unsupported")
     elif "контрагент" in normalized or "пошив" in normalized:
+        stages = execute_tool("process.list", user, {})["stages"]
         _add_message(
             conversation,
             user,
             "assistant",
             "Готов создать черновик контрагента по пошиву. Укажите название и прикрепите XLS-прайс; затем я покажу распознанные условия для подтверждения.",
             "provider_upload",
-            {"stages_tool": "process.list"},
+            {"stages": stages},
         )
     else:
         _add_message(conversation, user, "assistant", "Я могу показать доступные функции, создать черновик контрагента по пошиву или рассчитать подтверждённый прайс. Спросите «Что ты умеешь?».", "help")

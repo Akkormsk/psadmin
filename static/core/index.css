@@ -2096,4 +2096,8 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-message--user { margin-left:auto; background:var(--tint-positive); }
 .assistant-drawer__composer { display:flex; gap:8px; align-items:end; padding:12px 20px 18px; border-top:1px solid var(--line); }
 .assistant-drawer__composer textarea { min-width:0; flex:1; resize:vertical; }
+.assistant-card { display:grid; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+.assistant-card label { display:grid; gap:4px; font-size:12px; }
+.assistant-card button { justify-self:start; }
+.assistant-card__error { color:var(--negative-ink); }
 @media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:16px; bottom:16px; } }

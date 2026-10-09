@@ -1,4 +1,5 @@
 import hashlib
+import copy
 
 from django.db import transaction
 from django.utils import timezone
@@ -23,11 +24,31 @@ def create_knowledge_draft(counterparty, user, canonical_data, staging=None, sta
 
 def create_sewing_provider_draft(user, name, stage, raw_content, original_filename="Пошив.xls"):
     data = parse_sewing_workbook_bytes(raw_content)
-    provider, staging = create_provider(user, name, [stage], "file", raw_content, "Пошив.xls")
+    provider = Counterparty.objects.filter(name__iexact=name.strip()).first()
+    if provider:
+        StageCounterpartyLink.objects.get_or_create(stage=stage, counterparty=provider)
+        staging = ProviderKnowledgeStaging.objects.create(counterparty=provider, source_type="file", raw_content=raw_content, extracted_text="Пошив.xls", source_hash=hashlib.sha256(raw_content).hexdigest(), created_by=user)
+    else:
+        provider, staging = create_provider(user, name, [stage], "file", raw_content, "Пошив.xls")
     staging.original_filename = original_filename[:255]
     staging.save(update_fields=["original_filename"])
     version = create_knowledge_draft(provider, user, data, staging=staging, stage=stage, metadata={"source_kind": "sewing_xls"})
     return provider, version
+
+
+def confirm_sewing_price_list(version, user, currency, formula_confirmed):
+    if currency.strip().upper() != "RUB" or not formula_confirmed:
+        raise ValueError("Подтвердите валюту и то, что кэшированные значения XLS — цены за единицу")
+    data = copy.deepcopy(version.canonical_data)
+    data["requires_confirmation"] = False
+    data["formula_status"] = "confirmed"
+    data["pricing"]["currency"] = "RUB"
+    draft = create_knowledge_draft(version.counterparty, user, data, stage=version.stage, metadata=version.source_metadata)
+    confirmed = confirm_knowledge(draft, user, "Тестовое допущение: валюта RUB; кэшированные значения XLS подтверждены как цены за единицу.")
+    binding = initialize_structured_rules_binding(confirmed)
+    version.status = CounterpartyKnowledgeVersion.STATUS_INACTIVE
+    version.save(update_fields=["status"])
+    return confirmed, binding
 
 
 def confirm_knowledge(version, user, note=""):

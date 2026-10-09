@@ -1,4 +1,3 @@
-import copy
 import json
 
 from django.contrib.auth.decorators import login_required
@@ -7,9 +6,9 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .assistant_tools import available_tools
-from .assistant_conversations import conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
+from .assistant_conversations import add_assistant_message, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
 from .models import CounterpartyKnowledgeVersion, ProcessDefinition
-from .provider_knowledge import create_knowledge_draft, create_sewing_provider_draft, confirm_knowledge, initialize_structured_rules_binding
+from .provider_knowledge import confirm_sewing_price_list, create_sewing_provider_draft
 
 
 @login_required
@@ -34,18 +33,11 @@ def console(request):
         return redirect("assistant_console", version=version.pk)
     version = get_object_or_404(CounterpartyKnowledgeVersion, pk=request.POST.get("version_id"))
     if action == "confirm_sewing":
-        currency = request.POST.get("currency", "").strip().upper()
-        if currency != "RUB" or request.POST.get("formula_confirmed") != "yes":
-            messages.error(request, "Подтвердите валюту и то, что кэшированные значения XLS — цены за единицу.")
+        try:
+            _confirmed, binding = confirm_sewing_price_list(version, request.user, request.POST.get("currency", ""), request.POST.get("formula_confirmed") == "yes")
+        except ValueError as error:
+            messages.error(request, str(error))
             return redirect("assistant_console", version=version.pk)
-        data = copy.deepcopy(version.canonical_data)
-        data["requires_confirmation"] = False
-        data["formula_status"] = "confirmed"
-        data["pricing"]["currency"] = currency
-        confirmed = confirm_knowledge(create_knowledge_draft(version.counterparty, request.user, data, stage=version.stage, metadata=version.source_metadata), request.user, "Тестовое допущение: валюта RUB; кэшированные значения XLS подтверждены как цены за единицу.")
-        binding = initialize_structured_rules_binding(confirmed)
-        version.status = CounterpartyKnowledgeVersion.STATUS_INACTIVE
-        version.save(update_fields=["status"])
         return redirect("provider_calculator", binding_id=binding.pk)
     return redirect("assistant_console")
 
@@ -88,3 +80,54 @@ def conversation_message(request, conversation_id):
     if not isinstance(message, str) or not message.strip():
         return HttpResponseBadRequest("Введите сообщение")
     return JsonResponse({"messages": respond(conversation, request.user, message)})
+
+
+@login_required
+def conversation_sewing_upload(request, conversation_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    if not request.user.is_superuser:
+        return JsonResponse({"detail": "Создавать контрагента может только администратор"}, status=403)
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    upload = request.FILES.get("source")
+    name = request.POST.get("name", "").strip()
+    stage = ProcessDefinition.objects.filter(pk=request.POST.get("stage_id"), is_active=True).first()
+    if not upload or upload.name.lower().rsplit(".", 1)[-1] != "xls" or not name or not stage:
+        return HttpResponseBadRequest("Нужны название, этап и XLS-прайс")
+    try:
+        provider, version = create_sewing_provider_draft(request.user, name, stage, upload.read(), upload.name)
+    except ValueError as error:
+        return JsonResponse({"detail": str(error)}, status=400)
+    variants = version.canonical_data.get("pricing", {}).get("variants", {})
+    add_assistant_message(
+        conversation,
+        f"Черновик «{provider.name}» создан. Распознано вариантов: {len(variants)}. В XLS валюта и смысл кэшированных формул не подтверждены.",
+        "sewing_review",
+        {"version_id": version.pk, "provider_id": provider.pk, "variant_count": len(variants), "formula_note": version.canonical_data.get("formula_note", "")},
+    )
+    return JsonResponse({"messages": serialize_messages(conversation)})
+
+
+@login_required
+def conversation_sewing_confirm(request, conversation_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    if not request.user.is_superuser:
+        return JsonResponse({"detail": "Подтверждать прайс может только администратор"}, status=403)
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    version = get_object_or_404(CounterpartyKnowledgeVersion, pk=request.POST.get("version_id"))
+    try:
+        confirmed, binding = confirm_sewing_price_list(version, request.user, request.POST.get("currency", ""), request.POST.get("formula_confirmed") == "yes")
+    except ValueError as error:
+        return JsonResponse({"detail": str(error)}, status=400)
+    add_assistant_message(
+        conversation,
+        f"Прайс подтверждён: версия {confirmed.version_number}. Калькулятор активирован.",
+        "sewing_confirmed",
+        {"provider_id": confirmed.counterparty_id, "binding_id": binding.pk, "calculator_url": f"/tenders/production/base/providers/calculator/{binding.pk}/"},
+    )
+    return JsonResponse({"messages": serialize_messages(conversation)})
