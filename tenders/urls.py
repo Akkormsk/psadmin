@@ -1,8 +1,9 @@
 from django.urls import path
 
-from . import views
+from . import assistant_ui, views
 
 urlpatterns = [
+    path("assistant/", assistant_ui.console, name="assistant_console"),
     path("", views.home, name="tender_home"),
     path("cascade-lab/", views.cascade_lab, name="cascade_lab"),
     path("cascade-lab/execute/", views.cascade_lab_execute, name="cascade_lab_execute"),
