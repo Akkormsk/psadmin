@@ -46,3 +46,8 @@ class AssistantConversationTests(TestCase):
         )
         self.assertEqual(reply.status_code, 200)
         self.assertEqual(reply.json()["messages"][-1]["kind"], "unsupported")
+
+    def test_global_drawer_has_context_chips_and_real_suggestion_actions(self):
+        response = self.client.get(reverse("tender_home"), secure=True)
+        self.assertContains(response, 'assistant-context-chips')
+        self.assertContains(response, 'data-assistant-suggestion=', count=2)
