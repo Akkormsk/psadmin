@@ -762,6 +762,8 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
         job.status = TenderComputeJob.Status.ROUTING
         job.save(update_fields=["status", "updated_at"])
         decisions = route_tender_batch(job, router)
+        from .provider_execution import calculate_routed_provider_lines
+        calculate_routed_provider_lines(job)
         question_count = sum(1 for decision in decisions if decision.needs_review)
         job.status = TenderComputeJob.Status.NEEDS_REVIEW if question_count else TenderComputeJob.Status.READY
         job.completed_at = timezone.now()
