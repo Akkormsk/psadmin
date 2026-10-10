@@ -14,7 +14,7 @@
     {% block topbar %}
     {% if request.user.is_authenticated %}
     <nav class="account-bar" aria-label="Аккаунт">
-        <a href="{% url 'data' %}" class="account-bar__data">Данные</a>
+        <a href="/" class="account-bar__home">Главная</a>{% if request.resolver_match.url_name != 'data' %}<a href="{% url 'data' %}" class="account-bar__data">Данные</a>{% endif %}
         <a href="{% url 'account' %}" class="account-bar__profile">
             <span class="account-bar__name account-bar__name--desktop">{% if request.user.first_name or request.user.last_name %}{{ request.user.last_name }} {{ request.user.first_name }}{% else %}Аккаунт{% endif %}</span>
             <span class="account-bar__name account-bar__name--mobile">Аккаунт</span>
@@ -27,7 +27,7 @@
     {% endif %}
     {% endblock %}
     {% if request.user.is_authenticated and request.path != "/" and not request.GET.workspace %}
-    <nav class="app-navigation" aria-label="Навигация"><a href="{% if navigation_parent_url %}{{ navigation_parent_url }}{% else %}/{% endif %}" data-navigation-back>← Назад</a><strong id="app-navigation-title">Рабочая область</strong><a href="/">Главная</a></nav>
+    <nav class="app-navigation" aria-label="Навигация"><a href="{% if navigation_parent_url %}{{ navigation_parent_url }}{% else %}/{% endif %}" data-navigation-back>← Назад</a></nav>
     {% endif %}
     {% if messages %}
     <div class="toast-stack" aria-live="polite" aria-atomic="true">
@@ -136,7 +136,7 @@
       })();
     </script>
     {% endif %}
-    <script>(function(){const header=document.getElementById("app-navigation-title"),back=document.querySelector("[data-navigation-back]");if(header){const heading=document.querySelector("h1,h2");if(heading)header.textContent=heading.textContent.trim();}if(back&&document.referrer){const referrer=new URL(document.referrer);if(referrer.origin===location.origin)back.addEventListener("click",function(event){event.preventDefault();history.back();});}})();</script>
+    <script>(function(){const back=document.querySelector("[data-navigation-back]");if(back&&document.referrer){const referrer=new URL(document.referrer);if(referrer.origin===location.origin)back.addEventListener("click",function(event){event.preventDefault();history.back();});}})();</script>
     {% if messages %}
     <script>
       document.querySelectorAll(".toast").forEach(function (toast, index) {
