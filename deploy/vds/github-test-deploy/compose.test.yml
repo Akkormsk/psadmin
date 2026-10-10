@@ -1,0 +1,46 @@
+# Root-owned test runtime configuration. Do not replace it from a GitHub archive.
+name: psadmin-test
+
+services:
+  test-web:
+    image: psadmin-test-web:${RELEASE_TAG:?release tag is required}
+    build:
+      context: ${APP_RELEASE:?release path is required}
+      dockerfile: /etc/psadmin-test/Dockerfile
+    env_file: /home/deploy/psadmin-test.env
+    restart: unless-stopped
+    mem_limit: 600m
+    depends_on:
+      test-db:
+        condition: service_healthy
+    networks:
+      - default
+      - edge
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket,urllib.request as u; u.urlopen('http://%s:8000/' % socket.gethostbyname(socket.gethostname()), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  test-db:
+    image: postgres:16
+    restart: unless-stopped
+    mem_limit: 300m
+    command: postgres -c shared_buffers=64MB -c max_connections=20
+    env_file: /home/deploy/psadmin-test.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "psadmin", "-d", "psadmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  edge:
+    name: psadmin-edge
+    external: true
+
+volumes:
+  pgdata:

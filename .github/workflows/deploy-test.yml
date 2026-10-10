@@ -1,0 +1,52 @@
+name: Deploy test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: psadmin-test-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy test.admin.psodin.ru
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Build application archive
+        run: |
+          tar \
+            --exclude-vcs \
+            --exclude='./.github' \
+            --exclude='./deploy' \
+            --exclude='./.env' \
+            --exclude='./.env.*' \
+            --exclude='*.sqlite3' \
+            -czf psadmin-test.tar.gz .
+
+      - name: Configure restricted SSH key
+        env:
+          TEST_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.TEST_DEPLOY_SSH_PRIVATE_KEY }}
+          TEST_DEPLOY_KNOWN_HOSTS: ${{ secrets.TEST_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$TEST_DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$TEST_DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Send archive to the fixed test deploy command
+        run: |
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            deploy@46.149.70.38 deploy-test < psadmin-test.tar.gz
