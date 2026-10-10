@@ -8,7 +8,7 @@ PSADMIN automates tender intake, analysis, commercial calculation, execution and
 
 The home page is the top-level launcher for independent applications. Global functions are **Data**, Assistant and Settings. A business object opens in the current application's workspace; a URL remains available for deep links, refresh and browser history, but ordinary navigation must not create a duplicate page or global shell.
 
-`Data` is the future visible entry to the shared registry: counterparties, `ProcessDefinition` capabilities, and provider prices/calculators. A counterparty can have several roles; do not add a parallel provider registry. The current production-base endpoint is JSON used by the tender route drawer, not yet a user-facing Data page.
+`Data` is the visible entry to the shared registry: counterparties, `ProcessDefinition` capabilities, and provider prices/calculators. A counterparty can have several roles; do not add a parallel provider registry. The production-base endpoint remains JSON used by the tender route drawer.
 
 ## V1 and V2
 
@@ -22,7 +22,7 @@ The target flow is `TenderSourceItem -> TenderCommercialItem -> CalculationCompo
 
 `Counterparty` is the organisation. `ProcessDefinition` is a capability; `StageCounterpartyLink` joins it to a counterparty. `ProviderKnowledgeStaging` is temporary ingestion input. `CounterpartyKnowledgeVersion` stores a versioned normalized price source. `ProviderCalculatorBinding` selects its calculator; `ProviderCalculationQuote` preserves a result. `calculate_provider(...)` is the structured-rules calculation service.
 
-Only a confirmed knowledge version may activate a structured binding. Raw uploads are purged after confirmation. Superseded knowledge stays recoverable for old quotes; the provider UI hides it by default. Sewing XLS currently provides 18 parsed variants; the verified example is 100 classic women's jersey T-shirts at 414.80 RUB each, total 41,480 RUB.
+Only a confirmed knowledge version may activate a structured binding. Raw uploads are purged after confirmation. Superseded knowledge stays recoverable for old quotes; the provider UI hides it by default. The Prices tab expands a version into its stored structured rows, not raw JSON or another AI pass. Sewing XLS currently provides 18 parsed variants; the verified example is 100 classic women's jersey T-shirts at 414.80 RUB each, total 41,480 RUB.
 
 ## Assistant and learning
 
@@ -36,7 +36,7 @@ V2 cache preparation includes `TenderComputeJob`, `TenderComputeWorkUnit`, `Tend
 
 ## Roadmap
 
-1. **PARTIAL** Navigation and UX acceptance: create the global Data entry and its real workspace, then visually accept provider workspace/calculator.
+1. **PARTIAL** Navigation and UX acceptance: Data entry and structured price viewing are done; authenticated visual acceptance and a reusable navigation header remain.
 2. **NOT STARTED** Universal Data Agent: bounded read-only analysis and preview/confirmation mutations via the existing registry and learning models.
 3. **PARTIAL** Automatic V2 calculation: complete routing, matching, calculator execution, aggregation, clarification/resume and cache correctness.
 4. **PARTIAL** Background warming; no uncontrolled AI backfill.

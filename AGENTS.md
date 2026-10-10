@@ -8,6 +8,7 @@
 - Do not hardcode suppliers, products, or business rules in core logic. LLMs interpret language; backend services validate, rank, and calculate.
 - Verify the actual test commit and health before claiming a deployment. Do not run mass AI/backfill work without a defined budget.
 - Check UI changes in a real browser when authentication is available. Do not create pages-inside-pages, duplicate global chrome, or substitute a fake modal page for an in-app workspace.
+- Every new user-facing screen must use the PSADMIN navigation contract: logical parent fallback, Home access, and no navigation traps.
 - After a milestone report: completed work, verification, commit, test deployment state, limitations, and a concrete manual check.
 
 - Before changing assistant, catalogue search, ranking, feedback, or calculation behavior, read `docs/assistant_protocol.md`.

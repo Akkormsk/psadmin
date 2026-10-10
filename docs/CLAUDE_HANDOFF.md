@@ -4,7 +4,7 @@
 
 - Repository: `https://github.com/Akkormsk/psadmin.git`
 - Working branch: `codex/calculation-v2-foundation`
-- Last verified implementation and deployed test commit: `5c35320`
+- Last verified implementation and deployed test commit: `3460ce9`
 - Local worktree used for this work: `C:\Users\d_kor\PycharmProjects\psadmin2\.codex\worktrees\assistant-stage-answer`
 - Test checkout: `/home/deploy/psadmin-test`; isolated service: `psadmin-test-test-web-1`; URL: `https://test.admin.psodin.ru/`
 - Production checkout: `/home/deploy/psadmin`, branch `main`, commit `c626a595fe28086649b95c1e3deae27a90728b3b`. Do not modify it without direct owner approval.
@@ -27,7 +27,8 @@ On the isolated test VDS, deployment is run from `/home/deploy/psadmin-test` usi
 - Provider workspace with Overview, Prices and Calculator; assistant opens the same provider card.
 - Provider price cleanup: drafts can be deleted; superseded/inactive versions are hidden from normal history while retained for recoverability.
 - Global Data entry from home and account navigation, with Counterparties and Capabilities tabs; a counterparty opens through the existing workspace layer.
-- Test deployment at `5c35320`; 10 focused Data/provider tests passed after deployment.
+- Price versions expand into real stored structured rows, including variants, minimum quantities and formatted prices.
+- Test deployment at `3460ce9`; 5 provider workspace tests and `manage.py check` passed after deployment.
 
 ## Current limitations
 
@@ -37,7 +38,7 @@ On the isolated test VDS, deployment is run from `/home/deploy/psadmin-test` usi
 
 ## Exact next task
 
-Visually accept the deployed Data flow with an authenticated owner: home → Data → Counterparties → provider → Calculator → Back, then open the same provider from the assistant and through a direct URL. If accepted, continue only with the next documented priority; do not reopen the navigation architecture audit.
+Add the shared navigation header/parent fallback for Data and direct provider pages, then add multi-role filtering and compact counterparty details using `Counterparty` without a duplicate registry. Visually accept home → Data → provider → Calculator → Back and direct/assistant opening first.
 
 ## Safety
 
