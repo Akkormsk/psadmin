@@ -27,7 +27,7 @@ class AssistantConversationTests(TestCase):
 
         reply = self.client.post(
             reverse("assistant_conversation_message", args=[conversation_id]),
-            data=json.dumps({"message": "Что ты умеешь?"}),
+            data=json.dumps({"message": "Что ты умеешь?", "context": {"page": "/tenders/tender/42/", "label": "Позиция 6", "tender_id": "42", "line_id": "6"}}),
             content_type="application/json",
             secure=True,
         )
@@ -40,6 +40,7 @@ class AssistantConversationTests(TestCase):
         interaction = OwnerInteraction.objects.get(pk=conversation_id)
         self.assertEqual(interaction.context["kind"], "assistant_conversation")
         self.assertEqual(OwnerFeedbackEvent.objects.filter(interaction=interaction).count(), 2)
+        self.assertEqual(interaction.feedback_events.order_by("created_at", "pk").first().payload["context"]["line_id"], "6")
         listed = self.client.get(reverse("assistant_conversations"), secure=True)
         self.assertEqual(listed.json()["conversations"][0]["id"], conversation_id)
 
@@ -104,3 +105,7 @@ class AssistantConversationTests(TestCase):
         self.assertContains(response, 'event.key === "Enter" && !event.shiftKey')
         self.assertContains(response, 'assistant-tool-result')
         self.assertContains(response, 'assistant-message--pending')
+
+    def test_legacy_assistant_url_returns_to_global_drawer_host(self):
+        response = self.client.get(reverse("assistant_console"), secure=True)
+        self.assertRedirects(response, reverse("tender_home"))

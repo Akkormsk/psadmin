@@ -13,6 +13,11 @@ from .provider_knowledge import confirm_sewing_price_list, create_sewing_provide
 
 @login_required
 def console(request):
+    return redirect("tender_home")
+
+
+@login_required
+def legacy_console(request):
     stages = ProcessDefinition.objects.filter(is_active=True).order_by("name")
     version = get_object_or_404(CounterpartyKnowledgeVersion, pk=request.GET["version"]) if request.GET.get("version") else None
     context = {"tools": available_tools(request.user), "stages": stages, "version": version}
