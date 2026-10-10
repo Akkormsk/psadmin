@@ -18,6 +18,30 @@ workdir=$(mktemp -d /var/tmp/psadmin-test-deploy.XXXXXX)
 cleanup() { rm -rf "$workdir"; }
 trap cleanup EXIT
 
+old_release=
+old_tag=
+if [ -L "$base/current" ]; then
+  old_release=$(readlink -f "$base/current")
+  old_tag=$(cat "$old_release/.psadmin-release-tag")
+  ln -sfn "$old_release" "$base/previous"
+fi
+
+started_new_release=false
+on_exit() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ "$started_new_release" = true ] && [ -n "$old_release" ]; then
+    echo "New release failed; restoring the previous test-web container." >&2
+    APP_RELEASE="$old_release" RELEASE_TAG="$old_tag" \
+      docker compose --project-name psadmin-test -f "$compose_file" build test-web || true
+    APP_RELEASE="$old_release" RELEASE_TAG="$old_tag" \
+      docker compose --project-name psadmin-test -f "$compose_file" up -d test-web || true
+    echo "The test database is not rolled back; migrations are intentionally never reversed automatically." >&2
+  fi
+  cleanup
+  exit "$status"
+}
+trap on_exit EXIT
+
 # The key is allowed to stream one bounded archive, not to select paths or commands.
 ulimit -f 524288
 cat > "$workdir/release.tar.gz"
@@ -54,16 +78,10 @@ wait_healthy() {
 compose build test-web
 compose up -d test-db
 compose run --rm -T test-web python manage.py migrate --noinput
+started_new_release=true
 compose up -d
 wait_healthy
 
-old_release=
-if [ -L "$base/current" ]; then
-  old_release=$(readlink -f "$base/current")
-fi
 ln -sfn "$release" "$base/current"
-if [ -n "$old_release" ] && [ "$old_release" != "$release" ]; then
-  ln -sfn "$old_release" "$base/previous"
-fi
 
 echo "Test release $release_tag deployed."

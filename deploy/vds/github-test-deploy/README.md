@@ -8,6 +8,10 @@ The GitHub archive is application source only. The root-owned wrapper rejects
 deployment files and always uses the installed Compose file, Dockerfile, and
 certificate files.
 
+If a newly started test release fails its healthcheck, the wrapper rebuilds and
+starts the previous `test-web` release. It intentionally does not reverse Django
+migrations: automatic schema rollback can damage the existing test database.
+
 ## One-time VDS installation
 
 Run as root from a checked-out copy of this repository. Replace `PUBLIC_KEY`
