@@ -14,7 +14,7 @@
     {% block topbar %}
     {% if request.user.is_authenticated %}
     <nav class="account-bar" aria-label="Аккаунт">
-        {% if request.resolver_match.url_name != 'data' %}<a href="{% url 'data' %}" class="account-bar__data">Данные</a>{% endif %}
+        <a href="{% url 'data' %}" class="account-bar__data">Данные</a>
         <a href="{% url 'account' %}" class="account-bar__profile">
             <span class="account-bar__name account-bar__name--desktop">{% if request.user.first_name or request.user.last_name %}{{ request.user.last_name }} {{ request.user.first_name }}{% else %}Аккаунт{% endif %}</span>
             <span class="account-bar__name account-bar__name--mobile">Аккаунт</span>
