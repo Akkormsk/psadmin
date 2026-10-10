@@ -39,3 +39,29 @@ class ProviderWorkspaceTests(TestCase):
         self.assertContains(response, "414,80 ₽")
         self.assertContains(response, "41 480,00 ₽")
 
+    def test_draft_price_can_be_deleted(self):
+        draft = create_knowledge_draft(self.provider, self.user, {"pricing": {}}, stage=self.stage)
+
+        self.client.post(
+            reverse("provider_workspace", args=[self.provider.pk]),
+            {"tab": "prices", "remove_version_id": draft.pk},
+            secure=True,
+        )
+
+        self.assertFalse(type(draft).objects.filter(pk=draft.pk).exists())
+
+    def test_old_price_can_be_hidden_from_history(self):
+        old = create_knowledge_draft(self.provider, self.user, {"pricing": {}}, stage=self.stage)
+        old.status = old.STATUS_SUPERSEDED
+        old.save(update_fields=["status"])
+
+        response = self.client.post(
+            reverse("provider_workspace", args=[self.provider.pk]),
+            {"tab": "prices", "remove_version_id": old.pk},
+            secure=True,
+        )
+
+        old.refresh_from_db()
+        self.assertTrue(old.source_metadata["hidden"])
+        self.assertNotContains(response, f"Версия {old.version_number}")
+

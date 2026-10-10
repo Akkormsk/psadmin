@@ -90,24 +90,44 @@ def _provider_result_display(result):
 
 
 def _provider_workspace_context(provider, tab="overview", binding_id=None):
-    versions = list(provider.knowledge_versions.select_related("stage").all())
-    for version in versions:
+    all_versions = list(provider.knowledge_versions.select_related("stage").all())
+    versions = []
+    archived_versions = []
+    for version in all_versions:
         version.variant_count = len(version.canonical_data.get("pricing", {}).get("variants", {}))
+        if version.source_metadata.get("hidden"):
+            continue
+        if version.status in {CounterpartyKnowledgeVersion.STATUS_SUPERSEDED, CounterpartyKnowledgeVersion.STATUS_INACTIVE}:
+            archived_versions.append(version)
+        else:
+            versions.append(version)
     bindings = [binding for link in provider.stage_links.all() for binding in link.calculator_bindings.filter(is_active=True).select_related("knowledge_version", "link__stage")]
     binding = next((item for item in bindings if item.pk == binding_id), None) if binding_id else (bindings[0] if bindings else None)
-    return {"provider": provider, "versions": versions, "bindings": bindings, "binding": binding, "tab": tab if tab in {"overview", "prices", "calculator"} else "overview"}
+    return {"provider": provider, "versions": versions, "archived_versions": archived_versions, "bindings": bindings, "binding": binding, "tab": tab if tab in {"overview", "prices", "calculator"} else "overview"}
 
 
 @login_required
 def provider_workspace(request, provider_id):
     provider = get_object_or_404(Counterparty.objects.prefetch_related("stage_links__stage", "stage_links__calculator_bindings", "knowledge_versions"), pk=provider_id)
+    remove_version_id = request.POST.get("remove_version_id") if request.method == "POST" else None
+    remove_error = None
+    if remove_version_id:
+        version = get_object_or_404(CounterpartyKnowledgeVersion, pk=remove_version_id, counterparty=provider)
+        if version.status == CounterpartyKnowledgeVersion.STATUS_DRAFT:
+            version.delete()
+        elif version.status in {CounterpartyKnowledgeVersion.STATUS_SUPERSEDED, CounterpartyKnowledgeVersion.STATUS_INACTIVE}:
+            version.source_metadata = {**version.source_metadata, "hidden": True}
+            version.save(update_fields=["source_metadata"])
+        else:
+            remove_error = "Активный прайс нельзя удалить: сначала подтвердите новый."
     raw_binding_id = request.POST.get("binding_id") if request.method == "POST" else request.GET.get("binding_id")
     binding_id = int(raw_binding_id) if str(raw_binding_id or "").isdigit() else None
     tab = request.POST.get("tab", "calculator") if request.method == "POST" else request.GET.get("tab", "overview")
     context = _provider_workspace_context(provider, tab, binding_id)
     context["workspace"] = False
     context["result"] = context["error"] = None
-    if request.method == "POST" and context["binding"]:
+    context["remove_error"] = remove_error
+    if request.method == "POST" and not remove_version_id and context["binding"]:
         if context["binding"].calculator_type != ProviderCalculatorBinding.TYPE_STRUCTURED_RULES:
             context["error"] = "Этот тип калькулятора открывается через существующее приложение калькулятора."
         else:
