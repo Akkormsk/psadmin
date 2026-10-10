@@ -75,7 +75,9 @@ def provider_create(request):
 @login_required
 def provider_detail(request, provider_id):
     provider = get_object_or_404(Counterparty.objects.prefetch_related("stage_links__stage", "stage_links__calculator_bindings", "knowledge_versions"), pk=provider_id)
-    return render(request, "tenders/provider_detail.html", _provider_workspace_context(provider, request.GET.get("tab")))
+    context = _provider_workspace_context(provider, request.GET.get("tab"))
+    context["workspace"] = False
+    return render(request, "tenders/provider_detail.html", context)
 
 
 def _provider_result_display(result):
@@ -101,6 +103,7 @@ def provider_workspace(request, provider_id):
     binding_id = int(raw_binding_id) if str(raw_binding_id or "").isdigit() else None
     tab = request.POST.get("tab", "calculator") if request.method == "POST" else request.GET.get("tab", "overview")
     context = _provider_workspace_context(provider, tab, binding_id)
+    context["workspace"] = True
     context["result"] = context["error"] = None
     if request.method == "POST" and context["binding"]:
         if context["binding"].calculator_type != ProviderCalculatorBinding.TYPE_STRUCTURED_RULES:
