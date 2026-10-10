@@ -4,7 +4,7 @@
 
 - Repository: `https://github.com/Akkormsk/psadmin.git`
 - Working branch: `codex/calculation-v2-foundation`
-- Verified commit and deployed test commit: `ad4fc7a5e94806d96408c9ca25a8c43c3b2c0277`
+- Last verified implementation and deployed test commit: `5c35320`
 - Local worktree used for this work: `C:\Users\d_kor\PycharmProjects\psadmin2\.codex\worktrees\assistant-stage-answer`
 - Test checkout: `/home/deploy/psadmin-test`; isolated service: `psadmin-test-test-web-1`; URL: `https://test.admin.psodin.ru/`
 - Production checkout: `/home/deploy/psadmin`, branch `main`, commit `c626a595fe28086649b95c1e3deae27a90728b3b`. Do not modify it without direct owner approval.
@@ -27,7 +27,7 @@ On the isolated test VDS, deployment is run from `/home/deploy/psadmin-test` usi
 - Provider workspace with Overview, Prices and Calculator; assistant opens the same provider card.
 - Provider price cleanup: drafts can be deleted; superseded/inactive versions are hidden from normal history while retained for recoverability.
 - Global Data entry from home and account navigation, with Counterparties and Capabilities tabs; a counterparty opens through the existing workspace layer.
-- Test deployment at `ad4fc7a`; 13 focused provider/sewing tests passed after deployment.
+- Test deployment at `5c35320`; 10 focused Data/provider tests passed after deployment.
 
 ## Current limitations
 
