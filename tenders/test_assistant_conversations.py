@@ -105,6 +105,8 @@ class AssistantConversationTests(TestCase):
         self.assertContains(response, 'event.key === "Enter" && !event.shiftKey')
         self.assertContains(response, 'assistant-tool-result')
         self.assertContains(response, 'assistant-message--pending')
+        self.assertContains(response, 'Если формула или валюта неверны, не подтверждайте прайс')
+        self.assertNotContains(response, 'Нужно уточнить формулу')
 
     def test_legacy_assistant_url_returns_to_global_drawer_host(self):
         response = self.client.get(reverse("assistant_console"), secure=True)

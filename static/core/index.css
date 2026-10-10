@@ -2167,7 +2167,6 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-card button:hover { background:var(--accent); }
 .assistant-card button:disabled { opacity:.55; cursor:wait; }
 .assistant-card__actions { display:flex; flex-wrap:wrap; gap:8px; }
-.assistant-card button.assistant-card__secondary { border-color:var(--field-border); background:var(--surface); color:var(--ink-2); }
 .assistant-card__hint { margin:0; color:var(--ink-2); font-weight:700; }
 .assistant-card__notice { margin:0; color:var(--ink-3); font-size:11px; line-height:1.45; }
 .assistant-confirmed { display:grid; gap:4px; margin-top:12px; border:1px solid var(--border-positive); border-radius:9px; padding:11px; background:var(--tint-positive); color:var(--positive-ink); font-size:11px; }
