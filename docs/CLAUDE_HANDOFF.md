@@ -4,7 +4,7 @@
 
 - Repository: `https://github.com/Akkormsk/psadmin.git`
 - Working branch: `codex/calculation-v2-foundation`
-- Last verified implementation and deployed test commit: `78c1bde` (the visual polish commit was reverted).
+- Last verified implementation and deployed test commit: `845ef32`.
 - Local worktree used for this work: `C:\Users\d_kor\PycharmProjects\psadmin2\.codex\worktrees\assistant-stage-answer`
 - Test checkout: `/home/deploy/psadmin-test`; isolated service: `psadmin-test-test-web-1`; URL: `https://test.admin.psodin.ru/`
 - Production checkout: `/home/deploy/psadmin`, branch `main`, commit `c626a595fe28086649b95c1e3deae27a90728b3b`. Do not modify it without direct owner approval.
@@ -32,7 +32,7 @@ On the isolated test VDS, deployment is run from `/home/deploy/psadmin-test` usi
 
 ## Current limitations
 
-- The global **Data** entry and user-facing workspace are implemented; browser visual acceptance still requires an authenticated owner session. `/tenders/production/base/` remains a route-drawer JSON endpoint for route operations.
+- The global **Data** entry and user-facing workspace are implemented; the header was simplified to one Back/Home/profile row. Browser visual acceptance still requires an authenticated owner session. `/tenders/production/base/` remains a route-drawer JSON endpoint for route operations.
 - Provider workspace navigation was automated-tested but final browser visual acceptance requires an authenticated owner session.
 - The full V2 calculation pipeline, Universal Data Agent, Project111 and FSPrint remain unfinished.
 

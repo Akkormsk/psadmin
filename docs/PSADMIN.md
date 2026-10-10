@@ -6,7 +6,7 @@ PSADMIN automates tender intake, analysis, commercial calculation, execution and
 
 ## Navigation
 
-The home page is the top-level launcher for independent applications. Global functions are **Data**, Assistant and Settings. The shared base template supplies navigation with Back, current heading and Home: Back uses same-origin history when available, otherwise its logical parent/Home fallback. A business object opens in the current application's workspace; a URL remains available for deep links, refresh and browser history, but ordinary navigation must not create a duplicate page or global shell.
+The home page is the top-level launcher for independent applications. Global functions are **Data**, Assistant and Settings. The shared base template supplies a single header: Back at left, Home/profile/logout at right; Back uses same-origin history when available, otherwise its logical parent/Home fallback. A business object opens in the current application's workspace; a URL remains available for deep links, refresh and browser history, but ordinary navigation must not create a duplicate page or global shell.
 
 `Data` is the visible entry to the shared registry: counterparties, `ProcessDefinition` capabilities, and provider prices/calculators. A counterparty can have several roles; do not add a parallel provider registry. The production-base endpoint remains JSON used by the tender route drawer.
 
