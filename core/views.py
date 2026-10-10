@@ -8,10 +8,21 @@ from django.utils import timezone
 from .avatar import optimize_avatar, optimize_background
 from .forms import AccountPasswordChangeForm, AvatarUploadForm, BackgroundUploadForm
 from .models import Profile, ProfileBackground
+from tenders.models import Counterparty, ProcessDefinition
 
 @login_required
 def index(request):
     return render(request, "core/index.html")
+
+
+@login_required
+def data(request):
+    tab = request.GET.get("tab", "counterparties")
+    return render(request, "core/data.html", {
+        "tab": tab if tab in {"counterparties", "capabilities"} else "counterparties",
+        "counterparties": Counterparty.objects.filter(is_active=True).prefetch_related("stage_links__stage").order_by("name"),
+        "capabilities": ProcessDefinition.objects.filter(is_active=True).prefetch_related("counterparty_links").order_by("name"),
+    })
 
 
 def _initials(user):

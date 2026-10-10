@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261003">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=data-20261010">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -14,6 +14,7 @@
     {% block topbar %}
     {% if request.user.is_authenticated %}
     <nav class="account-bar" aria-label="Аккаунт">
+        <a href="{% url 'data' %}" class="account-bar__data">Данные</a>
         <a href="{% url 'account' %}" class="account-bar__profile">
             <span class="account-bar__name account-bar__name--desktop">{% if request.user.first_name or request.user.last_name %}{{ request.user.last_name }} {{ request.user.first_name }}{% else %}Аккаунт{% endif %}</span>
             <span class="account-bar__name account-bar__name--mobile">Аккаунт</span>

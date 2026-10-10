@@ -80,7 +80,7 @@
         </div>
 
         {% if request.user.is_superuser %}
-        <div class="footer"><a href="/admin/">Админка</a></div>
+        <div class="footer"><a href="{% url 'data' %}">Данные</a></div>
         {% endif %}
 
     </div>

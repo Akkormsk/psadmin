@@ -7,6 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from .models import Profile
+from tenders.models import Counterparty
 
 
 class HealthCheckTests(TestCase):
@@ -24,6 +25,21 @@ class HealthCheckTests(TestCase):
         response = self.client.get("/", HTTP_HOST="127.0.0.1", REMOTE_ADDR="127.0.0.1")
 
         self.assertNotEqual(response.content, b"ok")
+
+    def test_data_workspace_is_available_from_home(self):
+        user = get_user_model().objects.create_superuser("data-owner", "data@example.test", "password")
+        self.client.force_login(user)
+        provider = Counterparty.objects.create(name="Атекс", created_by=user)
+
+        response = self.client.get(reverse("index"), secure=True)
+        data = self.client.get(reverse("data"), secure=True)
+
+        self.assertContains(response, reverse("data"))
+        self.assertNotContains(response, ">Админка<")
+        self.assertContains(data, "Контрагенты")
+        self.assertContains(data, "Возможности")
+        self.assertContains(data, 'data-workspace-open')
+        self.assertContains(data, reverse("provider_detail", args=[provider.pk]))
 
 
 class LogoutTests(TestCase):

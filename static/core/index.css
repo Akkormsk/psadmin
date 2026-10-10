@@ -173,6 +173,20 @@ body::before {
 .app-home {
   align-items: flex-start;
 }
+.account-bar__data { font-weight: 700; }
+.data-page { max-width: 1060px; }
+.data-page__heading { margin-bottom: 20px; }
+.data-page__heading h1 { margin-bottom: 4px; }
+.data-page__heading p { margin: 0; color: var(--ink-2); }
+.data-tabs { display: flex; gap: 28px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+.data-tabs a { padding: 10px 0; color: var(--ink-2); text-decoration: none; border-bottom: 2px solid transparent; }
+.data-tabs a.is-active { color: var(--ink); font-weight: 700; border-color: var(--positive-ink); }
+.data-capabilities { display: grid; gap: 10px; }
+.data-capabilities article { display: grid; gap: 5px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); }
+.data-capabilities span { color: var(--ink-2); font-size: 13px; }
+.data-capabilities small { color: var(--ink-3); font-size: 11px; }
+body.workspace-embedded .data-page__heading { display: none; }
+.production-base-open { display: none; }
 
 .container {
   width: 100%;

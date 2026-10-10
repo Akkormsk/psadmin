@@ -26,17 +26,18 @@ On the isolated test VDS, deployment is run from `/home/deploy/psadmin-test` usi
 - Sewing XLS upload/normalization, confirmation, provider binding and deterministic `calculate_provider` result.
 - Provider workspace with Overview, Prices and Calculator; assistant opens the same provider card.
 - Provider price cleanup: drafts can be deleted; superseded/inactive versions are hidden from normal history while retained for recoverability.
+- Global Data entry from home and account navigation, with Counterparties and Capabilities tabs; a counterparty opens through the existing workspace layer.
 - Test deployment at `ad4fc7a`; 13 focused provider/sewing tests passed after deployment.
 
 ## Current limitations
 
-- No visible global **Data** entry or real user-facing Data workspace yet. `/tenders/production/base/` is a route-drawer JSON endpoint.
+- The global **Data** entry and user-facing workspace are implemented; browser visual acceptance still requires an authenticated owner session. `/tenders/production/base/` remains a route-drawer JSON endpoint for route operations.
 - Provider workspace navigation was automated-tested but final browser visual acceptance requires an authenticated owner session.
 - The full V2 calculation pipeline, Universal Data Agent, Project111 and FSPrint remain unfinished.
 
 ## Exact next task
 
-Implement the smallest user-facing global **Data** entry from the PSADMIN home/global navigation. It must lead to one workspace with `Counterparties` and `Capabilities` tabs, reuse `Counterparty` and `ProcessDefinition`, and open a counterparty in the existing workspace layer. Preserve V1 and the assistant. Write focused tests, visually check authenticated test UI, commit, push to `codex/calculation-v2-foundation`, and deploy only the isolated test stack.
+Visually accept the deployed Data flow with an authenticated owner: home → Data → Counterparties → provider → Calculator → Back, then open the same provider from the assistant and through a direct URL. If accepted, continue only with the next documented priority; do not reopen the navigation architecture audit.
 
 ## Safety
 
