@@ -36,7 +36,7 @@ V2 cache preparation includes `TenderComputeJob`, `TenderComputeWorkUnit`, `Tend
 
 ## Roadmap
 
-1. **PARTIAL** Navigation and UX acceptance: Data entry and structured price viewing are done; authenticated visual acceptance and a reusable navigation header remain.
+1. **PARTIAL** Navigation and UX acceptance: Data entry, shared navigation header and structured price viewing are done; authenticated visual acceptance remains.
 2. **NOT STARTED** Universal Data Agent: bounded read-only analysis and preview/confirmation mutations via the existing registry and learning models.
 3. **PARTIAL** Automatic V2 calculation: complete routing, matching, calculator execution, aggregation, clarification/resume and cache correctness.
 4. **PARTIAL** Background warming; no uncontrolled AI backfill.
