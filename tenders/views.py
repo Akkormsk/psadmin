@@ -75,7 +75,45 @@ def provider_create(request):
 @login_required
 def provider_detail(request, provider_id):
     provider = get_object_or_404(Counterparty.objects.prefetch_related("stage_links__stage", "stage_links__calculator_bindings", "knowledge_versions"), pk=provider_id)
-    return render(request, "tenders/provider_detail.html", {"provider": provider})
+    return render(request, "tenders/provider_detail.html", _provider_workspace_context(provider, request.GET.get("tab")))
+
+
+def _provider_result_display(result):
+    if result.get("currency") == "RUB":
+        for key in ("unit_price", "total"):
+            result[f"{key}_display"] = f"{Decimal(result[key]):,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+    return result
+
+
+def _provider_workspace_context(provider, tab="overview", binding_id=None):
+    versions = list(provider.knowledge_versions.select_related("stage").all())
+    for version in versions:
+        version.variant_count = len(version.canonical_data.get("pricing", {}).get("variants", {}))
+    bindings = [binding for link in provider.stage_links.all() for binding in link.calculator_bindings.filter(is_active=True).select_related("knowledge_version", "link__stage")]
+    binding = next((item for item in bindings if item.pk == binding_id), None) if binding_id else (bindings[0] if bindings else None)
+    return {"provider": provider, "versions": versions, "bindings": bindings, "binding": binding, "tab": tab if tab in {"overview", "prices", "calculator"} else "overview"}
+
+
+@login_required
+def provider_workspace(request, provider_id):
+    provider = get_object_or_404(Counterparty.objects.prefetch_related("stage_links__stage", "stage_links__calculator_bindings", "knowledge_versions"), pk=provider_id)
+    raw_binding_id = request.POST.get("binding_id") if request.method == "POST" else request.GET.get("binding_id")
+    binding_id = int(raw_binding_id) if str(raw_binding_id or "").isdigit() else None
+    tab = request.POST.get("tab", "calculator") if request.method == "POST" else request.GET.get("tab", "overview")
+    context = _provider_workspace_context(provider, tab, binding_id)
+    context["result"] = context["error"] = None
+    if request.method == "POST" and context["binding"]:
+        if context["binding"].calculator_type != ProviderCalculatorBinding.TYPE_STRUCTURED_RULES:
+            context["error"] = "Этот тип калькулятора открывается через существующее приложение калькулятора."
+        else:
+            schema = get_provider_calculator_schema(context["binding"])
+            try:
+                context["result"] = _provider_result_display(calculate_provider(context["binding"], {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}))
+            except ProviderCalculatorError as exc:
+                context["error"] = str(exc)
+    if context["binding"]:
+        context["schema"] = get_provider_calculator_schema(context["binding"])
+    return render(request, "tenders/_provider_workspace.html", context)
 
 
 @login_required
@@ -97,9 +135,7 @@ def provider_calculator(request, binding_id):
         spec = {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}
         try:
             result = calculate_provider(binding, spec)
-            if result.get("currency") == "RUB":
-                for key in ("unit_price", "total"):
-                    result[f"{key}_display"] = f"{Decimal(result[key]):,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+            result = _provider_result_display(result)
         except ProviderCalculatorError as exc:
             error = str(exc)
     return render(request, "tenders/provider_calculator.html", {"binding": binding, "schema": schema, "result": result, "error": error})

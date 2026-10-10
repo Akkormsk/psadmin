@@ -2184,3 +2184,41 @@ body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - m
 .provider-calculator-result__total dd { color:var(--positive-ink); font-size:20px; }
 .provider-calculator-result > p:not(.provider-calculator-page__eyebrow) { margin:8px 0 0; color:var(--ink-3); font-size:11px; }
 @media (max-width:700px) { .provider-calculator-page { padding:18px 16px 30px; } .provider-calculator-page h1 { font-size:24px; } .provider-calculator-card, .provider-calculator-result { padding:17px; border-radius:12px; } }
+
+.provider-list-page { max-width:1060px; }
+.provider-list-page h1 { text-align:left; }
+.provider-list { display:grid; gap:10px; margin-top:18px; }
+.provider-list__card { display:grid; gap:5px; width:100%; border:1px solid var(--border); border-radius:12px; padding:16px 18px; background:var(--surface); color:var(--ink); font:inherit; text-align:left; cursor:pointer; box-shadow:var(--shadow-card); }
+.provider-list__card:hover { border-color:var(--border-positive); box-shadow:var(--shadow-card-hover); }
+.provider-list__card strong { font-size:16px; }
+.provider-list__card span { color:var(--ink-2); font-size:13px; }
+.provider-list__card small { color:var(--ink-3); font-size:11px; }
+body.provider-modal-open { overflow:hidden; }
+.provider-modal { position:fixed; z-index:2100; inset:0; display:grid; place-items:center; padding:5vh 24px; box-sizing:border-box; }
+.provider-modal[hidden] { display:none; }
+.provider-modal__backdrop { position:absolute; inset:0; background:rgba(15,23,42,.32); }
+.provider-modal__dialog { position:relative; display:grid; grid-template-rows:auto auto minmax(0,1fr); width:min(1000px,100%); max-height:90vh; overflow:hidden; border:1px solid var(--border); border-radius:16px; background:var(--surface); box-shadow:0 24px 64px rgba(15,23,42,.25); }
+.provider-workspace__header { display:flex; justify-content:space-between; gap:20px; padding:22px 26px 16px; border-bottom:1px solid var(--border); }
+.provider-workspace__header h2 { margin:3px 0 4px; font-size:24px; line-height:1.2; }
+.provider-workspace__header p { margin:0; color:var(--ink-2); font-size:13px; }
+.provider-workspace__eyebrow { margin:0; color:var(--ink-3) !important; font-size:10px !important; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.provider-workspace__tabs { display:flex; gap:24px; overflow-x:auto; border-bottom:1px solid var(--border); padding:0 26px; }
+.provider-workspace__tabs button { flex:0 0 auto; border:0; border-bottom:2px solid transparent; padding:14px 0 11px; background:transparent; color:var(--ink-3); font:inherit; font-size:14px; font-weight:650; cursor:pointer; }
+.provider-workspace__tabs button.is-active { border-color:var(--positive-ink); color:var(--ink); font-weight:800; }
+.provider-workspace__content { min-height:0; overflow:auto; padding:22px 26px 28px; }
+.provider-overview { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(250px,.8fr); gap:18px; }
+.provider-overview h3, .provider-prices h3, .provider-calculator-workspace h3 { margin:0 0 14px; font-size:17px; }
+.provider-overview p { color:var(--ink-2); line-height:1.5; }
+.provider-overview dl { display:grid; gap:10px; margin:18px 0 0; }
+.provider-overview dl div { display:grid; grid-template-columns:130px minmax(0,1fr); gap:10px; font-size:13px; }
+.provider-overview dt { color:var(--ink-3); }.provider-overview dd { margin:0; color:var(--ink); font-weight:650; }
+.provider-overview__card { display:grid; gap:7px; border:1px solid var(--border); border-radius:11px; padding:15px; background:var(--tint-neutral); }
+.provider-overview__card span,.provider-overview__card small { color:var(--ink-3); font-size:11px; }.provider-overview__card strong { font-size:14px; }
+.provider-overview__card button,.provider-calculator-workspace button { width:max-content; min-height:40px; border:1px solid var(--border-positive); border-radius:8px; padding:8px 13px; background:var(--positive-ink); color:var(--surface); font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
+.provider-price-row { display:flex; justify-content:space-between; gap:16px; align-items:center; border:1px solid var(--border); border-radius:9px; padding:12px 14px; background:var(--surface); }
+.provider-price-row + .provider-price-row { margin-top:8px; }.provider-price-row div { display:grid; gap:3px; }.provider-price-row span,.provider-price-row small,.provider-muted { color:var(--ink-3); font-size:12px; }
+.provider-calculator-workspace { max-width:650px; }.provider-calculator-workspace form { display:grid; gap:14px; border:1px solid var(--border); border-radius:12px; padding:18px; background:var(--surface); }
+.provider-calculator-workspace label { display:grid; gap:7px; color:var(--ink-2); font-size:12px; font-weight:750; }.provider-calculator-workspace :is(input,select) { min-height:42px; box-sizing:border-box; border:1px solid var(--field-border); border-radius:8px; padding:9px 11px; background:var(--surface); color:var(--ink); font:inherit; }.provider-calculator-workspace :is(input,select):focus { outline:2px solid var(--accent-ring); border-color:var(--border-positive); }
+.provider-workspace-result { display:grid; gap:10px; margin-top:16px; border:1px solid var(--border-positive); border-radius:11px; padding:16px; background:var(--tint-positive); }.provider-workspace-result > span { display:flex; justify-content:space-between; gap:16px; color:var(--ink-2); font-size:13px; }.provider-workspace-result strong { color:var(--ink); }.provider-workspace-result__total { border-top:1px solid var(--border-positive); padding-top:12px; color:var(--ink) !important; font-size:16px !important; font-weight:800; }.provider-workspace-result__total strong { color:var(--positive-ink); font-size:20px; }.provider-workspace-result small { color:var(--ink-3); font-size:11px; }
+.provider-detail-page { max-width:1000px; }.provider-detail-page__card { overflow:hidden; border:1px solid var(--border); border-radius:16px; background:var(--surface); box-shadow:var(--shadow-card); }
+@media (max-width:700px) { .provider-modal { padding:0; }.provider-modal__dialog { width:100%; height:100dvh; max-height:none; border-radius:0; }.provider-workspace__header,.provider-workspace__content { padding-right:18px; padding-left:18px; }.provider-workspace__tabs { gap:20px; padding:0 18px; }.provider-overview { grid-template-columns:1fr; }.provider-overview dl div { grid-template-columns:1fr; gap:3px; } }

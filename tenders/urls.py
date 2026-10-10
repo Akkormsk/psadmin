@@ -39,6 +39,7 @@ urlpatterns = [
     path("production/base/providers/", views.provider_list, name="provider_list"),
     path("production/base/providers/add/", views.provider_create, name="provider_create"),
     path("production/base/providers/<int:provider_id>/", views.provider_detail, name="provider_detail"),
+    path("production/base/providers/<int:provider_id>/workspace/", views.provider_workspace, name="provider_workspace"),
     path("production/base/providers/knowledge/<int:version_id>/", views.provider_knowledge_review, name="provider_knowledge_review"),
     path("production/base/providers/calculator/<int:binding_id>/", views.provider_calculator, name="provider_calculator"),
     path("production/base/counterparty/draft/", views.production_counterparty_draft, name="tender_production_counterparty_draft"),
