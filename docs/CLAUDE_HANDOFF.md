@@ -4,7 +4,7 @@
 
 - Repository: `https://github.com/Akkormsk/psadmin.git`
 - Working branch: `codex/calculation-v2-foundation`
-- Last verified implementation and deployed test commit: `3460ce9`
+- Last verified implementation and deployed test commit: `f2b205d`
 - Local worktree used for this work: `C:\Users\d_kor\PycharmProjects\psadmin2\.codex\worktrees\assistant-stage-answer`
 - Test checkout: `/home/deploy/psadmin-test`; isolated service: `psadmin-test-test-web-1`; URL: `https://test.admin.psodin.ru/`
 - Production checkout: `/home/deploy/psadmin`, branch `main`, commit `c626a595fe28086649b95c1e3deae27a90728b3b`. Do not modify it without direct owner approval.
