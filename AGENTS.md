@@ -1,5 +1,15 @@
 # Project invariants
 
+## Shared agent rules
+
+- GitHub is the source of truth for code. Production PostgreSQL is the source of truth for operational knowledge; never copy it into Git.
+- Work in an isolated branch and test environment. Do not change production, production flags, secrets, or run destructive migrations without the owner's direct approval.
+- Preserve V1 behaviour until the corresponding V2 workflow has been accepted. Reuse existing models and domain services; do not add parallel registries, calculator engines, or learning stores.
+- Do not hardcode suppliers, products, or business rules in core logic. LLMs interpret language; backend services validate, rank, and calculate.
+- Verify the actual test commit and health before claiming a deployment. Do not run mass AI/backfill work without a defined budget.
+- Check UI changes in a real browser when authentication is available. Do not create pages-inside-pages, duplicate global chrome, or substitute a fake modal page for an in-app workspace.
+- After a milestone report: completed work, verification, commit, test deployment state, limitations, and a concrete manual check.
+
 - Before changing assistant, catalogue search, ranking, feedback, or calculation behavior, read `docs/assistant_protocol.md`.
 - The production database on Timeweb is the canonical assistant knowledge base.
 - Local automated tests must not connect to or modify production data.
