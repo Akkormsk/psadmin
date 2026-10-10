@@ -25,10 +25,10 @@ class ProviderWorkspaceTests(TestCase):
         self.assertContains(response, "Версия 1")
         self.assertContains(response, "1 вариант")
 
-    def test_provider_list_opens_workspace_without_detail_link(self):
+    def test_provider_list_opens_provider_in_shared_workspace(self):
         response = self.client.get(reverse("provider_list"), secure=True)
-        self.assertContains(response, "data-provider-workspace")
-        self.assertNotContains(response, 'href="%s"' % reverse("provider_detail", args=[self.provider.pk]))
+        self.assertContains(response, "data-workspace-open")
+        self.assertContains(response, 'href="%s"' % reverse("provider_detail", args=[self.provider.pk]))
 
     def test_workspace_calculator_uses_provider_service(self):
         response = self.client.post(

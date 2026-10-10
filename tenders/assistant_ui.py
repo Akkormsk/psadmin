@@ -146,6 +146,6 @@ def conversation_sewing_confirm(request, conversation_id):
         conversation,
         f"Прайс подтверждён: версия {confirmed.version_number}. Калькулятор активирован.",
         "sewing_confirmed",
-        {"provider_id": confirmed.counterparty_id, "binding_id": binding.pk, "calculator_url": f"/tenders/production/base/providers/calculator/{binding.pk}/"},
+        {"provider_id": confirmed.counterparty_id, "binding_id": binding.pk, "provider_url": f"/tenders/production/base/providers/{confirmed.counterparty_id}/?tab=calculator&binding_id={binding.pk}"},
     )
     return JsonResponse({"messages": serialize_messages(conversation)})
