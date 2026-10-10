@@ -98,8 +98,9 @@ def conversation_sewing_upload(request, conversation_id):
     upload = request.FILES.get("source")
     name = request.POST.get("name", "").strip()
     stage = ProcessDefinition.objects.filter(pk=request.POST.get("stage_id"), is_active=True).first()
-    if not upload or upload.name.lower().rsplit(".", 1)[-1] != "xls" or not name or not stage:
-        return HttpResponseBadRequest("Нужны название, этап и XLS-прайс")
+    extension = upload.name.lower().rsplit(".", 1)[-1] if upload and "." in upload.name else ""
+    if not upload or extension not in {"xls", "xlsx"} or not name or not stage:
+        return HttpResponseBadRequest("Нужны название, этап и прайс XLS/XLSX")
     try:
         provider, version = create_sewing_provider_draft(request.user, name, stage, upload.read(), upload.name)
     except ValueError as error:

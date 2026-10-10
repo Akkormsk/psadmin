@@ -24,8 +24,9 @@ def _decimal(value, default="0"):
 def get_provider_calculator_schema(binding):
     knowledge = binding.knowledge_version.canonical_data if binding.knowledge_version else {}
     inputs = list(knowledge.get("input_schema", []))
-    if not any(item.get("key") == "quantity" for item in inputs if isinstance(item, dict)):
-        inputs.insert(0, {"key": "quantity", "label": "Количество", "required": True, "type": "number"})
+    quantity = next((item for item in inputs if isinstance(item, dict) and item.get("key") == "quantity"), None)
+    inputs = [item for item in inputs if not (isinstance(item, dict) and item.get("key") == "quantity")]
+    inputs.append(quantity or {"key": "quantity", "label": "Количество, шт.", "required": True, "type": "number"})
     return {"inputs": inputs, "calculator_type": binding.calculator_type, "capability": binding.link.stage.name}
 
 

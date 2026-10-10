@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from io import BytesIO
+
+from openpyxl import load_workbook
 from typing import Any
 
 import xlrd
@@ -93,6 +96,10 @@ def parse_sewing_workbook(path: str | Path) -> dict[str, Any]:
 
 
 def parse_sewing_workbook_bytes(raw_content: bytes) -> dict[str, Any]:
+    if raw_content.startswith(b"PK"):
+        workbook = load_workbook(BytesIO(raw_content), read_only=True, data_only=True)
+        sheet = workbook.active
+        return canonical_data_from_rows(list(sheet.iter_rows(values_only=True)))
     workbook = xlrd.open_workbook(file_contents=raw_content, formatting_info=False)
     sheet = workbook.sheet_by_index(0)
     return canonical_data_from_rows([sheet.row_values(index) for index in range(sheet.nrows)])

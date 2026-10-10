@@ -1,13 +1,26 @@
+from io import BytesIO
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from openpyxl import Workbook
 
-from .sewing_price_list import canonical_data_from_rows
+from .sewing_price_list import canonical_data_from_rows, parse_sewing_workbook_bytes
 from .models import ProcessDefinition
 from .provider_calculators import calculate_provider
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_knowledge_draft, create_provider, initialize_structured_rules_binding
 
 
 class SewingPriceListTests(TestCase):
+    def test_xlsx_uses_cached_cell_values(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Изделие", "Крой", "Ткань", "Тираж (мин)", "Комментарии", "Стоимость"])
+        sheet.append(["Футболка", "Классическая женская", "Кулирка", 100, "Классическая женская футболка", 414.8])
+        raw = BytesIO()
+        workbook.save(raw)
+        data = parse_sewing_workbook_bytes(raw.getvalue())
+        self.assertIn("Футболка | Классическая женская | Кулирка", data["pricing"]["variants"])
+
     def test_keeps_real_values_but_marks_currency_and_formula_unconfirmed(self):
         data = canonical_data_from_rows([["", "", "", "", "Курс $", 80], ["", "", "", "", "+%", 82.4], ["Изделие", "Крой", "Ткань", "Тираж (мин)", "Комментарии", "Стоимость"], ["Футболка", "Классическая женская", "Кулирка", 100, "Классическая женская футболка", 414.8]])
         self.assertTrue(data["requires_confirmation"])

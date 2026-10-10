@@ -41,7 +41,7 @@ class ProviderKnowledgeCalculatorTests(TestCase):
         result = calculate_provider(binding, {"quantity": "2", "urgent": "1"})
         self.assertEqual(result["total"], "20")
         self.assertEqual(ProviderCalculationQuote.objects.get().knowledge_version, version)
-        self.assertEqual(get_provider_calculator_schema(binding)["inputs"][0]["key"], "quantity")
+        self.assertEqual(get_provider_calculator_schema(binding)["inputs"][-1]["key"], "quantity")
 
     def test_manual_quote_uses_same_service_without_http(self):
         binding = ProviderCalculatorBinding.objects.create(link=self.provider.stage_links.get(stage=self.stage_a), calculator_type=ProviderCalculatorBinding.TYPE_MANUAL_QUOTE)

@@ -36,10 +36,10 @@
     {% block content %}{% endblock %}
     <div class="app-workspace-stack" id="app-workspace-stack" aria-live="polite"></div>
     {% if request.user.is_authenticated %}
-    <button type="button" class="assistant-launcher" id="assistant-launcher" aria-controls="assistant-drawer" aria-expanded="false">Ассистент</button>
+    <button type="button" class="assistant-launcher" id="assistant-launcher" aria-controls="assistant-drawer" aria-expanded="false"><span aria-hidden="true">✦</span><span>Ассистент</span></button>
     <aside class="assistant-drawer" id="assistant-drawer" aria-label="Ассистент" aria-hidden="true">
-        <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Рабочий контекст</small><strong>Ассистент</strong><div class="assistant-context-chips" id="assistant-context-chips"><span id="assistant-context">Общая беседа</span><small id="assistant-context-meta">Текущий экран</small></div></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
-        <div class="assistant-drawer__history"><button type="button" class="assistant-history__new" id="assistant-new">+ Новая беседа</button><select id="assistant-history" aria-label="История бесед"></select></div>
+        <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Тема беседы</small><strong id="assistant-topic">Новая рабочая беседа</strong><details class="assistant-context" id="assistant-context"><summary id="assistant-context-summary">Контекст: текущий экран</summary><p id="assistant-context-meta">Ассистенту передаётся только открытый раздел.</p></details></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
+        <div class="assistant-drawer__history"><button type="button" class="assistant-history__new" id="assistant-new">+ Новая беседа</button><div class="assistant-history-picker"><button type="button" class="assistant-history__toggle" id="assistant-history-toggle" aria-expanded="false">История</button><div class="assistant-history__menu" id="assistant-history" hidden></div></div></div>
         <main class="assistant-drawer__messages" id="assistant-messages" aria-live="polite"></main>
         <form class="assistant-drawer__composer" id="assistant-composer"><textarea id="assistant-input" rows="2" placeholder="Спросите о расчёте или загрузите прайс…"></textarea><button class="assistant-composer__send" type="submit" aria-label="Отправить">➜</button></form>
     </aside>
@@ -47,7 +47,7 @@
       (function () {
         const launcher = document.getElementById("assistant-launcher"), drawer = document.getElementById("assistant-drawer");
         const close = document.getElementById("assistant-close"), fresh = document.getElementById("assistant-new");
-        const history = document.getElementById("assistant-history"), messages = document.getElementById("assistant-messages"), context = document.getElementById("assistant-context"), contextMeta = document.getElementById("assistant-context-meta");
+        const history = document.getElementById("assistant-history"), historyToggle = document.getElementById("assistant-history-toggle"), messages = document.getElementById("assistant-messages"), topic = document.getElementById("assistant-topic"), context = document.getElementById("assistant-context"), contextSummary = document.getElementById("assistant-context-summary"), contextMeta = document.getElementById("assistant-context-meta");
         const composer = document.getElementById("assistant-composer"), input = document.getElementById("assistant-input");
         const key = "psadmin-assistant-conversation";
         let active = null;
@@ -75,9 +75,9 @@
             let extra = "";
             if (item.kind === "capabilities") extra = "<ul>" + item.data.tools.filter(function (tool) { return tool.available; }).map(function (tool) { return "<li><strong>" + escape(tool.name) + "</strong><br><small>" + escape(tool.description) + "</small></li>"; }).join("") + "</ul>";
             if (item.kind === "tool_result") extra = "<div class=\"assistant-tool-result\">" + toolResult(item.data.result) + "</div>";
-            if (item.kind === "provider_upload") extra = "<form class=\"assistant-card\" data-sewing-upload><label>Название<input name=\"name\" value=\"" + escape(item.data.name) + "\" required></label><label>Этап<select name=\"stage_id\" required>" + item.data.stages.map(function (stage) { return "<option value=\"" + stage.id + "\"" + (stage.id === item.data.stage_id ? " selected" : "") + ">" + escape(stage.name) + "</option>"; }).join("") + "</select></label><label>Прайс XLS<input type=\"file\" name=\"source\" accept=\".xls\" required></label><button type=\"submit\">Создать черновик</button></form>";
-            if (item.kind === "sewing_review") extra = "<form class=\"assistant-card\" data-sewing-confirm><p><small>" + escape(item.data.formula_note) + "</small></p><input type=\"hidden\" name=\"version_id\" value=\"" + item.data.version_id + "\"><label>Валюта<select name=\"currency\"><option value=\"RUB\">RUB</option></select></label><label><input type=\"checkbox\" name=\"formula_confirmed\" value=\"yes\" required> Кэшированные значения XLS — цены за единицу</label><button type=\"submit\">Подтвердить прайс</button></form>";
-            if (item.kind === "sewing_confirmed") extra = "<p><a href=\"" + item.data.calculator_url + "\">Открыть калькулятор</a></p>";
+            if (item.kind === "provider_upload") extra = "<form class=\"assistant-card\" data-sewing-upload><label>Название<input name=\"name\" value=\"" + escape(item.data.name) + "\" required></label><label>Этап<select name=\"stage_id\" required>" + item.data.stages.map(function (stage) { return "<option value=\"" + stage.id + "\"" + (stage.id === item.data.stage_id ? " selected" : "") + ">" + escape(stage.name) + "</option>"; }).join("") + "</select></label><label>Прайс XLS/XLSX<input type=\"file\" name=\"source\" accept=\".xls,.xlsx\" required></label><button type=\"submit\">Продолжить</button></form>";
+            if (item.kind === "sewing_review") extra = "<form class=\"assistant-card\" data-sewing-confirm><p>Прайс распознан. " + escape(item.data.formula_note) + "</p><p class=\"assistant-card__hint\">Цены указаны в рублях?</p><input type=\"hidden\" name=\"version_id\" value=\"" + item.data.version_id + "\"><input type=\"hidden\" name=\"currency\" value=\"RUB\"><input type=\"hidden\" name=\"formula_confirmed\" value=\"yes\"><div class=\"assistant-card__actions\"><button type=\"submit\">Да, подтвердить прайс</button><button type=\"button\" class=\"assistant-card__secondary\" data-formula-question>Нужно уточнить формулу</button></div><p class=\"assistant-card__notice\" hidden>Прайс останется черновиком: уточните правило расчёта перед подтверждением.</p></form>";
+            if (item.kind === "sewing_confirmed") extra = "<section class=\"assistant-confirmed\"><strong>Прайс подтверждён</strong><span>Калькулятор готов</span><a href=\"" + item.data.calculator_url + "\">Открыть калькулятор</a></section>";
             return "<article class=\"assistant-message assistant-message--" + escape(item.role) + "\"><p>" + escape(item.text) + "</p>" + extra + "</article>";
           }).join("");
           messages.scrollTop = messages.scrollHeight;
@@ -91,18 +91,19 @@
         function showContext(conversation) {
           const value = conversation.business_context || {};
           const current = pageContext();
-          context.textContent = value.label ? "Обсуждается: " + value.label : "Общая беседа";
-          contextMeta.textContent = "Сейчас: " + current.label + (current.tender_id ? " · расчёт #" + current.tender_id : "");
+          topic.textContent = value.label || conversation.title || "Новая рабочая беседа";
+          contextSummary.textContent = "Контекст: " + current.label + (current.tender_id ? " · тендер №" + current.tender_id : "");
+          contextMeta.textContent = "Ассистенту передаётся открытый раздел" + (current.tender_id ? " и тендер №" + current.tender_id : "") + ".";
         }
         function load(id) {
           return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); showContext(data.conversation); render(data.messages); });
         }
         function refreshHistory() {
           return fetch("/tenders/assistant/conversations/").then(function (response) { return response.json(); }).then(function (data) {
-            history.innerHTML = data.conversations.map(function (item) { return "<option value=\"" + item.id + "\">" + escape(item.title) + "</option>"; }).join("");
+            history.innerHTML = data.conversations.length ? data.conversations.map(function (item) { return "<button type=\"button\" data-conversation-id=\"" + item.id + "\" title=\"" + escape(item.title) + "\">" + escape(item.title) + "</button>"; }).join("") : "<p>Сохранённых бесед пока нет.</p>";
             const wanted = Number(localStorage.getItem(key));
             const selected = data.conversations.find(function (item) { return item.id === wanted; }) || data.conversations[0];
-            if (selected) { history.value = selected.id; return load(selected.id); }
+            if (selected) { return load(selected.id); }
             return create();
           });
         }
@@ -110,10 +111,14 @@
           const data = pageContext(); data.title = data.label;
           return fetch("/tenders/assistant/conversations/new/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams(data)}).then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); return refreshHistory(); });
         }
+        function hideHistory() { history.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); }
         function open() { drawer.classList.add("is-open"); document.body.classList.add("assistant-open"); drawer.setAttribute("aria-hidden", "false"); launcher.setAttribute("aria-expanded", "true"); showContext({business_context:{}}); refreshHistory().then(function () { input.focus(); }); }
-        function shut() { drawer.classList.remove("is-open"); document.body.classList.remove("assistant-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); launcher.focus(); }
-        launcher.addEventListener("click", open); close.addEventListener("click", shut); fresh.addEventListener("click", create);
-        history.addEventListener("change", function () { active = Number(history.value); localStorage.setItem(key, String(active)); load(active); });
+        function shut(focusLauncher) { drawer.classList.remove("is-open"); document.body.classList.remove("assistant-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); hideHistory(); if (focusLauncher) launcher.focus(); }
+        launcher.addEventListener("click", function () { if (drawer.classList.contains("is-open")) shut(false); else open(); }); close.addEventListener("click", function () { shut(true); }); fresh.addEventListener("click", function () { create(); hideHistory(); });
+        historyToggle.addEventListener("click", function () { const hidden = history.hidden; history.hidden = !hidden; historyToggle.setAttribute("aria-expanded", String(hidden)); });
+        history.addEventListener("click", function (event) { const choice = event.target.closest("[data-conversation-id]"); if (!choice) return; active = Number(choice.dataset.conversationId); localStorage.setItem(key, String(active)); load(active); hideHistory(); });
+        document.addEventListener("keydown", function (event) { if (event.key === "Escape" && drawer.classList.contains("is-open")) { event.preventDefault(); event.stopPropagation(); shut(true); } }, true);
+        document.addEventListener("click", function (event) { if (!drawer.classList.contains("is-open") || event.target.closest("#assistant-drawer, #assistant-launcher, .tender-requirements-drawer, .tender-requirements-overlay, .custom-select")) return; event.preventDefault(); event.stopImmediatePropagation(); shut(false); }, true);
         input.addEventListener("keydown", function (event) {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -122,7 +127,7 @@
         });
         composer.addEventListener("submit", function (event) { event.preventDefault(); const text = input.value.trim(); if (!text || !active || input.disabled) return; input.value = ""; input.disabled = true; const send = composer.querySelector("button[type=submit]"); send.disabled = true; const pending = appendPending(text); fetch("/tenders/assistant/conversations/" + active + "/message/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/json"}, body:JSON.stringify({message:text})}).then(function (response) { return response.json(); }).then(function (data) { render(data.messages); }).catch(function () { pending.remove(); messages.insertAdjacentHTML("beforeend", "<article class=\"assistant-message assistant-message--assistant\"><p>Не удалось обработать сообщение. Повторите попытку.</p></article>"); }).finally(function () { input.disabled = false; send.disabled = false; input.focus(); }); });
         messages.addEventListener("submit", function (event) { const form = event.target; if (!form.matches("[data-sewing-upload], [data-sewing-confirm]")) return; event.preventDefault(); const action = form.matches("[data-sewing-upload]") ? "sewing/upload/" : "sewing/confirm/"; const button = form.querySelector("button"); button.disabled = true; fetch("/tenders/assistant/conversations/" + active + "/" + action, {method:"POST", headers:{"X-CSRFToken":csrf()}, body:new FormData(form)}).then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.detail || "Ошибка"); return data; }); }).then(function (data) { render(data.messages); }).catch(function (error) { form.insertAdjacentHTML("beforeend", "<p class=\"assistant-card__error\">" + escape(error.message) + "</p>"); button.disabled = false; }); });
-        messages.addEventListener("click", function (event) { const suggestion = event.target.closest("[data-assistant-suggestion]"); if (!suggestion) return; input.value = suggestion.dataset.assistantSuggestion; composer.requestSubmit(); });
+        messages.addEventListener("click", function (event) { const formulaQuestion = event.target.closest("[data-formula-question]"); if (formulaQuestion) { formulaQuestion.closest("form").querySelector(".assistant-card__notice").hidden = false; return; } const suggestion = event.target.closest("[data-assistant-suggestion]"); if (!suggestion) return; input.value = suggestion.dataset.assistantSuggestion; composer.requestSubmit(); });
       })();
     </script>
     {% endif %}

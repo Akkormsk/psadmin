@@ -97,6 +97,9 @@ def provider_calculator(request, binding_id):
         spec = {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}
         try:
             result = calculate_provider(binding, spec)
+            if result.get("currency") == "RUB":
+                for key in ("unit_price", "total"):
+                    result[f"{key}_display"] = f"{Decimal(result[key]):,.2f}".replace(",", " ").replace(".", ",") + " ₽"
         except ProviderCalculatorError as exc:
             error = str(exc)
     return render(request, "tenders/provider_calculator.html", {"binding": binding, "schema": schema, "result": result, "error": error})
