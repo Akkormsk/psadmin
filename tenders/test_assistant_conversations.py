@@ -108,4 +108,4 @@ class AssistantConversationTests(TestCase):
 
     def test_legacy_assistant_url_returns_to_global_drawer_host(self):
         response = self.client.get(reverse("assistant_console"), secure=True)
-        self.assertRedirects(response, reverse("tender_home"))
+        self.assertRedirects(response, reverse("tender_home"), fetch_redirect_response=False)
