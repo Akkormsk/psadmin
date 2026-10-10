@@ -94,7 +94,14 @@ def _provider_workspace_context(provider, tab="overview", binding_id=None):
     versions = []
     archived_versions = []
     for version in all_versions:
-        version.variant_count = len(version.canonical_data.get("pricing", {}).get("variants", {}))
+        pricing = version.canonical_data.get("pricing", {})
+        version.variant_count = len(pricing.get("variants", {}))
+        version.price_rows = list(pricing.get("variants", {}).values())
+        for item in version.price_rows:
+            try:
+                item["unit_price_display"] = f"{Decimal(str(item.get('unit_price'))):,.2f}".replace(",", " ").replace(".", ",")
+            except (InvalidOperation, TypeError, ValueError):
+                item["unit_price_display"] = item.get("unit_price", "—")
         if version.source_metadata.get("hidden"):
             continue
         if version.status in {CounterpartyKnowledgeVersion.STATUS_SUPERSEDED, CounterpartyKnowledgeVersion.STATUS_INACTIVE}:

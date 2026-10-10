@@ -24,6 +24,8 @@ class ProviderWorkspaceTests(TestCase):
         self.assertContains(response, 'data-provider-tab="overview"')
         self.assertContains(response, "Версия 1")
         self.assertContains(response, "1 вариант")
+        self.assertContains(response, "Классическая женская")
+        self.assertContains(response, "414,80")
 
     def test_provider_list_opens_provider_in_shared_workspace(self):
         response = self.client.get(reverse("provider_list"), secure=True)
