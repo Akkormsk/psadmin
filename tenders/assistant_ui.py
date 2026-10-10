@@ -83,7 +83,8 @@ def conversation_message(request, conversation_id):
     message = payload.get("message", "") if isinstance(payload, dict) else ""
     if not isinstance(message, str) or not message.strip():
         return HttpResponseBadRequest("Введите сообщение")
-    return JsonResponse({"messages": respond(conversation, request.user, message)})
+    context = payload.get("context", {}) if isinstance(payload, dict) else {}
+    return JsonResponse({"messages": respond(conversation, request.user, message, context)})
 
 
 @login_required

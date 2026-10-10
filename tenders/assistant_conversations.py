@@ -47,17 +47,18 @@ def serialize_messages(conversation):
             "kind": payload.get("kind", "text"),
             "text": event.raw_text,
             "data": payload.get("data", {}),
+            "context": payload.get("context", {}),
             "created_at": event.created_at.isoformat(),
         })
     return messages
 
 
-def _add_message(conversation, user, role, text, kind="text", data=None):
+def _add_message(conversation, user, role, text, kind="text", data=None, context=None):
     return OwnerFeedbackEvent.objects.create(
         interaction=conversation,
         actor=user if role == "user" else None,
         raw_text=text,
-        payload={"role": role, "kind": kind, "data": data or {}},
+        payload={"role": role, "kind": kind, "data": data or {}, "context": context or {}},
         scope="assistant_conversation",
     )
 
@@ -66,10 +67,11 @@ def add_assistant_message(conversation, text, kind="text", data=None):
     return _add_message(conversation, None, "assistant", text, kind, data)
 
 
-def respond(conversation, user, text):
+def respond(conversation, user, text, context=None):
     text = text.strip()
-    _add_message(conversation, user, "user", text)
-    response = reply(conversation, user, text)
+    context = {key: str(value)[:240] for key, value in (context or {}).items() if key in {"page", "label", "tender_id", "line_id"} and value not in (None, "")}
+    _add_message(conversation, user, "user", text, context=context)
+    response = reply(conversation, user, text, context)
     _add_message(conversation, user, "assistant", response["text"], response["kind"], response["data"])
     return serialize_messages(conversation)
 
