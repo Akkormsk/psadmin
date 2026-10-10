@@ -38,7 +38,7 @@ On the isolated test VDS, deployment is run from `/home/deploy/psadmin-test` usi
 
 ## Exact next task
 
-Add the shared navigation header/parent fallback for Data and direct provider pages, then add multi-role filtering and compact counterparty details using `Counterparty` without a duplicate registry. Visually accept home → Data → provider → Calculator → Back and direct/assistant opening first.
+Visually accept the shared navigation flow: home → Data → provider → Calculator → Back and direct/assistant opening. Then add multi-role filtering and compact counterparty details using `Counterparty` without a duplicate registry.
 
 ## Safety
 

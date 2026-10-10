@@ -38,6 +38,8 @@ class HealthCheckTests(TestCase):
         self.assertNotContains(response, ">Админка<")
         self.assertContains(data, "Контрагенты")
         self.assertContains(data, "Возможности")
+        self.assertContains(data, 'data-navigation-back')
+        self.assertContains(data, 'href="/"')
         self.assertContains(data, 'data-workspace-open')
         self.assertContains(data, reverse("provider_detail", args=[provider.pk]))
 

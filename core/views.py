@@ -20,6 +20,7 @@ def data(request):
     tab = request.GET.get("tab", "counterparties")
     return render(request, "core/data.html", {
         "tab": tab if tab in {"counterparties", "capabilities"} else "counterparties",
+        "navigation_title": "Данные",
         "counterparties": Counterparty.objects.filter(is_active=True).prefetch_related("stage_links__stage").order_by("name"),
         "capabilities": ProcessDefinition.objects.filter(is_active=True).prefetch_related("counterparty_links").order_by("name"),
     })

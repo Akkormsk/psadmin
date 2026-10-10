@@ -79,6 +79,8 @@ def provider_detail(request, provider_id):
     binding_id = int(raw_binding_id) if str(raw_binding_id or "").isdigit() else None
     context = _provider_workspace_context(provider, request.GET.get("tab"), binding_id)
     context["workspace"] = False
+    context["navigation_parent_url"] = reverse("data")
+    context["navigation_title"] = provider.name
     return render(request, "tenders/provider_detail.html", context)
 
 
