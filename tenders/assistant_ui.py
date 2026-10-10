@@ -6,7 +6,7 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .assistant_tools import available_tools
-from .assistant_conversations import add_assistant_message, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
+from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
 from .models import CounterpartyKnowledgeVersion, ProcessDefinition
 from .provider_knowledge import confirm_sewing_price_list, create_sewing_provider_draft
 
@@ -50,8 +50,15 @@ def legacy_console(request):
 @login_required
 def conversations(request):
     from .models import OwnerInteraction
-    items = OwnerInteraction.objects.filter(context__kind="assistant_conversation", context__owner_id=request.user.pk).order_by("-created_at")[:30]
+    items = OwnerInteraction.objects.filter(context__kind="assistant_conversation", context__owner_id=request.user.pk, status="open").order_by("-created_at")[:30]
     return JsonResponse({"conversations": [serialize_conversation(item) for item in items]})
+
+
+@login_required
+def conversations_clear(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    return JsonResponse({"archived": archive_conversations(request.user)})
 
 
 @login_required

@@ -2079,7 +2079,7 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
   .button-success:active { transform: none; }
 }
 
-.assistant-launcher { position:fixed; top:50%; right:8px; z-index:1700; display:flex; align-items:center; gap:6px; min-height:38px; border:1px solid var(--border-positive); border-radius:10px 0 0 10px; padding:8px 10px; background:var(--surface); color:var(--positive-ink); box-shadow:0 8px 24px rgba(15,23,42,.14); font:inherit; font-size:12px; font-weight:700; cursor:pointer; transform:translateY(-50%); transition:background .16s ease,color .16s ease; }
+.assistant-launcher { position:fixed; right:16px; bottom:20px; z-index:1700; display:flex; align-items:center; gap:6px; min-height:38px; border:1px solid var(--border-positive); border-radius:10px; padding:8px 10px; background:var(--surface); color:var(--positive-ink); box-shadow:0 8px 24px rgba(15,23,42,.14); font:inherit; font-size:12px; font-weight:700; cursor:pointer; transition:background .16s ease,color .16s ease; }
 .assistant-launcher span:last-child { max-width:0; overflow:hidden; opacity:0; transition:max-width .16s ease,opacity .16s ease; }
 .assistant-launcher:hover, .assistant-launcher:focus-visible { background:var(--positive-ink); color:var(--surface); outline:none; }
 .assistant-launcher:hover span:last-child, .assistant-launcher:focus-visible span:last-child { max-width:86px; opacity:1; }
@@ -2097,6 +2097,9 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-drawer__history { position:relative; display:flex; gap:8px; padding:12px 22px; border-bottom:1px solid var(--border); background:var(--tint-neutral); }
 .assistant-history__new { min-height:36px; white-space:nowrap; border:1px solid var(--border-positive); border-radius:8px; padding:6px 10px; background:var(--tint-positive); color:var(--positive-ink); font:inherit; font-size:11px; font-weight:800; cursor:pointer; }
 .assistant-history__new:hover { background:var(--positive-ink); color:var(--surface); }
+.assistant-history__clear { min-height:36px; border:0; padding:6px 0; background:transparent; color:var(--ink-3); font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
+.assistant-history__clear:hover { color:var(--negative-ink); }
+.assistant-history__clear:disabled { opacity:.5; cursor:wait; }
 .assistant-history-picker { min-width:0; flex:1; }
 .assistant-history__toggle { width:100%; min-height:36px; border:1px solid var(--field-border); border-radius:8px; padding:6px 10px; background:var(--surface); color:var(--ink-2); font:inherit; font-size:11px; font-weight:700; text-align:left; cursor:pointer; }
 .assistant-history__toggle::after { content:'⌄'; float:right; color:var(--ink-3); font-size:16px; line-height:.75; }
@@ -2155,7 +2158,7 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-card__error { margin:0; color:var(--negative-ink); font-size:11px; font-weight:700; }
 body.assistant-open .tender-requirements-overlay { right:min(480px,calc(100vw - 32px)); }
 body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - min(480px,calc(100vw - 32px)) - 16px)); }
-@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { top:auto; right:12px; bottom:16px; transform:none; border-radius:10px; } .assistant-launcher span:last-child { max-width:86px; opacity:1; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
+@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:12px; bottom:16px; } .assistant-launcher span:last-child { max-width:86px; opacity:1; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
 
 .provider-calculator-page { max-width:900px; padding-top:40px; }
 .provider-calculator-page__header { max-width:720px; margin:0 0 22px; }

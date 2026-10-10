@@ -10,7 +10,11 @@ CONVERSATION_KIND = "assistant_conversation"
 
 
 def _conversations(user):
-    return OwnerInteraction.objects.filter(context__kind=CONVERSATION_KIND, context__owner_id=user.pk).order_by("-created_at")
+    return OwnerInteraction.objects.filter(context__kind=CONVERSATION_KIND, context__owner_id=user.pk, status="open").order_by("-created_at")
+
+
+def archive_conversations(user):
+    return _conversations(user).update(status="archived")
 
 
 def create_conversation(user, title="", context=None):

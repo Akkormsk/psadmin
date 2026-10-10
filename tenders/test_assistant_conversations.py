@@ -109,3 +109,16 @@ class AssistantConversationTests(TestCase):
     def test_legacy_assistant_url_returns_to_global_drawer_host(self):
         response = self.client.get(reverse("assistant_console"), secure=True)
         self.assertRedirects(response, reverse("tender_home"), fetch_redirect_response=False)
+
+    def test_clear_history_archives_conversations_but_keeps_audit_events(self):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Тестовая беседа"}, secure=True).json()["conversation"]["id"]
+        OwnerFeedbackEvent.objects.create(interaction_id=conversation_id, actor=self.user, raw_text="Сообщение", payload={"role": "user"})
+
+        cleared = self.client.post(reverse("assistant_conversations_clear"), secure=True)
+
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.json()["archived"], 1)
+        interaction = OwnerInteraction.objects.get(pk=conversation_id)
+        self.assertEqual(interaction.status, "archived")
+        self.assertEqual(interaction.feedback_events.count(), 1)
+        self.assertEqual(self.client.get(reverse("assistant_conversations"), secure=True).json()["conversations"], [])

@@ -5,6 +5,7 @@ from . import assistant_ui, views
 urlpatterns = [
     path("assistant/", assistant_ui.console, name="assistant_console"),
     path("assistant/conversations/", assistant_ui.conversations, name="assistant_conversations"),
+    path("assistant/conversations/clear/", assistant_ui.conversations_clear, name="assistant_conversations_clear"),
     path("assistant/conversations/new/", assistant_ui.conversation_new, name="assistant_conversation_new"),
     path("assistant/conversations/<int:conversation_id>/", assistant_ui.conversation_detail, name="assistant_conversation_detail"),
     path("assistant/conversations/<int:conversation_id>/message/", assistant_ui.conversation_message, name="assistant_conversation_message"),
