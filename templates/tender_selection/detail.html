@@ -5,7 +5,7 @@
 {% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">{% endblock %}
 
 {% block content %}
-<div class="container ts-detail">
+<div class="container ts-detail ts-detail--document">
   {% if request.user.is_superuser %}
   <a href="{% if back_to_archive %}{% url 'tender_selection:archive' %}{% else %}{% url 'tender_selection:list' %}{% endif %}" class="back-link">← {% if back_to_archive %}к архиву{% else %}к списку{% endif %}</a>
   {% elif pushed_estimate_id %}

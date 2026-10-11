@@ -159,6 +159,76 @@
 .ts-risk-factor--medium { color: var(--warning-ink); }
 .ts-risk-factor--high { color: var(--negative-ink); font-weight: 600; }
 
+/* A tender opened from the collection is one opaque workspace document, not a
+   second copy of the application background or a stack of disconnected cards. */
+body.workspace-embedded {
+  background: var(--surface);
+}
+body.workspace-embedded > .container.ts-detail--document {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0 0 48px;
+  background: var(--surface);
+}
+body.workspace-embedded .ts-detail--document > .ts-lifecycle {
+  margin: 0;
+  padding: 17px clamp(20px, 4vw, 44px) 14px;
+  border-bottom: 1px solid var(--separator);
+  background: var(--surface);
+}
+body.workspace-embedded .ts-detail--document > .ts-sheet {
+  margin: 0;
+  padding: 26px clamp(20px, 4vw, 44px) 22px;
+  border: 0;
+  border-bottom: 1px solid var(--separator);
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: none;
+}
+body.workspace-embedded .ts-detail--document > details.panel {
+  margin: 0 !important;
+  padding: 0 clamp(20px, 4vw, 44px) 22px;
+  border: 0;
+  border-bottom: 1px solid var(--separator);
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: none;
+}
+body.workspace-embedded .ts-detail--document > details.panel > summary.panel-header {
+  min-height: 70px;
+  margin: 0;
+  padding: 0;
+}
+body.workspace-embedded .ts-detail--document > details.panel[open] > summary.panel-header {
+  margin-bottom: 18px;
+}
+body.workspace-embedded .ts-detail--document > details.panel > :not(summary) {
+  margin-bottom: 0;
+}
+body.workspace-embedded .ts-detail--document > details.panel[open] > :last-child {
+  padding-bottom: 2px;
+}
+body.workspace-embedded .ts-detail--document .ts-detail__head .panel-title {
+  font-size: clamp(22px, 2.4vw, 28px);
+}
+body.workspace-embedded .ts-detail--document .ts-linkchip {
+  border: 1px solid var(--border);
+  background: var(--tint-neutral);
+}
+@media (max-width: 640px) {
+  body.workspace-embedded .ts-detail--document > .ts-sheet {
+    padding-top: 20px;
+  }
+  body.workspace-embedded .ts-detail--document > details.panel > summary.panel-header {
+    min-height: 62px;
+  }
+  body.workspace-embedded .ts-detail--document > details.panel > summary.panel-header .panel-title {
+    font-size: 16px;
+  }
+}
+
 
 /* Compact composition-analysis signals; details remain in the tender card. */
 .ts-v2-badge { display: inline-block; margin-top: 5px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.25; }
