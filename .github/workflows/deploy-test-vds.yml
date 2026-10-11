@@ -1,6 +1,9 @@
 name: Deploy test VDS
 
 on:
+  push:
+    branches:
+      - codex/calculation-v2-foundation
   workflow_dispatch:
     inputs:
       target_sha:

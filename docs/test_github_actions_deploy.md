@@ -1,7 +1,7 @@
-# Ручной deploy тестового VDS через GitHub Actions
+# Deploy тестового VDS через GitHub Actions
 
 Workflow `.github/workflows/deploy-test-vds.yml` обновляет **только**
-`https://test.admin.psodin.ru`. Он запускается вручную из ветки
+`https://test.admin.psodin.ru`. Он запускается при каждом push в ветку
 `codex/calculation-v2-foundation`, собирает архив точного commit SHA и по SSH
 передаёт его на VDS. В workflow нет `refresh-db`, команд production Compose,
 путей production-кода или production-БД.
@@ -48,13 +48,11 @@ repository secret** и создать:
 
 ## Запуск и откат
 
-1. Открыть GitHub → **Actions** → **Deploy test VDS** → **Run workflow**.
-2. В списке веток выбрать строго `codex/calculation-v2-foundation`.
-3. Для обычного deploy оставить `target_sha` пустым. Для повторного deploy или
-   отката вставить полный SHA из лога предыдущего успешного запуска в
-   `target_sha`.
-4. Дождаться зелёного workflow: он проверяет Docker health `test-web` и URL
-   `https://test.admin.psodin.ru`.
+1. Отправить commit строго в `codex/calculation-v2-foundation`.
+2. Дождаться зелёного workflow **Deploy test VDS**: он проверяет Docker health
+   `test-web` и URL `https://test.admin.psodin.ru`.
+3. Для отката отправить в эту же ветку commit с нужным состоянием кода. Не
+   запускать production workflow и не использовать production-пути.
 
 Откат не запускает `refresh-db`: он разворачивает прежний commit как новый
 ручной test deploy. Если старый код несовместим со схемой тестовой БД после
