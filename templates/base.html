@@ -334,7 +334,11 @@
         }
 
         if (embedded) {
-          window.parent.postMessage({type: "ps-workspace-context", context: currentWorkspaceContext()}, location.origin);
+          function reportWorkspaceContext() {
+            window.parent.postMessage({type: "ps-workspace-context", context: currentWorkspaceContext()}, location.origin);
+          }
+          reportWorkspaceContext();
+          window.addEventListener("load", reportWorkspaceContext);
           return;
         }
         const root = document.getElementById("app-workspace-stack");
