@@ -734,10 +734,12 @@ body.has-workspace-stack { overflow: hidden; }
 body.workspace-embedded {
   min-height: 100vh;
   padding-top: 0 !important;
-  background-attachment: fixed;
+  background: var(--app-bg, var(--surface));
+  background-image: none;
 }
 body.workspace-embedded > .account-bar,
 body.workspace-embedded .container > .back-link:first-child { display: none; }
+body:not(.workspace-embedded) .container > .back-link:first-child { display: none; }
 body.workspace-embedded > .container {
   width: min(1380px, calc(100% - 40px));
   margin-top: 0;

@@ -36,6 +36,9 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, "if (reloadPage) window.location.reload();")
         self.assertContains(response, reverse("tender_selection:detail", args=[tender.pk]))
         self.assertContains(response, "let workspaceApi = null;")
+        self.assertContains(response, "function activeWorkspaceContext()")
+        self.assertContains(response, ".app-workspace-layer.is-active .app-workspace-layer__frame")
+        self.assertContains(response, 'const localBack = document.querySelector(".container > .back-link:first-child");')
         self.assertNotContains(response, "window.PSWorkspace")
 
     def test_embedded_tender_opens_calculation_as_next_layer(self):
@@ -65,6 +68,21 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, reverse("tender_pipeline_estimate", args=[estimate.pk]))
         self.assertContains(response, 'data-workspace-title="Расчёт"')
         self.assertContains(response, "ps-workspace-open")
+
+    def test_embedded_workspace_does_not_render_a_second_assistant(self):
+        tender = Tender.objects.create(
+            purchase_number="assistant-shell",
+            title="Тендер без второго ассистента",
+            notification_raw={"source": {}},
+        )
+
+        response = self.client.get(
+            f"{reverse('tender_selection:detail', args=[tender.pk])}?workspace=1"
+        )
+
+        self.assertNotContains(response, 'id="assistant-launcher"')
+        direct_response = self.client.get(reverse("tender_selection:detail", args=[tender.pk]))
+        self.assertContains(direct_response, 'id="assistant-launcher"')
 
     def test_embedded_dismiss_refreshes_the_parent_collection(self):
         tender = Tender.objects.create(

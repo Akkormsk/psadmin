@@ -12,7 +12,7 @@
 </head>
 <body class="{% if request.user.is_authenticated %}has-account-bar {% endif %}{% if request.GET.workspace %}workspace-embedded {% endif %}{% block body_class %}{% endblock %}">
     {% block topbar %}
-    {% if request.user.is_authenticated %}
+    {% if request.user.is_authenticated and not request.GET.workspace %}
     <nav class="account-bar" aria-label="Аккаунт">
         <a href="/" class="account-bar__home">Главная</a>{% if request.resolver_match.url_name != 'data' %}<a href="{% url 'data' %}" class="account-bar__data">Данные</a>{% endif %}
         <a href="{% url 'account' %}" class="account-bar__profile">
@@ -39,7 +39,7 @@
 
     {% block content %}{% endblock %}
     <div class="app-workspace-stack" id="app-workspace-stack" aria-live="polite"></div>
-    {% if request.user.is_authenticated %}
+    {% if request.user.is_authenticated and not request.GET.workspace %}
     <button type="button" class="assistant-launcher" id="assistant-launcher" aria-controls="assistant-drawer" aria-expanded="false"><span aria-hidden="true">✦</span><span>Ассистент</span></button>
     <aside class="assistant-drawer" id="assistant-drawer" aria-label="Ассистент" aria-hidden="true">
         <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Тема беседы</small><strong id="assistant-topic">Новая рабочая беседа</strong><details class="assistant-context" id="assistant-context"><summary id="assistant-context-summary">Контекст: текущий экран</summary><p id="assistant-context-meta">Ассистенту передаётся только открытый раздел.</p></details></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
@@ -86,7 +86,23 @@
           }).join("");
           messages.scrollTop = messages.scrollHeight;
         }
+        function activeWorkspaceContext() {
+          const frame = document.querySelector(".app-workspace-layer.is-active .app-workspace-layer__frame");
+          if (!frame) return null;
+          try {
+            const frameDocument = frame.contentDocument;
+            const frameLocation = frame.contentWindow.location;
+            const heading = frameDocument.querySelector("main h1, .page-title h1, h1, h2");
+            const label = heading && heading.textContent.trim() ? heading.textContent.trim().replace(/\s+/g, " ").slice(0, 120) : "Текущий объект";
+            const match = frameLocation.pathname.match(/(?:tender-selection|tender|order)\/(\d+)\//);
+            return {page: frameLocation.pathname + frameLocation.search, label: label, tender_id: match ? match[1] : ""};
+          } catch (error) {
+            return null;
+          }
+        }
         function pageContext() {
+          const workspaceContext = activeWorkspaceContext();
+          if (workspaceContext) return workspaceContext;
           const heading = document.querySelector("main h1, .page-title h1, h1");
           const label = heading && heading.textContent.trim() ? heading.textContent.trim().replace(/\s+/g, " ").slice(0, 120) : "Текущий экран";
           const match = location.pathname.match(/(?:tender|order)\/(\d+)\//);
@@ -136,7 +152,7 @@
       })();
     </script>
     {% endif %}
-    <script>(function(){const back=document.querySelector("[data-navigation-back]");if(back&&document.referrer){const referrer=new URL(document.referrer);if(referrer.origin===location.origin)back.addEventListener("click",function(event){event.preventDefault();history.back();});}})();</script>
+    <script>(function(){const back=document.querySelector("[data-navigation-back]");const localBack = document.querySelector(".container > .back-link:first-child");if(back&&localBack)back.href=localBack.href;if(back&&document.referrer){const referrer=new URL(document.referrer);if(referrer.origin===location.origin)back.addEventListener("click",function(event){event.preventDefault();history.back();});}})();</script>
     {% if messages %}
     <script>
       document.querySelectorAll(".toast").forEach(function (toast, index) {
