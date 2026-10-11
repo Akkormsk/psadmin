@@ -3169,6 +3169,117 @@
     },
     {
       "app": "tenders",
+      "db_table": "tenders_assistantoperation",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "conversation",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.OwnerInteraction",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "actor",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "action",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "model_label",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "object_pk",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveBigIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "values",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "before",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "confirmation_token",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "executed_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.AssistantOperation",
+      "model": "AssistantOperation",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
       "db_table": "tenders_attributeconcepthint",
       "fields": [
         {

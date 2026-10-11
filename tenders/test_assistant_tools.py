@@ -92,3 +92,15 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_committed_capability_map_matches_live_models_and_operations(self):
         self.assertEqual(MAP_PATH.read_text(encoding="utf-8"), serialized_map())
+
+    def test_generic_crud_preview_requires_confirmation_and_is_idempotent(self):
+        from .agent_crud import confirm, preview
+        from .assistant_conversations import create_conversation
+
+        conversation = create_conversation(self.admin, "CRUD")
+        item = preview(conversation, self.admin, {"action": "create", "model": "tenders.ProcessDefinition", "object_id": None, "values": {"name": "Новый этап", "role": ProcessDefinition.ROLE_PRODUCTION}})
+        self.assertFalse(ProcessDefinition.objects.filter(name="Новый этап").exists())
+        result = confirm(conversation, self.admin, item["operation_id"], item["token"], True)
+        self.assertEqual(result["status"], "executed")
+        with self.assertRaisesRegex(Exception, "уже использовано"):
+            confirm(conversation, self.admin, item["operation_id"], item["token"], True)

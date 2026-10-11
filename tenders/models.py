@@ -1047,6 +1047,27 @@ class OwnerFeedbackEvent(models.Model):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError("OwnerFeedbackEvent is immutable")
         return super().save(*args, **kwargs)
+
+
+class AssistantOperation(models.Model):
+    """Server-side confirmation and immutable audit record for generic CRUD."""
+    STATUS_PREVIEW = "preview"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_EXECUTED = "executed"
+    STATUS_STALE = "stale"
+    STATUS_CHOICES = ((STATUS_PREVIEW, "Preview"), (STATUS_CANCELLED, "Cancelled"), (STATUS_EXECUTED, "Executed"), (STATUS_STALE, "Stale"))
+
+    conversation = models.ForeignKey(OwnerInteraction, on_delete=models.CASCADE, related_name="assistant_operations")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    action = models.CharField(max_length=12)
+    model_label = models.CharField(max_length=100)
+    object_pk = models.PositiveBigIntegerField(null=True, blank=True)
+    values = models.JSONField(default=dict)
+    before = models.JSONField(default=dict)
+    confirmation_token = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PREVIEW)
+    created_at = models.DateTimeField(auto_now_add=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
 class KnowledgeRecord(models.Model):
     feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 
