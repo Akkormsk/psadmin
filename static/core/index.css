@@ -630,7 +630,7 @@ body.has-workspace-stack { overflow: hidden; }
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 34px 38px;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
   gap: 8px;
   align-items: center;
   padding: 0 12px;
@@ -638,8 +638,7 @@ body.has-workspace-stack { overflow: hidden; }
   background: color-mix(in srgb, var(--surface) 92%, var(--tint-cool));
 }
 .app-workspace-layer__back,
-.app-workspace-layer__close,
-.app-workspace-layer__external {
+.app-workspace-layer__close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -658,14 +657,12 @@ body.has-workspace-stack { overflow: hidden; }
   transition: background .15s ease, color .15s ease;
 }
 .app-workspace-layer__back:hover,
-.app-workspace-layer__close:hover,
-.app-workspace-layer__external:hover {
+.app-workspace-layer__close:hover {
   background: var(--tint-neutral);
   color: var(--ink);
   box-shadow: none;
   transform: none;
 }
-.app-workspace-layer__external { font-size: 17px; }
 .app-workspace-layer__close { font-size: 25px; }
 .app-workspace-layer__trail {
   display: flex;
@@ -761,7 +758,6 @@ body.workspace-embedded .app-home > .container > .ts-nav { display: none; }
   }
   .app-workspace-layer.is-active { transform: none; }
   .app-workspace-layer__bar { grid-template-columns: 38px minmax(0, 1fr) 38px; }
-  .app-workspace-layer__external { display: none; }
   body.workspace-embedded > .container { width: calc(100% - 24px); padding-top: 14px; }
 }
 .table-row { position: relative; transition: background 0.12s ease; }
@@ -2219,15 +2215,13 @@ body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - m
 .provider-workspace__tabs button { flex:0 0 auto; border:0; border-bottom:2px solid transparent; padding:14px 0 11px; background:transparent; color:var(--ink-3); font:inherit; font-size:14px; font-weight:650; cursor:pointer; }
 .provider-workspace__tabs button.is-active { border-color:var(--positive-ink); color:var(--ink); font-weight:800; }
 .provider-workspace__content { min-height:0; overflow:auto; padding:22px 26px 28px; }
-.provider-overview { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(250px,.8fr); gap:18px; }
+.provider-overview { max-width:680px; }
 .provider-overview h3, .provider-prices h3, .provider-calculator-workspace h3 { margin:0 0 14px; font-size:17px; }
 .provider-overview p { color:var(--ink-2); line-height:1.5; }
 .provider-overview dl { display:grid; gap:10px; margin:18px 0 0; }
 .provider-overview dl div { display:grid; grid-template-columns:130px minmax(0,1fr); gap:10px; font-size:13px; }
 .provider-overview dt { color:var(--ink-3); }.provider-overview dd { margin:0; color:var(--ink); font-weight:650; }
-.provider-overview__card { display:grid; gap:7px; border:1px solid var(--border); border-radius:11px; padding:15px; background:var(--tint-neutral); }
-.provider-overview__card span,.provider-overview__card small { color:var(--ink-3); font-size:11px; }.provider-overview__card strong { font-size:14px; }
-.provider-overview__card button,.provider-calculator-workspace button { width:max-content; min-height:40px; border:1px solid var(--border-positive); border-radius:8px; padding:8px 13px; background:var(--positive-ink); color:var(--surface); font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
+.provider-calculator-workspace button { width:max-content; min-height:40px; border:1px solid var(--border-positive); border-radius:8px; padding:8px 13px; background:var(--positive-ink); color:var(--surface); font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
 .provider-price-row { display:flex; justify-content:space-between; gap:16px; align-items:center; border:1px solid var(--border); border-radius:9px; padding:12px 14px; background:var(--surface); }
 .provider-price-row summary { display:flex; flex:1; justify-content:space-between; gap:16px; align-items:center; cursor:pointer; list-style:none; }.provider-price-row summary::-webkit-details-marker { display:none; }.provider-price-row[open] summary { margin-bottom:12px; }.provider-price-table { width:100%; border-collapse:collapse; font-size:12px; }.provider-price-table th,.provider-price-table td { padding:8px; border-top:1px solid var(--border); text-align:left; vertical-align:top; }.provider-price-table th { color:var(--ink-3); font-weight:700; }
 .provider-price-row + .provider-price-row { margin-top:8px; }.provider-price-row div { display:grid; gap:3px; }.provider-price-row span,.provider-price-row small,.provider-muted { color:var(--ink-3); font-size:12px; }

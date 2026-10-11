@@ -36,6 +36,7 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, "if (reloadPage) window.location.reload();")
         self.assertContains(response, reverse("tender_selection:detail", args=[tender.pk]))
         self.assertContains(response, "let workspaceApi = null;")
+        self.assertNotContains(response, 'app-workspace-layer__external')
         self.assertContains(response, 'data-navigation-home')
         self.assertNotContains(response, 'account-bar__home')
         self.assertNotContains(response, 'account-bar__data')

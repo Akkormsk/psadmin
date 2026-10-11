@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261011c">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261011d">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -420,7 +420,6 @@
             <header class="app-workspace-layer__bar">
               <button type="button" class="app-workspace-layer__back" data-workspace-back aria-label="Вернуться на один уровень">←</button>
               <nav class="app-workspace-layer__trail" data-workspace-trail aria-label="Путь рабочего окна"></nav>
-              <a class="app-workspace-layer__external" href="${new URL(rawUrl, location.href).toString()}" target="_blank" rel="noopener" title="Открыть отдельной страницей">↗</a>
               <button type="button" class="app-workspace-layer__close" data-workspace-close aria-label="Закрыть все рабочие окна">×</button>
             </header>
             <div class="app-workspace-layer__loader"><i></i><span>Открываю…</span></div>`;

@@ -27,6 +27,12 @@ class ProviderWorkspaceTests(TestCase):
         self.assertContains(response, "Классическая женская")
         self.assertContains(response, "414,80")
 
+    def test_overview_does_not_repeat_calculator_tab(self):
+        response = self.client.get(reverse("provider_workspace", args=[self.provider.pk]), secure=True)
+
+        self.assertContains(response, 'data-provider-tab="calculator"')
+        self.assertNotContains(response, 'provider-overview__card')
+
     def test_provider_list_opens_provider_in_shared_workspace(self):
         response = self.client.get(reverse("provider_list"), secure=True)
         self.assertContains(response, "data-workspace-open")
