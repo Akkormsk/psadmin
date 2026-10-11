@@ -205,6 +205,48 @@ def _universal_query(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def _list_provider_calculators(_user, payload):
+    _data_payload(payload, {"query"})
+    query = str(payload.get("query", "")).strip()
+    bindings = ProviderCalculatorBinding.objects.select_related("link__counterparty", "link__stage", "knowledge_version").filter(is_active=True, link__is_active=True, link__counterparty__is_active=True)
+    if query:
+        bindings = bindings.filter(Q(link__counterparty__name__icontains=query) | Q(link__stage__name__icontains=query))
+    return {"calculators": [{"id": item.pk, "counterparty_id": item.link.counterparty_id, "counterparty": item.link.counterparty.name, "stage": item.link.stage.name, "schema": get_provider_calculator_schema(item)} for item in bindings.order_by("link__counterparty__name")[:50]]}
+
+
+def _calculate_general(_user, payload):
+    from calculator.models import CalculatorSettings, Estimate, PriceItem
+    from calculator.services import calculate_sheet_estimate
+
+    _data_payload(payload, {"calculator_type", "quantity", "work_hours", "items"})
+    calculator_type = payload.get("calculator_type", Estimate.TYPE_SHEET)
+    if calculator_type not in {Estimate.TYPE_SHEET, Estimate.TYPE_WIDE}:
+        raise AssistantToolError("Неизвестный тип калькулятора")
+    quantity = _decimal(payload.get("quantity"))
+    hours = _decimal(payload.get("work_hours", 0))
+    rows = payload.get("items")
+    if quantity is None or quantity <= 0 or hours is None or hours < 0 or not isinstance(rows, list) or len(rows) > 100:
+        raise AssistantToolError("Некорректные параметры расчёта")
+    item_ids = [row.get("item_id") for row in rows if isinstance(row, dict)]
+    if len(item_ids) != len(rows) or not all(isinstance(item_id, int) for item_id in item_ids):
+        raise AssistantToolError("Нужны идентификаторы позиций калькулятора")
+    items = PriceItem.objects.filter(pk__in=item_ids, is_active=True).select_related("base_item").in_bulk()
+    if len(items) != len(set(item_ids)):
+        raise AssistantToolError("Одна или несколько позиций калькулятора недоступны")
+    lines = []
+    for row in rows:
+        item = items[row["item_id"]]
+        line_quantity = _decimal(row.get("quantity"))
+        if line_quantity is None or line_quantity <= 0:
+            raise AssistantToolError("Некорректное количество позиции")
+        lines.append({"category": item.category, "quantity": line_quantity, "unit_price": item.effective_unit_price})
+    settings = CalculatorSettings.objects.order_by("pk").first()
+    if not settings:
+        raise AssistantToolError("Не настроен общий калькулятор")
+    result = calculate_sheet_estimate(lines, quantity, hours, settings, calculator_type)
+    return {"calculator_type": calculator_type, "inputs": {"quantity": str(quantity), "work_hours": str(hours), "item_ids": item_ids}, "result": {key: str(value) for key, value in result.items()}, "evidence": [{"entity": "calculator_price_item", "id": item_id} for item_id in item_ids]}
+
+
 def _list_stages(_user, _payload):
     return {"stages": [{"id": item.pk, "name": item.name} for item in ProcessDefinition.objects.filter(is_active=True).order_by("name")]}
 
@@ -248,6 +290,8 @@ register_tool(AssistantTool("data.counterparties", "Данные контраг�
 register_tool(AssistantTool("data.cash", "Данные кассы", "Показывает операции кассы с ограниченными фильтрами и итогами прихода/расхода.", {"date": "YYYY-MM-DD?", "account": "cash|card?", "direction": "income|expense?", "query": "string?"}, True, False, False, _data_cash))
 register_tool(AssistantTool("data.payroll", "Данные зарплаты", "Показывает доступные строки зарплаты за период; сотрудник видит только свои.", {"period": "YYYY-MM?"}, True, False, False, _data_payroll))
 register_tool(AssistantTool("data.query", "Универсальный запрос данных", "Выполняет проверенный декларативный запрос к разрешённым сущностям, полям, фильтрам, сортировке и агрегациям. Возвращает источники. Не принимает SQL.", {"plan": {"entity": "catalogue id", "filters": "[{field,op,value}]?", "search": "string?", "fields": "string[]?", "order_by": "field?", "page": "integer?", "page_size": "integer?", "aggregates": "[{op,field}]?"}}, True, False, False, _universal_query, domain="platform", output_schema={"total_count": "integer", "returned_count": "integer", "aggregates": "object", "records": "array", "evidence": "array"}))
+register_tool(AssistantTool("provider.calculator_list", "Калькуляторы контрагентов", "Находит реальные активные калькуляторы контрагентов и их схемы параметров.", {"query": "string?"}, True, False, False, _list_provider_calculators, domain="providers", operation="calculate"))
+register_tool(AssistantTool("calculator.quote", "Общий калькулятор", "Выполняет детерминированный расчёт PSADMIN по активным позициям прайса. Цены передаются только из справочника по ID.", {"calculator_type": "sheet|wide?", "quantity": "number", "work_hours": "number?", "items": "[{item_id: integer, quantity: number}]"}, True, False, False, _calculate_general, domain="calculator", operation="calculate"))
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
 register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
 register_tool(AssistantTool("provider.calculator_schema", "Входы калькулятора", "Показывает подтверждённую схему калькулятора.", {"binding_id": "integer"}, True, False, False, _calculator_schema))

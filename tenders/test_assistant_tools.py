@@ -77,3 +77,13 @@ class AssistantToolRegistryTests(TestCase):
         result = execute_tool("data.query", self.user, {"plan": {"entity": "order", "fields": ["id", "name"]}})
 
         self.assertEqual(result["records"], [{"id": mine.pk, "name": "Мой"}])
+
+    def test_general_calculator_uses_price_catalog_not_model_supplied_prices(self):
+        from calculator.models import CalculatorSettings, PriceItem
+
+        CalculatorSettings.objects.create()
+        paper = PriceItem.objects.create(category=PriceItem.CATEGORY_PAPER, name="Бумага", unit_price="2.00")
+        result = execute_tool("calculator.quote", self.user, {"quantity": 10, "work_hours": 0, "items": [{"item_id": paper.pk, "quantity": 10}]})
+
+        self.assertEqual(result["result"]["material_cost"], "20.0000")
+        self.assertEqual(result["evidence"], [{"entity": "calculator_price_item", "id": paper.pk}])
