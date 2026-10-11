@@ -37,7 +37,8 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, reverse("tender_selection:detail", args=[tender.pk]))
         self.assertContains(response, "let workspaceApi = null;")
         self.assertContains(response, "function activeWorkspaceContext()")
-        self.assertContains(response, ".app-workspace-layer.is-active .app-workspace-layer__frame")
+        self.assertContains(response, 'window.addEventListener("ps-workspace-context"')
+        self.assertContains(response, 'type: "ps-workspace-context"')
         self.assertContains(response, 'const localBack = document.querySelector(".container > .back-link:first-child");')
         self.assertNotContains(response, "window.PSWorkspace")
 

@@ -55,6 +55,10 @@
         const composer = document.getElementById("assistant-composer"), input = document.getElementById("assistant-input");
         const key = "psadmin-assistant-conversation";
         let active = null;
+        let workspaceContext = null;
+        window.addEventListener("ps-workspace-context", function (event) {
+          workspaceContext = event.detail || null;
+        });
         function csrf() { return document.cookie.split("; ").find(function (item) { return item.startsWith("csrftoken="); })?.split("=")[1] || ""; }
         function escape(value) { const node = document.createElement("span"); node.textContent = value || ""; return node.innerHTML; }
         function toolResult(result) {
@@ -87,18 +91,7 @@
           messages.scrollTop = messages.scrollHeight;
         }
         function activeWorkspaceContext() {
-          const frame = document.querySelector(".app-workspace-layer.is-active .app-workspace-layer__frame");
-          if (!frame) return null;
-          try {
-            const frameDocument = frame.contentDocument;
-            const frameLocation = frame.contentWindow.location;
-            const heading = frameDocument.querySelector("main h1, .page-title h1, h1, h2");
-            const label = heading && heading.textContent.trim() ? heading.textContent.trim().replace(/\s+/g, " ").slice(0, 120) : "Текущий объект";
-            const match = frameLocation.pathname.match(/(?:tender-selection|tender|order)\/(\d+)\//);
-            return {page: frameLocation.pathname + frameLocation.search, label: label, tender_id: match ? match[1] : ""};
-          } catch (error) {
-            return null;
-          }
+          return workspaceContext;
         }
         function pageContext() {
           const workspaceContext = activeWorkspaceContext();
@@ -333,7 +326,17 @@
             .catch(function () { form.submit(); });
         });
 
-        if (embedded) return;
+        function currentWorkspaceContext() {
+          const heading = document.querySelector("main h1, .page-title h1, h1, h2");
+          const label = heading && heading.textContent.trim() ? heading.textContent.trim().replace(/\s+/g, " ").slice(0, 120) : "Текущий объект";
+          const match = location.pathname.match(/(?:tender-selection|tender|order)\/(\d+)\//);
+          return {page: location.pathname + location.search, label: label, tender_id: match ? match[1] : ""};
+        }
+
+        if (embedded) {
+          window.parent.postMessage({type: "ps-workspace-context", context: currentWorkspaceContext()}, location.origin);
+          return;
+        }
         const root = document.getElementById("app-workspace-stack");
         const layers = [];
         let refreshAfterBack = false;
@@ -357,6 +360,7 @@
         function renderStack() {
           root.classList.toggle("is-open", layers.length > 0);
           document.body.classList.toggle("has-workspace-stack", layers.length > 0);
+          window.dispatchEvent(new CustomEvent("ps-workspace-context", {detail: layers.length ? layers[layers.length - 1].context : null}));
           layers.forEach(function (layer, index) {
             const top = index === layers.length - 1;
             layer.element.classList.toggle("is-active", top);
@@ -418,7 +422,7 @@
           frame.title = title;
           frame.src = embeddedUrl(rawUrl);
           element.append(frame);
-          const layer = {element, frame, title};
+          const layer = {element, frame, title, context: null};
           layers.push(layer);
           root.append(element);
           element.querySelector("[data-workspace-back]").addEventListener("click", function () { workspaceApi.closeOne(); });
@@ -454,6 +458,12 @@
         };
         window.addEventListener("message", function (event) {
           if (event.origin !== location.origin || !layers.some(layer => layer.frame.contentWindow === event.source)) return;
+          if (event.data?.type === "ps-workspace-context" && event.data.context) {
+            const layer = layers.find(layer => layer.frame.contentWindow === event.source);
+            layer.context = event.data.context;
+            if (layer === layers[layers.length - 1]) renderStack();
+            return;
+          }
           if (event.data?.type === "ps-workspace-open" && event.data.url) {
             workspaceApi.open(event.data.url, event.data.title || "Рабочее окно");
           }
