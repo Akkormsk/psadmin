@@ -52,3 +52,28 @@ class AssistantToolRegistryTests(TestCase):
     def test_data_agent_rejects_unknown_filters_instead_of_guessing(self):
         with self.assertRaisesRegex(Exception, "Некорректные параметры"):
             execute_tool("data.tenders", self.admin, {"sql": "SELECT *"})
+
+    def test_universal_query_aggregates_all_visible_rows_not_only_page(self):
+        from cash.models import CashTransaction
+        from datetime import date
+
+        for amount in ("10.00", "20.00", "30.00"):
+            CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="expense", amount=amount, reason="Бумага", created_by=self.user)
+
+        result = execute_tool("data.query", self.user, {"plan": {"entity": "cash_transaction", "fields": ["id", "amount"], "page_size": 1, "aggregates": [{"op": "sum", "field": "amount"}]}})
+
+        self.assertEqual(result["total_count"], 3)
+        self.assertEqual(result["returned_count"], 1)
+        self.assertEqual(str(result["aggregates"]["sum_amount"]), "60")
+        self.assertEqual(len(result["evidence"]), 1)
+
+    def test_universal_query_cannot_follow_other_users_order(self):
+        mine = Order.objects.create(name="Мой")
+        OrderEstimate.objects.create(owner=self.user, order=mine, order_number="mine", name="Мой")
+        other = get_user_model().objects.create_user("agent-other")
+        hidden = Order.objects.create(name="Чужой")
+        OrderEstimate.objects.create(owner=other, order=hidden, order_number="hidden", name="Чужой")
+
+        result = execute_tool("data.query", self.user, {"plan": {"entity": "order", "fields": ["id", "name"]}})
+
+        self.assertEqual(result["records"], [{"id": mine.pk, "name": "Мой"}])

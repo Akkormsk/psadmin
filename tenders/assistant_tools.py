@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from importlib import import_module
 from typing import Any, Callable
 
 from django.db.models import Q
@@ -30,9 +31,13 @@ class AssistantTool:
     requires_superuser: bool
     executor: Callable[[Any, dict[str, Any]], dict[str, Any]]
     ui: dict[str, Any] | None = None
+    domain: str = "tenders"
+    operation: str = "read"
+    output_schema: dict[str, Any] | None = None
 
 
 _TOOLS: dict[str, AssistantTool] = {}
+_DISCOVERED = False
 
 
 def register_tool(tool: AssistantTool) -> AssistantTool:
@@ -42,7 +47,28 @@ def register_tool(tool: AssistantTool) -> AssistantTool:
     return tool
 
 
+def discover_capabilities():
+    """Load optional ``assistant_capabilities`` modules from installed apps once.
+
+    A future Django app only needs to import/register its capabilities from that
+    module; the agent core and UI protocol remain unchanged.
+    """
+    global _DISCOVERED
+    if _DISCOVERED:
+        return
+    from django.apps import apps
+
+    _DISCOVERED = True
+    for config in apps.get_app_configs():
+        try:
+            import_module(f"{config.name}.assistant_capabilities")
+        except ModuleNotFoundError as exc:
+            if exc.name != f"{config.name}.assistant_capabilities":
+                raise
+
+
 def available_tools(user) -> list[dict[str, Any]]:
+    discover_capabilities()
     return [
         {
             "id": tool.identifier,
@@ -50,6 +76,9 @@ def available_tools(user) -> list[dict[str, Any]]:
             "description": tool.description,
             "input_schema": tool.input_schema,
             "read_only": tool.read_only,
+            "domain": tool.domain,
+            "operation": tool.operation,
+            "output_schema": tool.output_schema or {},
             "requires_confirmation": tool.requires_confirmation,
             "available": not tool.requires_superuser or user.is_superuser,
             "ui": tool.ui,
@@ -59,6 +88,7 @@ def available_tools(user) -> list[dict[str, Any]]:
 
 
 def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
+    discover_capabilities()
     tool = _TOOLS.get(identifier)
     if not tool:
         raise AssistantToolError("Неизвестное действие ассистента")
@@ -166,6 +196,15 @@ def _data_payroll(user, payload):
     return {"count": len(items), "records": [{"id": item.pk, "period": item.period.code, "name": item.name, "work_shifts": item.work_shifts, "advance": f"{item.advance:.2f}", "order_profit": f"{item.order_profit:.2f}", "kpi_bonus": f"{item.kpi_bonus:.2f}"} for item in items]}
 
 
+def _universal_query(user, payload):
+    from .agent_query import QueryPlanError, execute_plan
+
+    try:
+        return execute_plan(user, payload.get("plan"))
+    except QueryPlanError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
 def _list_stages(_user, _payload):
     return {"stages": [{"id": item.pk, "name": item.name} for item in ProcessDefinition.objects.filter(is_active=True).order_by("name")]}
 
@@ -208,6 +247,7 @@ register_tool(AssistantTool("data.orders", "Данные заказов", "Ищ�
 register_tool(AssistantTool("data.counterparties", "Данные контрагентов", "Ищет активных контрагентов по названию и возвращает ID записей.", {"query": "string?"}, True, False, False, _data_counterparties))
 register_tool(AssistantTool("data.cash", "Данные кассы", "Показывает операции кассы с ограниченными фильтрами и итогами прихода/расхода.", {"date": "YYYY-MM-DD?", "account": "cash|card?", "direction": "income|expense?", "query": "string?"}, True, False, False, _data_cash))
 register_tool(AssistantTool("data.payroll", "Данные зарплаты", "Показывает доступные строки зарплаты за период; сотрудник видит только свои.", {"period": "YYYY-MM?"}, True, False, False, _data_payroll))
+register_tool(AssistantTool("data.query", "Универсальный запрос данных", "Выполняет проверенный декларативный запрос к разрешённым сущностям, полям, фильтрам, сортировке и агрегациям. Возвращает источники. Не принимает SQL.", {"plan": {"entity": "catalogue id", "filters": "[{field,op,value}]?", "search": "string?", "fields": "string[]?", "order_by": "field?", "page": "integer?", "page_size": "integer?", "aggregates": "[{op,field}]?"}}, True, False, False, _universal_query, domain="platform", output_schema={"total_count": "integer", "returned_count": "integer", "aggregates": "object", "records": "array", "evidence": "array"}))
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
 register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
 register_tool(AssistantTool("provider.calculator_schema", "Входы калькулятора", "Показывает подтверждённую схему калькулятора.", {"binding_id": "integer"}, True, False, False, _calculator_schema))
