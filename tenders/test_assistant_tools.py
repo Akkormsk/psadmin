@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from .capability_map import MAP_PATH, serialized_map
+
 from .assistant_tools import AssistantToolConfirmationRequired, available_tools, execute_tool
 from .models import Order, OrderEstimate, ProcessDefinition, TenderEstimate
 
@@ -34,24 +36,23 @@ class AssistantToolRegistryTests(TestCase):
         other = get_user_model().objects.create_user("other-user")
         OrderEstimate.objects.create(owner=other, order=Order.objects.create(name="Чужой заказ"), order_number="O-2", name="Чужой")
 
-        result = execute_tool("data.orders", self.user, {"query": "заказ"})
+        result = execute_tool("data.query", self.user, {"plan": {"entity": "order_estimate", "search": "Печать", "fields": ["id", "number", "name"]}})
 
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["records"], [{"id": mine.pk, "number": "O-1", "name": "Печать", "status": "Черновик", "order_id": mine.order_id}])
+        self.assertEqual(result["total_count"], 1)
+        self.assertEqual(result["records"], [{"id": mine.pk, "number": "O-1", "name": "Печать"}])
 
     def test_data_agent_admin_can_see_all_calculations_and_sums_known_amounts(self):
         first = TenderEstimate.objects.create(owner=self.user, tender_number="T-1", name="Первый", summary_snapshot={"our_price": "120.50"})
         second = TenderEstimate.objects.create(owner=self.admin, tender_number="T-2", name="Второй", summary_snapshot={"our_price": "79.50"})
 
-        result = execute_tool("data.tenders", self.admin, {})
+        result = execute_tool("data.query", self.admin, {"plan": {"entity": "tender_estimate", "fields": ["id", "number", "name"]}})
 
-        self.assertEqual(result["count"], 2)
-        self.assertEqual(result["totals"]["our_price"], "200.00")
+        self.assertEqual(result["total_count"], 2)
         self.assertEqual({record["id"] for record in result["records"]}, {first.pk, second.pk})
 
     def test_data_agent_rejects_unknown_filters_instead_of_guessing(self):
-        with self.assertRaisesRegex(Exception, "Некорректные параметры"):
-            execute_tool("data.tenders", self.admin, {"sql": "SELECT *"})
+        with self.assertRaisesRegex(Exception, "Некорректный план"):
+            execute_tool("data.query", self.admin, {"plan": {"entity": "tender_estimate", "sql": "SELECT *"}})
 
     def test_universal_query_aggregates_all_visible_rows_not_only_page(self):
         from cash.models import CashTransaction
@@ -87,3 +88,6 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(result["result"]["material_cost"], "20.0000")
         self.assertEqual(result["evidence"], [{"entity": "calculator_price_item", "id": paper.pk}])
+
+    def test_committed_capability_map_matches_live_models_and_operations(self):
+        self.assertEqual(MAP_PATH.read_text(encoding="utf-8"), serialized_map())

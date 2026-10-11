@@ -1,0 +1,7844 @@
+{
+  "models": [
+    {
+      "app": "calculator",
+      "db_table": "calculator_calculatorsettings",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "hourly_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "material_coefficient",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "time_coefficient",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "regular_discount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "partner_discount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "urgency_multiplier",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "vat_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "calculator.CalculatorSettings",
+      "model": "CalculatorSettings",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_priceitem",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "category",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "aliases",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "unit_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "unit_price",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "base_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "calculator.PriceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "price_multiplier",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "calculator.CanonPriceItem",
+      "model": "CanonPriceItem",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_estimate",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "owner",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "group",
+          "null": true,
+          "primary_key": false,
+          "relation": "calculator.EstimateGroup",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "calculator_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "comment",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "product_quantity",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "work_hours",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "settings_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "summary_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "calculator.Estimate",
+      "model": "Estimate",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_estimategroup",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "owner",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "calculator_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "calculator.EstimateGroup",
+      "model": "EstimateGroup",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_estimateline",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "estimate",
+          "null": false,
+          "primary_key": false,
+          "relation": "calculator.Estimate",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "category",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "price_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "calculator.PriceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "name_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "unit_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "unit_price_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "quantity",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "is_custom",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "calculator.EstimateLine",
+      "model": "EstimateLine",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_priceitem",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "category",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "aliases",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "unit_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "unit_price",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "base_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "calculator.PriceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "price_multiplier",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "calculator.PriceItem",
+      "model": "PriceItem",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_productionrule",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "price_item",
+          "null": false,
+          "primary_key": false,
+          "relation": "calculator.PriceItem",
+          "type": "OneToOneField"
+        },
+        {
+          "blank": false,
+          "name": "calculation_kind",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "package_quantity",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "waste_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "note",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        }
+      ],
+      "id": "calculator.ProductionRule",
+      "model": "ProductionRule",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "calculator",
+      "db_table": "calculator_priceitem",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "category",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "aliases",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "unit_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "unit_price",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "base_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "calculator.PriceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "price_multiplier",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "calculator.SheetPriceItem",
+      "model": "SheetPriceItem",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "cash",
+      "db_table": "cash_bankpayment",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "external_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "direction",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "amount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "currency",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "counterparty_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "counterparty_inn",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "counterparty_account",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "counterparty_bank",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "payment_purpose",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "doc_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "account_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "executed_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "operation_date",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": false,
+          "name": "is_internal",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "hidden_from_managers",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "raw",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "cash.BankPayment",
+      "model": "BankPayment",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "cash",
+      "db_table": "cash_banksyncstate",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": true,
+          "name": "last_synced_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "last_status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "own_identifiers",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        }
+      ],
+      "id": "cash.BankSyncState",
+      "model": "BankSyncState",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "cash",
+      "db_table": "cash_cashauditlog",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": true,
+          "name": "transaction",
+          "null": true,
+          "primary_key": false,
+          "relation": "cash.CashTransaction",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "actor",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "action",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "message",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "occurred_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "cash.CashAuditLog",
+      "model": "CashAuditLog",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "cash",
+      "db_table": "cash_cashreconciliation",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "effective_date",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": false,
+          "name": "cash_balance",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "card_balance",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "note",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "cash.CashReconciliation",
+      "model": "CashReconciliation",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "cash",
+      "db_table": "cash_cashtransaction",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "operation_date",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": false,
+          "name": "account",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "direction",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "amount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "reason",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "cash.CashTransaction",
+      "model": "CashTransaction",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "core",
+      "db_table": "core_profile",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "user",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "OneToOneField"
+        },
+        {
+          "blank": false,
+          "name": "role",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "theme",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "avatar_data",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "BinaryField"
+        },
+        {
+          "blank": true,
+          "name": "avatar_content_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "avatar_updated_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "background_updated_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "core.Profile",
+      "model": "Profile",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "core",
+      "db_table": "core_profilebackground",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "profile",
+          "null": false,
+          "primary_key": false,
+          "relation": "core.Profile",
+          "type": "OneToOneField"
+        },
+        {
+          "blank": false,
+          "name": "image_data",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BinaryField"
+        },
+        {
+          "blank": false,
+          "name": "content_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        }
+      ],
+      "id": "core.ProfileBackground",
+      "model": "ProfileBackground",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_financialperiod",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "code",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_closed",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "finance.FinancialPeriod",
+      "model": "FinancialPeriod",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_kpitier",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "threshold",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "finance.KpiTier",
+      "model": "KpiTier",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_managerkpirate",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "manager",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "tier",
+          "null": false,
+          "primary_key": false,
+          "relation": "finance.KpiTier",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "finance.ManagerKpiRate",
+      "model": "ManagerKpiRate",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_managersettings",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "user",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "OneToOneField"
+        },
+        {
+          "blank": false,
+          "name": "shift_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "leave_shift_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "design_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        }
+      ],
+      "id": "finance.ManagerSettings",
+      "model": "ManagerSettings",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_operatingexpense",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "amount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "finance.OperatingExpense",
+      "model": "OperatingExpense",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_payrollline",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "period",
+          "null": false,
+          "primary_key": false,
+          "relation": "finance.FinancialPeriod",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "kind",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "manager",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "work_shifts",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "leave_shifts",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "shift_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "leave_shift_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "fixed_salary",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "design_amount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "design_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "deductions",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "advance",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "order_profit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "kpi_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "kpi_bonus",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "finance.PayrollLine",
+      "model": "PayrollLine",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "finance",
+      "db_table": "finance_periodexpense",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "period",
+          "null": false,
+          "primary_key": false,
+          "relation": "finance.FinancialPeriod",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "template",
+          "null": true,
+          "primary_key": false,
+          "relation": "finance.OperatingExpense",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "amount",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "finance.PeriodExpense",
+      "model": "PeriodExpense",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "payroll",
+      "db_table": "payroll_orderrecord",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "order_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "gross_profit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "record_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "accounting_period",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "manager",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "source",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        }
+      ],
+      "id": "payroll.OrderRecord",
+      "model": "OrderRecord",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_contractstat",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "law",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "purchase_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "contract_reg_num",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "shared_purchase",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "category",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "okpd2",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "ktru",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "region",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "subject",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "customer_inn",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "nmck",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "final_price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "discount_pct",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "participants_count",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "winner_inn",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_ours",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "own_funnel",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "forecast_included",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "contract_date",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": false,
+          "name": "nmck_checked",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "collected_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tender_selection.ContractStat",
+      "model": "ContractStat",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_documentpreview",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "filename",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "kind",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "html",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "fetched_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tender_selection.DocumentPreview",
+      "model": "DocumentPreview",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_filtersettings",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": true,
+          "name": "include_words",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "exclude_words",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "min_price",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "window_days",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "risk_warning_days",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "risk_critical_days",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "risk_factor_levels",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "stats_target_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "stats_min_samples",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "reduction_hint_min",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "reduction_hint_max",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "incoming_ttl_days",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "okpd2_codes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "regions",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "laws",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "keyword_pull_cursor",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "profile_triage_enabled",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "tender_selection.FilterSettings",
+      "model": "FilterSettings",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_incomingtrace",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "law",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "purchase_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "title",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "okpd2",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "max_price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "plus_hits",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "filtered_out",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "was_opened",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "purged_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tender_selection.IncomingTrace",
+      "model": "IncomingTrace",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_organization",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "inn",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "short_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "city",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "region_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "address",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "email",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "website",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "checked_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tender_selection.Organization",
+      "model": "Organization",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_pullrun",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "started_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "finished_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "params",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "requests_made",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "records_received",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "created_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "updated_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "duration_seconds",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "FloatField"
+        },
+        {
+          "blank": false,
+          "name": "ok",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        }
+      ],
+      "id": "tender_selection.PullRun",
+      "model": "PullRun",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_statsrun",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "started_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "finished_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "params",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "requests_made",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "contracts_seen",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "created_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "filled_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "duration_seconds",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "FloatField"
+        },
+        {
+          "blank": false,
+          "name": "ok",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        }
+      ],
+      "id": "tender_selection.StatsRun",
+      "model": "StatsRun",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_tender",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "law",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "purchase_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "source",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "object_info",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "title",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "max_price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "currency_code",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "customer_inn",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "region",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "stage",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveSmallIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "purchase_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "okpd2",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "published_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "collecting_finished_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "eis_url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "raw",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "notification_raw",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "notification_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "notification_error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "clarifications_raw",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "complaints_raw",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "extras_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "risk_assessment",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "risk_assessment_docs",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "risk_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "risk_error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "review",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "opened_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "first_seen_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "last_pulled_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "archived_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "archived_from_stage",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "profile_signal",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "profile_confidence",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "profile_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "outcome_status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "market_forecast_percent",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "market_forecast_sample_count",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "market_forecast_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "contract_price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "contract_reduction_percent",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "outcome_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "outcome_source",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "bid_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "bid_price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "protocol",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "protocol_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "contract_reg_num",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "contract_winner_inn",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "contract_exe_start",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": true,
+          "name": "contract_exe_end",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": true,
+          "name": "contract_checked_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tender_selection.Tender",
+      "model": "Tender",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_tenderdismissalfeedback",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "tender",
+          "null": false,
+          "primary_key": false,
+          "relation": "tender_selection.Tender",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "reason",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tender_selection.TenderDismissalFeedback",
+      "model": "TenderDismissalFeedback",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tender_selection",
+      "db_table": "tender_selection_wordaudit",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "created_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "model",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "input_counts",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "result",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "spend_rub",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "tender_selection.WordAudit",
+      "model": "WordAudit",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_attributeconcepthint",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "concept_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "attribute_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "hits",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.AttributeConceptHint",
+      "model": "AttributeConceptHint",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_calculationcomponent",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "commercial_item",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderCommercialItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "source_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderSourceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "parent",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CalculationComponent",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "quantity_per_parent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "provenance",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.CalculationComponent",
+      "model": "CalculationComponent",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_cascadecache",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "kind",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "payload",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.CascadeCache",
+      "model": "CascadeCache",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_cascadeconfigversion",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "settings",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.CascadeConfigVersion",
+      "model": "CascadeConfigVersion",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_cascadelabpreset",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "settings",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.CascadeLabPreset",
+      "model": "CascadeLabPreset",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_catalogcategory",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "supplier",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.CatalogSupplier",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "external_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "parent_external_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "path",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "embedding",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "embedding_model",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "embedding_text_hash",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "embedding_updated_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "tenders.CatalogCategory",
+      "model": "CatalogCategory",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_catalogmatchdecision",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "session",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ProductionTrainingSession",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "product",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CatalogProduct",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "supplier_code",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "product_external_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "product_article",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "product_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "decision",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "reason_codes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "requirement_signature",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "note",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "is_confirmed",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.CatalogMatchDecision",
+      "model": "CatalogMatchDecision",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_catalogproduct",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "supplier",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.CatalogSupplier",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "external_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "article",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "article_base",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "group_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "color_group_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "family_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "full_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "description",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "category_ids",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "category_names",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "brand",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "size",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "materials",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "colors",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "attributes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "branding",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "package",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "discount_price",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "total_stock",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "IntegerField"
+        },
+        {
+          "blank": false,
+          "name": "stock_moscow",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "IntegerField"
+        },
+        {
+          "blank": false,
+          "name": "stock_remote",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "IntegerField"
+        },
+        {
+          "blank": false,
+          "name": "stock_transit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "IntegerField"
+        },
+        {
+          "blank": false,
+          "name": "is_on_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "delivery_days",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "image_url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "product_url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "supply_terms",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "warning",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "defect",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "search_text",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "source_updated_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "synced_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "sync_marker",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "raw_data",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        }
+      ],
+      "id": "tenders.CatalogProduct",
+      "model": "CatalogProduct",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_catalogsupplier",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "code",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "SlugField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "base_url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "last_synced_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "sync_status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "sync_message",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        }
+      ],
+      "id": "tenders.CatalogSupplier",
+      "model": "CatalogSupplier",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_catalogsyncrun",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "supplier",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.CatalogSupplier",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "started_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "finished_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "received_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "created_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "updated_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "deactivated_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        }
+      ],
+      "id": "tenders.CatalogSyncRun",
+      "model": "CatalogSyncRun",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_componentoperationstep",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "route_plan",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ComponentRoutePlan",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "process",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ProcessDefinition",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "position",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "details",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ComponentOperationStep",
+      "model": "ComponentOperationStep",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_componentrouteplan",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "commercial_item",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderCommercialItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "component",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CalculationComponent",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "scope",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "metadata",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ComponentRoutePlan",
+      "model": "ComponentRoutePlan",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_counterparty",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "catalog_supplier",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CatalogSupplier",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "notes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.Counterparty",
+      "model": "Counterparty",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_counterpartyknowledgeversion",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "counterparty",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.Counterparty",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "stage",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ProcessDefinition",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "staging",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ProviderKnowledgeStaging",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "version_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "canonical_data",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "source_metadata",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "confidence",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "effective_from",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": true,
+          "name": "effective_to",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateField"
+        },
+        {
+          "blank": true,
+          "name": "confirmation_note",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "supersedes",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CounterpartyKnowledgeVersion",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "confirmed_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "confirmed_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.CounterpartyKnowledgeVersion",
+      "model": "CounterpartyKnowledgeVersion",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_knowledgerecord",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": true,
+          "name": "feedback_event",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.OwnerFeedbackEvent",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "scope_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "scope_context",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "applicability",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "payload",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "confidence",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "supersedes",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.KnowledgeRecord",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.KnowledgeRecord",
+      "model": "KnowledgeRecord",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_lesson",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "scope",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "admin_text",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "summary",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "item_word",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "tz_labels",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "production_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "outcome",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "source",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "session",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ProductionTrainingSession",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.Lesson",
+      "model": "Lesson",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_order",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "archived_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.Order",
+      "model": "Order",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_orderestimate",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "owner",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "order",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.Order",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "legacy_calculation_id",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveBigIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "order_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "reduction_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "russia_delivery",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "vat_rate_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "summary_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "document_analysis",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "notes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.OrderEstimate",
+      "model": "OrderEstimate",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_orderline",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "estimate",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.OrderEstimate",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "quantity",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "nmck_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "material_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "application_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "logistics_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "product_url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "comment",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        }
+      ],
+      "id": "tenders.OrderLine",
+      "model": "OrderLine",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_ownerfeedbackevent",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "interaction",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.OwnerInteraction",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "actor",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "raw_text",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "payload",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "scope",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.OwnerFeedbackEvent",
+      "model": "OwnerFeedbackEvent",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_ownerinteraction",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": true,
+          "name": "tender",
+          "null": true,
+          "primary_key": false,
+          "relation": "tender_selection.Tender",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "source_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderSourceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "compute_line",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderComputeLine",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "work_unit",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderComputeWorkUnit",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "engine_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "question",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "reason",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "confidence",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "context",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "possible_answers",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "answered_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.OwnerInteraction",
+      "model": "OwnerInteraction",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_processdefinition",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "role",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "description",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "supplies_input",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "performs_production",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "terminal_mode",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "scope_tags",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "when_to_use",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "when_not_to_use",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "parameters",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        }
+      ],
+      "id": "tenders.ProcessDefinition",
+      "model": "ProcessDefinition",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_productiontrainingexample",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "knowledge_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "UUIDField"
+        },
+        {
+          "blank": false,
+          "name": "production_type",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ProductionType",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "position_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "features",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "routes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "note",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "superseded_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ProductionTrainingExample",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "embedding",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "embedding_model",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "embedding_updated_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ProductionTrainingExample",
+      "model": "ProductionTrainingExample",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_productiontrainingsession",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "position_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "current_hypothesis",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "is_confirmed",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "confirmed_example",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ProductionTrainingExample",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ProductionTrainingSession",
+      "model": "ProductionTrainingSession",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_productiontrainingturn",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "session",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ProductionTrainingSession",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "feedback",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "understood_changes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "hypothesis",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ProductionTrainingTurn",
+      "model": "ProductionTrainingTurn",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_productiontype",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "code",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "SlugField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "description",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "tenders.ProductionType",
+      "model": "ProductionType",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_proposal",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "batch_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "UUIDField"
+        },
+        {
+          "blank": false,
+          "name": "type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "payload",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "summary",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "session",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ProductionTrainingSession",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "source_text",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "decided_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "decided_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.Proposal",
+      "model": "Proposal",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_providercalculationquote",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "binding",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ProviderCalculatorBinding",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "knowledge_version",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CounterpartyKnowledgeVersion",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "calculation_spec",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "result",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ProviderCalculationQuote",
+      "model": "ProviderCalculationQuote",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_providercalculatorbinding",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "link",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.StageCounterpartyLink",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "knowledge_version",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CounterpartyKnowledgeVersion",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "calculator_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "configuration",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "is_default",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ProviderCalculatorBinding",
+      "model": "ProviderCalculatorBinding",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_providerknowledgestaging",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "counterparty",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.Counterparty",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "source_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "original_filename",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "source_hash",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "extracted_text",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "raw_content",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "BinaryField"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "purged_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.ProviderKnowledgeStaging",
+      "model": "ProviderKnowledgeStaging",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_requirementskiprule",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "label",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "label_normalized",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "example_value",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "created_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.RequirementSkipRule",
+      "model": "RequirementSkipRule",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_stagecounterpartylink",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "stage",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.ProcessDefinition",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "counterparty",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.Counterparty",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "priority",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": false,
+          "name": "price_source_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "settings",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.StageCounterpartyLink",
+      "model": "StageCounterpartyLink",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_step4decisioncache",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "target_signature",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "supplier",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.CatalogSupplier",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "product_external_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "candidate_signature",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "decision",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "model_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "contract_version",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "last_used_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "last_verified_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "hit_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        }
+      ],
+      "id": "tenders.Step4DecisionCache",
+      "model": "Step4DecisionCache",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendercommercialitem",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "tender",
+          "null": false,
+          "primary_key": false,
+          "relation": "tender_selection.Tender",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "job",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderComputeJob",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "source_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "display_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "quantity",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "provenance",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "structure",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.TenderCommercialItem",
+      "model": "TenderCommercialItem",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendercomputejob",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "tender",
+          "null": false,
+          "primary_key": false,
+          "relation": "tender_selection.Tender",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "version",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "trigger",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "attempt_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "started_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "completed_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "diagnostics",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "total_cost",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.TenderComputeJob",
+      "model": "TenderComputeJob",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendercomputeline",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "job",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderComputeJob",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "source_item",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderSourceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "commercial_item",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderCommercialItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "component",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CalculationComponent",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "input_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "route_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "engine_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "route_confidence",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "route_metadata",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "result",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "diagnostics",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        }
+      ],
+      "id": "tenders.TenderComputeLine",
+      "model": "TenderComputeLine",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendercomputepreparation",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "work_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderComputeWorkUnit",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "engine_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "preparation_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "payload",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "freshness",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "cost",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "attempt_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "started_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "completed_at",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        }
+      ],
+      "id": "tenders.TenderComputePreparation",
+      "model": "TenderComputePreparation",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendercomputeworkunit",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "job",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderComputeJob",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "component",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.CalculationComponent",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "operation_step",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.ComponentOperationStep",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "engine_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "dedupe_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "input_fingerprint",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "result",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "diagnostics",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "attempt_count",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        },
+        {
+          "blank": true,
+          "name": "error",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        }
+      ],
+      "id": "tenders.TenderComputeWorkUnit",
+      "model": "TenderComputeWorkUnit",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tenderestimate",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "owner",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "tender",
+          "null": true,
+          "primary_key": false,
+          "relation": "tender_selection.Tender",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "tender_number",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "result_notes",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "reduction_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "russia_delivery",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "vat_rate_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "summary_snapshot",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "document_analysis",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.TenderEstimate",
+      "model": "TenderEstimate",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tenderknowledgesource",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "knowledge_id",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "UUIDField"
+        },
+        {
+          "blank": false,
+          "name": "title",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "supplier_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "source_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "content_summary",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "structured_data",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "counterparty",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.Counterparty",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "raw_file",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "BinaryField"
+        },
+        {
+          "blank": true,
+          "name": "raw_file_name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "raw_file_content_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "superseded_by",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderKnowledgeSource",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "created_by",
+          "null": false,
+          "primary_key": false,
+          "relation": "auth.User",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        }
+      ],
+      "id": "tenders.TenderKnowledgeSource",
+      "model": "TenderKnowledgeSource",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tenderline",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "estimate",
+          "null": false,
+          "primary_key": false,
+          "relation": "tenders.TenderEstimate",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "name",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "quantity",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "nmck_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "material_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "application_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "logistics_unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "product_url",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "comment",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": false,
+          "name": "sort_order",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "PositiveIntegerField"
+        }
+      ],
+      "id": "tenders.TenderLine",
+      "model": "TenderLine",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendersettings",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "vat_rate",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "auto_start_product_search",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "auto_recalculate_requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": false,
+          "name": "roi_good_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "roi_thin_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": false,
+          "name": "default_reduction_percent",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        }
+      ],
+      "id": "tenders.TenderSettings",
+      "model": "TenderSettings",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_tendersourceitem",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "tender",
+          "null": false,
+          "primary_key": false,
+          "relation": "tender_selection.Tender",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "source_key",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "source_type",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "original_text",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": true,
+          "name": "quantity",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "unit",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "requirements",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "metadata",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "provenance",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "JSONField"
+        },
+        {
+          "blank": true,
+          "name": "confidence",
+          "null": true,
+          "primary_key": false,
+          "relation": null,
+          "type": "DecimalField"
+        },
+        {
+          "blank": true,
+          "name": "parent",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderSourceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": true,
+          "name": "supersedes",
+          "null": true,
+          "primary_key": false,
+          "relation": "tenders.TenderSourceItem",
+          "type": "ForeignKey"
+        },
+        {
+          "blank": false,
+          "name": "is_active",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "BooleanField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.TenderSourceItem",
+      "model": "TenderSourceItem",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
+      "db_table": "tenders_unitalias",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "spelling",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "canonical",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.UnitAlias",
+      "model": "UnitAlias",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    }
+  ],
+  "operations": [
+    {
+      "domain": "tenders",
+      "id": "assistant.capabilities",
+      "input_schema": {
+        "type": "object"
+      },
+      "operation": "read",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools.<lambda>",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "calculator",
+      "id": "calculator.quote",
+      "input_schema": {
+        "calculator_type": "sheet|wide?",
+        "items": "[{item_id: integer, quantity: number}]",
+        "quantity": "number",
+        "work_hours": "number?"
+      },
+      "operation": "calculate",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._calculate_general",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "platform",
+      "id": "data.query",
+      "input_schema": {
+        "plan": {
+          "aggregates": "[{op,field}]?",
+          "entity": "catalogue id",
+          "fields": "string[]?",
+          "filters": "[{field,op,value}]?",
+          "order_by": "field?",
+          "page": "integer?",
+          "page_size": "integer?",
+          "search": "string?"
+        }
+      },
+      "operation": "read",
+      "output_schema": {
+        "aggregates": "object",
+        "evidence": "array",
+        "records": "array",
+        "returned_count": "integer",
+        "total_count": "integer"
+      },
+      "python_path": "tenders.assistant_tools._universal_query",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "tenders",
+      "id": "process.list",
+      "input_schema": {
+        "type": "object"
+      },
+      "operation": "read",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._list_stages",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "tenders",
+      "id": "provider.calculate",
+      "input_schema": {
+        "binding_id": "integer",
+        "spec": "object"
+      },
+      "operation": "read",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._calculate_provider",
+      "read_only": false,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "providers",
+      "id": "provider.calculator_list",
+      "input_schema": {
+        "query": "string?"
+      },
+      "operation": "calculate",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._list_provider_calculators",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "tenders",
+      "id": "provider.calculator_schema",
+      "input_schema": {
+        "binding_id": "integer"
+      },
+      "operation": "read",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._calculator_schema",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    },
+    {
+      "domain": "tenders",
+      "id": "provider.create_draft",
+      "input_schema": {
+        "name": "string",
+        "source_text": "string",
+        "stage_ids": "integer[]"
+      },
+      "operation": "read",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._create_provider_draft",
+      "read_only": false,
+      "requires_confirmation": true,
+      "requires_superuser": true
+    },
+    {
+      "domain": "tenders",
+      "id": "provider.find",
+      "input_schema": {
+        "query": "string"
+      },
+      "operation": "read",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._find_counterparty",
+      "read_only": true,
+      "requires_confirmation": false,
+      "requires_superuser": false
+    }
+  ],
+  "version": 1
+}
