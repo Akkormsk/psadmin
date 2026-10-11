@@ -58,6 +58,7 @@
         let workspaceContext = null;
         window.addEventListener("ps-workspace-context", function (event) {
           workspaceContext = event.detail || null;
+          if (active) renderCurrentContext();
         });
         function csrf() { return document.cookie.split("; ").find(function (item) { return item.startsWith("csrftoken="); })?.split("=")[1] || ""; }
         function escape(value) { const node = document.createElement("span"); node.textContent = value || ""; return node.innerHTML; }
@@ -101,12 +102,15 @@
           const match = location.pathname.match(/(?:tender|order)\/(\d+)\//);
           return {page: location.pathname + location.search, label: label, tender_id: match ? match[1] : ""};
         }
-        function showContext(conversation) {
-          const value = conversation.business_context || {};
+        function renderCurrentContext() {
           const current = pageContext();
-          topic.textContent = value.label || conversation.title || "Новая рабочая беседа";
           contextSummary.textContent = "Контекст: " + current.label + (current.tender_id ? " · тендер №" + current.tender_id : "");
           contextMeta.textContent = "Ассистенту передаётся открытый раздел" + (current.tender_id ? " и тендер №" + current.tender_id : "") + ".";
+        }
+        function showContext(conversation) {
+          const value = conversation.business_context || {};
+          topic.textContent = value.label || conversation.title || "Новая рабочая беседа";
+          renderCurrentContext();
         }
         function load(id) {
           return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); showContext(data.conversation); render(data.messages); });

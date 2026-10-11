@@ -37,6 +37,7 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, reverse("tender_selection:detail", args=[tender.pk]))
         self.assertContains(response, "let workspaceApi = null;")
         self.assertContains(response, "function activeWorkspaceContext()")
+        self.assertContains(response, "function renderCurrentContext()")
         self.assertContains(response, 'window.addEventListener("ps-workspace-context"')
         self.assertContains(response, 'type: "ps-workspace-context"')
         self.assertContains(response, 'window.addEventListener("load", reportWorkspaceContext);')
