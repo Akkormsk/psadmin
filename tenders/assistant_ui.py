@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from .assistant_tools import available_tools
 from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
+from .agent_crud import CrudError, confirm as confirm_crud, preview as preview_crud
 from .models import CounterpartyKnowledgeVersion, ProcessDefinition
 from .provider_knowledge import confirm_sewing_price_list, create_sewing_provider_draft
 
@@ -97,6 +98,38 @@ def conversation_message(request, conversation_id):
         return HttpResponseBadRequest("Введите сообщение")
     context = payload.get("context", {}) if isinstance(payload, dict) else {}
     return JsonResponse({"messages": respond(conversation, request.user, message, context)})
+
+
+@login_required
+def conversation_operation_preview(request, conversation_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    try:
+        payload = json.loads(request.body)
+        operation = preview_crud(conversation, request.user, payload)
+    except (TypeError, ValueError, CrudError) as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+    add_assistant_message(conversation, "Проверьте предлагаемые изменения и подтвердите их явно.", "confirmation", operation)
+    return JsonResponse({"messages": serialize_messages(conversation)})
+
+
+@login_required
+def conversation_operation_confirm(request, conversation_id, operation_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    try:
+        payload = json.loads(request.body)
+        result = confirm_crud(conversation, request.user, operation_id, payload.get("token", ""), payload.get("accept") is True)
+    except (TypeError, ValueError, CrudError) as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+    add_assistant_message(conversation, "Изменение выполнено." if result["status"] == "executed" else "Изменение отменено.", "operation_result", result)
+    return JsonResponse({"messages": serialize_messages(conversation)})
 
 
 @login_required

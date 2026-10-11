@@ -124,3 +124,21 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(interaction.status, "archived")
         self.assertEqual(interaction.feedback_events.count(), 1)
         self.assertEqual(self.client.get(reverse("assistant_conversations"), secure=True).json()["conversations"], [])
+
+    def test_generic_operation_preview_and_confirmation_stay_in_one_conversation(self):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Изменение"}, secure=True).json()["conversation"]["id"]
+        preview = self.client.post(
+            reverse("assistant_operation_preview", args=[conversation_id]),
+            data=json.dumps({"action": "create", "model": "tenders.ProcessDefinition", "object_id": None, "values": {"name": "Этап через чат", "role": "production"}}),
+            content_type="application/json", secure=True,
+        )
+        self.assertEqual(preview.status_code, 200)
+        card = preview.json()["messages"][-1]
+        self.assertEqual(card["kind"], "confirmation")
+        self.assertFalse(ProcessDefinition.objects.filter(name="Этап через чат").exists())
+        confirmed = self.client.post(
+            reverse("assistant_operation_confirm", args=[conversation_id, card["data"]["operation_id"]]),
+            data=json.dumps({"token": card["data"]["token"], "accept": True}), content_type="application/json", secure=True,
+        )
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertTrue(ProcessDefinition.objects.filter(name="Этап через чат").exists())
