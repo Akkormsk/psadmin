@@ -76,6 +76,7 @@ class LayeredWorkspaceNavigationTests(TestCase):
         self.assertContains(response, 'data-workspace-title="Расчёт"')
         self.assertContains(response, "ps-workspace-open")
         self.assertContains(response, 'class="container ts-detail ts-detail--document"')
+        self.assertContains(response, 'class="workspace-action-stack"')
 
     def test_embedded_workspace_does_not_render_a_second_assistant(self):
         tender = Tender.objects.create(

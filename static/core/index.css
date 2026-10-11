@@ -449,6 +449,11 @@ h1 {
 .button-secondary:focus-visible,
 .button-success:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
 
+/* Shared spacing contract for explanatory copy followed by an action. */
+.workspace-action-stack { display: grid; justify-items: start; gap: 14px; }
+.workspace-action-stack > :is(p, small) { margin: 0; }
+.workspace-action-row { margin-top: 14px; }
+
 /* ---------- form ---------- */
 
 .form-group { margin-bottom: 18px; }
@@ -2228,6 +2233,8 @@ body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - m
 .provider-calculator-workspace { max-width:650px; }.provider-calculator-workspace form { display:grid; gap:14px; border:1px solid var(--border); border-radius:12px; padding:18px; background:var(--surface); }
 .provider-calculator-workspace label { display:grid; gap:7px; color:var(--ink-2); font-size:12px; font-weight:750; }.provider-calculator-workspace :is(input,select) { min-height:42px; box-sizing:border-box; border:1px solid var(--field-border); border-radius:8px; padding:9px 11px; background:var(--surface); color:var(--ink); font:inherit; }.provider-calculator-workspace :is(input,select):focus { outline:2px solid var(--accent-ring); border-color:var(--border-positive); }
 .provider-workspace-result { display:grid; gap:10px; margin-top:16px; border:1px solid var(--border-positive); border-radius:11px; padding:16px; background:var(--tint-positive); }.provider-workspace-result > span { display:flex; justify-content:space-between; gap:16px; color:var(--ink-2); font-size:13px; }.provider-workspace-result strong { color:var(--ink); }.provider-workspace-result__total { border-top:1px solid var(--border-positive); padding-top:12px; color:var(--ink) !important; font-size:16px !important; font-weight:800; }.provider-workspace-result__total strong { color:var(--positive-ink); font-size:20px; }.provider-workspace-result small { color:var(--ink-3); font-size:11px; }
+.provider-price-row[open] { display: block; }
+.provider-price-row .workspace-action-row button { min-height:36px; border:1px solid var(--field-border); border-radius:8px; padding:7px 11px; background:var(--surface); color:var(--ink); font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
 .provider-detail-page { max-width:1000px; }.provider-detail-page__card { overflow:hidden; border:1px solid var(--border); border-radius:16px; background:var(--surface); box-shadow:var(--shadow-card); }
 body.workspace-embedded .provider-detail-page { width:100%; max-width:none; min-height:calc(100vh - 72px); padding:0; }
 body.workspace-embedded .provider-detail-page__card { display:grid; min-height:calc(100vh - 72px); grid-template-rows:auto auto minmax(0,1fr); border:0; border-radius:0; box-shadow:none; }

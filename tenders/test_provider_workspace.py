@@ -50,6 +50,11 @@ class ProviderWorkspaceTests(TestCase):
     def test_draft_price_can_be_deleted(self):
         draft = create_knowledge_draft(self.provider, self.user, {"pricing": {}}, stage=self.stage)
 
+        response = self.client.get(
+            reverse("provider_workspace", args=[self.provider.pk]), {"tab": "prices"}, secure=True
+        )
+        self.assertContains(response, 'class="workspace-action-row" data-provider-price-remove')
+
         self.client.post(
             reverse("provider_workspace", args=[self.provider.pk]),
             {"tab": "prices", "remove_version_id": draft.pk},

@@ -233,7 +233,10 @@
       <div class="tender-verdict__stat tender-verdict__stat--{{ calc_verdict.roi_state }}"><small>ROI</small><strong>{{ calc_verdict.roi|group_number }}%</strong><span>{{ calc_verdict.roi_label }}</span></div>
     </div>
     {% elif pushed_estimate_id %}
-    <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
+    <div class="workspace-action-stack">
+      <p class="ts-sub">Расчёт создан, себестоимость ещё не посчитана до конца — сводка появится, когда расчёт будет завершён.</p>
+      <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% if back_to_archive %}?from=archive{% endif %}" class="button-success" data-workspace-open data-workspace-title="Расчёт">Перейти в расчёт →</a>
+    </div>
     {% else %}
     <p class="ts-sub">Расчёт не создавался.</p>
     {% endif %}
@@ -248,7 +251,7 @@
       </tbody>
     </table>
     {% endif %}
-    {% if pushed_estimate_id %}<a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% if back_to_archive %}?from=archive{% endif %}" class="button-success" data-workspace-open data-workspace-title="Расчёт">Перейти в расчёт →</a>{% endif %}
+    {% if pushed_estimate_id and calc_verdict %}<a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% if back_to_archive %}?from=archive{% endif %}" class="button-success workspace-action-row" data-workspace-open data-workspace-title="Расчёт">Перейти в расчёт →</a>{% endif %}
   </details>
   {% endif %}
 
