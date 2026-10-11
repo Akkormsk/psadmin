@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from django.db.models import Q
 
-from .models import Counterparty, CounterpartyKnowledgeVersion, OrderEstimate, ProcessDefinition, ProviderCalculatorBinding, TenderEstimate
+from .models import ProcessDefinition, ProviderCalculatorBinding
 from .provider_calculators import calculate_provider, get_provider_calculator_schema
 from .provider_knowledge import create_knowledge_draft, create_provider
 
@@ -101,14 +101,6 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
     return tool.executor(user, payload)
 
 
-def _find_counterparty(_user, payload):
-    query = str(payload.get("query", "")).strip()
-    matches = Counterparty.objects.filter(is_active=True)
-    if query:
-        matches = matches.filter(name__icontains=query)
-    return {"counterparties": [{"id": item.pk, "name": item.name} for item in matches.order_by("name")[:20]]}
-
-
 def _data_payload(payload, allowed):
     if set(payload) - allowed:
         raise AssistantToolError("Некорректные параметры запроса")
@@ -119,81 +111,6 @@ def _decimal(value):
         return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
-
-
-def _estimate_data(user, payload, model, number_field, relation_field, relation_name_field):
-    _data_payload(payload, {"query", "status"})
-    query = str(payload.get("query", "")).strip()
-    status = str(payload.get("status", "")).strip()
-    records = model.objects.select_related(relation_field)
-    if not user.is_superuser:
-        records = records.filter(owner=user)
-    if query:
-        records = records.filter(Q(name__icontains=query) | Q(**{f"{number_field}__icontains": query}) | Q(**{f"{relation_field}__{relation_name_field}__icontains": query}))
-    if status:
-        records = records.filter(**{f"{relation_field}__status": status})
-    items = list(records.order_by("-updated_at", "-pk")[:20])
-    total = sum((_decimal((item.summary_snapshot or {}).get("our_price")) or Decimal("0") for item in items), Decimal("0"))
-    return {
-        "count": len(items),
-        "totals": {"our_price": f"{total:.2f}"},
-        "records": [
-            {
-                "id": item.pk,
-                "number": getattr(item, number_field),
-                "name": item.name,
-                "status": item.display_status(),
-                f"{relation_field}_id": getattr(item, f"{relation_field}_id"),
-            }
-            for item in items
-        ],
-    }
-
-
-def _data_tenders(user, payload):
-    return _estimate_data(user, payload, TenderEstimate, "tender_number", "tender", "title")
-
-
-def _data_orders(user, payload):
-    return _estimate_data(user, payload, OrderEstimate, "order_number", "order", "name")
-
-
-def _data_counterparties(_user, payload):
-    _data_payload(payload, {"query"})
-    query = str(payload.get("query", "")).strip()
-    records = Counterparty.objects.filter(is_active=True)
-    if query:
-        records = records.filter(name__icontains=query)
-    return {"count": records.count(), "records": [{"id": item.pk, "name": item.name} for item in records.order_by("name")[:20]]}
-
-
-def _data_cash(user, payload):
-    from cash.models import CashTransaction
-
-    _data_payload(payload, {"date", "account", "direction", "query"})
-    filters = {key: str(payload[key]).strip() for key in ("account", "direction") if payload.get(key)}
-    records = CashTransaction.objects.filter(**filters)
-    if payload.get("date"):
-        records = records.filter(operation_date=str(payload["date"]))
-    if payload.get("query"):
-        records = records.filter(reason__icontains=str(payload["query"]).strip())
-    items = list(records.order_by("-operation_date", "-pk")[:50])
-    income = sum((item.amount for item in items if item.direction == CashTransaction.DIRECTION_INCOME), Decimal("0"))
-    expense = sum((item.amount for item in items if item.direction == CashTransaction.DIRECTION_EXPENSE), Decimal("0"))
-    return {"count": len(items), "totals": {"income": f"{income:.2f}", "expense": f"{expense:.2f}"}, "records": [{"id": item.pk, "date": item.operation_date.isoformat(), "account": item.account, "direction": item.direction, "amount": f"{item.amount:.2f}", "reason": item.reason} for item in items]}
-
-
-def _data_payroll(user, payload):
-    from finance.models import PayrollLine
-
-    _data_payload(payload, {"period"})
-    records = PayrollLine.objects.select_related("period").all()
-    if not user.is_superuser:
-        records = records.filter(manager=user)
-    if payload.get("period"):
-        records = records.filter(period__code=str(payload["period"]))
-    items = list(records.order_by("-period__code", "pk")[:20])
-    return {"count": len(items), "records": [{"id": item.pk, "period": item.period.code, "name": item.name, "work_shifts": item.work_shifts, "advance": f"{item.advance:.2f}", "order_profit": f"{item.order_profit:.2f}", "kpi_bonus": f"{item.kpi_bonus:.2f}"} for item in items]}
 
 
 def _universal_query(user, payload):
@@ -283,7 +200,6 @@ def _calculate_provider(_user, payload):
 
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
-register_tool(AssistantTool("provider.find", "Найти контрагента", "Ищет активных контрагентов.", {"query": "string"}, True, False, False, _find_counterparty))
 register_tool(AssistantTool("data.query", "Универсальный запрос данных", "Выполняет проверенный декларативный запрос к разрешённым сущностям, полям, фильтрам, сортировке и агрегациям. Возвращает источники. Не принимает SQL.", {"plan": {"entity": "catalogue id", "filters": "[{field,op,value}]?", "search": "string?", "fields": "string[]?", "order_by": "field?", "page": "integer?", "page_size": "integer?", "aggregates": "[{op,field}]?"}}, True, False, False, _universal_query, domain="platform", output_schema={"total_count": "integer", "returned_count": "integer", "aggregates": "object", "records": "array", "evidence": "array"}))
 register_tool(AssistantTool("provider.calculator_list", "Калькуляторы контрагентов", "Находит реальные активные калькуляторы контрагентов и их схемы параметров.", {"query": "string?"}, True, False, False, _list_provider_calculators, domain="providers", operation="calculate"))
 register_tool(AssistantTool("calculator.quote", "Общий калькулятор", "Выполняет детерминированный расчёт PSADMIN по активным позициям прайса. Цены передаются только из справочника по ID.", {"calculator_type": "sheet|wide?", "quantity": "number", "work_hours": "number?", "items": "[{item_id: integer, quantity: number}]"}, True, False, False, _calculate_general, domain="calculator", operation="calculate"))

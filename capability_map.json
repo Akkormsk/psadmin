@@ -7825,19 +7825,6 @@
       "read_only": false,
       "requires_confirmation": true,
       "requires_superuser": true
-    },
-    {
-      "domain": "tenders",
-      "id": "provider.find",
-      "input_schema": {
-        "query": "string"
-      },
-      "operation": "read",
-      "output_schema": {},
-      "python_path": "tenders.assistant_tools._find_counterparty",
-      "read_only": true,
-      "requires_confirmation": false,
-      "requires_superuser": false
     }
   ],
   "version": 1

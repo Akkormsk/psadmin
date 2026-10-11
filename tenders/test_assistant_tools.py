@@ -29,7 +29,8 @@ class AssistantToolRegistryTests(TestCase):
         result = execute_tool("provider.create_draft", self.admin, payload, confirmed=True)
 
         self.assertEqual(result["status"], "draft")
-        self.assertEqual(execute_tool("provider.find", self.admin, {"query": "Черновой"})["counterparties"][0]["name"], "Черновой пошив")
+        records = execute_tool("data.query", self.admin, {"plan": {"entity": "counterparty", "search": "Черновой", "fields": ["id", "name"]}})["records"]
+        self.assertEqual(records[0]["name"], "Черновой пошив")
 
     def test_data_agent_lists_only_users_own_calculations_and_returns_evidence(self):
         mine = OrderEstimate.objects.create(owner=self.user, order=Order.objects.create(name="Мой заказ"), order_number="O-1", name="Печать")
