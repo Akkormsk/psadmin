@@ -47,7 +47,7 @@ jobs:
           tender_id="$1"; root=/home/deploy; prod="$root/psadmin/deploy/vds/compose.yml"; test="$root/psadmin-test/deploy/vds/compose.test.yml"; fixture="$(mktemp /tmp/one-tender.XXXXXX.json)"
           echo "remote: copying tender ${tender_id}"
           cleanup() { status=$?; rm -f "$fixture"; exit "$status"; }; trap cleanup EXIT
-          docker compose -f "$prod" exec -T web python manage.py shell -c "
+          docker compose -f "$prod" exec -T web python manage.py shell --no-imports -c "
           import json
           from django.forms.models import model_to_dict
           from django.core.serializers.json import DjangoJSONEncoder
@@ -58,7 +58,7 @@ jobs:
           print(json.dumps({'pk':t.pk,'tender':model_to_dict(t),'documents':[model_to_dict(d) for d in DocumentPreview.objects.filter(url__in=urls)]}, cls=DjangoJSONEncoder))
           " </dev/null > "$fixture"
           echo "remote: exported production fixture"
-          docker compose -f "$test" run --rm -T test-web python manage.py shell -c "
+          docker compose -f "$test" run --rm -T test-web python manage.py shell --no-imports -c "
           import json,sys
           from tender_selection.models import Tender,DocumentPreview
           p=json.load(sys.stdin); Tender.objects.filter(pk=p['pk']).delete(); Tender.objects.create(pk=p['pk'],**p['tender'])
@@ -67,7 +67,7 @@ jobs:
           " < "$fixture"
           echo "remote: imported test fixture"
           docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance </dev/null | grep -E 'Баланс|Balance'
-          docker compose -f "$test" run --rm -T test-web python manage.py shell -c "
+          docker compose -f "$test" run --rm -T test-web python manage.py shell --no-imports -c "
           import json
           from tender_selection.models import Tender
           from tenders.models import TenderComputeJob,TenderSourceItem
