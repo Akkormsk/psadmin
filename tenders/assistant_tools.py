@@ -120,8 +120,18 @@ def _read_data(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def _create_cash_transaction(user, payload):
+    from cash.actions import CashActionError, create_transaction
+
+    try:
+        return create_transaction(user, payload)
+    except CashActionError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", {"plan": "object"}, True, False, True, _read_data))
+register_tool(AssistantTool("cash.transaction_create", "Создать операцию кассы", "Создаёт операцию кассы через действующую форму и журнал аудита.", {"operation_date": "YYYY-MM-DD", "account": "cash|card", "direction": "income|expense", "amount": "number", "reason": "string"}, False, True, True, _create_cash_transaction))
 register_tool(AssistantTool("provider.find", "Найти контрагента", "Ищет активных контрагентов.", {"query": "string"}, True, False, False, _find_counterparty))
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
 register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))

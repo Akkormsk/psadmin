@@ -17,6 +17,7 @@ from . import modulbank
 from .forms import CashReconciliationForm, CashTransactionForm
 from .models import BankPayment, BankSyncState, CashAuditLog, CashReconciliation, CashTransaction
 from .services import balance_for_date
+from .actions import CashActionError, create_transaction
 
 BANK_WINDOW_DAYS = modulbank.WINDOW_DAYS
 
@@ -138,10 +139,12 @@ def transaction_create(request):
     prefix = f"create-{account}" if request.method == "POST" and f"create-{account}-operation_date" in request.POST else None
     form = CashTransactionForm(request.POST or None, initial={"operation_date": selected_date, "account": account}, prefix=prefix)
     if request.method == "POST" and form.is_valid():
-        transaction = form.save(commit=False)
-        transaction.created_by = request.user
-        transaction.save()
-        _write_audit(request.user, CashAuditLog.ACTION_CREATED, f"Создал операцию: {_transaction_text(_snapshot(transaction))}", transaction)
+        values = {name: form.cleaned_data[name] for name in CashTransactionForm.Meta.fields}
+        try:
+            transaction_id = create_transaction(request.user, values)["transaction_id"]
+        except CashActionError:
+            return render(request, "cash/transaction_form.html", {"form": form, "selected_date": selected_date, "title": "Новая операция"})
+        transaction = CashTransaction.objects.get(pk=transaction_id)
         messages.success(request, "Операция добавлена.")
         return redirect(_cash_url(transaction.operation_date))
     return render(request, "cash/transaction_form.html", {"form": form, "selected_date": selected_date, "title": "Новая операция"})

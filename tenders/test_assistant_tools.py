@@ -48,3 +48,13 @@ class AssistantToolRegistryTests(TestCase):
             execute_tool("read", self.admin, {"plan": {"entity": "cash.BankPayment", "fields": ["account_number"]}})
         with self.assertRaisesRegex(Exception, "Недостаточно прав"):
             execute_tool("read", self.user, {"plan": {"entity": "cash.BankPayment", "fields": ["id"]}})
+
+    def test_cash_action_uses_existing_form_and_audit(self):
+        from cash.models import CashAuditLog, CashTransaction
+
+        payload = {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("cash.transaction_create", self.admin, payload)
+        result = execute_tool("cash.transaction_create", self.admin, payload, confirmed=True)
+        self.assertEqual(CashTransaction.objects.get(pk=result["transaction_id"]).reason, "Доставка")
+        self.assertEqual(CashAuditLog.objects.filter(transaction_id=result["transaction_id"], action=CashAuditLog.ACTION_CREATED).count(), 1)
