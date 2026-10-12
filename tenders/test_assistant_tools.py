@@ -91,3 +91,11 @@ class AssistantToolRegistryTests(TestCase):
         item = PriceItem.objects.create(category="paper", name="Бумага", unit_name="лист", unit_price="2")
         result = execute_tool("calculator.sheet_calculate", self.admin, {"product_quantity": 100, "work_hours": "1", "lines": [{"item_id": item.pk, "category": "paper", "quantity": "100"}]})
         self.assertIn("standard", result["summary"])
+
+    def test_saved_calculator_actions_use_shared_service(self):
+        from calculator.models import Estimate
+
+        estimate = Estimate.objects.create(owner=self.admin, name="Исходный")
+        copied = execute_tool("calculator.estimate_duplicate", self.admin, {"estimate_id": estimate.pk}, confirmed=True)
+        self.assertEqual(Estimate.objects.get(pk=copied["estimate_id"]).name, "Исходный (копия)")
+        self.assertTrue(execute_tool("calculator.estimate_delete", self.admin, {"estimate_id": copied["estimate_id"]}, confirmed=True)["deleted"])

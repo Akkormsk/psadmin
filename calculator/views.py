@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .models import CalculatorSettings, Estimate, EstimateGroup, EstimateLine, PriceItem
+from .actions import CalculatorActionError, delete_estimate as delete_saved_estimate, duplicate_estimate as duplicate_saved_estimate
 from .services import calculate_sheet_estimate
 
 
@@ -139,40 +140,21 @@ def save_estimate(request, pk=None):
 @login_required
 @require_POST
 def duplicate_estimate(request, pk):
-    original = _estimate_for_user(request, pk)
-    if original is None:
+    try:
+        copy = duplicate_saved_estimate(request.user, pk)
+    except CalculatorActionError:
         raise Http404
-    lines = list(original.lines.all())
-    copy = Estimate.objects.create(
-        owner=request.user,
-        calculator_type=original.calculator_type,
-        name=f"{original.name} (копия)"[:200],
-        comment=original.comment,
-        product_quantity=original.product_quantity,
-        work_hours=original.work_hours,
-        settings_snapshot=original.settings_snapshot,
-        summary_snapshot=original.summary_snapshot,
-    )
-    EstimateLine.objects.bulk_create([
-        EstimateLine(
-            estimate=copy, category=line.category, price_item=line.price_item,
-            name_snapshot=line.name_snapshot, unit_name=line.unit_name,
-            unit_price_snapshot=line.unit_price_snapshot, quantity=line.quantity,
-            is_custom=line.is_custom,
-        )
-        for line in lines
-    ])
-    messages.success(request, f"Создана копия расчёта «{original.name}».")
-    return redirect("calculator_estimate", pk=copy.pk)
+    messages.success(request, f"Создана копия расчёта «{copy['name']}».")
+    return redirect("calculator_estimate", pk=copy["estimate_id"])
 
 
 @login_required
 @require_POST
 def delete_estimate(request, pk):
-    estimate = _estimate_for_user(request, pk)
-    if estimate is None:
+    try:
+        delete_saved_estimate(request.user, pk)
+    except CalculatorActionError:
         raise Http404
-    estimate.delete()
     messages.success(request, "Сохранённый расчёт удалён.")
     return redirect("calculator_home")
 

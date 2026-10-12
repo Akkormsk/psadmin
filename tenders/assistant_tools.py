@@ -202,6 +202,21 @@ def _calculator_action(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def _saved_calculator_action(name):
+    def execute(user, payload):
+        from calculator.actions import CalculatorActionError, delete_estimate, duplicate_estimate
+
+        try:
+            if name == "duplicate":
+                return duplicate_estimate(user, payload.get("estimate_id"))
+            if name == "delete":
+                return delete_estimate(user, payload.get("estimate_id"))
+        except CalculatorActionError as exc:
+            raise AssistantToolError(str(exc)) from exc
+        raise AssistantToolError("Неизвестное действие калькулятора")
+    return execute
+
+
 def _tender_action(name):
     def execute(user, payload):
         from tender_selection import assistant_actions
@@ -225,6 +240,8 @@ register_tool(AssistantTool("finance.order_record_create", "Создать за�
 register_tool(AssistantTool("finance.order_record_update", "Изменить закрытый заказ", "Изменяет запись закрытого заказа через действующую финансовую форму.", {"order_record_id": "integer", "record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}, False, True, True, _finance_action("update_order_record")))
 register_tool(AssistantTool("finance.order_record_delete", "Удалить закрытый заказ", "Удаляет доступную пользователю запись закрытого заказа.", {"order_record_id": "integer"}, False, True, True, _finance_action("delete_order_record")))
 register_tool(AssistantTool("calculator.sheet_calculate", "Рассчитать общий калькулятор", "Запускает действующую детерминированную логику листового или широкоформатного калькулятора без сохранения расчёта.", {"calculator_type": "sheet|wide?", "product_quantity": "integer", "work_hours": "number?", "lines": "array"}, True, False, True, _calculator_action))
+register_tool(AssistantTool("calculator.estimate_duplicate", "Копировать сохранённый расчёт", "Создаёт копию существующего расчёта через тот же сервис, что и интерфейс калькулятора.", {"estimate_id": "integer"}, False, True, True, _saved_calculator_action("duplicate")))
+register_tool(AssistantTool("calculator.estimate_delete", "Удалить сохранённый расчёт", "Удаляет доступный расчёт через тот же сервис, что и интерфейс калькулятора.", {"estimate_id": "integer"}, False, True, True, _saved_calculator_action("delete")))
 register_tool(AssistantTool("tender.pull", "Обновить тендеры", "Запускает действующую выгрузку тендеров и возвращает реальный результат запуска.", {"max_requests": "integer?"}, False, True, True, _tender_action("pull")))
 register_tool(AssistantTool("tender.push_to_calculation", "Передать тендер в расчёт", "Создаёт просчёт через существующий сервис отбора тендеров.", {"tender_id": "integer"}, False, True, True, _tender_action("push_to_calculation")))
 register_tool(AssistantTool("tender.risk_assessment", "Оценить риски тендера", "Запускает существующую фоновую оценку рисков.", {"tender_id": "integer"}, False, True, True, _tender_action("start_risk")))
