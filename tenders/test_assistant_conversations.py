@@ -59,6 +59,28 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_fake_ai_receives_read_metadata_and_executes_a_generic_plan(self, request, _preflight):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(purchase_number="CHAT-READ", title="Каталог", outcome_status=Tender.OUTCOME_LOST)
+
+        def fake_gateway(prompt):
+            payload = json.loads(prompt)
+            if "tool_result" in payload:
+                self.assertEqual(payload["tool_result"]["records"][0]["id"], tender.pk)
+                return {"reply": "Найден тендер CHAT-READ."}
+            schema = next(item for item in payload["read_catalog"] if item["id"] == "tender_selection.Tender")
+            self.assertIn("outcome_status", {field["name"] for field in schema["fields"]})
+            return {"reply": "Проверяю тендер.", "action": {"id": "read", "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "outcome_status"], "filters": [{"field": "id", "op": "eq", "value": tender.pk}]}}}}
+
+        request.side_effect = fake_gateway
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ"}, secure=True).json()["conversation"]["id"]
+        reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Покажи тендер"}), content_type="application/json", secure=True)
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(reply.json()["messages"][-1]["kind"], "tool_result")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
         request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]

@@ -49,6 +49,52 @@ class AssistantToolRegistryTests(TestCase):
         with self.assertRaisesRegex(Exception, "Недостаточно прав"):
             execute_tool("read", self.user, {"plan": {"entity": "cash.BankPayment", "fields": ["id"]}})
 
+    def test_read_uses_metadata_for_tenders_cash_banks_json_and_relations(self):
+        """All business examples use the same generic read plan, not app tools."""
+        from cash.models import BankPayment, CashTransaction
+        from tender_selection.models import Tender
+        from .models import TenderEstimate
+
+        first = Tender.objects.create(
+            purchase_number="READ-1", collecting_finished_at="2026-09-30T10:00:00Z",
+            outcome_status=Tender.OUTCOME_LOST, contract_reduction_percent="10.00",
+            risk_assessment={"risk_level": "high", "secret_token": "must not leak"},
+        )
+        second = Tender.objects.create(
+            purchase_number="READ-2", collecting_finished_at="2026-09-29T10:00:00Z",
+            outcome_status=Tender.OUTCOME_LOST, contract_reduction_percent="30.00",
+        )
+        TenderEstimate.objects.create(owner=self.admin, tender=first, tender_number="READ-1", name="Расчёт")
+        CashTransaction.objects.create(operation_date=date(2026, 9, 2), account="cash", direction="income", amount="100", reason="Оплата", created_by=self.admin)
+        CashTransaction.objects.create(operation_date=date(2026, 9, 3), account="cash", direction="expense", amount="40", reason="Бумага", created_by=self.admin)
+        BankPayment.objects.create(external_id="read-bank", amount="75", operation_date=date(2026, 9, 4), counterparty_name="Заказчик")
+
+        tenders = execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "collecting_finished_at"], "order_by": "-collecting_finished_at", "limit": 10}})
+        self.assertEqual(tenders["records"][0]["id"], first.pk)
+        cash = execute_tool("read", self.admin, {"plan": {"entity": "cash.CashTransaction", "filters": [{"field": "operation_date", "op": "gte", "value": "2026-09-01"}, {"field": "operation_date", "op": "lt", "value": "2026-10-01"}], "group_by": ["direction"], "aggregates": [{"op": "sum", "field": "amount"}]}})
+        self.assertEqual({row["direction"]: str(row["sum_amount"]) for row in cash["records"]}, {"income": "100", "expense": "40"})
+        bank = execute_tool("read", self.admin, {"plan": {"entity": "cash.BankPayment", "fields": ["operation_date", "amount", "counterparty_name"], "filters": [{"field": "operation_date", "op": "gte", "value": "2026-09-01"}, {"field": "operation_date", "op": "lt", "value": "2026-10-01"}]}})
+        self.assertEqual(bank["records"][0]["id"], BankPayment.objects.get(external_id="read-bank").pk)
+        lost = execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"], "filters": [{"field": "outcome_status", "op": "eq", "value": "lost"}], "aggregates": [{"op": "avg", "field": "contract_reduction_percent"}]}})
+        self.assertEqual(str(lost["aggregates"]["avg_contract_reduction_percent"]), "20")
+        risk = execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "fields": ["risk_assessment"], "filters": [{"field": "id", "op": "eq", "value": first.pk}]}})
+        self.assertEqual(risk["records"][0]["risk_assessment"]["risk_level"], "high")
+        self.assertNotIn("secret_token", risk["records"][0]["risk_assessment"])
+        estimates = execute_tool("read", self.admin, {"plan": {"entity": "tenders.TenderEstimate", "fields": ["name", "tender.purchase_number", "tender.outcome_status"], "filters": [{"field": "tender.id", "op": "eq", "value": first.pk}]}})
+        self.assertEqual(estimates["records"][0]["tender.purchase_number"], "READ-1")
+        self.assertEqual(second.outcome_status, Tender.OUTCOME_LOST)
+
+    def test_read_catalog_and_validation_share_secret_and_relation_policy(self):
+        catalog = execute_tool("assistant.catalog", self.admin, {})["models"]
+        bank = next(item for item in catalog if item["id"] == "cash.BankPayment")
+        self.assertNotIn("account_number", {field["name"] for field in bank["fields"]})
+        estimate = next(item for item in catalog if item["id"] == "tenders.TenderEstimate")
+        self.assertEqual(next(field for field in estimate["fields"] if field["name"] == "tender")["traversal"], "forward_to_one")
+        with self.assertRaisesRegex(Exception, "недоступные поля"):
+            execute_tool("read", self.admin, {"plan": {"entity": "tenders.TenderEstimate", "fields": ["owner.username"]}})
+        with self.assertRaisesRegex(Exception, "JSON-поля"):
+            execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "filters": [{"field": "risk_assessment", "op": "eq", "value": {}}]}})
+
     def test_cash_action_uses_existing_form_and_audit(self):
         from cash.models import CashAuditLog, CashTransaction
 

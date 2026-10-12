@@ -41,11 +41,17 @@ def reply(conversation, user, message, page_context=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
     planning_tools = _planning_tools(tools, user)
+    read_catalog = []
+    if any(tool["id"] == "read" and tool["available"] for tool in tools):
+        # This is the same metadata source the ORM executor validates against.
+        from .assistant_read import catalogue
+        read_catalog = catalogue()
     pending = conversation.context.get("pending_action", {})
     prompt = json.dumps(
         {
             "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. When the user asks to start a tool with ui, select that tool immediately: its declared form collects the required inputs and the tool is not executed until that form is confirmed. Copy values explicitly stated by the user into ui action arguments; select an option only by its exact id from the supplied ui options. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
             "tools": planning_tools,
+            "read_catalog": read_catalog,
             "conversation_context": conversation.context.get("business_context", {}),
             "pending_action": pending,
             "page_context": page_context or {},
