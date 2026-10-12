@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import OwnerFeedbackEvent, OwnerInteraction, ProcessDefinition
+from .models import KnowledgeRecord, OwnerFeedbackEvent, OwnerInteraction, ProcessDefinition
 
 
 class AssistantConversationTests(TestCase):
@@ -152,3 +152,14 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["messages"][-1]["kind"], "confirmation")
         self.assertFalse(ProcessDefinition.objects.filter(name="Из плана").exists())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Принял.", "action": None})
+    def test_only_confirmed_working_knowledge_is_sent_to_agent(self, request, _preflight):
+        KnowledgeRecord.objects.create(scope_type="stage", payload={"value": "confirmed"}, status="confirmed")
+        KnowledgeRecord.objects.create(scope_type="stage", payload={"value": "draft"}, status="draft")
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Знания"}, secure=True).json()["conversation"]["id"]
+        self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Что известно?"}), content_type="application/json", secure=True)
+        prompt = request.call_args.args[0]
+        self.assertIn("confirmed", prompt)
+        self.assertNotIn('"value": "draft"', prompt)

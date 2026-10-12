@@ -41,11 +41,17 @@ def reply(conversation, user, message, page_context=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
     planning_tools = _planning_tools(tools, user)
+    from .models import KnowledgeRecord
+    confirmed_knowledge = [
+        {"id": item.pk, "scope_type": item.scope_type, "scope_context": item.scope_context, "applicability": item.applicability, "payload": item.payload}
+        for item in KnowledgeRecord.objects.filter(status="confirmed").order_by("-updated_at", "-pk")[:20]
+    ]
     prompt = json.dumps(
         {
             "task": "You are a concise Russian business assistant. Understand the user's request naturally and choose only registered capabilities. You may return up to four ordered actions when each later action can use only explicitly supplied arguments, not guessed values. Use data.query for arbitrary permitted analysis; it accepts only its documented JSON plan, never SQL. Never claim an action happened until tool_result is supplied. A mutating or confirmation-required capability must be selected only to prepare its server-side confirmation, never executed from text. When a tool has ui, select it immediately so its declared form collects parameters. If a needed value is unknown, ask one concrete question and return no actions.",
             "tools": planning_tools,
             "conversation_context": conversation.context.get("business_context", {}),
+            "confirmed_knowledge": confirmed_knowledge,
             "page_context": page_context or {},
             "history": _history(conversation),
             "message": message,
