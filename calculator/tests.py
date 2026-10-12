@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
+from .actions import save_estimate
 from .models import CalculatorSettings, Estimate, EstimateGroup, PriceItem
 from .services import calculate_sheet_estimate
 
@@ -22,6 +23,19 @@ class SheetCalculatorTests(TestCase):
         self.assertEqual(Estimate.objects.get().lines.count(), 1)
         self.assertEqual(Estimate.objects.get().comment, "Матовая бумага")
         self.assertContains(self.client.get(reverse("calculator_home")), "Матовая бумага")
+
+    def test_shared_save_estimate_persists_the_same_calculation_without_http(self):
+        result = save_estimate(self.user, {
+            "name": "Визитки для клиента",
+            "comment": "Матовая бумага",
+            "product_quantity": 100,
+            "work_hours": "1.5",
+            "lines": [{"category": "paper", "item_id": self.item.pk, "quantity": 25, "custom": False}],
+        })
+
+        estimate = Estimate.objects.get(pk=result["estimate_id"])
+        self.assertEqual(estimate.name, "Визитки для клиента")
+        self.assertEqual(estimate.lines.count(), 1)
 
     def test_manager_can_delete_own_estimate(self):
         estimate = Estimate.objects.create(owner=self.user, name="Удалить")

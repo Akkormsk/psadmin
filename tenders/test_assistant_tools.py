@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_tools, execute_tool
+from .assistant_tools import AssistantToolConfirmationRequired, available_tools, execute_tool, required_input_names
 from .models import ProcessDefinition
 
 
@@ -158,6 +158,17 @@ class AssistantToolRegistryTests(TestCase):
         item = PriceItem.objects.create(category="paper", name="Бумага", unit_name="лист", unit_price="2")
         result = execute_tool("calculator.sheet_calculate", self.admin, {"product_quantity": 100, "work_hours": "1", "lines": [{"item_id": item.pk, "category": "paper", "quantity": "100"}]})
         self.assertIn("standard", result["summary"])
+
+    def test_saved_calculator_uses_shared_executor_and_requires_a_name(self):
+        from calculator.models import Estimate, PriceItem
+
+        item = PriceItem.objects.create(category="paper", name="Сохранённая бумага", unit_name="лист", unit_price="2")
+        payload = {"name": "Тираж для клиента", "product_quantity": 100, "work_hours": "1", "lines": [{"item_id": item.pk, "category": "paper", "quantity": "100", "custom": False}]}
+        self.assertIn("name", required_input_names("calculator.estimate_save"))
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("calculator.estimate_save", self.admin, payload)
+        result = execute_tool("calculator.estimate_save", self.admin, payload, confirmed=True)
+        self.assertEqual(Estimate.objects.get(pk=result["estimate_id"]).name, "Тираж для клиента")
 
     def test_saved_calculator_actions_use_shared_service(self):
         from calculator.models import Estimate

@@ -19,6 +19,7 @@
 - Confirmed administrator feedback and superseded knowledge must remain versioned and recoverable.
 - Production changes are deployed through GitHub. Do not deploy or mutate Timeweb configuration without explicit authorization.
 - Supplier integrations must not download images unless explicitly requested.
+- Any user-facing operation that changes business data or starts a business process must have one shared backend executor. Django views handle only HTTP input, form rendering, messages, and redirects; the executor owns validation, business effects, and its structured result. If the operation is available to the assistant, the owning app publishes that same executor in `assistant_capabilities.py`. Do not create separate business logic for the assistant.
 
 # Personal coding behavior
 

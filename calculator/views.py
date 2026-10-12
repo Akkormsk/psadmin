@@ -1,5 +1,5 @@
 import json
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -9,9 +9,8 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from .models import CalculatorSettings, Estimate, EstimateGroup, EstimateLine, PriceItem
-from .actions import CalculatorActionError, delete_estimate as delete_saved_estimate, duplicate_estimate as duplicate_saved_estimate
-from .services import calculate_sheet_estimate
+from .models import CalculatorSettings, Estimate, EstimateGroup, PriceItem
+from .actions import CalculatorActionError, delete_estimate as delete_saved_estimate, duplicate_estimate as duplicate_saved_estimate, save_estimate as save_shared_estimate
 
 
 def _settings():
@@ -25,58 +24,24 @@ def _estimate_for_user(request, pk):
     return estimate
 
 
-def _persist_estimate(request, estimate, settings):
+def _persist_estimate(request, estimate):
     """Parse the posted calculator state and write it to ``estimate``
     (creating one when it is ``None``). Returns ``(estimate, error)`` —
     ``error`` is a message string when nothing was saved. Shared by the
     plain form POST and the autosave endpoint."""
+    values = {
+        "calculator_type": request.POST.get("calculator_type", Estimate.TYPE_SHEET),
+        "lines": request.POST.get("lines_json", "[]"),
+        "product_quantity": request.POST.get("product_quantity", 1),
+        "work_hours": request.POST.get("work_hours", "0"),
+        "name": request.POST.get("name", ""),
+        "comment": request.POST.get("comment", ""),
+    }
     try:
-        calculator_type = request.POST.get("calculator_type", Estimate.TYPE_SHEET)
-        if calculator_type not in {Estimate.TYPE_SHEET, Estimate.TYPE_WIDE}:
-            raise ValueError
-        raw_lines = json.loads(request.POST.get("lines_json", "[]"))
-        product_quantity = max(1, int(request.POST.get("product_quantity", 1)))
-        work_hours = Decimal(request.POST.get("work_hours", "0"))
-        if work_hours < 0 or (work_hours * 2) % 1:
-            raise ValueError
-    except (ValueError, InvalidOperation, json.JSONDecodeError):
-        return estimate, "Проверьте тираж, часы и добавленные строки."
-
-    lines = []
-    item_ids = [row.get("item_id") for row in raw_lines if row.get("item_id")]
-    items = PriceItem.objects.in_bulk(item_ids)
-    for row in raw_lines:
-        try:
-            quantity = Decimal(str(row.get("quantity", "0")))
-            category = row["category"]
-            if quantity <= 0:
-                continue
-            item = items.get(int(row["item_id"])) if row.get("item_id") else None
-            custom = bool(row.get("custom"))
-            price = Decimal(str(row.get("unit_price"))) if custom else item.effective_unit_price
-            name = str(row.get("name", "")).strip() if custom else item.name
-            if not name or price < 0:
-                raise ValueError
-            lines.append({"category": category, "quantity": quantity, "unit_price": price, "name": name, "item": item, "custom": custom})
-        except (KeyError, TypeError, ValueError, InvalidOperation, AttributeError):
-            return estimate, "Одна из строк расчёта заполнена неверно."
-
-    estimate = estimate or Estimate(owner=request.user)
-    estimate.name = request.POST.get("name", "").strip() or "Новый расчёт"
-    estimate.comment = request.POST.get("comment", "").strip()[:300]
-    estimate.calculator_type = calculator_type
-    estimate.product_quantity = product_quantity
-    estimate.work_hours = work_hours
-    estimate.settings_snapshot = {"hourly_rate": str(settings.hourly_rate), "material_coefficient": str(settings.material_coefficient), "time_coefficient": str(settings.time_coefficient)}
-    summary = calculate_sheet_estimate(lines, product_quantity, work_hours, settings, calculator_type)
-    estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
-    estimate.save()
-    estimate.lines.all().delete()
-    EstimateLine.objects.bulk_create([
-        EstimateLine(estimate=estimate, category=line["category"], price_item=line["item"], name_snapshot=line["name"], unit_price_snapshot=line["unit_price"], quantity=line["quantity"], is_custom=line["custom"])
-        for line in lines
-    ])
-    return estimate, None
+        result = save_shared_estimate(request.user, values, estimate.pk if estimate else None)
+    except CalculatorActionError as exc:
+        return estimate, str(exc)
+    return Estimate.objects.get(pk=result["estimate_id"]), None
 
 
 @login_required
@@ -90,7 +55,7 @@ def home(request, pk=None):
         posted_type = request.POST.get("calculator_type")
         if posted_type in {Estimate.TYPE_SHEET, Estimate.TYPE_WIDE}:
             calculator_type = posted_type
-        estimate, error = _persist_estimate(request, estimate, settings)
+        estimate, error = _persist_estimate(request, estimate)
         if error:
             messages.error(request, error)
         else:
@@ -126,7 +91,7 @@ def save_estimate(request, pk=None):
         estimate = _estimate_for_user(request, pk)
         if estimate is None:
             raise Http404
-    estimate, error = _persist_estimate(request, estimate, _settings())
+    estimate, error = _persist_estimate(request, estimate)
     if error:
         return JsonResponse({"error": error}, status=400)
     return JsonResponse({
