@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Any, Callable
+
+from django.apps import apps
 
 from .models import Counterparty, CounterpartyKnowledgeVersion, ProcessDefinition, ProviderCalculatorBinding
 from .provider_calculators import calculate_provider, get_provider_calculator_schema
@@ -31,6 +34,27 @@ class AssistantTool:
 
 
 _TOOLS: dict[str, AssistantTool] = {}
+_DISCOVERED = False
+
+
+def _discover_app_actions():
+    """Load declarations published by installed business applications.
+
+    The agent core never imports a concrete business app or enumerates its
+    actions.  An app may expose ``assistant_capabilities`` next to its real
+    services; importing that module only registers metadata and a reference to
+    the shared executor used by the UI.
+    """
+    global _DISCOVERED
+    if _DISCOVERED:
+        return
+    _DISCOVERED = True
+    for config in apps.get_app_configs():
+        try:
+            import_module(f"{config.name}.assistant_capabilities")
+        except ModuleNotFoundError as exc:
+            if exc.name != f"{config.name}.assistant_capabilities":
+                raise
 
 
 def register_tool(tool: AssistantTool) -> AssistantTool:
@@ -41,6 +65,7 @@ def register_tool(tool: AssistantTool) -> AssistantTool:
 
 
 def available_tools(user) -> list[dict[str, Any]]:
+    _discover_app_actions()
     return [
         {
             "id": tool.identifier,
@@ -58,6 +83,7 @@ def available_tools(user) -> list[dict[str, Any]]:
 
 
 def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
+    _discover_app_actions()
     tool = _TOOLS.get(identifier)
     if not tool:
         raise AssistantToolError("Неизвестное действие ассистента")
@@ -72,6 +98,7 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
 
 def required_input_names(identifier: str) -> list[str]:
     """Required top-level inputs declared by a real action contract."""
+    _discover_app_actions()
     tool = _TOOLS.get(identifier)
     if tool is None:
         return []
@@ -230,12 +257,6 @@ def _tender_action(name):
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", {"plan": "object"}, True, False, True, _read_data))
-register_tool(AssistantTool("cash.transaction_create", "Создать операцию кассы", "Создаёт операцию кассы через действующую форму и журнал аудита.", {"operation_date": "YYYY-MM-DD", "account": "cash|card", "direction": "income|expense", "amount": "number", "reason": "string"}, False, True, True, _create_cash_transaction))
-register_tool(AssistantTool("cash.transaction_update", "Изменить операцию кассы", "Изменяет операцию кассы через действующую форму и журнал аудита.", {"transaction_id": "integer", "operation_date": "YYYY-MM-DD", "account": "cash|card", "direction": "income|expense", "amount": "number", "reason": "string"}, False, True, True, _cash_action("update_transaction")))
-register_tool(AssistantTool("cash.transaction_delete", "Удалить операцию кассы", "Удаляет операцию кассы с записью в действующий журнал аудита.", {"transaction_id": "integer"}, False, True, True, _cash_action("delete_transaction")))
-register_tool(AssistantTool("cash.reconciliation_save", "Сохранить сверку кассы", "Создаёт или обновляет сверку через действующую форму кассы.", {"effective_date": "YYYY-MM-DD", "cash_balance": "number", "card_balance": "number", "note": "string?"}, False, True, True, _cash_action("reconcile")))
-register_tool(AssistantTool("cash.bank_payment_visibility_toggle", "Изменить видимость банковского платежа", "Переключает видимость существующего банковского платежа через действующий бизнес-обработчик.", {"bank_payment_id": "integer"}, False, True, True, _cash_action("toggle_bank_payment")))
-register_tool(AssistantTool("cash.bank_sync", "Синхронизировать банковские платежи", "Запускает штатную синхронизацию с банком; требует явного подтверждения.", {}, False, True, True, _cash_action("sync_bank")))
 register_tool(AssistantTool("finance.order_record_create", "Создать закрытый заказ", "Создаёт запись закрытого заказа через действующую финансовую форму.", {"record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}, False, True, True, _create_order_record))
 register_tool(AssistantTool("finance.order_record_update", "Изменить закрытый заказ", "Изменяет запись закрытого заказа через действующую финансовую форму.", {"order_record_id": "integer", "record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}, False, True, True, _finance_action("update_order_record")))
 register_tool(AssistantTool("finance.order_record_delete", "Удалить закрытый заказ", "Удаляет доступную пользователю запись закрытого заказа.", {"order_record_id": "integer"}, False, True, True, _finance_action("delete_order_record")))
