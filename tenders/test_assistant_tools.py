@@ -66,3 +66,28 @@ class AssistantToolRegistryTests(TestCase):
         payload = {"record_type": "order", "order_number": "123", "gross_profit": "85000", "accounting_period": "2026-10", "manager": str(manager.pk)}
         result = execute_tool("finance.order_record_create", self.admin, payload, confirmed=True)
         self.assertEqual(OrderRecord.objects.get(pk=result["order_record_id"]).manager, manager)
+
+    def test_catalog_is_generated_from_django_models_and_real_actions(self):
+        result = execute_tool("assistant.catalog", self.admin, {})
+        self.assertTrue(any(item["model"] == "cash.CashTransaction" for item in result["models"]))
+        actions = {item["id"]: item for item in result["actions"]}
+        self.assertIn("cash.transaction_update", actions)
+        self.assertIn("tender.filter_words_update", actions)
+        self.assertTrue(actions["cash.transaction_update"]["source"])
+
+    def test_cash_update_delete_and_bank_visibility_reuse_real_actions(self):
+        from cash.models import BankPayment, CashTransaction
+
+        transaction = CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="expense", amount="10", reason="Старое", created_by=self.admin)
+        updated = execute_tool("cash.transaction_update", self.admin, {"transaction_id": transaction.pk, "operation_date": "2026-09-02", "account": "card", "direction": "income", "amount": "11", "reason": "Новое"}, confirmed=True)
+        self.assertEqual(updated["transaction"]["reason"], "Новое")
+        self.assertTrue(execute_tool("cash.transaction_delete", self.admin, {"transaction_id": transaction.pk}, confirmed=True)["deleted"])
+        payment = BankPayment.objects.create(external_id="visibility", amount="10", operation_date=date(2026, 9, 1))
+        self.assertTrue(execute_tool("cash.bank_payment_visibility_toggle", self.admin, {"bank_payment_id": payment.pk}, confirmed=True)["hidden_from_managers"])
+
+    def test_general_calculator_uses_existing_calculation_service(self):
+        from calculator.models import PriceItem
+
+        item = PriceItem.objects.create(category="paper", name="Бумага", unit_name="лист", unit_price="2")
+        result = execute_tool("calculator.sheet_calculate", self.admin, {"product_quantity": 100, "work_hours": "1", "lines": [{"item_id": item.pk, "category": "paper", "quantity": "100"}]})
+        self.assertIn("standard", result["summary"])

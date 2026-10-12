@@ -7,7 +7,7 @@ from django.utils import timezone
 from calendar import monthrange
 
 from .forms import OrderRecordCreateForm
-from .actions import FinanceActionError, create_order_record
+from .actions import FinanceActionError, create_order_record, delete_order_record, update_order_record
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -305,10 +305,13 @@ def orders_update(request, pk):
         return redirect("finance:calculation")
     form = OrderRecordCreateForm(request.POST, instance=record, user=request.user, prefix=f"edit-{record.pk}")
     if form.is_valid():
-        record = form.save(commit=False)
-        if request.user.is_superuser:
-            record.manager = form.cleaned_data["manager"]
-        record.save()
+        values = {name: form.cleaned_data[name] for name in form.fields}
+        if values.get("manager") is not None:
+            values["manager"] = values["manager"].pk
+        try:
+            record = OrderRecord.objects.get(pk=update_order_record(request.user, record.pk, values)["order_record_id"])
+        except FinanceActionError:
+            return calculation(request, order_edit_form=form, open_order_edit_id=record.pk)
         messages.success(request, "Запись сохранена.")
         return redirect(f"{reverse('finance:calculation')}?period={record.accounting_period}")
     return calculation(request, order_edit_form=form, open_order_edit_id=record.pk)
@@ -322,7 +325,7 @@ def orders_delete(request, pk):
             records = records.filter(manager=request.user)
         record = records.first()
         if record:
-            record.delete()
+            delete_order_record(request.user, record.pk)
             messages.success(request, "Запись удалена.")
     return redirect(f"{reverse('finance:calculation')}?period={_order_period(request)}")
 

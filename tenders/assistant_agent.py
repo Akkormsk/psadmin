@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from .assistant_tools import AssistantToolConfirmationRequired, AssistantToolError, available_tools, execute_tool
+from .assistant_tools import AssistantToolConfirmationRequired, AssistantToolError, available_tools, execute_tool, required_input_names
 from .gateway_budget import preflight, spend_rub
 from .services import TenderAIError, _ai_gateway_json
 
@@ -41,11 +41,13 @@ def reply(conversation, user, message, page_context=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
     planning_tools = _planning_tools(tools, user)
+    pending = conversation.context.get("pending_action", {})
     prompt = json.dumps(
         {
             "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. When the user asks to start a tool with ui, select that tool immediately: its declared form collects the required inputs and the tool is not executed until that form is confirmed. Copy values explicitly stated by the user into ui action arguments; select an option only by its exact id from the supplied ui options. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
             "tools": planning_tools,
             "conversation_context": conversation.context.get("business_context", {}),
+            "pending_action": pending,
             "page_context": page_context or {},
             "history": _history(conversation),
             "message": message,
@@ -66,6 +68,8 @@ def reply(conversation, user, message, page_context=None):
         raise TenderAIError("Ассистент вернул некорректное действие.")
     if identifier not in {tool["id"] for tool in tools}:
         raise TenderAIError("Ассистент запросил действие вне реестра.")
+    if pending and pending.get("tool_id") == identifier and isinstance(pending.get("arguments"), dict):
+        arguments = {**pending["arguments"], **arguments}
     selected_tool = next(tool for tool in tools if tool["id"] == identifier)
     if selected_tool.get("ui"):
         data = {"tool_id": identifier}
@@ -79,6 +83,18 @@ def reply(conversation, user, message, page_context=None):
             if field_type == "integer" and isinstance(value, int) and any(item.get("id") == value for item in data.get("stages", [])):
                 data[name] = value
         return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
+    missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
+    if missing:
+        conversation.context["pending_action"] = {"tool_id": identifier, "arguments": arguments}
+        conversation.save(update_fields=["context"])
+        labels = ", ".join(missing)
+        text = plan["reply"].strip() or f"Уточните: {labels}."
+        if labels not in text:
+            text = f"{text}\nНужны параметры: {labels}."
+        return {"text": text, "kind": "text", "data": {"pending_tool_id": identifier, "missing": missing}}
+    if pending:
+        conversation.context.pop("pending_action", None)
+        conversation.save(update_fields=["context"])
     try:
         result = execute_tool(identifier, user, arguments)
     except AssistantToolConfirmationRequired:

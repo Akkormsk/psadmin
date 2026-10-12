@@ -70,6 +70,21 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_missing_parameters_are_kept_in_same_conversation(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Какова сумма расхода?", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "reason": "Доставка"}}},
+            {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"amount": "15000"}}},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
+        first = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход на доставку"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(first["kind"], "text")
+        self.assertIn("amount", first["data"]["missing"])
+        second = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "15 000"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(second["kind"], "confirmation_required")
+        self.assertEqual(second["data"]["arguments"]["reason"], "Доставка")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_model_can_run_stage_registry_without_keyword_routing(self, request, _preflight):
         stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
         request.side_effect = [
