@@ -1,0 +1,102 @@
+name: Deploy test VDS
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Branch to deploy to the isolated test VDS (never main)"
+        required: true
+        type: string
+      target_sha:
+        description: "Optional exact commit SHA from that branch"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: psadmin-test-vds-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      TEST_URL: https://test.admin.psodin.ru
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_USER: deploy
+      REMOTE_ARCHIVE: /home/deploy/psadmin-test-${{ github.run_id }}.tar.gz
+    steps:
+      - name: Validate requested source
+        shell: bash
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_REF" in
+            main|master|refs/heads/main|refs/heads/master|''|*[!A-Za-z0-9._/-]*)
+              echo "Only a non-production branch name is allowed" >&2; exit 2 ;;
+          esac
+
+      - name: Check out requested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_sha || inputs.target_ref }}
+          fetch-depth: 0
+
+      - name: Verify deployment source and archive it
+        id: source
+        shell: bash
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          deploy_sha="$(git rev-parse HEAD)"
+          git fetch --no-tags origin "$TARGET_REF"
+          git merge-base --is-ancestor "$deploy_sha" "FETCH_HEAD"
+          printf 'sha=%s\n' "$deploy_sha" >> "$GITHUB_OUTPUT"
+          git archive --format=tar "$deploy_sha" | gzip -9 > psadmin-test.tar.gz
+
+      - name: Configure strict SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Upload and activate isolated test release
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            psadmin-test.tar.gz "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE'" <<'REMOTE'
+          set -euo pipefail
+          deploy_sha="$1"; archive="$2"; root=/home/deploy; app="$root/psadmin-test"
+          rollback_root="$root/psadmin-test-rollbacks"; stage="$(mktemp -d "$root/psadmin-test.new.XXXXXX")"
+          cleanup() { rm -f "$archive"; test -d "$stage" && rm -rf "$stage" || true; }
+          trap cleanup EXIT
+          test -d "$app"; test -f "$app/.twin-version"
+          previous_sha="$(grep -Eo '[0-9a-f]{40}' "$app/.twin-version" | head -1)"
+          case "$previous_sha" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 2;; esac
+          tar -xzf "$archive" -C "$stage"; test -x "$stage/deploy/vds/twin.sh"
+          mkdir -p "$rollback_root"; rollback="$rollback_root/$previous_sha-$(date -u +%Y%m%dT%H%M%SZ)"
+          printf 'sha=%s\nprevious_sha=%s\ndeployed_at=%s\n' "$deploy_sha" "$previous_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$stage/.twin-version"
+          mv "$app" "$rollback"; mv "$stage" "$app"; stage=""
+          cd "$app/deploy/vds"; ./twin.sh up
+          docker compose -f compose.test.yml ps test-web
+          curl --fail --silent --show-error --max-time 20 --resolve test.admin.psodin.ru:443:127.0.0.1 https://test.admin.psodin.ru/ > /dev/null
+          REMOTE
+
+      - name: Verify public test URL
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 20 "$TEST_URL" > /dev/null
