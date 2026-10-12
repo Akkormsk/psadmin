@@ -14,7 +14,7 @@ asks otherwise.
 
 ## Current test release
 
-- Test commit: `8557f88c6f10593050573ec45caeaf5a8443c5ca`.
+- Test commit: `8f47ad09a970a4c41982970eb3d1fc57ab8e076c`.
 - Test URL: `https://test.admin.psodin.ru/tender-selection/`.
 - Production was not modified.
 - Focused tests passed before release.
