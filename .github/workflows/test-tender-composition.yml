@@ -68,7 +68,6 @@ jobs:
           print(json.dumps({'copied_tender':p['pk'],'documents':len(p['documents'])}))
           " < "$fixture"
           echo "remote: imported test fixture"
-          docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance </dev/null | grep -E 'Баланс|Balance'
           docker compose -f "$test" run --rm -T test-web python manage.py shell --no-imports -c "
           import json
           from tender_selection.models import Tender
@@ -79,6 +78,5 @@ jobs:
           assert j and j.tender_id==t.pk, 'wrong queued job'
           print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'proposals':TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).count(),'diagnostics':j.diagnostics},ensure_ascii=False))
           " </dev/null
-          docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance </dev/null | grep -E 'Баланс|Balance'
           echo "remote: completed tender ${tender_id}"
           REMOTE
