@@ -56,7 +56,7 @@ jobs:
           t=Tender.objects.get(pk=$tender_id)
           urls=[d.get('url') for d in parse_notification(t.notification_raw).get('documents',[]) if d.get('url')]
           print(json.dumps({'pk':t.pk,'tender':model_to_dict(t),'documents':[model_to_dict(d) for d in DocumentPreview.objects.filter(url__in=urls)]}, cls=DjangoJSONEncoder))
-" </dev/null > "$fixture"
+          " </dev/null > "$fixture"
           echo "remote: exported production fixture"
           docker compose -f "$test" run --rm -T test-web python manage.py shell -c "
           import json,sys
@@ -76,7 +76,7 @@ jobs:
           j=run_next_tender_understanding_job()
           assert j and j.tender_id==t.pk, 'wrong queued job'
           print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'proposals':TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).count(),'diagnostics':j.diagnostics},ensure_ascii=False))
-" </dev/null
+          " </dev/null
           docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance </dev/null | grep -E 'Баланс|Balance'
           echo "remote: completed tender ${tender_id}"
           REMOTE
