@@ -770,7 +770,7 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, model=None):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite").strip()
@@ -792,7 +792,8 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
         return content
 
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    for attempt in range(2):
+    json_attempts = max(1, int(json_attempts or 1))
+    for attempt in range(json_attempts):
         system_content = "Ты точно анализируешь документы и таблицы. Отвечай только валидным JSON без markdown."
         if attempt:
             system_content += " Предыдущая попытка содержала синтаксическую ошибку. Особенно тщательно проверь кавычки, запятые и закрывающие скобки."
@@ -851,7 +852,7 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
             return _json_from_model(content), total_usage
         except TenderAIError as exc:
             exc.usage = dict(total_usage)
-            if not attempt:
+            if attempt < json_attempts - 1:
                 continue
             raise
 

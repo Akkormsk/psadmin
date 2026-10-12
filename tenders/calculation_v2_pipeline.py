@@ -267,7 +267,7 @@ class GatewayDocumentEnricher:
             self.diagnostics = {"outcome": "budget_blocked", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost) if estimated_cost is not None else None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         try:
-            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1)
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1, json_attempts=1)
         except Exception as exc:
             self._record_gateway_failure(exc, usage={}, phase="document_analysis", started=started)
             raise
