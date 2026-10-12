@@ -556,6 +556,48 @@ def tender_detail(request, pk):
     from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
     document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal"]
+    document_proposal_groups = []
+    proposals_by_parent = {}
+    for proposal in document_proposals:
+        # A decision is made for the complete replacement of one notification
+        # position, never for an opaque individual AI row.
+        parent_key = proposal.parent_id or proposal.pk
+        group = proposals_by_parent.get(parent_key)
+        if group is None:
+            parent = proposal.parent
+            group = {
+                "parent": parent,
+                "items": [],
+                "parent_quantity": parent.quantity if parent else None,
+                "parent_unit": parent.unit if parent else "",
+            }
+            proposals_by_parent[parent_key] = group
+            document_proposal_groups.append(group)
+        requirements = proposal.requirements if isinstance(proposal.requirements, dict) else {}
+        raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
+        characteristics = [
+            {
+                "name": str(row.get("name") or row.get("characteristicName") or ""),
+                "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or ""),
+            }
+            for row in raw_characteristics if isinstance(row, dict)
+        ]
+        if not characteristics:
+            characteristics = [
+                {"name": str(key), "value": str(value)}
+                for key, value in requirements.get("document_requirements", requirements).items()
+                if value not in (None, "", [], {})
+            ]
+        metadata = proposal.metadata if isinstance(proposal.metadata, dict) else {}
+        group["items"].append({
+            "name": proposal.original_text,
+            "quantity": proposal.quantity,
+            "unit": proposal.unit,
+            "quantity_per_parent": metadata.get("quantity_per_parent"),
+            "relationship": metadata.get("relationship"),
+            "characteristics": characteristics,
+            "provenance": proposal.provenance if isinstance(proposal.provenance, dict) else {},
+        })
     v2_lines = TenderComputeLine.objects.filter(job__tender=tender).select_related("source_item").order_by("job_id", "pk")
     v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
     v2_job = TenderComputeJob.objects.filter(tender=tender).order_by("-pk").first()
@@ -739,6 +781,7 @@ def tender_detail(request, pk):
         "estimate": estimate,
         "v2_source_items": v2_source_items,
         "document_proposals": document_proposals,
+        "document_proposal_groups": document_proposal_groups,
         "v2_lines": v2_lines,
         "v2_questions": v2_questions,
         "v2_job": v2_job,

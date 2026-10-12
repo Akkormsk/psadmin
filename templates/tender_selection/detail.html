@@ -147,15 +147,23 @@
       </tbody>
     </table></div>
     {% endif %}
-    {% if document_proposals %}
+    {% if document_proposal_groups %}
     <section class="ts-document-proposals">
       <h3>Предложения из документации · нужна проверка</h3>
-      {% for proposal in document_proposals %}
-      <article>
-        <strong>{{ proposal.parent.original_text }}</strong> → {{ proposal.original_text }}{% if proposal.quantity %} · {{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% endif %}
-        {% if proposal.provenance.evidence %}<p>{{ proposal.provenance.evidence }}</p>{% endif %}
-        <small>{{ proposal.provenance.document_url }}{% if proposal.provenance.page_or_section %} · {{ proposal.provenance.page_or_section }}{% endif %}</small>
-        <form method="post" action="{% url 'tender_selection:document_proposal_action' tender.pk proposal.parent.pk %}">{% csrf_token %}<button class="button-primary" name="action" value="accept">Принять состав</button><button class="button-secondary" name="action" value="reject">Отклонить</button></form>
+      <p class="ts-document-proposals__lead">Проверьте, какие позиции агент нашёл в документации. При принятии исходная строка будет заменена строками из этой таблицы; до этого расчёт не запускается.</p>
+      {% for group in document_proposal_groups %}
+      <article class="ts-document-proposal">
+        <header><strong>Исходная позиция:</strong> {{ group.parent.original_text }}{% if group.parent_quantity %} · {{ group.parent_quantity|floatformat:"-2" }} {{ group.parent_unit }}{% endif %}</header>
+        <div class="table-wrapper"><table class="table ts-document-proposal__table">
+          <thead><tr><th>Найдено в документации</th><th>Кол-во в наборе</th><th>Требования</th><th>Источник</th></tr></thead>
+          <tbody>{% for proposal in group.items %}<tr>
+            <td><strong>{{ proposal.name }}</strong>{% if proposal.relationship == "component" %}<span class="ts-position-mark ts-position-mark--enriched">Состав набора</span>{% endif %}</td>
+            <td class="ts-nowrap">{% if proposal.quantity_per_parent %}{{ proposal.quantity_per_parent|floatformat:"-4" }} {{ proposal.unit }} × {{ group.parent_quantity|floatformat:"-2" }}{% elif proposal.quantity %}{{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% else %}—{% endif %}</td>
+            <td>{% if proposal.characteristics %}<ul class="ts-chars">{% for characteristic in proposal.characteristics %}<li>{% if characteristic.name %}<span class="ts-sub">{{ characteristic.name }}:</span> {% endif %}{{ characteristic.value }}</li>{% endfor %}</ul>{% else %}—{% endif %}</td>
+            <td>{% if proposal.provenance.document_url %}<a href="{{ proposal.provenance.document_url }}" target="_blank" rel="noopener">Документ</a>{% endif %}{% if proposal.provenance.page_or_section %}<br><span class="ts-sub">{{ proposal.provenance.page_or_section }}</span>{% endif %}{% if proposal.provenance.evidence %}<p class="ts-document-proposal__evidence">{{ proposal.provenance.evidence }}</p>{% endif %}</td>
+          </tr>{% endfor %}</tbody>
+        </table></div>
+        <form class="ts-document-proposal__actions" method="post" action="{% url 'tender_selection:document_proposal_action' tender.pk group.parent.pk %}">{% csrf_token %}<button class="button-success" name="action" value="accept">Принять состав</button><button class="button-secondary" name="action" value="reject">Отклонить</button></form>
       </article>
       {% endfor %}
     </section>
