@@ -161,6 +161,8 @@ def _cash_action(name):
                 return actions.save_reconciliation(user, payload)
             if name == "toggle_bank_payment":
                 return actions.toggle_bank_payment_visibility(user, payload.get("bank_payment_id"))
+            if name == "sync_bank":
+                return actions.sync_bank(user)
         except actions.CashActionError as exc:
             raise AssistantToolError(str(exc)) from exc
         raise AssistantToolError("Неизвестное действие кассы")
@@ -218,6 +220,7 @@ register_tool(AssistantTool("cash.transaction_update", "Изменить опе�
 register_tool(AssistantTool("cash.transaction_delete", "Удалить операцию кассы", "Удаляет операцию кассы с записью в действующий журнал аудита.", {"transaction_id": "integer"}, False, True, True, _cash_action("delete_transaction")))
 register_tool(AssistantTool("cash.reconciliation_save", "Сохранить сверку кассы", "Создаёт или обновляет сверку через действующую форму кассы.", {"effective_date": "YYYY-MM-DD", "cash_balance": "number", "card_balance": "number", "note": "string?"}, False, True, True, _cash_action("reconcile")))
 register_tool(AssistantTool("cash.bank_payment_visibility_toggle", "Изменить видимость банковского платежа", "Переключает видимость существующего банковского платежа через действующий бизнес-обработчик.", {"bank_payment_id": "integer"}, False, True, True, _cash_action("toggle_bank_payment")))
+register_tool(AssistantTool("cash.bank_sync", "Синхронизировать банковские платежи", "Запускает штатную синхронизацию с банком; требует явного подтверждения.", {}, False, True, True, _cash_action("sync_bank")))
 register_tool(AssistantTool("finance.order_record_create", "Создать закрытый заказ", "Создаёт запись закрытого заказа через действующую финансовую форму.", {"record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}, False, True, True, _create_order_record))
 register_tool(AssistantTool("finance.order_record_update", "Изменить закрытый заказ", "Изменяет запись закрытого заказа через действующую финансовую форму.", {"order_record_id": "integer", "record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}, False, True, True, _finance_action("update_order_record")))
 register_tool(AssistantTool("finance.order_record_delete", "Удалить закрытый заказ", "Удаляет доступную пользователю запись закрытого заказа.", {"order_record_id": "integer"}, False, True, True, _finance_action("delete_order_record")))

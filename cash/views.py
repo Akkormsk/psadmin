@@ -17,7 +17,7 @@ from . import modulbank
 from .forms import CashReconciliationForm, CashTransactionForm
 from .models import BankPayment, BankSyncState, CashAuditLog, CashReconciliation, CashTransaction
 from .services import balance_for_date
-from .actions import CashActionError, create_transaction, delete_transaction, save_reconciliation, toggle_bank_payment_visibility, update_transaction
+from .actions import CashActionError, create_transaction, delete_transaction, save_reconciliation, sync_bank, toggle_bank_payment_visibility, update_transaction
 
 BANK_WINDOW_DAYS = modulbank.WINDOW_DAYS
 
@@ -199,9 +199,8 @@ def audit_log(request):
 @require_POST
 def bank_sync_now(request):
     try:
-        touched = modulbank.sync()
-    except modulbank.ModulbankError as error:
-        modulbank.record_sync_error(str(error))
+        touched = sync_bank(request.user)["touched"]
+    except CashActionError as error:
         messages.error(request, f"Синхронизация с банком не удалась: {error}")
     else:
         messages.success(request, f"Синхронизация с банком выполнена. Обработано платежей: {touched}.")

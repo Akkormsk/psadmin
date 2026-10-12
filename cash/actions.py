@@ -88,3 +88,15 @@ def toggle_bank_payment_visibility(actor, payment_id):
     verb = "Скрыл от менеджеров" if payment.hidden_from_managers else "Показал менеджерам"
     _write_audit(actor, CashAuditLog.ACTION_UPDATED, f"{verb} платёж из банка на {payment.amount:.2f} ₽ от «{payment.counterparty_name}» ({payment.operation_date:%d.%m.%Y})")
     return {"bank_payment_id": payment.pk, "hidden_from_managers": payment.hidden_from_managers}
+
+
+def sync_bank(_actor):
+    """Delegate to the same bank synchronizer used by the cash page."""
+    from . import modulbank
+
+    try:
+        touched = modulbank.sync()
+    except modulbank.ModulbankError as exc:
+        modulbank.record_sync_error(str(exc))
+        raise CashActionError(f"Синхронизация с банком не удалась: {exc}") from exc
+    return {"touched": touched}
