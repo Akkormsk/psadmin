@@ -45,3 +45,16 @@ class OwnerInteractionAnswerTests(TestCase):
         self.interaction.refresh_from_db()
         self.assertEqual(self.interaction.status, "open")
         self.assertFalse(OwnerFeedbackEvent.objects.exists())
+
+    def test_accepting_document_proposals_replaces_only_their_parent(self):
+        other = TenderSourceItem.objects.create(tender=self.tender, source_key="notification:other", source_type="notification", original_text="Другая позиция")
+        proposal = TenderSourceItem.objects.create(tender=self.tender, source_key="proposal:1", source_type="document_proposal", original_text="Деталь", parent=self.item, is_active=False)
+
+        response = self.client.post(reverse("tender_selection:document_proposal_action", args=[self.tender.pk, self.item.pk]), {"action": "accept"}, secure=True)
+
+        self.assertEqual(response.status_code, 302)
+        self.item.refresh_from_db(); other.refresh_from_db(); proposal.refresh_from_db()
+        self.assertFalse(self.item.is_active)
+        self.assertTrue(other.is_active)
+        self.assertTrue(proposal.is_active)
+        self.assertEqual(proposal.source_type, "document_extraction")

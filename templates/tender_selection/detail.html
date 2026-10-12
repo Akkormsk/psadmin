@@ -155,6 +155,7 @@
         <strong>{{ proposal.parent.original_text }}</strong> → {{ proposal.original_text }}{% if proposal.quantity %} · {{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% endif %}
         {% if proposal.provenance.evidence %}<p>{{ proposal.provenance.evidence }}</p>{% endif %}
         <small>{{ proposal.provenance.document_url }}{% if proposal.provenance.page_or_section %} · {{ proposal.provenance.page_or_section }}{% endif %}</small>
+        <form method="post" action="{% url 'tender_selection:document_proposal_action' tender.pk proposal.parent.pk %}">{% csrf_token %}<button class="button-primary" name="action" value="accept">Принять состав</button><button class="button-secondary" name="action" value="reject">Отклонить</button></form>
       </article>
       {% endfor %}
     </section>
@@ -546,6 +547,7 @@
   .ts-document-proposals article + article { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--separator); }
   .ts-document-proposals p { margin: 4px 0; font-size: 13px; }
   .ts-document-proposals small { color: var(--ink-3); overflow-wrap: anywhere; }
+  .ts-document-proposals form { display: flex; gap: 8px; margin-top: 8px; }
   .ts-docs { list-style: none; padding: 0; margin: 0; }
   .ts-docs li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--separator); }
   .ts-docs li:last-child { border-bottom: 0; }
