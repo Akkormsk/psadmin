@@ -4,7 +4,7 @@
 
 - Репозиторий: `Akkormsk/psadmin`.
 - Рабочая ветка и PR: `feature/m3-agent-simple`, PR #3.
-- База PR: `codex/calculation-v2-foundation`.
+- База PR: `test-server`.
 - Стартовый commit этой передачи: `c906cac47d3c54f651ebb145cf32266763a0cdaa`.
 - Не создавать другой PR, не делать merge/deploy, force-push или `reset --hard`.
 - Перед работой проверить `git status`, HEAD, `gh pr view 3`, base/head и diff.
