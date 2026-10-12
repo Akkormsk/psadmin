@@ -7,7 +7,7 @@ from django.utils import timezone
 from calendar import monthrange
 
 from .forms import OrderRecordCreateForm
-from .actions import FinanceActionError, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, save_operating_expenses, update_order_record
+from .actions import FinanceActionError, _sync_open_manager_lines, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, manager_data as _manager_data, save_manager_settings, save_operating_expenses, update_order_record
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -16,33 +16,9 @@ from django.db.models import Case, IntegerField, Value, When
 from decimal import Decimal
 
 
-DEFAULT_THRESHOLDS = (0, 100000, 200000, 300000)
 PRINTER_FIXED_SALARY = Decimal("90000")
 PRINTER_ADVANCE = Decimal("45000")
 PRINTER_LEAVE_DAY_RATE = Decimal("1000")
-
-
-def _manager_data():
-    tiers = []
-    for threshold in DEFAULT_THRESHOLDS:
-        tier, _ = KpiTier.objects.get_or_create(threshold=threshold)
-        tiers.append(tier)
-
-    users = get_user_model().objects.filter(is_superuser=False, is_active=True)
-    for user in users:
-        ManagerSettings.objects.get_or_create(user=user)
-    employee_settings = ManagerSettings.objects.filter(user__is_superuser=False, user__is_active=True).select_related("user").order_by(
-        "sort_order", "user__first_name", "user__last_name", "user_id"
-    )
-    result = []
-    for settings in employee_settings:
-        manager = settings.user
-        rates = {}
-        for tier in tiers:
-            rate, _ = ManagerKpiRate.objects.get_or_create(manager=manager, tier=tier)
-            rates[tier.pk] = rate
-        result.append((manager, settings, [rates[tier.pk] for tier in tiers]))
-    return tiers, result
 
 
 @login_required
@@ -62,29 +38,6 @@ def _refresh_period(period):
         line.kpi_bonus = profit * line.kpi_percent / Decimal("100")
         line.design_amount = design_total
         line.save(update_fields=("order_profit", "kpi_percent", "kpi_bonus", "design_amount"))
-
-
-def _sync_open_manager_lines(period, managers):
-    """Open periods use current manager rates; closed periods remain snapshots."""
-    if period.is_closed:
-        return
-    for manager, settings, _ in managers:
-        line, _ = PayrollLine.objects.get_or_create(
-            period=period,
-            manager=manager,
-            defaults={
-                "kind": PayrollLine.MANAGER,
-                "name": manager.get_full_name().strip() or "Имя не указано",
-                "shift_rate": settings.shift_rate,
-                "leave_shift_rate": settings.leave_shift_rate,
-                "design_percent": settings.design_percent,
-            },
-        )
-        line.name = manager.get_full_name().strip() or "Имя не указано"
-        line.shift_rate = settings.shift_rate
-        line.leave_shift_rate = settings.leave_shift_rate
-        line.design_percent = settings.design_percent
-        line.save(update_fields=("name", "shift_rate", "leave_shift_rate", "design_percent"))
 
 
 def _sync_open_printer_line(period):
@@ -341,18 +294,9 @@ def manager_settings(request):
     tiers, managers = _manager_data()
     if request.method == "POST":
         submitted_order = [value for value in request.POST.get("employee_order", "").split(",") if value.isdigit()]
-        order_by_id = {int(manager_id): position for position, manager_id in enumerate(submitted_order)}
+        entries = []
         for manager, settings, rates in managers:
-            settings.shift_rate = request.POST.get(f"shift_rate_{manager.pk}") or 0
-            settings.leave_shift_rate = request.POST.get(f"leave_rate_{manager.pk}") or 0
-            settings.design_percent = request.POST.get(f"design_percent_{manager.pk}") or 90
-            if manager.pk in order_by_id:
-                settings.sort_order = order_by_id[manager.pk]
-            settings.save()
-            for tier, rate in zip(tiers, rates):
-                rate.percent = request.POST.get(f"kpi_{manager.pk}_{tier.pk}") or 0
-                rate.save()
-        for period in FinancialPeriod.objects.filter(is_closed=False):
-            _sync_open_manager_lines(period, managers)
+            entries.append({"manager_id": manager.pk, "shift_rate": request.POST.get(f"shift_rate_{manager.pk}") or 0, "leave_shift_rate": request.POST.get(f"leave_rate_{manager.pk}") or 0, "design_percent": request.POST.get(f"design_percent_{manager.pk}") or 90, "kpi": {str(tier.pk): request.POST.get(f"kpi_{manager.pk}_{tier.pk}") or 0 for tier in tiers}})
+        save_manager_settings(request.user, {"employee_order": [int(value) for value in submitted_order], "managers": entries})
         return redirect("finance:manager_settings")
     return render(request, "finance/manager_settings.html", {"tiers": tiers, "managers": managers})
