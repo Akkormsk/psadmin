@@ -1,8 +1,8 @@
 """Adapters for existing tender-selection services; no selection logic lives here."""
 from decimal import Decimal, InvalidOperation
 
-from .models import ContractStat, FilterSettings, Tender
-from .services import apply_tender_outcome, archive_tender, dismiss_tender, push_to_estimate, restore_tender, run_pull, set_our_bid, set_tender_review, start_risk_assessment_in_background
+from .models import Tender
+from .services import apply_tender_outcome, archive_tender, dismiss_tender, push_to_estimate, restore_tender, run_pull, set_our_bid, set_tender_review, start_risk_assessment_in_background, toggle_forecast_inclusion, update_filter_words as save_filter_words
 
 
 def pull(_user, payload):
@@ -90,14 +90,7 @@ def set_outcome(_user, payload):
 
 
 def update_filter_words(_user, payload):
-    settings = FilterSettings.load()
-    include_words = payload.get("include_words")
-    exclude_words = payload.get("exclude_words")
-    if not isinstance(include_words, str) or not isinstance(exclude_words, str):
-        raise ValueError("Нужны текстовые плюс- и минус-слова")
-    settings.include_words = include_words.strip()
-    settings.exclude_words = exclude_words.strip()
-    settings.save(update_fields=["include_words", "exclude_words"])
+    settings = save_filter_words(include_words=payload.get("include_words"), exclude_words=payload.get("exclude_words"))
     return {"include_words": settings.include_words, "exclude_words": settings.exclude_words}
 
 
@@ -119,14 +112,10 @@ def word_audit_apply(_user, payload):
 
 
 def toggle_forecast(_user, payload):
-    tender = Tender.objects.filter(pk=payload.get("tender_id"), status=Tender.DISMISSED).first()
+    tender = Tender.objects.filter(pk=payload.get("tender_id")).first()
     if not tender:
         raise ValueError("Скрытый тендер не найден")
-    stat = ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first()
-    if stat is None:
-        raise ValueError("Результат торгов ещё не попал в статистику прогноза")
-    stat.forecast_included = not stat.forecast_included
-    stat.save(update_fields=["forecast_included"])
+    stat = toggle_forecast_inclusion(tender)
     return {"tender_id": tender.pk, "forecast_included": stat.forecast_included}
 
 

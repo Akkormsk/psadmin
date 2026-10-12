@@ -1011,8 +1011,12 @@ def eis_diag(request):
 def filter_settings(request):
     settings = FilterSettings.load()
     if request.method == "POST":
-        settings.include_words = request.POST.get("include_words", "").strip()
-        settings.exclude_words = request.POST.get("exclude_words", "").strip()
+        from .services import update_filter_words
+
+        settings = update_filter_words(
+            include_words=request.POST.get("include_words", ""),
+            exclude_words=request.POST.get("exclude_words", ""),
+        )
         settings.profile_triage_enabled = request.POST.get("profile_triage_enabled") == "1"
         settings.min_price = request.POST.get("min_price") or 0
         settings.window_days = request.POST.get("window_days") or 7
@@ -1363,15 +1367,15 @@ def restore_estimate(request, pk):
 @superuser_required
 @require_POST
 def toggle_forecast(request, pk):
-    from .assistant_actions import toggle_forecast as toggle_forecast_action
+    from .services import toggle_forecast_inclusion
 
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
     try:
-        result = toggle_forecast_action(request.user, {"tender_id": tender.pk})
+        result = toggle_forecast_inclusion(tender)
     except ValueError as exc:
         messages.warning(request, str(exc) + ".")
     else:
-        messages.success(request, "Результат добавлен в прогноз." if result["forecast_included"] else "Результат исключён из прогноза.")
+        messages.success(request, "Результат добавлен в прогноз." if result.forecast_included else "Результат исключён из прогноза.")
     return redirect(f"{reverse('tender_selection:detail', args=[pk])}?from=archive")
 
 
