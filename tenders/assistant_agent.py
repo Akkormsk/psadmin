@@ -82,7 +82,7 @@ def reply(conversation, user, message, page_context=None):
     try:
         result = execute_tool(identifier, user, arguments)
     except AssistantToolConfirmationRequired:
-        return {"text": plan["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier}}
+        return {"text": plan["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
     except AssistantToolError as exc:
         return {"text": str(exc), "kind": "tool_error", "data": {"tool_id": identifier}}
     final = _request(

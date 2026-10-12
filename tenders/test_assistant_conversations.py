@@ -59,6 +59,17 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
+        request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
+        message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(message["kind"], "confirmation_required")
+        first = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_model_can_run_stage_registry_without_keyword_routing(self, request, _preflight):
         stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
         request.side_effect = [

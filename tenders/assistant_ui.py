@@ -5,7 +5,7 @@ from django.contrib import messages
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .assistant_tools import available_tools
+from .assistant_tools import AssistantToolError, available_tools, execute_tool
 from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
 from .models import CounterpartyKnowledgeVersion, ProcessDefinition
 from .provider_knowledge import confirm_sewing_price_list, create_sewing_provider_draft
@@ -97,6 +97,36 @@ def conversation_message(request, conversation_id):
         return HttpResponseBadRequest("Введите сообщение")
     context = payload.get("context", {}) if isinstance(payload, dict) else {}
     return JsonResponse({"messages": respond(conversation, request.user, message, context)})
+
+
+@login_required
+def conversation_action_confirm(request, conversation_id, event_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    event = conversation.feedback_events.filter(pk=event_id).first()
+    payload = event.payload if event else {}
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    used = list(conversation.context.get("confirmed_action_events", []))
+    if not event or payload.get("kind") != "confirmation_required" or event.pk in used:
+        return JsonResponse({"detail": "Подтверждение недействительно или уже использовано"}, status=409)
+    if request.POST.get("accept") != "yes":
+        used.append(event.pk)
+        conversation.context["confirmed_action_events"] = used
+        conversation.save(update_fields=["context"])
+        add_assistant_message(conversation, "Действие отменено.")
+        return JsonResponse({"messages": serialize_messages(conversation)})
+    try:
+        result = execute_tool(data["tool_id"], request.user, data.get("arguments", {}), confirmed=True)
+    except (KeyError, AssistantToolError) as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+    used.append(event.pk)
+    conversation.context["confirmed_action_events"] = used
+    conversation.save(update_fields=["context"])
+    add_assistant_message(conversation, "Действие выполнено.", "tool_result", {"tool_id": data["tool_id"], "result": result})
+    return JsonResponse({"messages": serialize_messages(conversation)})
 
 
 @login_required
