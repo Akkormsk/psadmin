@@ -62,7 +62,7 @@ jobs:
           import json,sys
           from tender_selection.models import Tender,DocumentPreview
           from django.db import connection
-          with connection.cursor() as c: c.execute('ALTER TABLE tender_selection_tender ALTER COLUMN profile_model DROP NOT NULL')
+          with connection.cursor() as c: c.execute('ALTER TABLE tender_selection_tender ALTER COLUMN profile_model DROP NOT NULL; ALTER TABLE tender_selection_tender ALTER COLUMN profile_reason DROP NOT NULL')
           p=json.load(sys.stdin); fields={f.name for f in Tender._meta.fields}; p['tender']={k:v for k,v in p['tender'].items() if k in fields}; Tender.objects.filter(pk=p['pk']).delete(); Tender.objects.create(pk=p['pk'],**p['tender'])
           for d in p['documents']: DocumentPreview.objects.update_or_create(url=d['url'],defaults=d)
           print(json.dumps({'copied_tender':p['pk'],'documents':len(p['documents'])}))
