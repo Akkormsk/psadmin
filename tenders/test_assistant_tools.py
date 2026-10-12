@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from datetime import date
 
 from .assistant_tools import AssistantToolConfirmationRequired, available_tools, execute_tool
 from .models import ProcessDefinition
@@ -28,3 +29,22 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(result["status"], "draft")
         self.assertEqual(execute_tool("provider.find", self.admin, {"query": "Черновой"})["counterparties"][0]["name"], "Черновой пошив")
+
+    def test_read_uses_real_cash_records_and_aggregates_before_limit(self):
+        from cash.models import CashTransaction
+
+        for amount in ("10.00", "20.00", "30.00"):
+            CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="expense", amount=amount, reason="Бумага", created_by=self.admin)
+        result = execute_tool("read", self.admin, {"plan": {"entity": "cash.CashTransaction", "fields": ["id", "amount"], "limit": 1, "aggregates": [{"op": "sum", "field": "amount"}]}})
+        self.assertEqual(result["total_count"], 3)
+        self.assertEqual(result["returned_count"], 1)
+        self.assertEqual(str(result["aggregates"]["sum_amount"]), "60")
+
+    def test_read_rejects_sensitive_bank_account_and_non_owner(self):
+        from cash.models import BankPayment
+
+        BankPayment.objects.create(external_id="test-payment", amount="10", operation_date=date(2026, 9, 1), account_number="secret")
+        with self.assertRaisesRegex(Exception, "недоступные поля"):
+            execute_tool("read", self.admin, {"plan": {"entity": "cash.BankPayment", "fields": ["account_number"]}})
+        with self.assertRaisesRegex(Exception, "Недостаточно прав"):
+            execute_tool("read", self.user, {"plan": {"entity": "cash.BankPayment", "fields": ["id"]}})
