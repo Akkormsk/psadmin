@@ -1367,14 +1367,15 @@ def restore_estimate(request, pk):
 @superuser_required
 @require_POST
 def toggle_forecast(request, pk):
+    from .assistant_actions import toggle_forecast as toggle_forecast_action
+
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
-    stat = ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first()
-    if stat is None:
-        messages.warning(request, "Результат торгов ещё не попал в статистику прогноза.")
+    try:
+        result = toggle_forecast_action(request.user, {"tender_id": tender.pk})
+    except ValueError as exc:
+        messages.warning(request, str(exc) + ".")
     else:
-        stat.forecast_included = not stat.forecast_included
-        stat.save(update_fields=["forecast_included"])
-        messages.success(request, "Результат добавлен в прогноз." if stat.forecast_included else "Результат исключён из прогноза.")
+        messages.success(request, "Результат добавлен в прогноз." if result["forecast_included"] else "Результат исключён из прогноза.")
     return redirect(f"{reverse('tender_selection:detail', args=[pk])}?from=archive")
 
 

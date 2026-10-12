@@ -1,7 +1,7 @@
 """Adapters for existing tender-selection services; no selection logic lives here."""
 from decimal import Decimal, InvalidOperation
 
-from .models import FilterSettings, Tender, TenderDismissalFeedback
+from .models import ContractStat, FilterSettings, Tender, TenderDismissalFeedback
 from .services import apply_tender_outcome, archive_tender, push_to_estimate, run_pull, set_our_bid, start_risk_assessment_in_background
 
 
@@ -128,6 +128,18 @@ def word_audit_apply(_user, payload):
         raise ValueError("Наборы слов должны быть списками")
     apply_words(**chosen)
     return {"applied": {kind: len(words) for kind, words in chosen.items()}}
+
+
+def toggle_forecast(_user, payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id"), status=Tender.DISMISSED).first()
+    if not tender:
+        raise ValueError("Скрытый тендер не найден")
+    stat = ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first()
+    if stat is None:
+        raise ValueError("Результат торгов ещё не попал в статистику прогноза")
+    stat.forecast_included = not stat.forecast_included
+    stat.save(update_fields=["forecast_included"])
+    return {"tender_id": tender.pk, "forecast_included": stat.forecast_included}
 
 
 def _tender(payload):
