@@ -7,6 +7,7 @@ from django.utils import timezone
 from calendar import monthrange
 
 from .forms import OrderRecordCreateForm
+from .actions import FinanceActionError, create_order_record
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -285,11 +286,10 @@ def orders_create(request):
         return redirect("finance:calculation")
     form = OrderRecordCreateForm(request.POST, user=request.user)
     if form.is_valid():
-        record = form.save(commit=False)
-        record.manager = form.cleaned_data.get("manager") if request.user.is_superuser else request.user
-        record.created_by = request.user
-        record.source = OrderRecord.SOURCE_MANUAL
-        record.save()
+        try:
+            record = OrderRecord.objects.get(pk=create_order_record(request.user, request.POST)["order_record_id"])
+        except FinanceActionError:
+            return calculation(request, order_form=form, open_order_modal=True)
         messages.success(request, "Запись добавлена.")
         return redirect(f"{reverse('finance:calculation')}?period={record.accounting_period}")
     return calculation(request, order_form=form, open_order_modal=True)

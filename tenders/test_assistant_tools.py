@@ -58,3 +58,11 @@ class AssistantToolRegistryTests(TestCase):
         result = execute_tool("cash.transaction_create", self.admin, payload, confirmed=True)
         self.assertEqual(CashTransaction.objects.get(pk=result["transaction_id"]).reason, "Доставка")
         self.assertEqual(CashAuditLog.objects.filter(transaction_id=result["transaction_id"], action=CashAuditLog.ACTION_CREATED).count(), 1)
+
+    def test_finance_action_uses_existing_order_form(self):
+        from payroll.models import OrderRecord
+
+        manager = get_user_model().objects.create_user("order-manager")
+        payload = {"record_type": "order", "order_number": "123", "gross_profit": "85000", "accounting_period": "2026-10", "manager": str(manager.pk)}
+        result = execute_tool("finance.order_record_create", self.admin, payload, confirmed=True)
+        self.assertEqual(OrderRecord.objects.get(pk=result["order_record_id"]).manager, manager)
