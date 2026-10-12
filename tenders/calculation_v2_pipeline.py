@@ -604,7 +604,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
         extracted = extract_tender(tender=tender, source_items=active, documents=quality["documents"])
         detail = getattr(enricher, "diagnostics", {}) or {}
         outcome = detail.get("outcome")
-        if outcome in {"system_extraction_failure", "validation_failure"}:
+        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded"}:
             return {"created": [], "state": outcome, "diagnostics": [detail]}
         parents = {item.pk: item for item in active}
         proposals = []
@@ -636,7 +636,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
         detail = getattr(enricher, "diagnostics", {}) or {}
         diagnostics.append(detail)
         outcome = detail.get("outcome")
-        if outcome in {"system_extraction_failure", "validation_failure"}:
+        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded"}:
             return {"created": created, "state": outcome, "diagnostics": diagnostics}
         if not extracted:
             continue
@@ -887,7 +887,7 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
         quality = assess_quality(job.tender, source_items)
         enrichment_started = time.monotonic()
         enrichment = enrich_suspicious_tender(job.tender, quality, enricher)
-        if enrichment["state"] in {"system_extraction_failure", "validation_failure"}:
+        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded"}:
             job.status = TenderComputeJob.Status.PARTIAL
             job.completed_at = timezone.now()
             job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))

@@ -36,6 +36,15 @@ class NoDataEnricher:
         return []
 
 
+class BudgetBlockedEnricher:
+    def __init__(self):
+        self.diagnostics = {"outcome": "budget_blocked", "budget": {"limit_rub": "1.0"}}
+        self.cost_rub = 0
+
+    def extract_tender(self, **kwargs):
+        return []
+
+
 class DocumentEnrichmentRegressionTests(TestCase):
     def setUp(self):
         settings = FilterSettings.load()
@@ -76,6 +85,14 @@ class DocumentEnrichmentRegressionTests(TestCase):
         job = run_next_tender_understanding_job(router=ExistingKnowledgeBatchRouter(), enricher=NoDataEnricher())
         self.assertEqual(job.status, TenderComputeJob.Status.NEEDS_REVIEW)
         self.assertTrue(OwnerInteraction.objects.filter(tender=tender).exists())
+
+    @override_settings(CALCULATION_V2_ENABLED=True)
+    def test_budget_blocked_document_analysis_does_not_continue_to_routing(self):
+        tender = self.tender()
+        trigger_visible_tender(tender)
+        job = run_next_tender_understanding_job(router=ExistingKnowledgeBatchRouter(), enricher=BudgetBlockedEnricher())
+        self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)
+        self.assertEqual(job.diagnostics["enrichment_state"], "budget_blocked")
 
 
 class GatewayDocumentEnricherBudgetTests(TestCase):
