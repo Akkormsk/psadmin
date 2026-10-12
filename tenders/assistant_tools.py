@@ -164,6 +164,10 @@ def _calculate_general(_user, payload):
     return {"calculator_type": calculator_type, "inputs": {"quantity": str(quantity), "work_hours": str(hours), "item_ids": item_ids}, "result": {key: str(value) for key, value in result.items()}, "evidence": [{"entity": "calculator_price_item", "id": item_id} for item_id in item_ids]}
 
 
+def _mutation_preview_only(_user, _payload):
+    raise AssistantToolConfirmationRequired("Изменение доступно только как предпросмотр в беседе")
+
+
 def _list_stages(_user, _payload):
     return {"stages": [{"id": item.pk, "name": item.name} for item in ProcessDefinition.objects.filter(is_active=True).order_by("name")]}
 
@@ -203,6 +207,7 @@ register_tool(AssistantTool("assistant.capabilities", "Доступные воз
 register_tool(AssistantTool("data.query", "Универсальный запрос данных", "Выполняет проверенный декларативный запрос к разрешённым сущностям, полям, фильтрам, сортировке и агрегациям. Возвращает источники. Не принимает SQL.", {"plan": {"entity": "catalogue id", "filters": "[{field,op,value}]?", "search": "string?", "fields": "string[]?", "order_by": "field?", "page": "integer?", "page_size": "integer?", "aggregates": "[{op,field}]?"}}, True, False, False, _universal_query, domain="platform", output_schema={"total_count": "integer", "returned_count": "integer", "aggregates": "object", "records": "array", "evidence": "array"}))
 register_tool(AssistantTool("provider.calculator_list", "Калькуляторы контрагентов", "Находит реальные активные калькуляторы контрагентов и их схемы параметров.", {"query": "string?"}, True, False, False, _list_provider_calculators, domain="providers", operation="calculate"))
 register_tool(AssistantTool("calculator.quote", "Общий калькулятор", "Выполняет детерминированный расчёт PSADMIN по активным позициям прайса. Цены передаются только из справочника по ID.", {"calculator_type": "sheet|wide?", "quantity": "number", "work_hours": "number?", "items": "[{item_id: integer, quantity: number}]"}, True, False, False, _calculate_general, domain="calculator", operation="calculate"))
+register_tool(AssistantTool("data.mutate", "Изменить запись", "Готовит предпросмотр универсального создания, изменения или удаления обычной записи. Исполнение возможно только кнопкой подтверждения в текущей беседе.", {"action": "create|update|delete", "model": "app.Model", "object_id": "integer|null", "values": "object"}, False, True, True, _mutation_preview_only, domain="platform", operation="mutate"))
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
 register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
 register_tool(AssistantTool("provider.calculator_schema", "Входы калькулятора", "Показывает подтверждённую схему калькулятора.", {"binding_id": "integer"}, True, False, False, _calculator_schema))

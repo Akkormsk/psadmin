@@ -3169,6 +3169,93 @@
     },
     {
       "app": "tenders",
+      "db_table": "tenders_agentgap",
+      "fields": [
+        {
+          "blank": true,
+          "name": "id",
+          "null": false,
+          "primary_key": true,
+          "relation": null,
+          "type": "BigAutoField"
+        },
+        {
+          "blank": false,
+          "name": "request_summary",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "category",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": false,
+          "name": "technical_reason",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "missing_capability",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "proposed_resolution",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "TextField"
+        },
+        {
+          "blank": false,
+          "name": "status",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "CharField"
+        },
+        {
+          "blank": true,
+          "name": "created_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        },
+        {
+          "blank": true,
+          "name": "updated_at",
+          "null": false,
+          "primary_key": false,
+          "relation": null,
+          "type": "DateTimeField"
+        }
+      ],
+      "id": "tenders.AgentGap",
+      "model": "AgentGap",
+      "read": true,
+      "standard_crud": {
+        "confirmation_required": true,
+        "create": true,
+        "delete": true,
+        "update": true
+      }
+    },
+    {
+      "app": "tenders",
       "db_table": "tenders_assistantoperation",
       "fields": [
         {
@@ -7840,6 +7927,22 @@
       "read_only": true,
       "requires_confirmation": false,
       "requires_superuser": false
+    },
+    {
+      "domain": "platform",
+      "id": "data.mutate",
+      "input_schema": {
+        "action": "create|update|delete",
+        "model": "app.Model",
+        "object_id": "integer|null",
+        "values": "object"
+      },
+      "operation": "mutate",
+      "output_schema": {},
+      "python_path": "tenders.assistant_tools._mutation_preview_only",
+      "read_only": false,
+      "requires_confirmation": true,
+      "requires_superuser": true
     },
     {
       "domain": "platform",

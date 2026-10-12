@@ -1068,6 +1068,20 @@ class AssistantOperation(models.Model):
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PREVIEW)
     created_at = models.DateTimeField(auto_now_add=True)
     executed_at = models.DateTimeField(null=True, blank=True)
+
+
+class AgentGap(models.Model):
+    """Verified platform limitation, never a missing user-supplied parameter."""
+    STATUS_OPEN = "open"
+    STATUS_RESOLVED = "resolved"
+    request_summary = models.CharField(max_length=500)
+    category = models.CharField(max_length=64)
+    technical_reason = models.TextField()
+    missing_capability = models.CharField(max_length=200)
+    proposed_resolution = models.TextField(blank=True)
+    status = models.CharField(max_length=16, default=STATUS_OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 class KnowledgeRecord(models.Model):
     feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 

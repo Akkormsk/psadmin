@@ -142,3 +142,13 @@ class AssistantConversationTests(TestCase):
         )
         self.assertEqual(confirmed.status_code, 200)
         self.assertTrue(ProcessDefinition.objects.filter(name="Этап через чат").exists())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_agent_routes_generic_mutation_to_confirmation_not_database_write(self, request, _preflight):
+        request.return_value = {"reply": "Подготовил этап.", "action": {"id": "data.mutate", "arguments": {"action": "create", "model": "tenders.ProcessDefinition", "object_id": None, "values": {"name": "Из плана", "role": "production"}}}}
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Этап"}, secure=True).json()["conversation"]["id"]
+        response = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Создай этап"}), content_type="application/json", secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["kind"], "confirmation")
+        self.assertFalse(ProcessDefinition.objects.filter(name="Из плана").exists())

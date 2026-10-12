@@ -73,6 +73,14 @@ def reply(conversation, user, message, page_context=None):
         if not isinstance(identifier, str) or not isinstance(arguments, dict) or identifier not in {tool["id"] for tool in tools}:
             raise TenderAIError("Ассистент запросил действие вне реестра.")
         selected_tool = next(tool for tool in tools if tool["id"] == identifier)
+        if identifier == "data.mutate":
+            from .agent_crud import CrudError, preview
+
+            try:
+                data = preview(conversation, user, arguments)
+            except CrudError as exc:
+                return {"text": str(exc), "kind": "tool_error", "data": {"tool_id": identifier}}
+            return {"text": plan["reply"].strip(), "kind": "confirmation", "data": data}
         if selected_tool.get("ui"):
             data = {"tool_id": identifier}
             for name, source in selected_tool["ui"].get("options", {}).items():

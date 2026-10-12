@@ -104,3 +104,14 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["status"], "executed")
         with self.assertRaisesRegex(Exception, "уже использовано"):
             confirm(conversation, self.admin, item["operation_id"], item["token"], True)
+
+    def test_gap_export_uses_database_as_source_of_truth(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from .agent_gaps import export_gaps, record_gap
+
+        record_gap("Нет маршрута доставки", "missing_service", "В реестре нет сервиса логистики", "logistics.quote", "Зарегистрировать сервис логистики")
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_gaps.jsonl"
+            export_gaps(path)
+            self.assertIn('"missing_capability": "logistics.quote"', path.read_text(encoding="utf-8"))
