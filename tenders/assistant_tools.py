@@ -138,10 +138,24 @@ def _create_order_record(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def _tender_action(name):
+    def execute(user, payload):
+        from tender_selection import assistant_actions
+        try:
+            return getattr(assistant_actions, name)(user, payload)
+        except (AttributeError, ValueError) as exc:
+            raise AssistantToolError(str(exc)) from exc
+    return execute
+
+
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", {"plan": "object"}, True, False, True, _read_data))
 register_tool(AssistantTool("cash.transaction_create", "Создать операцию кассы", "Создаёт операцию кассы через действующую форму и журнал аудита.", {"operation_date": "YYYY-MM-DD", "account": "cash|card", "direction": "income|expense", "amount": "number", "reason": "string"}, False, True, True, _create_cash_transaction))
 register_tool(AssistantTool("finance.order_record_create", "Создать закрытый заказ", "Создаёт запись закрытого заказа через действующую финансовую форму.", {"record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}, False, True, True, _create_order_record))
+register_tool(AssistantTool("tender.pull", "Обновить тендеры", "Запускает действующую выгрузку тендеров и возвращает реальный результат запуска.", {"max_requests": "integer?"}, False, True, True, _tender_action("pull")))
+register_tool(AssistantTool("tender.push_to_calculation", "Передать тендер в расчёт", "Создаёт просчёт через существующий сервис отбора тендеров.", {"tender_id": "integer"}, False, True, True, _tender_action("push_to_calculation")))
+register_tool(AssistantTool("tender.risk_assessment", "Оценить риски тендера", "Запускает существующую фоновую оценку рисков.", {"tender_id": "integer"}, False, True, True, _tender_action("start_risk")))
+register_tool(AssistantTool("tender.archive", "Архивировать тендер", "Архивирует тендер через существующий сервис жизненного цикла.", {"tender_id": "integer"}, False, True, True, _tender_action("archive")))
 register_tool(AssistantTool("provider.find", "Найти контрагента", "Ищет активных контрагентов.", {"query": "string"}, True, False, False, _find_counterparty))
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
 register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
