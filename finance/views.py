@@ -7,7 +7,7 @@ from django.utils import timezone
 from calendar import monthrange
 
 from .forms import OrderRecordCreateForm
-from .actions import FinanceActionError, create_order_record, delete_order_record, update_order_record
+from .actions import FinanceActionError, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, save_operating_expenses, update_order_record
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -122,23 +122,6 @@ def _base_salary(line, period):
         worked_part = line.fixed_salary * worked_days / workdays_in_month
         return (worked_part + leave_days * line.leave_shift_rate).quantize(Decimal("0.01"))
     return line.work_shifts * line.shift_rate + line.leave_shifts * line.leave_shift_rate
-
-
-def _sync_open_period_expenses(period, refresh_values=False):
-    if period.is_closed:
-        return
-    if refresh_values:
-        PeriodExpense.objects.filter(period=period, template__is_active=False).delete()
-    for template in OperatingExpense.objects.filter(is_active=True):
-        expense, created = PeriodExpense.objects.get_or_create(
-            period=period,
-            template=template,
-            defaults={"name": template.name, "amount": template.amount},
-        )
-        if refresh_values and not created:
-            expense.name = template.name
-            expense.amount = template.amount
-            expense.save(update_fields=("name", "amount"))
 
 
 def _period_options(code):
@@ -338,22 +321,15 @@ def expenses(request):
     if request.method == "POST":
         delete_id = request.POST.get("delete_expense")
         if delete_id:
-            expense = OperatingExpense.objects.filter(pk=delete_id).first()
-            if expense:
-                PeriodExpense.objects.filter(template=expense, period__is_closed=False).delete()
-                expense.delete()
+            try:
+                delete_operating_expense(request.user, delete_id)
+            except FinanceActionError:
+                pass
             return redirect(f"{request.path}?period={period_code}")
-        for expense in OperatingExpense.objects.all():
-            expense.name = request.POST.get(f"name_{expense.pk}", expense.name).strip() or expense.name
-            expense.amount = request.POST.get(f"amount_{expense.pk}") or 0
-            expense.is_active = True
-            expense.save()
-        new_name = request.POST.get("new_name", "").strip()
-        new_amount = request.POST.get("new_amount") or 0
-        if new_name:
-            OperatingExpense.objects.update_or_create(name=new_name, defaults={"amount": new_amount, "is_active": True})
-        for open_period in FinancialPeriod.objects.filter(is_closed=False):
-            _sync_open_period_expenses(open_period, refresh_values=True)
+        save_operating_expenses(request.user, {
+            "updates": [{"id": expense.pk, "name": request.POST.get(f"name_{expense.pk}", expense.name), "amount": request.POST.get(f"amount_{expense.pk}") or 0} for expense in OperatingExpense.objects.all()],
+            "new": {"name": request.POST.get("new_name", ""), "amount": request.POST.get("new_amount") or 0},
+        })
         return redirect(f"{request.path}?period={period_code}")
     _sync_open_period_expenses(period)
     return render(request, "finance/expenses.html", {"period": period, "expenses": OperatingExpense.objects.all()})

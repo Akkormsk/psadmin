@@ -9,6 +9,7 @@ from django.urls import reverse
 from payroll.models import OrderRecord
 
 from .models import FinancialPeriod, KpiTier, ManagerKpiRate, ManagerSettings, PayrollLine
+from .actions import delete_operating_expense, save_operating_expenses
 from .views import _base_salary
 
 
@@ -40,6 +41,25 @@ class PrinterSalaryTests(TestCase):
             _base_salary(line, period),
             Decimal("63714.29"),
         )
+
+
+class OperatingExpenseActionTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser(username="expense-admin", password="password")
+
+    def test_shared_expense_actions_update_open_periods_and_delete_only_open_copies(self):
+        open_period = FinancialPeriod.objects.create(code="2026-10")
+        closed_period = FinancialPeriod.objects.create(code="2026-09", is_closed=True)
+        created = save_operating_expenses(self.admin, {"new": {"name": "Аренда", "amount": "10000"}})
+        expense_id = created["created_id"]
+        self.assertEqual(open_period.expenses.get(template_id=expense_id).amount, Decimal("10000"))
+        save_operating_expenses(self.admin, {"updates": [{"id": expense_id, "name": "Аренда офиса", "amount": "12000"}]})
+        self.assertEqual(open_period.expenses.get(template_id=expense_id).amount, Decimal("12000"))
+        from .models import PeriodExpense
+        PeriodExpense.objects.create(period=closed_period, template_id=expense_id, name="Аренда офиса", amount="12000")
+        delete_operating_expense(self.admin, expense_id)
+        self.assertFalse(open_period.expenses.filter(template_id=expense_id).exists())
+        self.assertTrue(PeriodExpense.objects.filter(period=closed_period, template_id=None, name="Аренда офиса").exists())
 
 
 class CalculationPeriodOptionsTests(TestCase):
