@@ -2,7 +2,7 @@
 from decimal import Decimal, InvalidOperation
 
 from .models import ContractStat, FilterSettings, Tender, TenderDismissalFeedback
-from .services import apply_tender_outcome, archive_tender, push_to_estimate, run_pull, set_our_bid, start_risk_assessment_in_background
+from .services import apply_tender_outcome, archive_tender, clear_tender_document_previews, push_to_estimate, run_pull, set_our_bid, start_risk_assessment_in_background
 
 
 def pull(_user, payload):
@@ -38,6 +38,7 @@ def dismiss(_user, payload):
     reason = payload.get("reason")
     if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
         TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
+    clear_tender_document_previews(tender)
     archive_tender(tender)
     return {"tender_id": tender.pk, "status": tender.status}
 

@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 MSK = ZoneInfo("Europe/Moscow")
 UTC = ZoneInfo("UTC")
 
+
+def clear_tender_document_previews(tender) -> None:
+    """Shared side effect of hiding a tender from every entry point."""
+    from .notification import parse_notification
+
+    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    urls = [doc.get("url") for doc in (card or {}).get("documents", []) if doc.get("url")]
+    if urls:
+        DocumentPreview.objects.filter(url__in=urls).delete()
+
 # служебные слова в названии организации -> в аббревиатуру / выкинуть
 _ORG_ABBR = [
     ("федеральное государственное бюджетное образовательное учреждение высшего образования", "ФГБОУ ВО"),

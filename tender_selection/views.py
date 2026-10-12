@@ -855,10 +855,9 @@ def _doc_by_idx(tender, idx):
 
 
 def _clear_tender_document_previews(tender):
-    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
-    urls = [doc.get("url") for doc in (card or {}).get("documents", []) if doc.get("url")]
-    if urls:
-        DocumentPreview.objects.filter(url__in=urls).delete()
+    from .services import clear_tender_document_previews
+
+    return clear_tender_document_previews(tender)
 
 
 
