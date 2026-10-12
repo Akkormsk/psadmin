@@ -47,32 +47,32 @@ jobs:
           tender_id="$1"; root=/home/deploy; prod="$root/psadmin/deploy/vds/compose.yml"; test="$root/psadmin-test/deploy/vds/compose.test.yml"; fixture="$(mktemp /tmp/one-tender.XXXXXX.json)"
           cleanup() { rm -f "$fixture"; }; trap cleanup EXIT
           docker compose -f "$prod" exec -T web python manage.py shell -c "
-import json
-from django.forms.models import model_to_dict
-from django.core.serializers.json import DjangoJSONEncoder
-from tender_selection.models import Tender, DocumentPreview
-from tender_selection.notification import parse_notification
-t=Tender.objects.get(pk=$tender_id)
-urls=[d.get('url') for d in parse_notification(t.notification_raw).get('documents',[]) if d.get('url')]
-print(json.dumps({'pk':t.pk,'tender':model_to_dict(t),'documents':[model_to_dict(d) for d in DocumentPreview.objects.filter(url__in=urls)]}, cls=DjangoJSONEncoder))
-" > "$fixture"
+          import json
+          from django.forms.models import model_to_dict
+          from django.core.serializers.json import DjangoJSONEncoder
+          from tender_selection.models import Tender, DocumentPreview
+          from tender_selection.notification import parse_notification
+          t=Tender.objects.get(pk=$tender_id)
+          urls=[d.get('url') for d in parse_notification(t.notification_raw).get('documents',[]) if d.get('url')]
+          print(json.dumps({'pk':t.pk,'tender':model_to_dict(t),'documents':[model_to_dict(d) for d in DocumentPreview.objects.filter(url__in=urls)]}, cls=DjangoJSONEncoder))
+          " > "$fixture"
           docker compose -f "$test" run --rm -T test-web python manage.py shell -c "
-import json,sys
-from tender_selection.models import Tender,DocumentPreview
-p=json.load(sys.stdin); Tender.objects.filter(pk=p['pk']).delete(); Tender.objects.create(pk=p['pk'],**p['tender'])
-for d in p['documents']: DocumentPreview.objects.update_or_create(url=d['url'],defaults=d)
-print(json.dumps({'copied_tender':p['pk'],'documents':len(p['documents'])}))
-" < "$fixture"
+          import json,sys
+          from tender_selection.models import Tender,DocumentPreview
+          p=json.load(sys.stdin); Tender.objects.filter(pk=p['pk']).delete(); Tender.objects.create(pk=p['pk'],**p['tender'])
+          for d in p['documents']: DocumentPreview.objects.update_or_create(url=d['url'],defaults=d)
+          print(json.dumps({'copied_tender':p['pk'],'documents':len(p['documents'])}))
+          " < "$fixture"
           docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance | grep -E 'Баланс|Balance'
           docker compose -f "$test" run --rm -T test-web python manage.py shell -c "
-import json
-from tender_selection.models import Tender
-from tenders.models import TenderComputeJob,TenderSourceItem
-from tenders.calculation_v2_pipeline import run_next_tender_understanding_job
-t=Tender.objects.get(pk=$tender_id); TenderComputeJob.objects.filter(tender=t).delete(); TenderComputeJob.objects.create(tender=t,trigger='manual_document_review',version='v2')
-j=run_next_tender_understanding_job()
-assert j and j.tender_id==t.pk, 'wrong queued job'
-print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'proposals':TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).count(),'diagnostics':j.diagnostics},ensure_ascii=False))
-"
+          import json
+          from tender_selection.models import Tender
+          from tenders.models import TenderComputeJob,TenderSourceItem
+          from tenders.calculation_v2_pipeline import run_next_tender_understanding_job
+          t=Tender.objects.get(pk=$tender_id); TenderComputeJob.objects.filter(tender=t).delete(); TenderComputeJob.objects.create(tender=t,trigger='manual_document_review',version='v2')
+          j=run_next_tender_understanding_job()
+          assert j and j.tender_id==t.pk, 'wrong queued job'
+          print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'proposals':TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).count(),'diagnostics':j.diagnostics},ensure_ascii=False))
+          "
           docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance | grep -E 'Баланс|Balance'
           REMOTE
