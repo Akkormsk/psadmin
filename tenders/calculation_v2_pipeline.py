@@ -428,6 +428,32 @@ def queue_visible_backfill(*, limit: int) -> list[TenderComputeJob]:
     return jobs
 
 
+def eligible_existing_recheck_tenders(*, limit: int) -> list[Tender]:
+    """Opt-in future recheck set: current Incoming plus Kanban, never dismissed/archived."""
+    from django.conf import settings
+    if limit < 1 or not settings.CALCULATION_V2_EXISTING_RECHECK_ENABLED:
+        return []
+    already_queued = TenderComputeJob.objects.filter(tender_id=OuterRef("pk"), version="v2-existing-recheck")
+    return list(
+        Tender.objects.filter(status__in=[Tender.NEW, Tender.PUSHED], archived_at__isnull=True)
+        .annotate(has_recheck=Exists(already_queued)).filter(has_recheck=False)
+        .order_by("-published_at", "pk")[:limit]
+    )
+
+
+def queue_existing_recheck(*, limit: int) -> list[TenderComputeJob]:
+    from django.conf import settings
+    if not settings.CALCULATION_V2_EXISTING_RECHECK_ENABLED:
+        return []
+    return [
+        TenderComputeJob.objects.get_or_create(
+            tender=tender, version="v2-existing-recheck",
+            defaults={"trigger": "owner_enabled_existing_recheck"},
+        )[0]
+        for tender in eligible_existing_recheck_tenders(limit=limit)
+    ]
+
+
 def _notification_rows(tender: Tender) -> list[dict]:
     if not tender.notification_raw:
         return []
