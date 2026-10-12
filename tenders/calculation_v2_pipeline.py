@@ -163,13 +163,12 @@ class GatewayBatchRouter:
 class GatewayDocumentEnricher:
     """One bounded, evidence-only document analysis for the pre-routing intake stage."""
 
-    # These limits are intentionally conservative: a tender gets one provider
-    # request and its worst-case priced token envelope must stay below 1 ₽.
-    # They are environment settings only to allow a *lower* operational limit;
-    # a higher value never bypasses the hard one-ruble guard in extract_tender.
+    # The bounded prompt and one provider attempt make Flash Lite economical.
+    # One ruble is a portfolio target, tracked in diagnostics, not a reason to
+    # leave an unusually rich tender without document analysis.
     DOCUMENT_INPUT_CHAR_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_INPUT_CHAR_LIMIT", "18000"))
     DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "1200"))
-    DOCUMENT_RUN_COST_LIMIT_RUB = 1.00
+    DOCUMENT_AVERAGE_COST_TARGET_RUB = 1.00
 
     def __init__(self, model=None):
         # Document composition has its own deliberately inexpensive default;
@@ -263,8 +262,8 @@ class GatewayDocumentEnricher:
         }
         prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. Return enrich only for explicitly documented facts about that same notification item. Return split only where a document explicitly replaces an aggregate item with separately named goods. Return component only where contents of an aggregate are explicitly enumerated; quantity_per_parent is the documented amount in one aggregate. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         estimated_cost, estimated_usage = self._preflight_cost(prompt)
-        if estimated_cost is None or estimated_cost > self.DOCUMENT_RUN_COST_LIMIT_RUB:
-            self.diagnostics = {"outcome": "budget_blocked", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost) if estimated_cost is not None else None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+        if estimated_cost is None:
+            self.diagnostics = {"outcome": "unpriced_model", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         try:
             raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1, json_attempts=1)
@@ -273,9 +272,6 @@ class GatewayDocumentEnricher:
             raise
         self.usage = extract_usage
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
-        if self.cost_rub > self.DOCUMENT_RUN_COST_LIMIT_RUB:
-            self.diagnostics = {"outcome": "budget_exceeded", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
-            return []
         allowed_urls = {doc["url"] for doc in available if doc["text"]}
         output, rejections = [], []
         for index, row in enumerate(raw.get("items", []) if isinstance(raw, dict) else []):
@@ -294,7 +290,7 @@ class GatewayDocumentEnricher:
                 rejections.append({"index": index, "reason": "invalid_structure"}); continue
             output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id))
         outcome = "success" if output else ("validation_failure" if rejections else "no_data")
-        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage}, "extraction": {"selected_urls": sorted(allowed_urls), "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
+        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage, "target_exceeded": self.cost_rub > self.DOCUMENT_AVERAGE_COST_TARGET_RUB}, "extraction": {"selected_urls": sorted(allowed_urls), "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
         return output
 
     def extract(self, *, tender, aggregate, documents):
@@ -604,7 +600,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
         extracted = extract_tender(tender=tender, source_items=active, documents=quality["documents"])
         detail = getattr(enricher, "diagnostics", {}) or {}
         outcome = detail.get("outcome")
-        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded"}:
+        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
             return {"created": [], "state": outcome, "diagnostics": [detail]}
         parents = {item.pk: item for item in active}
         proposals = []
@@ -636,7 +632,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
         detail = getattr(enricher, "diagnostics", {}) or {}
         diagnostics.append(detail)
         outcome = detail.get("outcome")
-        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded"}:
+        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
             return {"created": created, "state": outcome, "diagnostics": diagnostics}
         if not extracted:
             continue
@@ -887,7 +883,7 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
         quality = assess_quality(job.tender, source_items)
         enrichment_started = time.monotonic()
         enrichment = enrich_suspicious_tender(job.tender, quality, enricher)
-        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded"}:
+        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
             job.status = TenderComputeJob.Status.PARTIAL
             job.completed_at = timezone.now()
             job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))

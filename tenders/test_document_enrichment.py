@@ -38,7 +38,7 @@ class NoDataEnricher:
 
 class BudgetBlockedEnricher:
     def __init__(self):
-        self.diagnostics = {"outcome": "budget_blocked", "budget": {"limit_rub": "1.0"}}
+        self.diagnostics = {"outcome": "unpriced_model", "budget": {"average_target_rub": "1.0"}}
         self.cost_rub = 0
 
     def extract_tender(self, **kwargs):
@@ -87,12 +87,12 @@ class DocumentEnrichmentRegressionTests(TestCase):
         self.assertTrue(OwnerInteraction.objects.filter(tender=tender).exists())
 
     @override_settings(CALCULATION_V2_ENABLED=True)
-    def test_budget_blocked_document_analysis_does_not_continue_to_routing(self):
+    def test_unpriced_document_model_does_not_continue_to_routing(self):
         tender = self.tender()
         trigger_visible_tender(tender)
         job = run_next_tender_understanding_job(router=ExistingKnowledgeBatchRouter(), enricher=BudgetBlockedEnricher())
         self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)
-        self.assertEqual(job.diagnostics["enrichment_state"], "budget_blocked")
+        self.assertEqual(job.diagnostics["enrichment_state"], "unpriced_model")
 
 
 class GatewayDocumentEnricherBudgetTests(TestCase):
@@ -138,11 +138,11 @@ class GatewayDocumentEnricherBudgetTests(TestCase):
         self.assertEqual(enricher.diagnostics["documents"]["considered"].__len__(), 2)
 
     @patch("tenders.services._ai_gateway_json")
-    def test_expensive_model_is_blocked_before_any_gateway_call(self, gateway):
-        enricher = GatewayDocumentEnricher(model="gemini/gemini-3.1-pro-preview")
+    def test_unpriced_model_is_blocked_before_any_gateway_call(self, gateway):
+        enricher = GatewayDocumentEnricher(model="unpriced/model")
 
         result = enricher.extract_tender(tender=self.tender, source_items=[self.source], documents=self.documents)
 
         self.assertEqual(result, [])
-        self.assertEqual(enricher.diagnostics["outcome"], "budget_blocked")
+        self.assertEqual(enricher.diagnostics["outcome"], "unpriced_model")
         gateway.assert_not_called()
