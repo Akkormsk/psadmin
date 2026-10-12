@@ -8,6 +8,16 @@ name: Verify one tender composition on test
         required: true
         default: "2042"
         type: string
+      model:
+        description: "AI model for this one review (empty = server default)"
+        required: false
+        default: ""
+        type: string
+      fresh_documents:
+        description: "Delete the application document cache and fetch the documents again from EIS"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +33,8 @@ jobs:
       SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
       SSH_USER: deploy
       TENDER_ID: ${{ inputs.tender_id }}
+      TENDER_MODEL: ${{ inputs.model }}
+      FRESH_DOCUMENTS: ${{ inputs.fresh_documents }}
     steps:
       - name: Validate identifier and configure SSH
         env:
@@ -40,11 +52,15 @@ jobs:
       - name: Copy one tender to test and run one document review
         run: |
           set -euo pipefail
+          case "$TENDER_MODEL" in *[![:alnum:]./_-]*) echo "invalid model" >&2; exit 2;; esac
+          case "$FRESH_DOCUMENTS" in true|false) ;; *) echo "invalid fresh_documents" >&2; exit 2;; esac
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '$TENDER_ID'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '$TENDER_ID' '$TENDER_MODEL' '$FRESH_DOCUMENTS'" <<'REMOTE'
           set -euxo pipefail
-          tender_id="$1"; root=/home/deploy; prod="$root/psadmin/deploy/vds/compose.yml"; test="$root/psadmin-test/deploy/vds/compose.test.yml"; fixture="$(mktemp /tmp/one-tender.XXXXXX.json)"
+          tender_id="$1"; model="$2"; fresh_documents="$3"; root=/home/deploy; prod="$root/psadmin/deploy/vds/compose.yml"; test="$root/psadmin-test/deploy/vds/compose.test.yml"; fixture="$(mktemp /tmp/one-tender.XXXXXX.json)"
+          case "$model" in *[![:alnum:]./_-]*) echo "invalid model" >&2; exit 2;; esac
+          case "$fresh_documents" in true|false) ;; *) echo "invalid fresh_documents" >&2; exit 2;; esac
           echo "remote: copying tender ${tender_id}"
           cleanup() { status=$?; rm -f "$fixture"; exit "$status"; }; trap cleanup EXIT
           docker compose -f "$prod" exec -T web python manage.py shell --no-imports -c "
@@ -70,13 +86,20 @@ jobs:
           echo "remote: imported test fixture"
           docker compose -f "$test" run --rm -T test-web python manage.py shell --no-imports -c "
           import json
-          from tender_selection.models import Tender
+          from tender_selection.models import Tender,DocumentPreview
+          from tender_selection.notification import parse_notification
+          from tender_selection.services import documents_html
           from tenders.models import TenderComputeJob,TenderSourceItem
-          from tenders.calculation_v2_pipeline import run_next_tender_understanding_job
-          t=Tender.objects.get(pk=$tender_id); TenderComputeJob.objects.filter(tender=t).delete(); TenderComputeJob.objects.create(tender=t,trigger='manual_document_review',version='v2')
-          j=run_next_tender_understanding_job()
+          from tenders.calculation_v2_pipeline import GatewayDocumentEnricher,run_next_tender_understanding_job
+          t=Tender.objects.get(pk=$tender_id); docs=parse_notification(t.notification_raw).get('documents',[]); urls=[d.get('url') for d in docs if d.get('url')]
+          TenderComputeJob.objects.filter(tender=t).delete(); TenderSourceItem.objects.filter(tender=t,source_type='document_proposal').delete()
+          if '$fresh_documents' == 'true':
+              DocumentPreview.objects.filter(url__in=urls).delete(); documents_html(t, docs)
+          TenderComputeJob.objects.create(tender=t,trigger='manual_document_review',version='v2')
+          j=run_next_tender_understanding_job(enricher=GatewayDocumentEnricher(model='$model') if '$model' else None)
           assert j and j.tender_id==t.pk, 'wrong queued job'
-          print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'proposals':TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).count(),'diagnostics':j.diagnostics},ensure_ascii=False))
+          proposals=[{'parent':item.parent.original_text if item.parent_id else '', 'name':item.original_text, 'quantity':str(item.quantity or ''), 'unit':item.unit, 'relationship':item.metadata.get('relationship'), 'quantity_per_parent':item.metadata.get('quantity_per_parent'), 'requirements':item.requirements, 'source':item.provenance.get('document_url'), 'section':item.provenance.get('page_or_section'), 'evidence':item.provenance.get('evidence')} for item in TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).select_related('parent').order_by('parent_id','pk')]
+          print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'fresh_documents':'$fresh_documents' == 'true','model':'$model' or None,'proposals':proposals,'diagnostics':j.diagnostics},ensure_ascii=False,default=str))
           " </dev/null
           echo "remote: completed tender ${tender_id}"
           REMOTE
