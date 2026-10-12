@@ -2,7 +2,7 @@
 
 Workflow `.github/workflows/deploy-test-vds.yml` обновляет **только**
 `https://test.admin.psodin.ru`. Он запускается при каждом push в ветку
-`codex/calculation-v2-foundation`, собирает архив точного commit SHA и по SSH
+`test-server`, собирает архив точного commit SHA и по SSH
 передаёт его на VDS. В workflow нет `refresh-db`, команд production Compose,
 путей production-кода или production-БД.
 
@@ -48,7 +48,7 @@ repository secret** и создать:
 
 ## Запуск и откат
 
-1. Отправить commit строго в `codex/calculation-v2-foundation`.
+1. Отправить commit строго в `test-server`.
 2. Дождаться зелёного workflow **Deploy test VDS**: он проверяет Docker health
    `test-web` и URL `https://test.admin.psodin.ru`.
 3. Для отката отправить в эту же ветку commit с нужным состоянием кода. Не

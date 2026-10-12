@@ -3,11 +3,11 @@ name: Deploy test VDS
 on:
   push:
     branches:
-      - codex/calculation-v2-foundation
+      - test-server
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Commit SHA from codex/calculation-v2-foundation; leave empty for the selected branch HEAD"
+        description: "Commit SHA from test-server; leave empty for the selected branch HEAD"
         required: false
         type: string
 
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/codex/calculation-v2-foundation'
+    if: github.ref == 'refs/heads/test-server'
     runs-on: ubuntu-latest
     env:
       TEST_URL: https://test.admin.psodin.ru
@@ -40,8 +40,8 @@ jobs:
         run: |
           set -euo pipefail
           deploy_sha="$(git rev-parse HEAD)"
-          git fetch --no-tags origin codex/calculation-v2-foundation
-          git merge-base --is-ancestor "$deploy_sha" origin/codex/calculation-v2-foundation
+          git fetch --no-tags origin test-server
+          git merge-base --is-ancestor "$deploy_sha" origin/test-server
           printf 'sha=%s\n' "$deploy_sha" >> "$GITHUB_OUTPUT"
           git archive --format=tar "$deploy_sha" | gzip -9 > psadmin-test.tar.gz
 

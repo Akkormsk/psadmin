@@ -2,7 +2,7 @@
 
 ## Read this first
 
-Work in `Akkormsk/psadmin`, branch `codex/calculation-v2-foundation`.
+Work in `Akkormsk/psadmin`, branch `test-server`.
 Test is deployed from that branch only; production remains on `main` and must
 not be changed. Before editing, read `AGENTS.md`, `docs/PSADMIN.md` and this
 file, then verify branch, HEAD, Git status and test deployment.
@@ -107,7 +107,7 @@ enable it in test or production until intake quality is accepted.
 
 ```text
 Read AGENTS.md, docs/PSADMIN.md and docs/CLAUDE_HANDOFF.md. Work only in
-codex/calculation-v2-foundation. Continue the V2 incoming-tender understanding
+test-server. Continue the V2 incoming-tender understanding
 milestone: add semantic fit/not-fit/review after title triage and before
 routing, using the existing bounded evidence-only document pipeline. Never
 hardcode document names or product keywords; preserve owner review and do not
