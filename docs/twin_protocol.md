@@ -32,10 +32,15 @@
 
 ## Техника (для агента)
 
-- Выкладка на тест: из рабочей копии агента
-  `git ls-files -co --exclude-standard -z | tar --null -cf - -T - | ssh deploy@46.149.70.38 '…'` —
-  распаковать в `~/psadmin-test.new`, заменить `~/psadmin-test`, записать `~/psadmin-test/.twin-version`
-  (время + коммит), затем `~/psadmin-test/deploy/vds/twin.sh up`.
+- **Штатный и единственный способ выкладки на тест — GitHub Actions →
+  `Deploy test VDS`.** Агент отправляет проверенную ветку в GitHub, затем
+  вручную запускает workflow с этой веткой и точным SHA. Workflow сериализует
+  выкладки, проверяет commit, сохраняет прошлый release и проверяет healthcheck
+  теста. Подробности — в `docs/test_github_actions_deploy.md`.
+- Не создавать и не привязывать временные SSH-ключи, не использовать Timeweb
+  API и не выполнять прямой SSH из чата. Доступ к VDS находится только в
+  GitHub Actions secrets; это исключает утечку ключей и не требует доступа от
+  каждого следующего чата.
 - Настройки теста: `~/psadmin-test.env` (все `*_ENABLED=0`, своя база `test-db`, свой `DJANGO_SECRET_KEY`).
 - «обнови тестовую базу»: `~/psadmin-test/deploy/vds/twin.sh refresh-db`.
 - Разовая задача: `docker compose -f ~/psadmin-test/deploy/vds/compose.test.yml run --rm -T test-web python manage.py <команда>`.
