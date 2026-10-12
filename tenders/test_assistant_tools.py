@@ -69,6 +69,15 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(str(result["aggregates"]["sum_amount"]), "60")
         self.assertEqual(len(result["evidence"]), 1)
 
+    def test_universal_query_groups_cash_operations_by_direction(self):
+        from cash.models import CashTransaction
+        from datetime import date
+
+        CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="income", amount="100", reason="Оплата", created_by=self.user)
+        CashTransaction.objects.create(operation_date=date(2026, 9, 2), account="cash", direction="expense", amount="30", reason="Бумага", created_by=self.user)
+        result = execute_tool("data.query", self.user, {"plan": {"entity": "cash_transaction", "group_by": ["direction"], "aggregates": [{"op": "sum", "field": "amount"}]}})
+        self.assertEqual(result["records"], [{"direction": "expense", "sum_amount": "30"}, {"direction": "income", "sum_amount": "100"}])
+
     def test_universal_query_cannot_follow_other_users_order(self):
         mine = Order.objects.create(name="Мой")
         OrderEstimate.objects.create(owner=self.user, order=mine, order_number="mine", name="Мой")

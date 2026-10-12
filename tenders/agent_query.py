@@ -88,7 +88,7 @@ def _value(value):
 
 
 def execute_plan(user, plan: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(plan, dict) or set(plan) - {"entity", "filters", "search", "fields", "order_by", "page", "page_size", "aggregates"}:
+    if not isinstance(plan, dict) or set(plan) - {"entity", "filters", "search", "fields", "order_by", "page", "page_size", "aggregates", "group_by"}:
         raise QueryPlanError("Некорректный план запроса")
     entity = ENTITIES.get(plan.get("entity"))
     if not entity:
@@ -122,6 +122,17 @@ def execute_plan(user, plan: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict) or set(item) != {"op", "field"} or item["op"] not in AGGREGATES or item["field"] not in entity.fields:
             raise QueryPlanError("Некорректная агрегация")
         annotations[f"{item['op']}_{item['field']}"] = AGGREGATES[item["op"]](entity.fields[item["field"]])
+    group_by = plan.get("group_by", [])
+    if not isinstance(group_by, list) or any(field not in entity.fields for field in group_by):
+        raise QueryPlanError("Некорректная группировка")
+    if group_by:
+        grouped = list(qs.values(*[entity.fields[field] for field in group_by]).annotate(**annotations).order_by(*[entity.fields[field] for field in group_by])[:MAX_LIMIT])
+        records = []
+        for row in grouped:
+            record = {field: _value(row.get(entity.fields[field])) for field in group_by}
+            record.update({key: _value(value) for key, value in row.items() if key in annotations})
+            records.append(record)
+        return {"entity": entity.identifier, "total_count": qs.count(), "returned_count": len(records), "aggregates": {}, "records": records, "pagination": {"page": 1, "page_size": MAX_LIMIT}, "evidence": []}
     aggregate_values = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
     total_count = qs.count()
     order_by = plan.get("order_by", entity.default_order)

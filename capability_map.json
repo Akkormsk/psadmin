@@ -7953,6 +7953,7 @@
           "entity": "catalogue id",
           "fields": "string[]?",
           "filters": "[{field,op,value}]?",
+          "group_by": "string[]?",
           "order_by": "field?",
           "page": "integer?",
           "page_size": "integer?",
