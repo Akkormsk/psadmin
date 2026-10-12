@@ -833,6 +833,31 @@ def owner_interaction_answer(request, pk, interaction_pk):
 
 
 @tender_viewer_required
+@require_POST
+def document_proposal_action(request, pk, parent_pk):
+    tender = get_object_or_404(Tender, pk=pk)
+    from tenders.models import TenderSourceItem
+
+    parent = get_object_or_404(TenderSourceItem, pk=parent_pk, tender=tender)
+    proposals = list(TenderSourceItem.objects.filter(tender=tender, parent=parent, source_type="document_proposal"))
+    if not proposals:
+        messages.error(request, "Предложения из документации не найдены.")
+        return redirect(reverse("tender_selection:detail", args=[tender.pk]))
+    if request.POST.get("action") == "accept":
+        for proposal in proposals:
+            proposal.source_type = "document_extraction"
+            proposal.is_active = True
+            proposal.save(update_fields=["source_type", "is_active"])
+        parent.is_active = False
+        parent.save(update_fields=["is_active"])
+        messages.success(request, "Состав из документации принят. Расчёт можно запустить заново.")
+    else:
+        TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
+        messages.info(request, "Предложения из документации отклонены.")
+    return redirect(reverse("tender_selection:detail", args=[tender.pk]))
+
+
+@tender_viewer_required
 def risk_status(request, pk):
     """AJAX-эндпоинт для блока «Оценка рисков» на карточке — считает (или берёт из
     кэша) и отдаёт готовый HTML-фрагмент. Чтение документов и запрос к ИИ-шлюзу могут
