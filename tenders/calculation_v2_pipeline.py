@@ -562,11 +562,23 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
         outcome = detail.get("outcome")
         if outcome in {"system_extraction_failure", "validation_failure"}:
             return {"created": [], "state": outcome, "diagnostics": [detail]}
-        by_parent = {}
+        parents = {item.pk: item for item in active}
+        proposals = []
         for entry in extracted:
-            by_parent.setdefault(entry.parent_source_item_id, []).append(entry)
-        groups = [[item] for item in active]
-        extracted_groups = [(group, by_parent.get(group[0].pk, [])) for group in groups]
+            parent = parents.get(entry.parent_source_item_id)
+            if parent is None:
+                continue
+            payload = {"parent": parent.pk, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)}
+            proposal, _ = TenderSourceItem.objects.get_or_create(
+                tender=tender,
+                source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
+                defaults={"source_type": "document_proposal", "original_text": entry.name, "quantity": entry.quantity,
+                          "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance,
+                          "metadata": {"relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)},
+                          "confidence": entry.confidence, "parent": parent, "is_active": False},
+            )
+            proposals.append(proposal)
+        return {"created": proposals, "state": "needs_review" if proposals else "no_data", "diagnostics": [detail]}
     else:
         extracted_groups = None
     groups = {}
@@ -839,6 +851,13 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
             job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
             return job
         derived = enrichment["created"]
+        if enrichment["state"] == "needs_review":
+            job.status = TenderComputeJob.Status.NEEDS_REVIEW
+            job.completed_at = timezone.now()
+            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
+            job.diagnostics = {"source_item_count": len(source_items), "active_item_count": len(active_calculation_items(job.tender)), "document_proposal_count": len(derived), "documents_inspected": len(quality["documents"]), "enrichment": enrichment["diagnostics"], "enrichment_state": enrichment["state"], "ai_cost_rub": str(job.total_cost), "document_enrichment_ms": round((time.monotonic() - enrichment_started) * 1000, 2), "total_ms": round((time.monotonic() - started) * 1000, 2)}
+            job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
+            return job
         job.status = TenderComputeJob.Status.ROUTING
         job.save(update_fields=["status", "updated_at"])
         decisions = route_tender_batch(job, router)

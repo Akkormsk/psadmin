@@ -555,6 +555,7 @@ def tender_detail(request, pk):
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
     from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
+    document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal"]
     v2_lines = TenderComputeLine.objects.filter(job__tender=tender).select_related("source_item").order_by("job_id", "pk")
     v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
     v2_job = TenderComputeJob.objects.filter(tender=tender).order_by("-pk").first()
@@ -737,6 +738,7 @@ def tender_detail(request, pk):
         "forecast_stat": ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first(),
         "estimate": estimate,
         "v2_source_items": v2_source_items,
+        "document_proposals": document_proposals,
         "v2_lines": v2_lines,
         "v2_questions": v2_questions,
         "v2_job": v2_job,

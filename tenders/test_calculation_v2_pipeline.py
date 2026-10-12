@@ -304,6 +304,26 @@ class FullCompositionRegressionTests(TestCase):
         self.assertEqual(source.derived_items.filter(is_active=True).count(), 3)
         self.assertEqual(source.derived_items.filter(is_active=True).first().provenance["page_or_section"], "таблица 2")
 
+    def test_tender_wide_agent_stages_document_findings_for_review(self):
+        class TenderEnricher:
+            diagnostics = {"outcome": "success"}
+            cost_rub = 0
+
+            def extract_tender(self, *, source_items, documents, **kwargs):
+                parent = source_items[0]
+                return [ExtractedItem("Компонент", Decimal("100"), "шт.", {}, {"document_url": documents[0]["url"], "page_or_section": "таблица 2", "evidence": "Компонент"}, Decimal("0.95"), "split", Decimal("1"), parent.pk)]
+
+        tender = self.tender([raw_item("Агрегированная позиция", "100")])
+        originals = ingest_source_items(tender)
+        result = enrich_suspicious_tender(tender, assess_quality(tender, originals), TenderEnricher())
+
+        self.assertEqual(result["state"], "needs_review")
+        originals[0].refresh_from_db()
+        self.assertTrue(originals[0].is_active)
+        proposal = TenderSourceItem.objects.get(tender=tender, source_type="document_proposal")
+        self.assertFalse(proposal.is_active)
+        self.assertEqual(proposal.parent_id, originals[0].pk)
+
     def test_document_that_adds_no_fact_does_not_create_an_enriched_item(self):
         class SameAsNotificationEnricher:
             diagnostics = {"outcome": "success"}

@@ -147,6 +147,18 @@
       </tbody>
     </table></div>
     {% endif %}
+    {% if document_proposals %}
+    <section class="ts-document-proposals">
+      <h3>Предложения из документации · нужна проверка</h3>
+      {% for proposal in document_proposals %}
+      <article>
+        <strong>{{ proposal.parent.original_text }}</strong> → {{ proposal.original_text }}{% if proposal.quantity %} · {{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% endif %}
+        {% if proposal.provenance.evidence %}<p>{{ proposal.provenance.evidence }}</p>{% endif %}
+        <small>{{ proposal.provenance.document_url }}{% if proposal.provenance.page_or_section %} · {{ proposal.provenance.page_or_section }}{% endif %}</small>
+      </article>
+      {% endfor %}
+    </section>
+    {% endif %}
   </details>
 
 
@@ -529,6 +541,11 @@
   .ts-items td { vertical-align: top; }
   .ts-nowrap { white-space: nowrap; }
   .ts-chars { margin: 4px 0 0; padding-left: 16px; font-size: 12px; color: var(--ink-2); }
+  .ts-document-proposals { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--tint-neutral); }
+  .ts-document-proposals h3 { margin: 0 0 10px; font-size: 14px; }
+  .ts-document-proposals article + article { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--separator); }
+  .ts-document-proposals p { margin: 4px 0; font-size: 13px; }
+  .ts-document-proposals small { color: var(--ink-3); overflow-wrap: anywhere; }
   .ts-docs { list-style: none; padding: 0; margin: 0; }
   .ts-docs li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--separator); }
   .ts-docs li:last-child { border-bottom: 0; }
