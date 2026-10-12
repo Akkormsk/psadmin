@@ -45,6 +45,7 @@ jobs:
             "$SSH_USER@$SSH_HOST" "bash -s -- '$TENDER_ID'" <<'REMOTE'
           set -euo pipefail
           tender_id="$1"; root=/home/deploy; prod="$root/psadmin/deploy/vds/compose.yml"; test="$root/psadmin-test/deploy/vds/compose.test.yml"; fixture="$(mktemp /tmp/one-tender.XXXXXX.json)"
+          echo "remote: copying tender ${tender_id}"
           cleanup() { rm -f "$fixture"; }; trap cleanup EXIT
           docker compose -f "$prod" exec -T web python manage.py shell -c "
           import json
@@ -75,4 +76,5 @@ jobs:
           print(json.dumps({'job_id':j.pk,'status':j.status,'cost_rub':str(j.total_cost),'proposals':TenderSourceItem.objects.filter(tender=t,source_type='document_proposal',is_active=False).count(),'diagnostics':j.diagnostics},ensure_ascii=False))
           "
           docker compose -f "$test" run --rm -T test-web python manage.py gateway_balance | grep -E 'Баланс|Balance'
+          echo "remote: completed tender ${tender_id}"
           REMOTE
