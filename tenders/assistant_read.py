@@ -1,7 +1,10 @@
 """Validated, metadata-driven read-only ORM plans for the global assistant."""
 from __future__ import annotations
 
+from datetime import date, datetime, time
 from decimal import Decimal
+import re
+from uuid import UUID
 
 from django.apps import apps
 from django.db import models
@@ -24,6 +27,9 @@ SCALAR_TYPES = (models.CharField, models.TextField, models.IntegerField, models.
 NUMERIC_TYPES = (models.IntegerField, models.DecimalField, models.FloatField)
 AGGREGATES = {"count": Count, "sum": Sum, "min": Min, "max": Max, "avg": Avg}
 OPS = {"eq", "contains", "gte", "gt", "lte", "lt", "in", "isnull"}
+_AUTH_VALUE = re.compile(r"(?i)\\b(?:bearer|basic|api[-_ ]?key)\\s+[A-Za-z0-9._~+/=-]{8,}")
+_JWT_VALUE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+_OPAQUE_VALUE = re.compile(r"^[A-Za-z0-9_+/=-]{40,}$")
 
 
 def _sensitive(name):
@@ -123,7 +129,26 @@ def catalogue():
 
 
 def _value(value):
-    return str(value) if isinstance(value, Decimal) else value
+    return _json_safe_value(value)
+
+
+def _json_safe_value(value):
+    """Convert ORM values before a result is sent to the model or HTTP JSON."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (date, datetime, time)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    return value
+
+
+def _looks_like_secret(value):
+    """Catch credential-shaped values even when their key is innocuous."""
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    return bool(_AUTH_VALUE.search(candidate) or _JWT_VALUE.search(candidate) or _OPAQUE_VALUE.fullmatch(candidate))
 
 
 def _json_value(value, depth=0):
@@ -133,11 +158,13 @@ def _json_value(value, depth=0):
         return {str(key): _json_value(item, depth + 1) for key, item in list(value.items())[:MAX_JSON_ITEMS] if not _sensitive(str(key))}
     if isinstance(value, list):
         return [_json_value(item, depth + 1) for item in value[:MAX_JSON_ITEMS]]
-    return _value(value)
+    if _looks_like_secret(value):
+        return "[скрыто: возможные учётные данные]"
+    return _json_safe_value(value)
 
 
 def _output_value(value, descriptor):
-    return _json_value(value) if descriptor["kind"] == "json" else _value(value)
+    return _json_value(value) if descriptor["kind"] == "json" else _json_safe_value(value)
 
 
 def _validated_items(value, label):

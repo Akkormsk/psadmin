@@ -18,19 +18,19 @@ def _call(name):
 
 
 _ACTIONS = (
-    ("tender.pull", "Обновить тендеры", {"max_requests": "integer?"}, "pull"),
-    ("tender.push_to_calculation", "Передать тендер в расчёт", {"tender_id": "integer"}, "push_to_calculation"),
-    ("tender.risk_assessment", "Оценить риски тендера", {"tender_id": "integer"}, "start_risk"),
-    ("tender.archive", "Архивировать тендер", {"tender_id": "integer"}, "archive"),
-    ("tender.dismiss", "Скрыть тендер", {"tender_id": "integer", "reason": "string?"}, "dismiss"),
-    ("tender.restore", "Восстановить тендер", {"tender_id": "integer"}, "restore"),
-    ("tender.review_set", "Изменить статус проверки тендера", {"tender_id": "integer", "review": "unreviewed|interesting"}, "set_review"),
-    ("tender.bid_save", "Сохранить ставку по тендеру", {"estimate_id": "integer", "bid_number": "string?", "bid_price": "number?"}, "save_bid"),
-    ("tender.outcome_set", "Зафиксировать итог тендера", {"estimate_id": "integer", "status": "won|lost|not_participated", "actual_reduction_percent": "number?"}, "set_outcome"),
-    ("tender.filter_words_update", "Изменить плюс- и минус-слова", {"include_words": "string", "exclude_words": "string"}, "update_filter_words"),
-    ("tender.word_audit_run", "Запустить аудит слов", {}, "word_audit_run"),
-    ("tender.word_audit_apply", "Применить результаты аудита слов", {"add_plus": "string[]", "add_minus": "string[]", "remove_plus": "string[]", "remove_minus": "string[]"}, "word_audit_apply"),
-    ("tender.forecast_toggle", "Изменить участие результата в прогнозе", {"tender_id": "integer"}, "toggle_forecast"),
+    ("tender.pull", "Обновить тендеры", {"max_requests": "integer?"}, "pull", "tender_selection.services.run_pull"),
+    ("tender.push_to_calculation", "Передать тендер в расчёт", {"tender_id": "integer"}, "push_to_calculation", "tender_selection.services.push_to_estimate"),
+    ("tender.risk_assessment", "Оценить риски тендера", {"tender_id": "integer"}, "start_risk", "tender_selection.services.start_risk_assessment_in_background"),
+    ("tender.archive", "Архивировать тендер", {"tender_id": "integer"}, "archive", "tender_selection.services.archive_tender"),
+    ("tender.dismiss", "Скрыть тендер", {"tender_id": "integer", "reason": "string?"}, "dismiss", "tender_selection.services.dismiss_tender"),
+    ("tender.restore", "Восстановить тендер", {"tender_id": "integer"}, "restore", "tender_selection.services.restore_tender"),
+    ("tender.review_set", "Изменить статус проверки тендера", {"tender_id": "integer", "review": "unreviewed|interesting"}, "set_review", "tender_selection.services.set_tender_review"),
+    ("tender.bid_save", "Сохранить ставку по тендеру", {"estimate_id": "integer", "bid_number": "string?", "bid_price": "number?"}, "save_bid", "tender_selection.services.set_our_bid"),
+    ("tender.outcome_set", "Зафиксировать итог тендера", {"estimate_id": "integer", "status": "won|lost|not_participated", "actual_reduction_percent": "number?"}, "set_outcome", "tender_selection.services.apply_tender_outcome"),
+    ("tender.filter_words_update", "Изменить плюс- и минус-слова", {"include_words": "string", "exclude_words": "string"}, "update_filter_words", "tender_selection.services.update_filter_words"),
+    ("tender.word_audit_run", "Запустить аудит слов", {}, "word_audit_run", "tender_selection.word_audit.run_audit"),
+    ("tender.word_audit_apply", "Применить результаты аудита слов", {"add_plus": "string[]", "add_minus": "string[]", "remove_plus": "string[]", "remove_minus": "string[]"}, "word_audit_apply", "tender_selection.word_audit.apply_words"),
+    ("tender.forecast_toggle", "Изменить участие результата в прогнозе", {"tender_id": "integer"}, "toggle_forecast", "tender_selection.services.toggle_forecast_inclusion"),
 )
-for identifier, name, schema, handler in _ACTIONS:
-    register_tool(AssistantTool(identifier, name, name, schema, False, True, True, _call(handler), source=f"tender_selection.services.{handler}"))
+for identifier, name, schema, handler, source in _ACTIONS:
+    register_tool(AssistantTool(identifier, name, name, schema, False, True, True, _call(handler), source=source))

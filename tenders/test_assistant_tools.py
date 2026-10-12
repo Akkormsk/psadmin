@@ -1,3 +1,5 @@
+import json
+from importlib import import_module
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
@@ -84,6 +86,18 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(estimates["records"][0]["tender.purchase_number"], "READ-1")
         self.assertEqual(second.outcome_status, Tender.OUTCOME_LOST)
 
+    def test_read_result_is_json_serializable_and_redacts_credential_shaped_json_values(self):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(
+            purchase_number="SAFE-JSON", collecting_finished_at="2026-09-30T10:00:00Z",
+            risk_assessment={"risk_level": "low", "evidence": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue"},
+        )
+        result = execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "fields": ["collecting_finished_at", "risk_assessment"], "filters": [{"field": "id", "op": "eq", "value": tender.pk}]}})
+        self.assertEqual(result["records"][0]["collecting_finished_at"], "2026-09-30T10:00:00+00:00")
+        self.assertEqual(result["records"][0]["risk_assessment"]["evidence"], "[скрыто: возможные учётные данные]")
+        json.dumps(result, ensure_ascii=False)
+
     def test_read_catalog_and_validation_share_secret_and_relation_policy(self):
         catalog = execute_tool("assistant.catalog", self.admin, {})["models"]
         bank = next(item for item in catalog if item["id"] == "cash.BankPayment")
@@ -120,6 +134,13 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("cash.transaction_update", actions)
         self.assertIn("tender.filter_words_update", actions)
         self.assertTrue(actions["cash.transaction_update"]["source"])
+
+    def test_published_action_sources_resolve_to_real_callables(self):
+        for tool in available_tools(self.admin):
+            if tool["id"].startswith("assistant."):
+                continue
+            module_name, attribute = tool["source"].rsplit(".", 1)
+            self.assertTrue(callable(getattr(import_module(module_name), attribute)), tool["id"])
 
     def test_cash_update_delete_and_bank_visibility_reuse_real_actions(self):
         from cash.models import BankPayment, CashTransaction

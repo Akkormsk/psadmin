@@ -62,16 +62,17 @@ class AssistantConversationTests(TestCase):
     def test_fake_ai_receives_read_metadata_and_executes_a_generic_plan(self, request, _preflight):
         from tender_selection.models import Tender
 
-        tender = Tender.objects.create(purchase_number="CHAT-READ", title="Каталог", outcome_status=Tender.OUTCOME_LOST)
+        tender = Tender.objects.create(purchase_number="CHAT-READ", title="Каталог", collecting_finished_at="2026-09-30T10:00:00Z", outcome_status=Tender.OUTCOME_LOST)
 
         def fake_gateway(prompt):
             payload = json.loads(prompt)
             if "tool_result" in payload:
                 self.assertEqual(payload["tool_result"]["records"][0]["id"], tender.pk)
+                self.assertEqual(payload["tool_result"]["records"][0]["collecting_finished_at"], "2026-09-30T10:00:00+00:00")
                 return {"reply": "Найден тендер CHAT-READ."}
             schema = next(item for item in payload["read_catalog"] if item["id"] == "tender_selection.Tender")
             self.assertIn("outcome_status", {field["name"] for field in schema["fields"]})
-            return {"reply": "Проверяю тендер.", "action": {"id": "read", "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "outcome_status"], "filters": [{"field": "id", "op": "eq", "value": tender.pk}]}}}}
+            return {"reply": "Проверяю тендер.", "action": {"id": "read", "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "outcome_status", "collecting_finished_at"], "filters": [{"field": "id", "op": "eq", "value": tender.pk}]}}}}
 
         request.side_effect = fake_gateway
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ"}, secure=True).json()["conversation"]["id"]
@@ -88,6 +89,19 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(message["kind"], "confirmation_required")
         first = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True)
         self.assertEqual(first.status_code, 200)
+        self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_cancelled_action_is_consumed_without_writing_data(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Отмена"}}}
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
+        message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
+        cancelled = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "no"}, secure=True)
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertFalse(CashTransaction.objects.filter(reason="Отмена").exists())
         self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
 
     @patch("tenders.assistant_agent.preflight")
