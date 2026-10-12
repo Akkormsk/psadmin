@@ -161,12 +161,67 @@ class GatewayBatchRouter:
 
 
 class GatewayDocumentEnricher:
-    """Triage cached document text, then extract structured items from relevant documents."""
+    """One bounded, evidence-only document analysis for the pre-routing intake stage."""
+
+    # These limits are intentionally conservative: a tender gets one provider
+    # request and its worst-case priced token envelope must stay below 1 ₽.
+    # They are environment settings only to allow a *lower* operational limit;
+    # a higher value never bypasses the hard one-ruble guard in extract_tender.
+    DOCUMENT_INPUT_CHAR_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_INPUT_CHAR_LIMIT", "18000"))
+    DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "1200"))
+    DOCUMENT_RUN_COST_LIMIT_RUB = 1.00
+
     def __init__(self, model=None):
-        self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-pro-preview"))
+        # Document composition has its own deliberately inexpensive default;
+        # the general-purpose gateway model must not change it by accident.
+        self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", "gemini/gemini-3.1-flash-lite")
         self.usage = {}
         self.cost_rub = 0.0
         self.diagnostics = {}
+
+    def _bounded_documents(self, documents):
+        """Give every cached document an equal bounded excerpt; never filter by name."""
+        candidates = []
+        for doc in documents:
+            url = doc.get("url")
+            if not url:
+                continue
+            html = DocumentPreview.objects.filter(url=url).values_list("html", flat=True).first() or ""
+            candidates.append({"url": url, "name": doc.get("name", ""), "html": html})
+        if not candidates:
+            return [], []
+
+        per_document_limit = max(1, self.DOCUMENT_INPUT_CHAR_LIMIT // len(candidates))
+        available, considered = [], []
+        for candidate in candidates:
+            excerpt = candidate["html"][:per_document_limit]
+            # Tables are useful when they fit.  If their structured payload is
+            # larger than this document's equal share, retain the original
+            # excerpt instead of silently starving the following documents.
+            entry = {"url": candidate["url"], "name": candidate["name"], "text": excerpt}
+            tables = document_table_payload(excerpt) if excerpt else []
+            candidate_entry = {**entry, "tables": tables}
+            if len(json.dumps(candidate_entry, ensure_ascii=False, default=str)) <= per_document_limit * 2:
+                entry["tables"] = tables
+            available.append(entry)
+            considered.append({
+                "url": candidate["url"], "name": candidate["name"],
+                "cached_text_chars": len(candidate["html"]), "sent_text_chars": len(excerpt),
+                "table_count": len(entry.get("tables", [])),
+            })
+        return available, considered
+
+    def _preflight_cost(self, prompt):
+        """Return a conservative upper estimate, or None when the tariff is unknown."""
+        from .gateway_budget import spend_rub
+
+        # Two characters per token deliberately overestimates normal Russian
+        # document text and keeps the 1 ₽ promise valid before any egress.
+        usage = {
+            "prompt_tokens": (len(prompt) + 1) // 2,
+            "completion_tokens": self.DOCUMENT_OUTPUT_TOKEN_LIMIT,
+        }
+        return spend_rub(usage, self.model), usage
 
     def _record_gateway_failure(self, exc, *, usage, phase, started):
         failure_usage = dict(getattr(exc, "usage", {}) or {})
@@ -198,41 +253,30 @@ class GatewayDocumentEnricher:
         started = time.monotonic()
         self.diagnostics = {}
         allowed_source_ids = {item.pk for item in source_items}
-        available = []
-        for doc in documents:
-            if not doc.get("url"):
-                continue
-            html = (DocumentPreview.objects.filter(url=doc["url"]).values_list("html", flat=True).first() or "")[:30000]
-            available.append({"url": doc["url"], "name": doc.get("name", ""), "text": html, "tables": document_table_payload(html)})
+        available, considered = self._bounded_documents(documents)
         if not any(doc["text"] for doc in available):
-            self.diagnostics = {"outcome": "system_extraction_failure", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
-            return []
-        triage_prompt = "Return JSON only {\"relevant_urls\":[string]}. Select documents that contain facts about any notification item. Documents:\n" + json.dumps(available, ensure_ascii=False)
-        try:
-            triage, triage_usage = _ai_gateway_json(triage_prompt, model=self.model, max_tokens=800, timeout=90, network_attempts=2)
-        except Exception as exc:
-            self._record_gateway_failure(exc, usage={}, phase="triage", started=started)
-            raise
-        urls = set(triage.get("relevant_urls", [])) if isinstance(triage, dict) else set()
-        selected = [doc for doc in available if doc["url"] in urls and doc["text"]]
-        if not selected:
-            self.usage = triage_usage
-            self.cost_rub = float(spend_rub(triage_usage, self.model) or 0)
-            self.diagnostics = {"outcome": "no_data", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "no_relevant_document_selected", "usage": triage_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            self.diagnostics = {"outcome": "no_data", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         payload = {
             "notification_items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""), "unit": item.unit, "requirements": item.requirements} for item in source_items],
-            "documents": selected,
+            "documents": available,
         }
-        prompt = """Read the supplied tender documents freely and compare them against every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. Return an enrich row only for documented facts about the same notification item. Return split rows only when the document explicitly replaces an aggregate notification item with separately named goods. When a notification item is a set and its contents are explicitly enumerated, return one component row for every separately named included good, attached to that notification item. Do not return the set name or a set variant as a component merely because it was renamed: the review must show the actual included goods. For components, quantity_per_parent is the amount in one set; use the documented unit. Return component rows only for facts explicitly stated in the documents. Never invent facts, infer products, or attach evidence to another notification item.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. Return enrich only for explicitly documented facts about that same notification item. Return split only where a document explicitly replaces an aggregate item with separately named goods. Return component only where contents of an aggregate are explicitly enumerated; quantity_per_parent is the documented amount in one aggregate. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        estimated_cost, estimated_usage = self._preflight_cost(prompt)
+        if estimated_cost is None or estimated_cost > self.DOCUMENT_RUN_COST_LIMIT_RUB:
+            self.diagnostics = {"outcome": "budget_blocked", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost) if estimated_cost is not None else None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
         try:
-            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=5000, timeout=120, network_attempts=2)
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1)
         except Exception as exc:
-            self._record_gateway_failure(exc, usage=triage_usage, phase="extraction", started=started)
+            self._record_gateway_failure(exc, usage={}, phase="document_analysis", started=started)
             raise
-        self.usage = {key: (triage_usage.get(key, 0) or 0) + (extract_usage.get(key, 0) or 0) for key in {**triage_usage, **extract_usage}}
+        self.usage = extract_usage
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
-        allowed_urls = {doc["url"] for doc in selected}
+        if self.cost_rub > self.DOCUMENT_RUN_COST_LIMIT_RUB:
+            self.diagnostics = {"outcome": "budget_exceeded", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
+        allowed_urls = {doc["url"] for doc in available if doc["text"]}
         output, rejections = [], []
         for index, row in enumerate(raw.get("items", []) if isinstance(raw, dict) else []):
             if not isinstance(row, dict):
@@ -250,7 +294,7 @@ class GatewayDocumentEnricher:
                 rejections.append({"index": index, "reason": "invalid_structure"}); continue
             output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id))
         outcome = "success" if output else ("validation_failure" if rejections else "no_data")
-        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [doc["url"] for doc in selected], "usage": triage_usage}, "extraction": {"selected_urls": [doc["url"] for doc in selected], "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
+        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"limit_rub": str(self.DOCUMENT_RUN_COST_LIMIT_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage}, "extraction": {"selected_urls": sorted(allowed_urls), "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
         return output
 
     def extract(self, *, tender, aggregate, documents):
