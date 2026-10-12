@@ -1,6 +1,6 @@
 name: Verify one tender composition on test
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       tender_id:
