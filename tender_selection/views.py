@@ -1315,11 +1315,9 @@ def save_bid(request, pk):
 @require_POST
 def dismiss(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
-    reason = request.POST.get("reason")
-    if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
-        TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
-    _clear_tender_document_previews(tender)
-    archive_tender(tender)
+    from .services import dismiss_tender
+
+    dismiss_tender(tender, reason=request.POST.get("reason"))
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
@@ -1333,8 +1331,9 @@ def dismiss_estimate(request, pk):
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
     tender = get_object_or_404(Tender, pk=estimate.tender_id)
-    _clear_tender_document_previews(tender)
-    archive_tender(tender)
+    from .services import dismiss_tender
+
+    dismiss_tender(tender)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
@@ -1344,11 +1343,9 @@ def dismiss_estimate(request, pk):
 @require_POST
 def restore(request, pk):
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
-    # Со стадий расчёта и дальше — обратно на доску, а не во «Входящие».
-    tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
-    tender.archived_at = None
-    tender.archived_from_stage = ""
-    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+    from .services import restore_tender
+
+    restore_tender(tender)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(f"{reverse('tender_selection:list')}?view=kanban")

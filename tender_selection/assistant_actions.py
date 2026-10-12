@@ -1,8 +1,8 @@
 """Adapters for existing tender-selection services; no selection logic lives here."""
 from decimal import Decimal, InvalidOperation
 
-from .models import ContractStat, FilterSettings, Tender, TenderDismissalFeedback
-from .services import apply_tender_outcome, archive_tender, clear_tender_document_previews, push_to_estimate, run_pull, set_our_bid, start_risk_assessment_in_background
+from .models import ContractStat, FilterSettings, Tender
+from .services import apply_tender_outcome, archive_tender, dismiss_tender, push_to_estimate, restore_tender, run_pull, set_our_bid, set_tender_review, start_risk_assessment_in_background
 
 
 def pull(_user, payload):
@@ -35,11 +35,7 @@ def archive(_user, payload):
 
 def dismiss(_user, payload):
     tender = _tender(payload)
-    reason = payload.get("reason")
-    if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
-        TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
-    clear_tender_document_previews(tender)
-    archive_tender(tender)
+    dismiss_tender(tender, reason=payload.get("reason"))
     return {"tender_id": tender.pk, "status": tender.status}
 
 
@@ -47,23 +43,14 @@ def restore(_user, payload):
     tender = Tender.objects.filter(pk=payload.get("tender_id"), status=Tender.DISMISSED).first()
     if not tender:
         raise ValueError("Скрытый тендер не найден")
-    tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
-    tender.archived_at = None
-    tender.archived_from_stage = ""
-    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+    restore_tender(tender)
     return {"tender_id": tender.pk, "status": tender.status}
 
 
 def set_review(_user, payload):
     tender = _tender(payload)
     value = payload.get("review")
-    if value not in dict(Tender.REVIEW_CHOICES):
-        raise ValueError("Недопустимый статус проверки")
-    was_unreviewed = tender.review == Tender.UNREVIEWED
-    tender.review = value
-    tender.save(update_fields=["review"])
-    if was_unreviewed and value != Tender.UNREVIEWED and not tender.risk_checked_at:
-        start_risk_assessment_in_background(tender.pk)
+    set_tender_review(tender, value)
     return {"tender_id": tender.pk, "review": tender.review}
 
 

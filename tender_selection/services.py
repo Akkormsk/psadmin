@@ -1272,6 +1272,35 @@ def archive_tender(tender) -> None:
     tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
 
 
+def dismiss_tender(tender, *, reason=None) -> None:
+    """The sole implementation behind the UI and assistant 'hide tender' action."""
+    from .models import TenderDismissalFeedback
+
+    if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
+        TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
+    clear_tender_document_previews(tender)
+    archive_tender(tender)
+
+
+def restore_tender(tender) -> None:
+    if tender.status != Tender.DISMISSED:
+        raise ValueError("Скрытый тендер не найден")
+    tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
+    tender.archived_at = None
+    tender.archived_from_stage = ""
+    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+
+
+def set_tender_review(tender, review) -> None:
+    if review not in dict(Tender.REVIEW_CHOICES):
+        raise ValueError("Недопустимый статус проверки")
+    was_unreviewed = tender.review == Tender.UNREVIEWED
+    tender.review = review
+    tender.save(update_fields=["review"])
+    if was_unreviewed and review != Tender.UNREVIEWED and not tender.risk_checked_at:
+        start_risk_assessment_in_background(tender.pk)
+
+
 PROTOCOL_RECHECK = timedelta(minutes=30)
 # Уже завершённые (итог внесён вручную) — дозаполняем протоколом для статистики, но не чаще раза в сутки.
 PROTOCOL_BACKFILL_RECHECK = timedelta(days=1)
