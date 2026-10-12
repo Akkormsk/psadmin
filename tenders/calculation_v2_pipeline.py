@@ -66,6 +66,7 @@ class ExtractedItem:
     confidence: Decimal | None
     relationship: str = "split"
     quantity_per_parent: Decimal = Decimal("1")
+    parent_source_item_id: int | None = None
 
 
 class ExistingKnowledgeBatchRouter:
@@ -188,6 +189,69 @@ class GatewayDocumentEnricher:
             "failure_phase": phase,
             "usage": total_usage,
         }
+
+    def extract_tender(self, *, tender, source_items, documents):
+        """Read every available document once and map evidence back to source rows."""
+        from .gateway_budget import spend_rub
+        from .services import _ai_gateway_json
+
+        started = time.monotonic()
+        self.diagnostics = {}
+        allowed_source_ids = {item.pk for item in source_items}
+        available = []
+        for doc in documents:
+            if not doc.get("url"):
+                continue
+            html = (DocumentPreview.objects.filter(url=doc["url"]).values_list("html", flat=True).first() or "")[:30000]
+            available.append({"url": doc["url"], "name": doc.get("name", ""), "text": html, "tables": document_table_payload(html)})
+        if not any(doc["text"] for doc in available):
+            self.diagnostics = {"outcome": "system_extraction_failure", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
+        triage_prompt = "Return JSON only {\"relevant_urls\":[string]}. Select documents that contain facts about any notification item. Documents:\n" + json.dumps(available, ensure_ascii=False)
+        try:
+            triage, triage_usage = _ai_gateway_json(triage_prompt, model=self.model, max_tokens=800, timeout=90, network_attempts=2)
+        except Exception as exc:
+            self._record_gateway_failure(exc, usage={}, phase="triage", started=started)
+            raise
+        urls = set(triage.get("relevant_urls", [])) if isinstance(triage, dict) else set()
+        selected = [doc for doc in available if doc["url"] in urls and doc["text"]]
+        if not selected:
+            self.usage = triage_usage
+            self.cost_rub = float(spend_rub(triage_usage, self.model) or 0)
+            self.diagnostics = {"outcome": "no_data", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "no_relevant_document_selected", "usage": triage_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
+        payload = {
+            "notification_items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""), "unit": item.unit, "requirements": item.requirements} for item in source_items],
+            "documents": selected,
+        }
+        prompt = """Read the supplied tender documents freely and compare them against every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. Return an enrich row only for documented facts about the same notification item. Return split rows only when the document explicitly replaces an aggregate notification item with separately named goods. Return component rows only when the document explicitly states what belongs inside one item. Never invent facts, infer products, or attach evidence to another notification item.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        try:
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=5000, timeout=120, network_attempts=2)
+        except Exception as exc:
+            self._record_gateway_failure(exc, usage=triage_usage, phase="extraction", started=started)
+            raise
+        self.usage = {key: (triage_usage.get(key, 0) or 0) + (extract_usage.get(key, 0) or 0) for key in {**triage_usage, **extract_usage}}
+        self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
+        allowed_urls = {doc["url"] for doc in selected}
+        output, rejections = [], []
+        for index, row in enumerate(raw.get("items", []) if isinstance(raw, dict) else []):
+            if not isinstance(row, dict):
+                rejections.append({"index": index, "reason": "not_object"}); continue
+            parent_id = row.get("parent_source_item_id")
+            if not isinstance(parent_id, int) or parent_id not in allowed_source_ids:
+                rejections.append({"index": index, "reason": "invalid_parent_source_item_id"}); continue
+            if not str(row.get("name") or "").strip() or row.get("source_url") not in allowed_urls:
+                rejections.append({"index": index, "reason": "invalid_name_or_source"}); continue
+            confidence = _as_decimal(row.get("confidence"))
+            requirements = row.get("requirements")
+            relationship = str(row.get("relationship") or "").lower()
+            per_parent = _as_decimal(row.get("quantity_per_parent")) or Decimal("1")
+            if confidence is None or not Decimal("0") <= confidence <= Decimal("1") or not isinstance(requirements, dict) or relationship not in {"enrich", "split", "component"} or per_parent <= 0:
+                rejections.append({"index": index, "reason": "invalid_structure"}); continue
+            output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id))
+        outcome = "success" if output else ("validation_failure" if rejections else "no_data")
+        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [doc["url"] for doc in selected], "usage": triage_usage}, "extraction": {"selected_urls": [doc["url"] for doc in selected], "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
+        return output
 
     def extract(self, *, tender, aggregate, documents):
         from .gateway_budget import spend_rub
@@ -491,12 +555,28 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
     if not quality["enrichment_recommended"]:
         return {"created": [], "state": "no_data", "diagnostics": {"outcome": "no_data", "reason": "not_recommended"}}
     active = active_calculation_items(tender)
+    extract_tender = getattr(enricher, "extract_tender", None)
+    if callable(extract_tender):
+        extracted = extract_tender(tender=tender, source_items=active, documents=quality["documents"])
+        detail = getattr(enricher, "diagnostics", {}) or {}
+        outcome = detail.get("outcome")
+        if outcome in {"system_extraction_failure", "validation_failure"}:
+            return {"created": [], "state": outcome, "diagnostics": [detail]}
+        by_parent = {}
+        for entry in extracted:
+            by_parent.setdefault(entry.parent_source_item_id, []).append(entry)
+        groups = [[item] for item in active]
+        extracted_groups = [(group, by_parent.get(group[0].pk, [])) for group in groups]
+    else:
+        extracted_groups = None
     groups = {}
-    for item in active:
-        groups.setdefault(_normal(item.original_text), []).append(item)
+    if extracted_groups is None:
+        for item in active:
+            groups.setdefault(_normal(item.original_text), []).append(item)
     created, diagnostics, extracted_any = [], [], False
-    for group in groups.values():
-        extracted = enricher.extract(tender=tender, aggregate=group[0], documents=quality["documents"])
+    for group, extracted in extracted_groups or ((group, None) for group in groups.values()):
+        if extracted is None:
+            extracted = enricher.extract(tender=tender, aggregate=group[0], documents=quality["documents"])
         detail = getattr(enricher, "diagnostics", {}) or {}
         diagnostics.append(detail)
         outcome = detail.get("outcome")
