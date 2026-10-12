@@ -161,7 +161,7 @@ def _calculate_general(_user, payload):
     if not settings:
         raise AssistantToolError("Не настроен общий калькулятор")
     result = calculate_sheet_estimate(lines, quantity, hours, settings, calculator_type)
-    return {"calculator_type": calculator_type, "inputs": {"quantity": str(quantity), "work_hours": str(hours), "item_ids": item_ids}, "result": {key: str(value) for key, value in result.items()}, "evidence": [{"entity": "calculator_price_item", "id": item_id} for item_id in item_ids]}
+    return {"calculator_type": calculator_type, "inputs": {"quantity": str(quantity), "work_hours": str(hours), "item_ids": item_ids}, "result": {key: str(value) for key, value in result.items()}, "evidence": [{"entity": "calculator.PriceItem", "id": item_id} for item_id in item_ids]}
 
 
 def _mutation_preview_only(_user, _payload):
