@@ -818,16 +818,12 @@ def owner_interaction_answer(request, pk, interaction_pk):
     if not answer:
         messages.error(request, "Введите ответ, чтобы закрыть вопрос.")
         return redirect(redirect_url)
-    OwnerFeedbackEvent.objects.create(
-        interaction=interaction,
-        actor=request.user,
-        raw_text=answer,
-        payload={"answer": answer},
-        scope="current_tender",
-    )
-    interaction.status = "resolved"
-    interaction.answered_at = timezone.now()
-    interaction.save(update_fields=["status", "answered_at"])
+    from .services import answer_tender_owner_question
+    try:
+        answer_tender_owner_question(request.user, tender.pk, interaction.pk, answer)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect(redirect_url)
     messages.success(request, "Ответ сохранён для этого тендера.")
     return redirect(redirect_url)
 
