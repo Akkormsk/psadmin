@@ -9,7 +9,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase as DjangoTestCase
+from django.test import TestCase as DjangoTestCase, override_settings
 
 from .cascade import Cascade
 from .models import (
@@ -1050,6 +1050,7 @@ class CascadeOpenAxisTests(TestCase):
         self.assertEqual(result.candidates[0]["id"], "D900")
 
 
+@override_settings(STEP4_DECISION_CACHE_ENABLED=False)
 class CascadeNameFilterCacheTests(TestCase):
     def test_second_run_uses_the_cached_keep_set(self):
         _product("USB-флешка Твист", external_id="A2")
