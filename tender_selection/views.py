@@ -1011,19 +1011,22 @@ def eis_diag(request):
 def filter_settings(request):
     settings = FilterSettings.load()
     if request.method == "POST":
-        from .services import update_filter_words
+        from .services import save_selection_settings
 
-        settings = update_filter_words(
-            include_words=request.POST.get("include_words", ""),
-            exclude_words=request.POST.get("exclude_words", ""),
-        )
-        settings.profile_triage_enabled = request.POST.get("profile_triage_enabled") == "1"
-        settings.min_price = request.POST.get("min_price") or 0
-        settings.window_days = request.POST.get("window_days") or 7
-        settings.okpd2_codes = request.POST.getlist("okpd2")
-        settings.regions = [r for r in request.POST.getlist("region") if r.isdigit()]
-        settings.laws = [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"]
-        settings.save()
+        try:
+            save_selection_settings({
+                "include_words": request.POST.get("include_words", ""),
+                "exclude_words": request.POST.get("exclude_words", ""),
+                "profile_triage_enabled": request.POST.get("profile_triage_enabled") == "1",
+                "min_price": request.POST.get("min_price") or 0,
+                "window_days": request.POST.get("window_days") or 7,
+                "okpd2_codes": request.POST.getlist("okpd2"),
+                "regions": [r for r in request.POST.getlist("region") if r.isdigit()],
+                "laws": [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"],
+            })
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("tender_selection:settings")
         messages.success(request, "Настройки подбора сохранены.")
         return redirect("tender_selection:list")
 
