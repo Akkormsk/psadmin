@@ -166,7 +166,7 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(Proposal.objects.filter(type=Proposal.TYPE_CREATE_COUNTERPARTY).exists())
 
     def test_feedback_decision_rejects_unknown_batch(self):
-        with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
+        with self.assertRaisesRegex(Exception, "Неверный идентификатор"):
             execute_tool("production.feedback_decide", self.admin, {
                 "batch_id": "no-such-batch", "accepted_ids": [],
             }, confirmed=True)
