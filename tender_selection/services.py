@@ -1485,3 +1485,25 @@ def save_selection_settings(payload):
     settings.save()
     return {"updated": True, "min_price": str(settings.min_price),
             "window_days": settings.window_days, "laws": settings.laws}
+
+@transaction.atomic
+def answer_tender_owner_question(user, tender_id, interaction_id, answer):
+    """Resolve a tender owner question and preserve its evidence event."""
+    from tenders.models import OwnerFeedbackEvent, OwnerInteraction
+
+    answer = str(answer).strip()
+    if not answer:
+        raise ValueError("Введите ответ, чтобы закрыть вопрос")
+    interaction = OwnerInteraction.objects.select_for_update().filter(
+        pk=interaction_id, tender_id=tender_id, status="open",
+    ).first()
+    if interaction is None:
+        raise ValueError("Вопрос не найден или уже закрыт")
+    OwnerFeedbackEvent.objects.create(
+        interaction=interaction, actor=user, raw_text=answer,
+        payload={"answer": answer}, scope="current_tender",
+    )
+    interaction.status = "resolved"
+    interaction.answered_at = timezone.now()
+    interaction.save(update_fields=["status", "answered_at"])
+    return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
