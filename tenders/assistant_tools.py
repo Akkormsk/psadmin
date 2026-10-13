@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
+from django.utils.module_loading import import_string
 from typing import Any, Callable
 
 from django.apps import apps
@@ -94,6 +95,25 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
     if not isinstance(payload, dict):
         raise AssistantToolError("Некорректные параметры действия")
     return tool.executor(user, payload)
+
+
+def capability_issues(user) -> list[dict[str, str]]:
+    """Check declarations against importable shared executors, without running them."""
+    _discover_app_actions()
+    issues = []
+    for tool in _TOOLS.values():
+        if not tool.source:
+            continue
+        try:
+            source = import_string(tool.source)
+        except (ImportError, AttributeError, ValueError):
+            issues.append({"id": tool.identifier, "issue": "missing_executor", "source": tool.source})
+            continue
+        if not callable(source):
+            issues.append({"id": tool.identifier, "issue": "not_callable", "source": tool.source})
+        if not tool.read_only and not tool.requires_confirmation:
+            issues.append({"id": tool.identifier, "issue": "missing_confirmation", "source": tool.source})
+    return issues
 
 
 def required_input_names(identifier: str) -> list[str]:
