@@ -38,6 +38,18 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(source["site_route_inventory"], routes)
         self.assertNotIn("site_route_inventory", catalog(self.user))
 
+    def test_action_contract_rejects_false_strings_and_wrong_array_shapes(self):
+        with self.assertRaisesRegex(Exception, "true или false"):
+            execute_tool("finance.period_lock", self.admin, {
+                "period": "2026-10", "closed": "false",
+            }, confirmed=True)
+        with self.assertRaisesRegex(Exception, "списком"):
+            execute_tool("provider.production_create", self.admin, {
+                "name": "Тест", "stage_ids": "1,2",
+            }, confirmed=True)
+        with self.assertRaisesRegex(Exception, "объектом"):
+            execute_tool("read", self.admin, {"plan": []})
+
     def test_inventory_describes_real_registered_tools_and_permissions(self):
         admin_tools = {item["id"]: item for item in available_tools(self.admin)}
         user_tools = {item["id"]: item for item in available_tools(self.user)}
