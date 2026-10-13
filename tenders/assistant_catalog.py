@@ -56,6 +56,37 @@ def workflow_catalog(user, actions=None):
     return result
 
 
+def site_route_inventory():
+    """Live URL inventory for coverage audits, not a list of executable AI tools."""
+    from django.urls import URLPattern, URLResolver, get_resolver
+
+    routes = []
+
+    def walk(patterns, prefix=""):
+        for entry in patterns:
+            route = prefix + str(entry.pattern)
+            if isinstance(entry, URLResolver):
+                walk(entry.url_patterns, route)
+                continue
+            if not isinstance(entry, URLPattern):
+                continue
+            callback = entry.callback
+            module = getattr(callback, "__module__", "")
+            if not module.startswith(("tenders.", "tender_selection.", "calculator.", "cash.", "finance.", "core.", "payroll.")):
+                continue
+            routes.append({
+                "route": route,
+                "name": entry.name or "",
+                "view": f"{module}.{getattr(callback, '__name__', '')}",
+            })
+
+    walk(get_resolver().url_patterns)
+    return sorted(routes, key=lambda item: (item["route"], item["name"]))
+
+
 def catalog(user):
     actions = action_catalog(user)
-    return {"models": model_catalog(), "actions": actions, "workflows": workflow_catalog(user, actions)}
+    output = {"models": model_catalog(), "actions": actions, "workflows": workflow_catalog(user, actions)}
+    if user.is_superuser:
+        output["site_route_inventory"] = site_route_inventory()
+    return output
