@@ -1173,38 +1173,13 @@ def production_counterparty_confirm(request):
     через Proposal (см. tenders/proposals.py), одним batch на карточку."""
     if not request.user.is_superuser:
         return JsonResponse({"error": "Добавлять контрагентов может только администратор."}, status=403)
+    from .production_actions import confirm_counterparty_with_stages
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        name = str(payload.get("name", "")).strip()[:200]
-        if not name:
-            raise ValueError
-        notes = str(payload.get("notes", ""))[:2000]
-        stage_ids = [int(value) for value in payload.get("stage_ids", []) if str(value).isdigit()]
-        source_id = payload.get("source_id")
+        result = confirm_counterparty_with_stages(request.user, payload)
     except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось прочитать форму контрагента."}, status=400)
-
-    counterparty_proposal = Proposal.objects.create(
-        type=Proposal.TYPE_CREATE_COUNTERPARTY, payload={"name": name, "notes": notes},
-        summary=f"Новый контрагент «{name}»", created_by=request.user,
-    )
-    apply_proposal(counterparty_proposal, request.user)
-    counterparty = Counterparty.objects.get(name=name)
-    stages = {stage.pk: stage for stage in ProcessDefinition.objects.filter(pk__in=stage_ids)}
-    for stage_id in stage_ids:
-        stage = stages.get(stage_id)
-        if stage is None:
-            continue
-        link_proposal = Proposal.objects.create(
-            type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY, batch_id=counterparty_proposal.batch_id,
-            payload={"stage_id": stage.pk, "counterparty_id": counterparty.pk},
-            summary=f"Связать «{stage.name}» и «{name}»", created_by=request.user,
-        )
-        apply_proposal(link_proposal, request.user)
-    if source_id:
-        TenderKnowledgeSource.objects.filter(pk=source_id, counterparty__isnull=True).update(counterparty=counterparty)
-    linked_stage_names = list(counterparty.stage_links.select_related("stage").values_list("stage__name", flat=True))
-    return JsonResponse({"id": counterparty.pk, "name": counterparty.name, "stage_names": linked_stage_names})
+    return JsonResponse(result)
 
 
 @login_required
