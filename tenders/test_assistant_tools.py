@@ -25,6 +25,15 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(admin_tools["provider.create_draft"]["requires_confirmation"])
         self.assertFalse(user_tools["provider.create_draft"]["available"])
 
+    def test_required_fields_checked_after_confirmation(self):
+        from cash.models import CashTransaction
+        with self.assertRaisesRegex(Exception, "обязательные поля: amount"):
+            execute_tool("cash.transaction_create", self.admin, {
+                "operation_date": "2026-10-12", "account": "cash",
+                "direction": "expense", "reason": "Доставка",
+            }, confirmed=True)
+        self.assertFalse(CashTransaction.objects.exists())
+
     def test_mutating_provider_draft_requires_confirmation(self):
         payload = {"name": "Черновой пошив", "stage_ids": [self.stage.pk], "source_text": "Прайс получен"}
 
