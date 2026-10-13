@@ -38,6 +38,15 @@ def delete_expense(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def set_period_state(user, payload):
+    try:
+        return actions.set_financial_period_state(
+            user, payload["period"], closed=payload["closed"],
+        )
+    except actions.FinanceActionError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
 def save_managers(user, payload):
     try:
         return actions.save_manager_settings(user, payload)
@@ -52,3 +61,8 @@ register_tool(AssistantTool("finance.order_record_delete", "Удалить за�
 register_tool(AssistantTool("finance.operating_expenses_save", "Сохранить постоянные расходы", "Добавляет или изменяет постоянные расходы тем же исполнителем, что и страница финансов.", {"updates": "array?", "new": "object?"}, False, True, True, save_expenses, source="finance.actions.save_operating_expenses"))
 register_tool(AssistantTool("finance.operating_expense_delete", "Удалить постоянный расход", "Удаляет постоянный расход тем же исполнителем, что и страница финансов.", {"expense_id": "integer"}, False, True, True, delete_expense, source="finance.actions.delete_operating_expense"))
 register_tool(AssistantTool("finance.manager_settings_save", "Сохранить настройки менеджеров и KPI", "Сохраняет ставки, порядок и KPI тем же исполнителем, что и страница финансов.", {"employee_order": "integer[]?", "managers": "array"}, False, True, True, save_managers, source="finance.actions.save_manager_settings"))
+
+register_tool(AssistantTool("finance.period_lock", "Закрыть или открыть финансовый период",
+    "Закрывает проверенный расчётный период либо вновь разрешает его редактирование. Существующая финансовая страница использует тот же исполнитель.",
+    {"period": "YYYY-MM", "closed": "boolean"}, False, True, True,
+    set_period_state, source="finance.actions.set_financial_period_state"))
