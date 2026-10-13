@@ -105,6 +105,10 @@ def capability_issues(user) -> list[dict[str, str]]:
     _discover_app_actions()
     issues = []
     for tool in _TOOLS.values():
+        if not callable(tool.executor):
+            issues.append({"id": tool.identifier, "issue": "invalid_executor", "source": tool.source})
+        if not tool.read_only and not tool.requires_confirmation:
+            issues.append({"id": tool.identifier, "issue": "missing_confirmation", "source": tool.source})
         if not tool.source:
             continue
         try:
@@ -114,8 +118,6 @@ def capability_issues(user) -> list[dict[str, str]]:
             continue
         if not callable(source):
             issues.append({"id": tool.identifier, "issue": "not_callable", "source": tool.source})
-        if not tool.read_only and not tool.requires_confirmation:
-            issues.append({"id": tool.identifier, "issue": "missing_confirmation", "source": tool.source})
     return issues
 
 
@@ -196,4 +198,4 @@ register_tool(AssistantTool("provider.find", "Найти контрагента"
 register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
 register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
 register_tool(AssistantTool("provider.calculator_schema", "Входы калькулятора", "Показывает подтверждённую схему калькулятора.", {"binding_id": "integer"}, True, False, False, _calculator_schema))
-register_tool(AssistantTool("provider.calculate", "Рассчитать у контрагента", "Запускает детерминированный калькулятор с заданными входами.", {"binding_id": "integer", "spec": "object"}, False, False, False, _calculate_provider))
+register_tool(AssistantTool("provider.calculate", "Рассчитать у контрагента", "Запускает детерминированный калькулятор с заданными входами.", {"binding_id": "integer", "spec": "object"}, True, False, False, _calculate_provider))
