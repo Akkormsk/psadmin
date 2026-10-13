@@ -50,6 +50,14 @@ class AssistantToolRegistryTests(TestCase):
         with self.assertRaisesRegex(Exception, "объектом"):
             execute_tool("read", self.admin, {"plan": []})
 
+    def test_local_audit_command_is_safe_and_reports_registered_actions(self):
+        from io import StringIO
+        from django.core.management import call_command
+        output = StringIO()
+        call_command("audit_assistant_capabilities", "--strict", stdout=output)
+        self.assertIn("Registered actions:", output.getvalue())
+        self.assertIn("Registry references: OK", output.getvalue())
+
     def test_inventory_describes_real_registered_tools_and_permissions(self):
         admin_tools = {item["id"]: item for item in available_tools(self.admin)}
         user_tools = {item["id"]: item for item in available_tools(self.user)}
