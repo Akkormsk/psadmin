@@ -52,3 +52,20 @@ register_tool(AssistantTool(
     False, True, True, save_discovery_settings,
     source="tender_selection.services.save_selection_settings",
 ))
+
+def resolve_owner_question(user, payload):
+    from .services import answer_tender_owner_question
+    try:
+        return answer_tender_owner_question(user, payload["tender_id"],
+                                            payload["interaction_id"], payload["answer"])
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "tender.owner_question_answer", "Ответить на запрос уточнения по тендеру",
+    "Сохраняет ответ на открытый вопрос с записью в журнал и закрывает вопрос, как это делает карточка тендера.",
+    {"tender_id": "integer", "interaction_id": "integer", "answer": "string"},
+    False, True, True, resolve_owner_question,
+    source="tender_selection.services.answer_tender_owner_question",
+))
