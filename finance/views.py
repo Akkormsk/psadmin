@@ -7,7 +7,7 @@ from django.utils import timezone
 from calendar import monthrange
 
 from .forms import OrderRecordCreateForm
-from .actions import FinanceActionError, _sync_open_manager_lines, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, manager_data as _manager_data, save_manager_settings, save_operating_expenses, update_order_record
+from .actions import FinanceActionError, _sync_open_manager_lines, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, manager_data as _manager_data, save_manager_settings, save_operating_expenses, set_financial_period_state, update_order_record
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -145,8 +145,7 @@ def calculation(request, order_form=None, open_order_modal=False, order_edit_for
         _sync_open_printer_line(period)
     _sync_open_period_expenses(period)
     if request.method == "POST" and request.POST.get("action") == "reopen" and is_admin_view:
-        period.is_closed = False
-        period.save(update_fields=("is_closed",))
+        set_financial_period_state(request.user, code, closed=False)
         return redirect(f"{request.path}?period={code}")
     if request.method == "POST" and request.POST.get("action") and not period.is_closed:
         editable_lines = period.payroll_lines.all() if is_admin_view else period.payroll_lines.filter(manager=request.user)
@@ -163,8 +162,7 @@ def calculation(request, order_form=None, open_order_modal=False, order_edit_for
             line.save()
         _refresh_period(period)
         if request.POST.get("action") == "close" and is_admin_view:
-            period.is_closed = True
-            period.save(update_fields=("is_closed",))
+            set_financial_period_state(request.user, code, closed=True)
         return redirect(f"{request.path}?period={code}")
     _refresh_period(period) if not period.is_closed else None
     lines = period.payroll_lines.order_by(
