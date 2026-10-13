@@ -39,6 +39,8 @@ def delete_expense(user, payload):
 
 
 def set_period_state(user, payload):
+    if not isinstance(payload.get("closed"), bool):
+        raise AssistantToolError("Для закрытия периода нужно явно указать true или false")
     try:
         return actions.set_financial_period_state(
             user, payload["period"], closed=payload["closed"],
