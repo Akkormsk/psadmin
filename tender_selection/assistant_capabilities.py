@@ -34,3 +34,21 @@ _ACTIONS = (
 )
 for identifier, name, schema, handler, source in _ACTIONS:
     register_tool(AssistantTool(identifier, name, name, schema, False, True, True, _call(handler), source=source))
+
+def save_discovery_settings(user, payload):
+    from .services import save_selection_settings
+    try:
+        return save_selection_settings(payload)
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "tender.discovery_settings", "Настроить поиск и отбор закупок",
+    "Изменяет фильтры поиска тендеров: ключевые слова, ценовой порог, период, категории ОКПД2, регионы, законы и автоматический отбор. Неуказанные настройки сохраняются без изменений.",
+    {"include_words": "string?", "exclude_words": "string?", "profile_triage_enabled": "boolean?",
+     "min_price": "number?", "window_days": "integer?", "okpd2_codes": "string[]?",
+     "regions": "string[]?", "laws": "string[]?"},
+    False, True, True, save_discovery_settings,
+    source="tender_selection.services.save_selection_settings",
+))
