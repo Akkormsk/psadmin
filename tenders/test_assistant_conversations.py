@@ -70,6 +70,7 @@ class AssistantConversationTests(TestCase):
                 self.assertEqual(payload["tool_result"]["records"][0]["id"], tender.pk)
                 self.assertEqual(payload["tool_result"]["records"][0]["collecting_finished_at"], "2026-09-30T10:00:00+00:00")
                 return {"reply": "Найден тендер CHAT-READ."}
+            self.assertIn("cash", {goal["id"] for goal in payload["workflows"]})
             schema = next(item for item in payload["read_catalog"] if item["id"] == "tender_selection.Tender")
             self.assertIn("outcome_status", {field["name"] for field in schema["fields"]})
             return {"reply": "Проверяю тендер.", "action": {"id": "read", "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "outcome_status", "collecting_finished_at"], "filters": [{"field": "id", "op": "eq", "value": tender.pk}]}}}}
