@@ -107,6 +107,8 @@ def reply(conversation, user, message, page_context=None):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
     action = plan.get("action")
     if not isinstance(action, dict) or not action.get("id"):
+        if pending:
+            return {"text": (plan["reply"].strip() or "Уточните недостающие параметры задачи."), "kind": "text", "data": {"pending_tool_id": pending.get("tool_id")}}
         return {"text": plan["reply"].strip(), "kind": "text", "data": {}}
     identifier = action.get("id")
     arguments = action.get("arguments", {})
