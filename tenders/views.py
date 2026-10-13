@@ -1884,50 +1884,28 @@ def delete_estimate(request, pk, pipeline=False):
 @login_required
 @require_POST
 def update_estimate_status(request, pk, pipeline=True):
-    from tender_selection.models import Tender
+    from .estimate_actions import EstimateActionError, set_tender_estimate_status
 
     estimate = _estimate_for_user(request, pk, TenderEstimate)
-    status = request.POST.get("status", "")
-    if status not in dict(Tender.OUTCOME_STATUS_CHOICES) or not estimate.tender_id:
-        return HttpResponse(status=400)
-    if status == Tender.OUTCOME_PENDING and (estimate.summary_snapshot or {}).get("is_incomplete", True):
-        return HttpResponse("Завершите расчёт перед переходом в торги.", status=400)
-    tender = estimate.tender
-    tender.outcome_status = status
-    update_fields = ["outcome_status"]
-    # «Архивировать — невыгодно» — тоже терминальное решение по этому тендеру
-    # (участвовать не будем), уходит в архив сразу же, как и настоящий факт
-    # торгов (см. apply_tender_outcome) — не нужно отдельно жать «Скрыть».
-    if status == Tender.OUTCOME_NOT_PARTICIPATED:
-        from tender_selection.services import archive_tender
-
-        tender.save(update_fields=update_fields)
-        archive_tender(tender)
-    else:
-        tender.save(update_fields=update_fields)
+    try:
+        outcome = set_tender_estimate_status(request.user, pk, request.POST.get("status", ""))
+    except EstimateActionError as exc:
+        return HttpResponse(str(exc), status=400)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({
-            "status": status,
-            "label": tender.get_outcome_status_display(),
-            "requires_result": status in {Tender.OUTCOME_LOST, Tender.OUTCOME_WON},
-        })
-    # Кнопка теперь живёт на странице тендера (не здесь) — туда и возвращаем.
+        return JsonResponse({key: outcome[key] for key in ("status", "label", "requires_result")})
     return redirect("tender_selection:detail", pk=estimate.tender_id)
 
 
 @login_required
 @require_POST
 def update_order_status(request, pk):
-    estimate = _estimate_for_user(request, pk, OrderEstimate)
-    status = request.POST.get("status", "")
-    if status not in dict(Order.STATUS_CHOICES):
-        return HttpResponse(status=400)
-    if not estimate.order_id:
-        estimate.order = Order.objects.create(name=estimate.name)
-        estimate.save(update_fields=["order"])
-    order = estimate.order
-    order.status = status
-    order.save(update_fields=["status", "updated_at"])
+    from .estimate_actions import EstimateActionError, set_order_estimate_status
+
+    _estimate_for_user(request, pk, OrderEstimate)
+    try:
+        state = set_order_estimate_status(request.user, pk, request.POST.get("status", ""))
+    except EstimateActionError as exc:
+        return HttpResponse(str(exc), status=400)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({"status": status, "label": order.get_status_display()})
+        return JsonResponse({"status": state["status"], "label": state["label"]})
     return redirect("tender_home")
