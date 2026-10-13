@@ -1,7 +1,8 @@
 """Backend production-knowledge actions shared by UI and assistant."""
 from django.db import transaction
 
-from .models import Lesson, ProductionTrainingExample
+from .models import Lesson, ProductionTrainingExample, Proposal, Counterparty, ProcessDefinition, TenderKnowledgeSource
+from .proposals import apply_proposal
 
 
 def deactivate_lesson(lesson_id):
@@ -41,3 +42,43 @@ def deactivate_route_knowledge(payload):
             pk=lesson.session.confirmed_example_id,
         ).update(is_active=False)
     return True
+
+
+@transaction.atomic
+def confirm_counterparty_with_stages(user, payload):
+    """Commit one approved production-base counterparty with stage links."""
+    if not isinstance(payload, dict):
+        raise ValueError("Не удалось прочитать форму контрагента")
+    name = str(payload.get("name", "")).strip()[:200]
+    if not name:
+        raise ValueError("Не указано название контрагента")
+    notes = str(payload.get("notes", ""))[:2000]
+    raw_ids = payload.get("stage_ids", [])
+    if not isinstance(raw_ids, list) or not all(str(x).isdigit() for x in raw_ids):
+        raise ValueError("Некорректные производственные этапы")
+    stage_ids = list(dict.fromkeys(int(x) for x in raw_ids))
+    stages = list(ProcessDefinition.objects.filter(pk__in=stage_ids))
+    if len(stages) != len(stage_ids):
+        raise ValueError("Один или несколько этапов не найдены")
+    proposal = Proposal.objects.create(
+        type=Proposal.TYPE_CREATE_COUNTERPARTY,
+        payload={"name": name, "notes": notes},
+        summary=f"Новый контрагент «{name}»", created_by=user,
+    )
+    apply_proposal(proposal, user)
+    counterparty = Counterparty.objects.get(name=name)
+    for stage in stages:
+        link = Proposal.objects.create(
+            type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY, batch_id=proposal.batch_id,
+            payload={"stage_id": stage.pk, "counterparty_id": counterparty.pk},
+            summary=f"Связать «{stage.name}» и «{name}»", created_by=user,
+        )
+        apply_proposal(link, user)
+    if payload.get("source_id"):
+        TenderKnowledgeSource.objects.filter(
+            pk=payload["source_id"], counterparty__isnull=True,
+        ).update(counterparty=counterparty)
+    return {
+        "id": counterparty.pk, "name": counterparty.name,
+        "stage_names": list(counterparty.stage_links.select_related("stage").values_list("stage__name", flat=True)),
+    }
