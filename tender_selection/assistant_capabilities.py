@@ -32,8 +32,23 @@ _ACTIONS = (
     ("tender.word_audit_apply", "Применить результаты аудита слов", {"add_plus": "string[]", "add_minus": "string[]", "remove_plus": "string[]", "remove_minus": "string[]"}, "word_audit_apply", "tender_selection.word_audit.apply_words"),
     ("tender.forecast_toggle", "Изменить участие результата в прогнозе", {"tender_id": "integer"}, "toggle_forecast", "tender_selection.services.toggle_forecast_inclusion"),
 )
+_ACTION_DESCRIPTIONS = {
+    "tender.pull": "Получить новые и изменённые закупки из подключённого источника, обновить существующие записи и сохранить результат выгрузки.",
+    "tender.push_to_calculation": "Создать расчёт тендера с позициями из извещения и перевести его на этап подготовки цены.",
+    "tender.risk_assessment": "Запустить штатную фоновую оценку юридических, коммерческих и сроковых рисков конкретной закупки.",
+    "tender.archive": "Архивировать выбранную закупку с сохранением истории и связанных данных.",
+    "tender.dismiss": "Скрыть неинтересную закупку, сохранить причину и выполнить штатную очистку связанных предпросмотров.",
+    "tender.restore": "Вернуть ранее скрытую закупку в рабочий список без создания копии.",
+    "tender.review_set": "Изменить ручную отметку проверки входящей закупки на «интересно» либо «не рассмотрено».",
+    "tender.bid_save": "Сохранить номер и цену нашей заявки для конкретного просчёта тендера.",
+    "tender.outcome_set": "Ручная отметка результата закупки; не является официальной проверкой протокола ЕИС и должна быть подтверждена владельцем.",
+    "tender.filter_words_update": "Обновить включающие и исключающие слова поиска с немедленным использованием штатной фильтрации.",
+    "tender.word_audit_run": "Запустить AI-аудит поисковых слов и создать предложения по их изменению; расходует бюджет модели.",
+    "tender.word_audit_apply": "Принять выбранные рекомендации аудита: добавить или удалить плюс- и минус-слова.",
+    "tender.forecast_toggle": "Включить или исключить зарегистрированный результат закупки из статистики прогноза снижения цены.",
+}
 for identifier, name, schema, handler, source in _ACTIONS:
-    register_tool(AssistantTool(identifier, name, name, schema, False, True, True, _call(handler), source=source))
+    register_tool(AssistantTool(identifier, name, _ACTION_DESCRIPTIONS[identifier], schema, False, True, True, _call(handler), source=source))
 
 def save_discovery_settings(user, payload):
     from .services import save_selection_settings
