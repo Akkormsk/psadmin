@@ -97,7 +97,7 @@ def reply(conversation, user, message, page_context=None):
             "page_context": page_context or {},
             "history": _history(conversation),
             "message": message,
-            "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}},
+            "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}, "task_status": "continue|cancel"},
         },
         ensure_ascii=False,
     )
@@ -105,6 +105,10 @@ def reply(conversation, user, message, page_context=None):
     plan = _request(prompt)
     if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
+    if pending and plan.get("task_status") == "cancel":
+        conversation.context.pop("pending_action", None)
+        conversation.save(update_fields=["context"])
+        return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
     action = plan.get("action")
     if not isinstance(action, dict) or not action.get("id"):
         if pending:
