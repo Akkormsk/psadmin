@@ -1862,41 +1862,21 @@ def save_estimate(request, pk=None, pipeline=False):
 @login_required
 @require_POST
 def duplicate_estimate(request, pk, pipeline=False):
+    from .estimate_actions import duplicate_estimate as duplicate_shared
     model = TenderEstimate if pipeline else OrderEstimate
-    line_model = TenderLine if pipeline else OrderLine
-    original = _estimate_for_user(request, pk, model)
-    lines = list(original.lines.all())
-    name = f"{original.name} (копия)"[:300]
-    copy = model.objects.create(
-        owner=request.user,
-        **({"tender": original.tender} if pipeline else {"order": Order.objects.create(name=name)}),
-        tender_number=original.tender_number,
-        name=name,
-        reduction_percent=original.reduction_percent,
-        russia_delivery=original.russia_delivery,
-        result_notes="",
-        vat_rate_snapshot=original.vat_rate_snapshot,
-        summary_snapshot=original.summary_snapshot,
-        document_analysis=original.document_analysis,
-    )
-    line_model.objects.bulk_create([
-        line_model(
-            estimate=copy, sort_order=line.sort_order, name=line.name, quantity=line.quantity,
-            nmck_unit=line.nmck_unit, material_unit=line.material_unit,
-            application_unit=line.application_unit, logistics_unit=line.logistics_unit,
-            product_url=line.product_url, comment=line.comment, requirements=line.requirements,
-        )
-        for line in lines
-    ])
-    messages.success(request, f"Создана копия просчёта № {original.tender_number}.")
-    return redirect("tender_pipeline_estimate" if pipeline else "tender_estimate", pk=copy.pk)
+    _estimate_for_user(request, pk, model)
+    result = duplicate_shared(request.user, pk, pipeline)
+    messages.success(request, "Создана копия просчёта.")
+    return redirect("tender_pipeline_estimate" if pipeline else "tender_estimate", pk=result["estimate_id"])
 
 
 @login_required
 @require_POST
 def delete_estimate(request, pk, pipeline=False):
-    estimate = _estimate_for_user(request, pk, TenderEstimate if pipeline else OrderEstimate)
-    estimate.delete()
+    from .estimate_actions import delete_estimate as delete_shared
+    model = TenderEstimate if pipeline else OrderEstimate
+    _estimate_for_user(request, pk, model)
+    delete_shared(request.user, pk, pipeline)
     messages.success(request, "Расчёт удалён.")
     return redirect("tender_pipeline_home" if pipeline else "tender_home")
 
