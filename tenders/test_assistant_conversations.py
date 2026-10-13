@@ -121,6 +121,20 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_pending_macro_task_can_be_explicitly_cancelled(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Укажите сумму.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "reason": "Доставка"}}},
+            {"reply": "Задача отменена.", "action": None, "task_status": "cancel"},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Отмена задачи"}, secure=True).json()["conversation"]["id"]
+        endpoint = reverse("assistant_conversation_message", args=[conversation_id])
+        self.client.post(endpoint, data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True)
+        response = self.client.post(endpoint, data=json.dumps({"message": "Отмена, не добавляй расход"}), content_type="application/json", secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_model_can_run_stage_registry_without_keyword_routing(self, request, _preflight):
         stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
         request.side_effect = [
