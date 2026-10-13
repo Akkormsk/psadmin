@@ -3,7 +3,7 @@ from .assistant_tools import AssistantTool, AssistantToolError, register_tool
 from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
-from .production_actions import deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages
+from .production_actions import deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, EstimateActionError
 
 
@@ -177,4 +177,19 @@ register_tool(AssistantTool(
     {"name": "string", "notes": "string?", "stage_ids": "integer[]", "source_id": "integer?"},
     False, True, True, confirm_production_counterparty,
     source="tenders.production_actions.confirm_counterparty_with_stages",
+))
+
+def prepare_production_changes(user, payload):
+    from .services import TenderAIError
+    try:
+        return draft_production_feedback(user, payload["text"])
+    except (ValueError, TenderAIError) as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "production.feedback_draft", "Подготовить правки базы производства по описанию",
+    "Разбирает свободное описание исправлений на независимые предложения для проверки. Записывает только ожидающие подтверждения предложения, не изменяет глобальные правила.",
+    {"text": "string"}, False, True, True, prepare_production_changes,
+    source="tenders.production_actions.draft_production_feedback",
 ))
