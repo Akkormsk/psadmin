@@ -36,7 +36,11 @@ def create_sewing_provider_draft(user, name, stage, raw_content, original_filena
     return provider, version
 
 
+@transaction.atomic
 def confirm_sewing_price_list(version, user, currency, formula_confirmed):
+    version = CounterpartyKnowledgeVersion.objects.select_for_update().get(pk=version.pk)
+    if version.status != CounterpartyKnowledgeVersion.STATUS_DRAFT:
+        raise ValueError("Черновик прайса уже был обработан")
     if currency.strip().upper() != "RUB" or not formula_confirmed:
         raise ValueError("Подтвердите валюту и то, что кэшированные значения XLS — цены за единицу")
     data = copy.deepcopy(version.canonical_data)
