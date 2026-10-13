@@ -4,7 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
 from .production_actions import deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback
-from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, EstimateActionError
+from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
 
 
 def confirm_provider_knowledge(user, payload):
@@ -192,4 +192,48 @@ register_tool(AssistantTool(
     "Разбирает свободное описание исправлений на независимые предложения для проверки. Записывает только ожидающие подтверждения предложения, не изменяет глобальные правила.",
     {"text": "string"}, False, True, True, prepare_production_changes,
     source="tenders.production_actions.draft_production_feedback",
+))
+
+def save_business_estimate(user, payload):
+    import json
+    from .models import TenderSettings
+
+    if not isinstance(payload.get("lines"), list):
+        raise AssistantToolError("Нужен список позиций расчёта")
+    pipeline = payload.get("pipeline", True)
+    if not isinstance(pipeline, bool):
+        raise AssistantToolError("Тип расчёта должен быть задан однозначно")
+    estimate = None
+    if payload.get("estimate_id") not in (None, ""):
+        try:
+            estimate = estimate_for_user(user, payload["estimate_id"], pipeline)
+        except EstimateActionError as exc:
+            raise AssistantToolError(str(exc)) from exc
+    data = {
+        "tender_number": str(payload["tender_number"]),
+        "name": str(payload["name"]),
+        "lines_json": json.dumps(payload["lines"], ensure_ascii=False),
+        "document_analysis_json": json.dumps(payload.get("document_analysis") or {}, ensure_ascii=False),
+        "reduction_percent": payload.get("reduction_percent"),
+        "russia_delivery": payload.get("russia_delivery"),
+        "result_notes": str(payload.get("result_notes", "")),
+    }
+    if user.is_superuser and payload.get("owner_id"):
+        data["owner_id"] = payload["owner_id"]
+    settings, _ = TenderSettings.objects.get_or_create(pk=1)
+    saved, error, meta = persist_estimate(user, data, estimate, settings, pipeline=pipeline)
+    if error:
+        raise AssistantToolError(error)
+    return {"estimate_id": saved.pk, "pipeline": pipeline, "incomplete": meta["incomplete"]}
+
+
+register_tool(AssistantTool(
+    "estimate.save", "Создать или изменить расчёт с автоматическим пересчётом",
+    "Создаёт или обновляет расчёт, вычисляет экономику и автоматически сохраняет все позиции и свод по тем же правилам, что и страница сайта.",
+    {"estimate_id": "integer?", "pipeline": "boolean?", "tender_number": "string",
+     "name": "string", "lines": "array", "reduction_percent": "number?",
+     "russia_delivery": "number?", "result_notes": "string?",
+     "document_analysis": "object?", "owner_id": "integer?"},
+    False, True, True, save_business_estimate,
+    source="tenders.estimate_actions.persist_estimate",
 ))
