@@ -194,6 +194,28 @@ class AssistantToolRegistryTests(TestCase):
         with self.assertRaisesRegex(Exception, "уже закрыт"):
             execute_tool("tender.owner_question_answer", self.admin, args, confirmed=True)
 
+    def test_estimate_save_recomputes_and_updates_same_record(self):
+        from .models import TenderEstimate
+        args = {
+            "pipeline": True, "tender_number": "CALC-007",
+            "name": "Папки", "lines": [{
+                "name": "Папка", "quantity": "10", "nmck_unit": "300",
+                "material_unit": "100", "application_unit": "20",
+                "logistics_unit": "10",
+            }],
+        }
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("estimate.save", self.admin, args)
+        created = execute_tool("estimate.save", self.admin, args, confirmed=True)
+        self.assertFalse(created["incomplete"])
+        saved = TenderEstimate.objects.get(pk=created["estimate_id"])
+        self.assertEqual(saved.lines.count(), 1)
+        args.update(estimate_id=saved.pk, name="Папки изменены")
+        updated = execute_tool("estimate.save", self.admin, args, confirmed=True)
+        self.assertEqual(updated["estimate_id"], saved.pk)
+        self.assertEqual(TenderEstimate.objects.get(pk=saved.pk).name, "Папки изменены")
+        self.assertEqual(TenderEstimate.objects.count(), 1)
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Неверный идентификатор"):
             execute_tool("production.feedback_decide", self.admin, {
