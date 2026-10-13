@@ -22,18 +22,19 @@ def duplicate_estimate(user, estimate_id, pipeline):
     model = TenderEstimate if pipeline else OrderEstimate
     line_model = TenderLine if pipeline else OrderLine
     name = f"{original.name} (копия)"[:300]
-    new_estimate = model.objects.create(
-        owner=user,
-        **({"tender": original.tender} if pipeline else {"order": Order.objects.create(name=name)}),
-        tender_number=original.tender_number,
-        name=name,
-        reduction_percent=original.reduction_percent,
-        russia_delivery=original.russia_delivery,
-        result_notes="",
-        vat_rate_snapshot=original.vat_rate_snapshot,
-        summary_snapshot=original.summary_snapshot,
-        document_analysis=original.document_analysis,
-    )
+    fields = {
+        "owner": user, "name": name,
+        "reduction_percent": original.reduction_percent,
+        "russia_delivery": original.russia_delivery,
+        "vat_rate_snapshot": original.vat_rate_snapshot,
+        "summary_snapshot": original.summary_snapshot,
+        "document_analysis": original.document_analysis,
+    }
+    if pipeline:
+        fields.update(tender=original.tender, tender_number=original.tender_number, result_notes="")
+    else:
+        fields.update(order=Order.objects.create(name=name), order_number=original.order_number, notes="")
+    new_estimate = model.objects.create(**fields)
     line_model.objects.bulk_create([
         line_model(
             estimate=new_estimate, sort_order=line.sort_order, name=line.name,
