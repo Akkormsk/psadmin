@@ -80,6 +80,22 @@ class AssistantToolRegistryTests(TestCase):
         service.assert_called_once_with(37)
         self.assertTrue(result["dropped"])
 
+    def test_financial_period_lock_is_shared_and_requires_confirmation(self):
+        from finance.models import FinancialPeriod
+        args = {"period": "2026-10", "closed": True}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("finance.period_lock", self.admin, args)
+        self.assertFalse(FinancialPeriod.objects.filter(code="2026-10", is_closed=True).exists())
+        self.assertTrue(execute_tool("finance.period_lock", self.admin, args, confirmed=True)["is_closed"])
+        self.assertTrue(FinancialPeriod.objects.get(code="2026-10").is_closed)
+        with self.assertRaisesRegex(Exception, "true или false"):
+            execute_tool("finance.period_lock", self.admin, {
+                "period": "2026-10", "closed": "false"
+            }, confirmed=True)
+        self.assertFalse(execute_tool("finance.period_lock", self.admin, {
+            "period": "2026-10", "closed": False
+        }, confirmed=True)["is_closed"])
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
