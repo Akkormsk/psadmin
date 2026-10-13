@@ -4,6 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
 from .production_actions import deactivate_lesson
+from .estimate_actions import duplicate_estimate, delete_estimate, EstimateActionError
 
 
 def confirm_provider_knowledge(user, payload):
@@ -94,4 +95,30 @@ register_tool(AssistantTool(
     "Скрыть выбранное правило из следующих производственных расчётов, не удаляя историю обучения.",
     {"lesson_id": "integer"}, False, True, True,
     deactivate_training_lesson, source="tenders.production_actions.deactivate_lesson",
+))
+
+def manage_saved_estimate(user, payload, *, delete=False):
+    pipeline = payload.get("pipeline", True)
+    if not isinstance(pipeline, bool):
+        raise AssistantToolError("Тип расчёта должен быть указан однозначно")
+    try:
+        executor = delete_estimate if delete else duplicate_estimate
+        return executor(user, payload["estimate_id"], pipeline)
+    except EstimateActionError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "estimate.duplicate", "Копировать сохранённый тендерный или заказной расчёт",
+    "Создаёт самостоятельную копию со всеми строками через ту же операцию, что используется на странице расчёта.",
+    {"estimate_id": "integer", "pipeline": "boolean?"}, False, True, True,
+    lambda user, payload: manage_saved_estimate(user, payload),
+    source="tenders.estimate_actions.duplicate_estimate",
+))
+register_tool(AssistantTool(
+    "estimate.delete", "Удалить сохранённый тендерный или заказной расчёт",
+    "Удаляет выбранный расчёт через штатный механизм с проверкой владельца; операция необратима.",
+    {"estimate_id": "integer", "pipeline": "boolean?"}, False, True, True,
+    lambda user, payload: manage_saved_estimate(user, payload, delete=True),
+    source="tenders.estimate_actions.delete_estimate",
 ))
