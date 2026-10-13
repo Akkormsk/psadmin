@@ -49,13 +49,13 @@ def _discover_app_actions():
     global _DISCOVERED
     if _DISCOVERED:
         return
-    _DISCOVERED = True
     for config in apps.get_app_configs():
         try:
             import_module(f"{config.name}.assistant_capabilities")
         except ModuleNotFoundError as exc:
             if exc.name != f"{config.name}.assistant_capabilities":
                 raise
+    _DISCOVERED = True
 
 
 def register_tool(tool: AssistantTool) -> AssistantTool:
