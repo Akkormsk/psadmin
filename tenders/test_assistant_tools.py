@@ -128,6 +128,24 @@ class AssistantToolRegistryTests(TestCase):
         estimate.refresh_from_db()
         self.assertEqual(estimate.order.status, Order.PENDING)
 
+    def test_complete_tender_filters_macro_updates_only_specified_fields(self):
+        from tender_selection.models import FilterSettings
+
+        before = FilterSettings.load()
+        old_window = before.window_days
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("tender.discovery_settings", self.admin, {"min_price": "500000"})
+        self.assertTrue(execute_tool("tender.discovery_settings", self.admin, {
+            "min_price": "500000", "laws": ["fz44", "fz223"],
+        }, confirmed=True)["updated"])
+        updated = FilterSettings.load()
+        updated.refresh_from_db()
+        self.assertEqual(str(updated.min_price), "500000.00")
+        self.assertEqual(updated.window_days, old_window)
+        self.assertEqual(updated.laws, ["fz44", "fz223"])
+        with self.assertRaisesRegex(Exception, "неотрицательным"):
+            execute_tool("tender.discovery_settings", self.admin, {"min_price": -1}, confirmed=True)
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
