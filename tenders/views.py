@@ -1285,21 +1285,11 @@ def drop_lesson(request):
 def drop_route_knowledge(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Менять знания может только администратор."}, status=403)
+    from .production_actions import deactivate_route_knowledge
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        if payload.get("example_id"):
-            example_id = int(payload["example_id"])
-            changed = ProductionTrainingExample.objects.filter(pk=example_id).update(is_active=False)
-            Lesson.objects.filter(session__confirmed_example_id=example_id, scope__in=["route", "production_step"]).update(is_active=False)
-        else:
-            lesson = Lesson.objects.get(pk=int(payload["lesson_id"]), scope__in=["route", "production_step"])
-            lesson.is_active = False
-            lesson.save(update_fields=["is_active"])
-            # The confirmed route also contains this correction; stop recalling both representations.
-            if lesson.session_id and lesson.session.confirmed_example_id:
-                ProductionTrainingExample.objects.filter(pk=lesson.session.confirmed_example_id).update(is_active=False)
-            changed = True
-    except (ValueError, TypeError, KeyError, json.JSONDecodeError, Lesson.DoesNotExist):
+        changed = deactivate_route_knowledge(payload)
+    except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось определить сохранённый опыт."}, status=400)
     return JsonResponse({"dropped": bool(changed)})
 
