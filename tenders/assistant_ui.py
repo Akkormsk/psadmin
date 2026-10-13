@@ -171,6 +171,8 @@ def conversation_sewing_confirm(request, conversation_id):
     if not conversation:
         return JsonResponse({"detail": "Беседа не найдена"}, status=404)
     version = get_object_or_404(CounterpartyKnowledgeVersion, pk=request.POST.get("version_id"))
+    if not conversation.feedback_events.filter(payload__kind="sewing_review", payload__data__version_id=version.pk).exists():
+        return JsonResponse({"detail": "Прайс не был загружен в эту беседу"}, status=403)
     try:
         confirmed, binding = confirm_sewing_price_list(version, request.user, request.POST.get("currency", ""), request.POST.get("formula_confirmed") == "yes")
     except ValueError as error:
