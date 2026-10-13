@@ -3,6 +3,7 @@ from .assistant_tools import AssistantTool, AssistantToolError, register_tool
 from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
+from .production_actions import deactivate_lesson
 
 
 def confirm_provider_knowledge(user, payload):
@@ -82,4 +83,15 @@ register_tool(AssistantTool(
     "После проверки распознанного XLS/XLSX подтверждает валюту и смысл формулы, фиксирует версию прайса и активирует существующий калькулятор.",
     {"version_id": "integer", "currency": "string", "formula_confirmed": "boolean"}, False, True, True,
     confirm_sewing_price, source="tenders.provider_knowledge.confirm_sewing_price_list",
+))
+
+def deactivate_training_lesson(user, payload):
+    return {"dropped": deactivate_lesson(payload["lesson_id"])}
+
+
+register_tool(AssistantTool(
+    "production.lesson_deactivate", "Отключить ранее выученное правило",
+    "Скрыть выбранное правило из следующих производственных расчётов, не удаляя историю обучения.",
+    {"lesson_id": "integer"}, False, True, True,
+    deactivate_training_lesson, source="tenders.production_actions.deactivate_lesson",
 ))
