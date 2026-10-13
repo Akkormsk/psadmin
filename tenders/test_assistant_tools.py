@@ -146,6 +146,14 @@ class AssistantToolRegistryTests(TestCase):
         with self.assertRaisesRegex(Exception, "неотрицательным"):
             execute_tool("tender.discovery_settings", self.admin, {"min_price": -1}, confirmed=True)
 
+    def test_route_knowledge_macro_needs_confirmation_and_valid_target(self):
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("production.route_knowledge_deactivate", self.admin, {"lesson_id": 777})
+        with self.assertRaisesRegex(Exception, "Сохранённый опыт не найден"):
+            execute_tool("production.route_knowledge_deactivate", self.admin, {
+                "lesson_id": 777
+            }, confirmed=True)
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
