@@ -165,6 +165,17 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn(self.stage.name, result["stage_names"])
         self.assertTrue(Proposal.objects.filter(type=Proposal.TYPE_CREATE_COUNTERPARTY).exists())
 
+    def test_feedback_draft_is_reviewable_before_global_mutation(self):
+        from unittest.mock import patch
+        from .models import Proposal
+        args = {"text": "Обнови сведения о подрядчике"}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("production.feedback_draft", self.admin, args)
+        with patch("tenders.services.parse_production_feedback", return_value=[]):
+            result = execute_tool("production.feedback_draft", self.admin, args, confirmed=True)
+        self.assertEqual(result["items"], [])
+        self.assertFalse(Proposal.objects.exists())
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Неверный идентификатор"):
             execute_tool("production.feedback_decide", self.admin, {
