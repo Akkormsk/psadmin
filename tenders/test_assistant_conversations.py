@@ -94,6 +94,24 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_old_confirmation_is_invalid_after_newer_conversation_message(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        request.side_effect = [
+            {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Устаревший расход"}}},
+            {"reply": "Проверим заново.", "action": None},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Устаревшее подтверждение"}, secure=True).json()["conversation"]["id"]
+        endpoint = reverse("assistant_conversation_message", args=[conversation_id])
+        first = self.client.post(endpoint, data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(first["kind"], "confirmation_required")
+        self.client.post(endpoint, data=json.dumps({"message": "Погоди, я хочу изменить условия"}), content_type="application/json", secure=True)
+        confirmation = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, first["id"]]), {"accept": "yes"}, secure=True)
+        self.assertEqual(confirmation.status_code, 409)
+        self.assertFalse(CashTransaction.objects.filter(reason="Устаревший расход").exists())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_cancelled_action_is_consumed_without_writing_data(self, request, _preflight):
         from cash.models import CashTransaction
 
