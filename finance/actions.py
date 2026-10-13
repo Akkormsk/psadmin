@@ -161,3 +161,14 @@ def delete_order_record(actor, record_id):
         raise FinanceActionError("Закрытый заказ не найден или недоступен")
     record.delete()
     return {"order_record_id": record_id, "deleted": True}
+
+def set_financial_period_state(user, code, *, closed):
+    """Shared period lock state for finance UI and assistant."""
+    if not user.is_superuser:
+        raise FinanceActionError("Недостаточно прав для закрытия периода")
+    if not isinstance(code, str) or len(code) != 7 or code[4] != "-" or not code[:4].isdigit() or not code[5:].isdigit() or not (1 <= int(code[5:]) <= 12):
+        raise FinanceActionError("Неверный расчётный период, ожидается ГГГГ-ММ")
+    period, _ = FinancialPeriod.objects.get_or_create(code=code)
+    period.is_closed = bool(closed)
+    period.save(update_fields=("is_closed",))
+    return {"period": period.code, "is_closed": period.is_closed}
