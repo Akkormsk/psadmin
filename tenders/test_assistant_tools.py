@@ -70,6 +70,16 @@ class AssistantToolRegistryTests(TestCase):
         with self.assertRaisesRegex(Exception, "не найден или уже обработан"):
             execute_tool("provider.knowledge_confirm", self.admin, args, confirmed=True)
 
+    def test_production_lesson_deactivation_uses_shared_service(self):
+        from unittest.mock import patch
+
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("production.lesson_deactivate", self.admin, {"lesson_id": 37})
+        with patch("tenders.assistant_capabilities.deactivate_lesson", return_value=True) as service:
+            result = execute_tool("production.lesson_deactivate", self.admin, {"lesson_id": 37}, confirmed=True)
+        service.assert_called_once_with(37)
+        self.assertTrue(result["dropped"])
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
