@@ -1443,9 +1443,9 @@ def save_selection_settings(payload):
         raise ValueError("Настройки должны быть объектом")
     settings = FilterSettings.load()
     if "include_words" in payload:
-        settings.include_words = str(payload["include_words"])
+        settings.include_words = str(payload["include_words"]).strip()
     if "exclude_words" in payload:
-        settings.exclude_words = str(payload["exclude_words"])
+        settings.exclude_words = str(payload["exclude_words"]).strip()
     if "profile_triage_enabled" in payload:
         value = payload["profile_triage_enabled"]
         if not isinstance(value, bool):
