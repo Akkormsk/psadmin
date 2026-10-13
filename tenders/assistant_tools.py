@@ -94,7 +94,11 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
         raise AssistantToolConfirmationRequired("Действие требует явного подтверждения")
     if not isinstance(payload, dict):
         raise AssistantToolError("Некорректные параметры действия")
-    missing = [name for name in required_input_names(identifier) if payload.get(name) in (None, "", [])]
+    missing = [
+        name for name in required_input_names(identifier)
+        if name not in payload or payload[name] is None
+        or (isinstance(payload[name], str) and not payload[name].strip())
+    ]
     if missing:
         raise AssistantToolError("Не заполнены обязательные поля: " + ", ".join(missing))
     for name, declared in tool.input_schema.items():
