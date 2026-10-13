@@ -113,8 +113,9 @@ def conversation_action_confirm(request, conversation_id, event_id):
         payload = event.payload if event else {}
         data = payload.get("data", {}) if isinstance(payload, dict) else {}
         used = list(conversation.context.get("confirmed_action_events", []))
-        if not event or payload.get("kind") != "confirmation_required" or event.pk in used:
-            return JsonResponse({"detail": "Подтверждение недействительно или уже использовано"}, status=409)
+        if (not event or payload.get("kind") != "confirmation_required" or event.pk in used
+                or conversation.feedback_events.filter(pk__gt=event.pk).exists()):
+            return JsonResponse({"detail": "Подтверждение недействительно, устарело или уже использовано"}, status=409)
         used.append(event.pk)
         conversation.context["confirmed_action_events"] = used
         # Consume before execution under the same transaction: retries cannot
