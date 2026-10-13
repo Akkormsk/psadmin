@@ -102,7 +102,7 @@ register_tool(AssistantTool(
 ))
 
 def manage_saved_estimate(user, payload, *, delete=False):
-    pipeline = payload.get("pipeline", True)
+    pipeline = payload.get("pipeline")
     if not isinstance(pipeline, bool):
         raise AssistantToolError("Тип расчёта должен быть указан однозначно")
     try:
@@ -115,7 +115,7 @@ def manage_saved_estimate(user, payload, *, delete=False):
 register_tool(AssistantTool(
     "estimate.duplicate", "Копировать сохранённый тендерный или заказной расчёт",
     "Создаёт самостоятельную копию со всеми строками через ту же операцию, что используется на странице расчёта.",
-    {"estimate_id": "integer", "pipeline": "boolean?"}, False, True, True,
+    {"estimate_id": "integer", "pipeline": "boolean"}, False, True, True,
     lambda user, payload: manage_saved_estimate(user, payload),
     source="tenders.estimate_actions.duplicate_estimate",
 ))
