@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_tools, execute_tool, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, required_input_names
 from .models import ProcessDefinition
 
 
@@ -13,6 +13,9 @@ class AssistantToolRegistryTests(TestCase):
         self.admin = get_user_model().objects.create_superuser("assistant-admin", "assistant@example.test", "password")
         self.user = get_user_model().objects.create_user("assistant-user")
         self.stage, _ = ProcessDefinition.objects.get_or_create(name="Швейное производство под ключ", role="production")
+
+    def test_published_capability_sources_resolve_to_shared_callables(self):
+        self.assertEqual(capability_issues(self.admin), [])
 
     def test_inventory_describes_real_registered_tools_and_permissions(self):
         admin_tools = {item["id"]: item for item in available_tools(self.admin)}
