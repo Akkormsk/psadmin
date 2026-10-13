@@ -4,7 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
 from .production_actions import deactivate_lesson
-from .estimate_actions import duplicate_estimate, delete_estimate, EstimateActionError
+from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, EstimateActionError
 
 
 def confirm_provider_knowledge(user, payload):
@@ -121,4 +121,27 @@ register_tool(AssistantTool(
     {"estimate_id": "integer", "pipeline": "boolean?"}, False, True, True,
     lambda user, payload: manage_saved_estimate(user, payload, delete=True),
     source="tenders.estimate_actions.delete_estimate",
+))
+
+def set_estimate_outcome(user, payload, *, pipeline):
+    try:
+        executor = set_tender_estimate_status if pipeline else set_order_estimate_status
+        return executor(user, payload["estimate_id"], payload["status"])
+    except EstimateActionError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "estimate.tender_status", "Изменить пользовательскую стадию тендерного расчёта",
+    "Устанавливает доступную стадию расчёта и при отказе от участия архивирует тендер через штатный сервис. Не заменяет получение официального протокола торгов.",
+    {"estimate_id": "integer", "status": "string"}, False, True, True,
+    lambda user, payload: set_estimate_outcome(user, payload, pipeline=True),
+    source="tenders.estimate_actions.set_tender_estimate_status",
+))
+register_tool(AssistantTool(
+    "estimate.order_status", "Изменить стадию отдельного заказа",
+    "Меняет статус заказа и при необходимости создаёт связанную карточку заказа так же, как существующая страница.",
+    {"estimate_id": "integer", "status": "string"}, False, True, True,
+    lambda user, payload: set_estimate_outcome(user, payload, pipeline=False),
+    source="tenders.estimate_actions.set_order_estimate_status",
 ))
