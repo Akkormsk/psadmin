@@ -56,6 +56,8 @@ def reply(conversation, user, message, page_context=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
     planning_tools = _planning_tools(tools, user)
+    from .assistant_catalog import workflow_catalog
+    workflows = workflow_catalog(user, tools)
     read_catalog = []
     if any(tool["id"] == "read" and tool["available"] for tool in tools):
         # This is the same metadata source the ORM executor validates against.
@@ -91,6 +93,7 @@ def reply(conversation, user, message, page_context=None):
                 "Return valid JSON matching response_schema."
             ),
             "tools": planning_tools,
+            "workflows": workflows,
             "read_catalog": read_catalog,
             "conversation_context": conversation.context.get("business_context", {}),
             "pending_action": pending,
