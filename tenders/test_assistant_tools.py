@@ -154,6 +154,17 @@ class AssistantToolRegistryTests(TestCase):
                 "lesson_id": 777
             }, confirmed=True)
 
+    def test_production_base_counterparty_macro_reuses_proposal_service(self):
+        from .models import Counterparty, Proposal
+
+        payload = {"name": "Мастерская Север", "stage_ids": [self.stage.pk], "notes": "Тест"}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("provider.production_create", self.admin, payload)
+        result = execute_tool("provider.production_create", self.admin, payload, confirmed=True)
+        self.assertTrue(Counterparty.objects.filter(pk=result["id"]).exists())
+        self.assertIn(self.stage.name, result["stage_names"])
+        self.assertTrue(Proposal.objects.filter(type=Proposal.TYPE_CREATE_COUNTERPARTY).exists())
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
