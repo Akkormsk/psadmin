@@ -115,6 +115,19 @@ class AssistantToolRegistryTests(TestCase):
         self.assertFalse(OrderEstimate.objects.filter(pk=copy_id).exists())
         self.assertTrue(OrderEstimate.objects.filter(pk=order.pk).exists())
 
+    def test_shared_order_estimate_status_checks_owner_and_writes_status(self):
+        from .models import Order, OrderEstimate
+        estimate = OrderEstimate.objects.create(owner=self.admin, name="Заказ со статусом", order_number="O-ST")
+        params = {"estimate_id": estimate.pk, "status": Order.PENDING}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("estimate.order_status", self.admin, params)
+        with self.assertRaisesRegex(Exception, "Недостаточно прав"):
+            execute_tool("estimate.order_status", self.user, params, confirmed=True)
+        result = execute_tool("estimate.order_status", self.admin, params, confirmed=True)
+        self.assertEqual(result["status"], Order.PENDING)
+        estimate.refresh_from_db()
+        self.assertEqual(estimate.order.status, Order.PENDING)
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
