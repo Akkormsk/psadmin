@@ -1191,32 +1191,12 @@ def production_feedback_draft(request):
     применяется здесь — только на production_feedback_confirm."""
     if not request.user.is_superuser:
         return JsonResponse({"error": "Учить «Базу производства» может только администратор."}, status=403)
-    text = request.POST.get("text", "").strip()
-    if not text:
-        return JsonResponse({"error": "Напишите, что изменить."}, status=400)
-    active_stages = list(ProcessDefinition.objects.filter(is_active=True).values("id", "name"))
-    active_counterparties = list(Counterparty.objects.filter(is_active=True).values("id", "name"))
+    from .production_actions import draft_production_feedback
     try:
-        items = parse_production_feedback(text, active_stages, active_counterparties)
-    except TenderAIError as exc:
+        result = draft_production_feedback(request.user, request.POST.get("text", ""))
+    except (TenderAIError, ValueError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-
-    batch_id = None
-    proposals = []
-    for item in items:
-        proposal = Proposal.objects.create(
-            type=item["type"], payload=payload_from_feedback_item(item["type"], item["raw"]),
-            summary=item["summary"], source_text=text, created_by=request.user,
-            **({"batch_id": batch_id} if batch_id else {}),
-        )
-        batch_id = batch_id or proposal.batch_id
-        proposals.append(proposal)
-    return JsonResponse({
-        "batch_id": str(batch_id),
-        "items": [{"id": p.pk, "type": p.type, "type_display": p.get_type_display(), "summary": p.summary, "payload": p.payload} for p in proposals],
-        "active_stages": active_stages, "active_counterparties": active_counterparties,
-    })
-
+    return JsonResponse(result)
 
 @login_required
 @require_POST
