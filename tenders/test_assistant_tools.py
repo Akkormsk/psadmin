@@ -17,6 +17,18 @@ class AssistantToolRegistryTests(TestCase):
     def test_published_capability_sources_resolve_to_shared_callables(self):
         self.assertEqual(capability_issues(self.admin), [])
 
+    def test_workflow_encyclopedia_reuses_only_registered_capabilities(self):
+        from .assistant_catalog import action_catalog, catalog, workflow_catalog
+
+        actions = action_catalog(self.admin)
+        workflows = workflow_catalog(self.admin, actions)
+        published = {action["id"] for action in actions}
+        grouped = [tool_id for goal in workflows for tool_id in goal["actions"]]
+        self.assertEqual(set(grouped), published)
+        self.assertEqual(len(grouped), len(set(grouped)))
+        self.assertEqual(catalog(self.admin)["workflows"], workflows)
+        self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
+
     def test_inventory_describes_real_registered_tools_and_permissions(self):
         admin_tools = {item["id"]: item for item in available_tools(self.admin)}
         user_tools = {item["id"]: item for item in available_tools(self.user)}
