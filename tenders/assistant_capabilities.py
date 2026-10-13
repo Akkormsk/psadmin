@@ -3,7 +3,7 @@ from .assistant_tools import AssistantTool, AssistantToolError, register_tool
 from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
-from .production_actions import deactivate_lesson, deactivate_route_knowledge
+from .production_actions import deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, EstimateActionError
 
 
@@ -158,4 +158,19 @@ register_tool(AssistantTool(
     "Отключает выбранный подтверждённый маршрут и связанные с ним выученные правила по тому же алгоритму, что и интерфейс.",
     {"lesson_id": "integer?", "example_id": "integer?"}, False, True, True,
     deactivate_route_experience, source="tenders.production_actions.deactivate_route_knowledge",
+))
+
+def confirm_production_counterparty(user, payload):
+    try:
+        return confirm_counterparty_with_stages(user, payload)
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "provider.production_create", "Добавить контрагента и производственные связи",
+    "Создаёт или обновляет контрагента и связывает его с выбранными этапами через штатный журнал предложений; использует тот же исполнитель, что и «База производства».",
+    {"name": "string", "notes": "string?", "stage_ids": "integer[]", "source_id": "integer?"},
+    False, True, True, confirm_production_counterparty,
+    source="tenders.production_actions.confirm_counterparty_with_stages",
 ))
