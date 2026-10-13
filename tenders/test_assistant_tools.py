@@ -176,6 +176,24 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["items"], [])
         self.assertFalse(Proposal.objects.exists())
 
+    def test_tender_question_macro_records_answer_once(self):
+        from tender_selection.models import Tender
+        from .models import OwnerInteraction, OwnerFeedbackEvent
+
+        tender = Tender.objects.create(
+            purchase_number="ASK-001", collecting_finished_at="2026-10-31T10:00:00Z"
+        )
+        question = OwnerInteraction.objects.create(
+            tender=tender, question="Уточните срок поставки", status="open",
+        )
+        args = {"tender_id": tender.pk, "interaction_id": question.pk, "answer": "До конца месяца"}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("tender.owner_question_answer", self.admin, args)
+        self.assertEqual(execute_tool("tender.owner_question_answer", self.admin, args, confirmed=True)["status"], "resolved")
+        self.assertEqual(OwnerFeedbackEvent.objects.filter(interaction=question).count(), 1)
+        with self.assertRaisesRegex(Exception, "уже закрыт"):
+            execute_tool("tender.owner_question_answer", self.admin, args, confirmed=True)
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Неверный идентификатор"):
             execute_tool("production.feedback_decide", self.admin, {
