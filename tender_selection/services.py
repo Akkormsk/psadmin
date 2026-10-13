@@ -1435,3 +1435,53 @@ def retry_pending_protocols(*, limit: int = 6, pause: float = PROTOCOL_PAUSE_SEC
             logger.warning("protocols: ЕИС не ответил по %s (%s) — продолжим в следующий тик", tender.purchase_number, exc)
             break
     return attempted, succeeded
+
+@transaction.atomic
+def save_selection_settings(payload):
+    """Update tender discovery settings from UI or assistant with one contract."""
+    if not isinstance(payload, dict):
+        raise ValueError("Настройки должны быть объектом")
+    settings = FilterSettings.load()
+    if "include_words" in payload:
+        settings.include_words = str(payload["include_words"])
+    if "exclude_words" in payload:
+        settings.exclude_words = str(payload["exclude_words"])
+    if "profile_triage_enabled" in payload:
+        value = payload["profile_triage_enabled"]
+        if not isinstance(value, bool):
+            raise ValueError("Режим автоматического отбора должен быть логическим значением")
+        settings.profile_triage_enabled = value
+    if "min_price" in payload:
+        try:
+            price = Decimal(str(payload["min_price"]))
+            if not price.is_finite() or price < 0:
+                raise ValueError
+        except (InvalidOperation, ValueError, TypeError):
+            raise ValueError("Минимальная цена должна быть неотрицательным числом")
+        settings.min_price = price
+    if "window_days" in payload:
+        try:
+            days = int(payload["window_days"])
+        except (ValueError, TypeError):
+            raise ValueError("Неверный период поиска")
+        if not 1 <= days <= 365:
+            raise ValueError("Период поиска должен быть от 1 до 365 дней")
+        settings.window_days = days
+    if "okpd2_codes" in payload:
+        codes = payload["okpd2_codes"]
+        if not isinstance(codes, list) or not all(isinstance(x, str) for x in codes):
+            raise ValueError("Неверный список кодов ОКПД2")
+        settings.okpd2_codes = codes
+    if "regions" in payload:
+        regions = payload["regions"]
+        if not isinstance(regions, list) or not all(str(x).isdigit() for x in regions):
+            raise ValueError("Неверный список регионов")
+        settings.regions = [str(x) for x in regions]
+    if "laws" in payload:
+        laws = payload["laws"]
+        if not isinstance(laws, list) or not laws or any(x not in ("fz44", "fz223") for x in laws):
+            raise ValueError("Необходимо выбрать 44-ФЗ, 223-ФЗ или оба закона")
+        settings.laws = laws
+    settings.save()
+    return {"updated": True, "min_price": str(settings.min_price),
+            "window_days": settings.window_days, "laws": settings.laws}
