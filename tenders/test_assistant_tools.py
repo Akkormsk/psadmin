@@ -56,6 +56,26 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["status"], "draft")
         self.assertEqual(execute_tool("provider.find", self.admin, {"query": "Черновой"})["counterparties"][0]["name"], "Черновой пошив")
 
+    def test_provider_knowledge_confirm_is_shared_and_requires_owner_approval(self):
+        from .models import CounterpartyKnowledgeVersion
+        provider = execute_tool("provider.create_draft", self.admin, {
+            "name": "Проверка знаний", "stage_ids": [self.stage.pk],
+            "source_text": "Тестовая инструкция", 
+        }, confirmed=True)
+        args = {"version_id": provider["knowledge_version_id"]}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("provider.knowledge_confirm", self.admin, args)
+        result = execute_tool("provider.knowledge_confirm", self.admin, args, confirmed=True)
+        self.assertEqual(result["status"], CounterpartyKnowledgeVersion.STATUS_CONFIRMED)
+        with self.assertRaisesRegex(Exception, "не найден или уже обработан"):
+            execute_tool("provider.knowledge_confirm", self.admin, args, confirmed=True)
+
+    def test_feedback_decision_rejects_unknown_batch(self):
+        with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
+            execute_tool("production.feedback_decide", self.admin, {
+                "batch_id": "no-such-batch", "accepted_ids": [],
+            }, confirmed=True)
+
     def test_read_uses_real_cash_records_and_aggregates_before_limit(self):
         from cash.models import CashTransaction
 
