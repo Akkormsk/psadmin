@@ -3,7 +3,7 @@ from .assistant_tools import AssistantTool, AssistantToolError, register_tool
 from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list
 from .proposals import apply_batch
-from .production_actions import deactivate_lesson
+from .production_actions import deactivate_lesson, deactivate_route_knowledge
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, EstimateActionError
 
 
@@ -144,4 +144,18 @@ register_tool(AssistantTool(
     {"estimate_id": "integer", "status": "string"}, False, True, True,
     lambda user, payload: set_estimate_outcome(user, payload, pipeline=False),
     source="tenders.estimate_actions.set_order_estimate_status",
+))
+
+def deactivate_route_experience(user, payload):
+    try:
+        return {"dropped": deactivate_route_knowledge(payload)}
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+register_tool(AssistantTool(
+    "production.route_knowledge_deactivate", "Отключить неверный производственный маршрут",
+    "Отключает выбранный подтверждённый маршрут и связанные с ним выученные правила по тому же алгоритму, что и интерфейс.",
+    {"lesson_id": "integer?", "example_id": "integer?"}, False, True, True,
+    deactivate_route_experience, source="tenders.production_actions.deactivate_route_knowledge",
 ))
