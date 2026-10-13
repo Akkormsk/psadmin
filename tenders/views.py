@@ -1275,8 +1275,8 @@ def drop_lesson(request):
         lesson_id = int(json.loads(request.POST.get("payload", "{}")).get("lesson_id"))
     except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось определить урок."}, status=400)
-    dropped = Lesson.objects.filter(pk=lesson_id, is_active=True).update(is_active=False)
-    return JsonResponse({"dropped": bool(dropped)})
+    from .production_actions import deactivate_lesson
+    return JsonResponse({"dropped": deactivate_lesson(lesson_id)})
 
 
 @login_required
