@@ -97,6 +97,17 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
     missing = [name for name in required_input_names(identifier) if payload.get(name) in (None, "", [])]
     if missing:
         raise AssistantToolError("Не заполнены обязательные поля: " + ", ".join(missing))
+    for name, declared in tool.input_schema.items():
+        if name not in payload or payload[name] is None or not isinstance(declared, str):
+            continue
+        kind = declared.rstrip("?")
+        value = payload[name]
+        if kind == "boolean" and not isinstance(value, bool):
+            raise AssistantToolError(f"Поле {name} должно иметь значение true или false")
+        if kind.endswith("[]") and not isinstance(value, list):
+            raise AssistantToolError(f"Поле {name} должно быть списком")
+        if kind in {"object"} and not isinstance(value, dict):
+            raise AssistantToolError(f"Поле {name} должно быть объектом")
     return tool.executor(user, payload)
 
 
