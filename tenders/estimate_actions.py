@@ -1,7 +1,12 @@
 """Shared saved-estimate operations for web UI and assistant channels."""
 from django.db import transaction
+from django.contrib.auth import get_user_model
+from django.shortcuts import get_object_or_404
+from decimal import Decimal, InvalidOperation
+import json
 
 from .models import Order, OrderEstimate, OrderLine, TenderEstimate, TenderLine
+from .services import calculate_tender
 
 
 class EstimateActionError(ValueError):
@@ -86,13 +91,6 @@ def set_order_estimate_status(user, estimate_id, status):
     order.save(update_fields=["status", "updated_at"])
     return {"status": status, "label": order.get_status_display(), "order_id": order.pk}
 
-import json
-from decimal import Decimal, InvalidOperation
-from django.contrib.auth import get_user_model
-from django.shortcuts import get_object_or_404
-from .models import TenderSettings
-from .services import calculate_tender
-
 def _number(value, default="0"):
     return Decimal(str(value or default).replace(",", "."))
 
@@ -145,8 +143,7 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     except (ValueError, TypeError, InvalidOperation):
         return estimate, "Проверьте реквизиты тендера и товарные позиции.", meta
 
-    calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
-    is_new = estimate is None
+    _calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
     estimate = estimate or (TenderEstimate(owner=user) if pipeline else OrderEstimate(owner=user))
     if user.is_superuser and data.get("owner_id"):
         estimate.owner = get_object_or_404(get_user_model(), pk=data["owner_id"])
