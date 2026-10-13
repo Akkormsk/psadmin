@@ -96,6 +96,25 @@ class AssistantToolRegistryTests(TestCase):
             "period": "2026-10", "closed": False
         }, confirmed=True)["is_closed"])
 
+    def test_saved_order_and_tender_estimates_copy_and_delete_using_shared_service(self):
+        from .models import OrderEstimate, OrderLine, TenderEstimate, TenderLine
+
+        order = OrderEstimate.objects.create(owner=self.admin, name="Заказ", order_number="O-1")
+        OrderLine.objects.create(estimate=order, name="Тираж", quantity=10, nmck_unit=20)
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("estimate.duplicate", self.admin, {"estimate_id": order.pk, "pipeline": False})
+        copy_id = execute_tool("estimate.duplicate", self.admin, {"estimate_id": order.pk, "pipeline": False}, confirmed=True)["estimate_id"]
+        copied = OrderEstimate.objects.get(pk=copy_id)
+        self.assertEqual(copied.order_number, "O-1")
+        self.assertEqual(copied.lines.count(), 1)
+        tender = TenderEstimate.objects.create(owner=self.admin, name="Тендер", tender_number="T-1")
+        TenderLine.objects.create(estimate=tender, name="Папки", quantity=5, nmck_unit=100)
+        tender_copy = execute_tool("estimate.duplicate", self.admin, {"estimate_id": tender.pk, "pipeline": True}, confirmed=True)
+        self.assertEqual(TenderEstimate.objects.get(pk=tender_copy["estimate_id"]).lines.count(), 1)
+        self.assertTrue(execute_tool("estimate.delete", self.admin, {"estimate_id": copy_id, "pipeline": False}, confirmed=True)["deleted"])
+        self.assertFalse(OrderEstimate.objects.filter(pk=copy_id).exists())
+        self.assertTrue(OrderEstimate.objects.filter(pk=order.pk).exists())
+
     def test_feedback_decision_rejects_unknown_batch(self):
         with self.assertRaisesRegex(Exception, "Нет ожидающих предложений"):
             execute_tool("production.feedback_decide", self.admin, {
