@@ -29,6 +29,15 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(catalog(self.admin)["workflows"], workflows)
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
+    def test_site_route_inventory_is_not_mistaken_for_executable_tools(self):
+        from .assistant_catalog import site_route_inventory, catalog
+        routes = site_route_inventory()
+        self.assertTrue(any("cash" in item["route"] for item in routes))
+        self.assertTrue(any("tenders" in item["route"] for item in routes))
+        source = catalog(self.admin)
+        self.assertEqual(source["site_route_inventory"], routes)
+        self.assertNotIn("site_route_inventory", catalog(self.user))
+
     def test_inventory_describes_real_registered_tools_and_permissions(self):
         admin_tools = {item["id"]: item for item in available_tools(self.admin)}
         user_tools = {item["id"]: item for item in available_tools(self.user)}
