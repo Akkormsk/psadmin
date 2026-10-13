@@ -82,3 +82,32 @@ def confirm_counterparty_with_stages(user, payload):
         "id": counterparty.pk, "name": counterparty.name,
         "stage_names": list(counterparty.stage_links.select_related("stage").values_list("stage__name", flat=True)),
     }
+
+@transaction.atomic
+def draft_production_feedback(user, text):
+    """Prepare one reviewable proposal batch; no global changes are applied."""
+    from .services import parse_production_feedback
+    from .proposals import payload_from_feedback_item
+
+    text = str(text).strip()
+    if not text:
+        raise ValueError("Напишите, что изменить")
+    stages = list(ProcessDefinition.objects.filter(is_active=True).values("id", "name"))
+    counterparties = list(Counterparty.objects.filter(is_active=True).values("id", "name"))
+    items = parse_production_feedback(text, stages, counterparties)
+    batch_id = None
+    proposals = []
+    for item in items:
+        proposal = Proposal.objects.create(
+            type=item["type"], payload=payload_from_feedback_item(item["type"], item["raw"]),
+            summary=item["summary"], source_text=text, created_by=user,
+            **({"batch_id": batch_id} if batch_id else {}),
+        )
+        batch_id = batch_id or proposal.batch_id
+        proposals.append(proposal)
+    return {
+        "batch_id": str(batch_id) if batch_id else None,
+        "items": [{"id": p.pk, "type": p.type, "type_display": p.get_type_display(),
+                   "summary": p.summary, "payload": p.payload} for p in proposals],
+        "active_stages": stages, "active_counterparties": counterparties,
+    }
