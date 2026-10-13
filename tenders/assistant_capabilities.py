@@ -45,7 +45,11 @@ def confirm_sewing_price(user, payload):
 
 
 def decide_feedback_proposals(user, payload):
-    batch_id = payload["batch_id"]
+    from uuid import UUID
+    try:
+        batch_id = str(UUID(str(payload["batch_id"])))
+    except (ValueError, TypeError):
+        raise AssistantToolError("Неверный идентификатор набора предложений")
     accepted_ids = payload["accepted_ids"]
     if not isinstance(accepted_ids, list) or not all(
         isinstance(item, int) and not isinstance(item, bool) for item in accepted_ids
