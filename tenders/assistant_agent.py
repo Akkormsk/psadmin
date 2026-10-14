@@ -69,191 +69,168 @@ def _planning_tools(tools, user):
     return prepared
 
 
+MAX_AGENT_STEPS = 5
+
+
+def _result_fallback(observations, trace_id):
+    """Answer from verified adapter output even when the language model fails."""
+    for item in reversed(observations):
+        result = item.get("result", {})
+        if isinstance(result, dict) and isinstance(result.get("display_text"), str) and result["display_text"].strip():
+            return result["display_text"].strip()
+    if observations:
+        return "Данные получены, но оформить ответ не удалось. Код диагностики: " + trace_id + "."
+    return "Не удалось выполнить запрос. Код диагностики: " + trace_id + "."
+
+
 def reply(conversation, user, message, page_context=None):
-    """Lets the model choose from the registry; execution remains backend-only."""
-    tools = available_tools(user)
-    planning_tools = _planning_tools(tools, user)
+    """A bounded multi-step agent over registered business actions only.
+
+    The model chooses what to do; Django owns permissions, data, and confirmations.
+    The legacy technical ORM 'read' plan is deliberately NOT advertised.
+    """
+    trace_id = uuid4().hex[:10]
+    registry = [
+        entry for entry in available_tools(user)
+        if entry.get("available") and entry["id"] != "read"
+    ]
+    planning_tools = _planning_tools(registry, user)
     from .assistant_catalog import workflow_catalog
-    workflows = workflow_catalog(user, tools)
-    read_catalog = []
-    if any(tool["id"] == "read" and tool["available"] for tool in tools):
-        # This is the same metadata source the ORM executor validates against.
-        from .assistant_read import catalogue
-        read_catalog = catalogue()
-    pending = conversation.context.get("pending_action", {})
-    prompt = json.dumps(
-        {
-            # 2026-10-13: Старый промпт превращал AI в диспетчера инструмента;
-            # теперь разрешаем самостоятельное обсуждение и уточнения, сохраняя
-            # лимит в один инструмент за ход и все серверные проверки.
-            # Было:
-            # "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. When the user asks to start a tool with ui, select that tool immediately: its declared form collects the required inputs and the tool is not executed until that form is confirmed. Copy values explicitly stated by the user into ui action arguments; select an option only by its exact id from the supplied ui options. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
-            "task": (
-                "You are PSADMIN's Russian-speaking business assistant. "
-                "Your main goal is to understand the user's intent and help solve their task. "
-                "You may reason about the problem, discuss alternatives, explain decisions, "
-                "ask clarifying questions, and guide multi-step work naturally. "
-                "Do not force tool usage during an ordinary conversation. "
-                "Ask preferably one useful question at a time. "
-                "Use the conversation history and provided context; do not ask again for information already given. "
-                "You may propose a plan and continue discussing it over several user messages. "
-                "Use tools only when you need real PSADMIN data or must execute an existing business operation. "
-                "When a user explicitly requests records or facts from PSADMIN, execute a read-only tool in this turn; never merely promise to fetch data. "
-                "Use runtime catalogue to select relevant fields and scope; distinguish incoming from all records. "
-                "When tool data arrives answer the original question fully with every requested field; omit internal metadata. "
-                "Choose at most one tool action per assistant response; "
-                "the backend does not support multiple tool calls in one turn. "
-                "For tools with a declared UI, select the tool and let its existing UI collect missing inputs. "
-                "For read operations create the plan object yourself from read_catalog. "
-                "The read tool expects arguments.plan = {entity: app_label.ModelName, fields: [field_name], "
-                "filters: [{field: field_name, op: eq|contains|gte|gt|lte|lt|in|isnull, value: value}], "
-                "order_by: -field_name, limit: integer}; optional keys may be omitted. "
-                "Use only entity IDs and field names from read_catalog; do not invent technical identifiers. "
-                "For requests for recent records choose a date field if available or descending id. "
-                "A plan is internal; never ask the user to supply plan, entity, filters or field names. "
-                "For other tools, when required arguments are missing, ask for clarification "
-                "and return action=null until they are available. "
-                "Never invent database records, prices, tool results, or completed actions. "
-                "Never claim an operation succeeded without a real tool result. "
-                "Only registered tools may be executed. "
-                "Preserve all backend permission checks and required confirmations. "
-                "Return valid JSON matching response_schema."
-            ),
+    workflow = workflow_catalog(user, registry)
+    pending = conversation.context.get("pending_action") or {}
+    observations = []
+    last_read = conversation.context.get("last_agent_read")
+    if isinstance(last_read, dict) and last_read.get("tool_id") in {t["id"] for t in registry if t["read_only"]}:
+        observations.append({"tool_id": last_read["tool_id"], "result": last_read.get("result", {}), "prior_turn": True})
+    user_message = message
+    instruction = (
+        "You are the Russian-language PSADMIN assistant. Talk naturally with the user. "
+        "You can call several registered tools in sequence, observing each result before "
+        "choosing whether another tool is needed. A tool call does not finish the turn. "
+        "Choose tools by their business descriptions, using only their public input_schema. "
+        "Never invent Django model names, ORM field names, SQL, or unregistered tools. "
+        "The backend supplies every tool's result and all exact calculations. "
+        "For data requests call the relevant business read tool, not a future-tense promise. "
+        "After obtaining data, answer the complete user request briefly and clearly in Russian. "
+        "Do not show internal metadata, code, execution details, or invented information. "
+        "If data is missing, ask one useful clarification. "
+        "Never claim a write happened unless confirmed by the backend. "
+        "For changing operations choose a declared action and stop for user confirmation; "
+        "never attempt to bypass confirmation. "
+        "You must return a JSON object with reply (string), action (object or null), "
+        "and optional task_status (continue|cancel). "
+        "Use action=null when you are done answering or need clarification."
+    )
+    previous = set()
+    failures = 0
+    success_count = 0
+    for step in range(MAX_AGENT_STEPS + 1):
+        payload = {
+            "task": instruction,
             "tools": planning_tools,
-            "workflows": workflows,
-            "read_catalog": read_catalog,
+            "workflows": workflow,
             "conversation_context": conversation.context.get("business_context", {}),
             "pending_action": pending,
             "page_context": page_context or {},
             "history": _history(conversation),
-            "message": message,
-            "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}, "task_status": "continue|cancel"},
-        },
-        ensure_ascii=False,
-    )
-    preflight()
-    plan = _request(prompt)
-    if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
-        raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
-    if pending and plan.get("task_status") == "cancel":
-        conversation.context.pop("pending_action", None)
-        conversation.save(update_fields=["context"])
-        return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
-    action = plan.get("action")
-    if not isinstance(action, dict) or not action.get("id"):
-        # A bounded follow-up for a promised data fetch that was not executed.
-        # The planner still chooses the entity using the runtime catalogue.
-        if not pending and read_catalog:
-            reply_text = plan["reply"].strip().lower()
-            future_claim = any(phrase in reply_text for phrase in (
-                "сейчас получ", "сейчас провер", "сейчас подготов",
-                "я выполню запрос", "я запрошу", "получу данные", "запрошу данные",
-            ))
-            if future_claim:
-                retry = _request(json.dumps({
-                    "task": "Your previous answer only promised a data lookup. If the user requested PSADMIN records, select a read-only tool NOW and construct its complete internal arguments from the catalogue. Otherwise return action=null and a truthful final reply. Never invent results.",
-                    "message": message,
-                    "previous_reply": plan["reply"],
-                    "tools": [item for item in planning_tools if item.get("available") and item.get("read_only")],
-                    "read_catalog": read_catalog,
-                    "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}},
-                }, ensure_ascii=False))
-                if isinstance(retry, dict) and isinstance(retry.get("action"), dict):
-                    retry_id = retry["action"].get("id")
-                    if retry_id in {item["id"] for item in tools if item["read_only"] and item["available"]}:
-                        plan = retry
-                        action = retry["action"]
-        if not isinstance(action, dict) or not action.get("id"):
-            if pending:
-                return {"text": (plan["reply"].strip() or "Уточните недостающие параметры задачи."), "kind": "text", "data": {"pending_tool_id": pending.get("tool_id")}}
-            return {"text": plan["reply"].strip(), "kind": "text", "data": {}}
-    identifier = action.get("id")
-    arguments = action.get("arguments", {})
-    if not isinstance(identifier, str) or not isinstance(arguments, dict):
-        raise TenderAIError("Ассистент вернул некорректное действие.")
-    if identifier not in {tool["id"] for tool in tools}:
-        raise TenderAIError("Ассистент запросил действие вне реестра.")
-    if pending and pending.get("tool_id") == identifier and isinstance(pending.get("arguments"), dict):
-        arguments = {**pending["arguments"], **arguments}
-    selected_tool = next(tool for tool in tools if tool["id"] == identifier)
-    if selected_tool.get("ui"):
-        data = {"tool_id": identifier}
-        for name, source in selected_tool["ui"].get("options", {}).items():
-            values = execute_tool(source["tool"], user, {})
-            data[name] = values.get(source["field"], [])
-        for name, field_type in selected_tool["ui"].get("fields", {}).items():
-            value = arguments.get(name)
-            if field_type == "string" and isinstance(value, str) and value.strip():
-                data[name] = value.strip()
-            if field_type == "integer" and isinstance(value, int) and any(item.get("id") == value for item in data.get("stages", [])):
-                data[name] = value
-        return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
-    missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
-    if identifier == "read":
-        trace_id = uuid4().hex[:10]
-        _logger.warning("READ trace=%s initial=%s", trace_id, _plan_shape(arguments))
-        from .assistant_read import ReadPlanError, normalize_plan, catalogue
-        for attempt in range(2):
-            try:
-                if isinstance(arguments.get("plan"), dict):
-                    arguments = {**arguments, "plan": normalize_plan(arguments["plan"])}
-                result = execute_tool(identifier, user, arguments)
-                _logger.warning("READ trace=%s success attempt=%s records=%s", trace_id, attempt + 1, result.get("returned_count"))
-                break
-            except (AssistantToolError, ReadPlanError, ValueError, TypeError) as exc:
-                _logger.warning("READ trace=%s rejected attempt=%s exception=%s reason=%s shape=%s", trace_id, attempt + 1, type(exc).__name__, str(exc)[:180], _plan_shape(arguments))
-                if attempt:
-                    return {"text": f"Не удалось сформировать корректный запрос к данным. Код диагностики: {trace_id}.", "kind": "tool_error", "data": {"tool_id": identifier, "trace_id": trace_id}}
-                correction = _request(json.dumps({
-                    "task": "Repair the internal read tool arguments using the exact validation error and the allowed catalogue. Do not request technical parameters from the user. Never fabricate database results. Return the complete corrected action with arguments.plan.",
-                    "request": message, "invalid_arguments": arguments,
-                    "validation_error": str(exc),
-                    "read_catalog": ([entry for entry in read_catalog if isinstance(arguments.get("plan"), dict) and entry["id"] == arguments["plan"].get("entity")]
-                                     or read_catalog),
-                    "instruction": "Use exactly the entity ID and field NAME values from read_catalog, never display labels. Return action.arguments.plan with entity, fields, filters, order_by, limit; never model or nmck unless listed as a real field.",
-                    "response_schema": {"reply": "Russian text", "action": {"id": "read", "arguments": {"plan": "object"}}},
-                }, ensure_ascii=False))
-                action_retry = correction.get("action") if isinstance(correction, dict) else None
-                if not isinstance(action_retry, dict) or action_retry.get("id") != "read" or not isinstance(action_retry.get("arguments"), dict):
-                    return {"text": "Не удалось сформировать корректный запрос к данным. Попробуйте переформулировать задачу.", "kind": "tool_error", "data": {"tool_id": identifier}}
-                arguments = action_retry["arguments"]
-                _logger.warning("READ trace=%s repaired_shape=%s", trace_id, _plan_shape(arguments))
-        final = _request(json.dumps({
-            "task": "Answer the original user request concisely using only tool_result. For a list include each requested field for every returned record. If a requested field is missing, say so rather than invent it. Avoid internal metadata and IDs unless requested.",
-            "original_request": message, "tool": selected_tool, "tool_result": result, "response_schema": {"reply": "Russian text"},
-        }, ensure_ascii=False))
-        if not isinstance(final, dict) or not isinstance(final.get("reply"), str):
-            raise TenderAIError("Ассистент не смог сформировать ответ по результату чтения.")
-        return {"text": final["reply"].strip(), "kind": "tool_result", "data": {"tool_id": identifier, "result": result}}
-    if missing:
-        conversation.context["pending_action"] = {"tool_id": identifier, "arguments": arguments}
-        conversation.save(update_fields=["context"])
-        labels = ", ".join(missing)
-        text = plan["reply"].strip() or f"Уточните: {labels}."
-        if labels not in text:
-            text = f"{text}\nНужны параметры: {labels}."
-        return {"text": text, "kind": "text", "data": {"pending_tool_id": identifier, "missing": missing}}
-    if pending:
-        conversation.context.pop("pending_action", None)
-        conversation.save(update_fields=["context"])
-    try:
-        result = execute_tool(identifier, user, arguments)
-    except AssistantToolConfirmationRequired:
-        return {"text": plan["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
-    except AssistantToolError as exc:
-        return {"text": str(exc), "kind": "tool_error", "data": {"tool_id": identifier}}
-    final = _request(
-        json.dumps(
-            {
-                "task": "Answer in concise Russian using only tool_result. Do not invent data or promise further execution.",
-                "draft": plan["reply"],
-                "tool": selected_tool,
-                "tool_result": result,
-                "response_schema": {"reply": "Russian text"},
+            "message": user_message,
+            "observations": observations[-MAX_AGENT_STEPS:],
+            "remaining_tool_calls": MAX_AGENT_STEPS - step,
+            "response_schema": {
+                "reply": "Short Russian final response or clarification",
+                "action": {"id": "registered tool id or null", "arguments": "object"},
+                "task_status": "continue|cancel",
             },
-            ensure_ascii=False,
-        )
-    )
-    if not isinstance(final, dict) or not isinstance(final.get("reply"), str):
-        raise TenderAIError("Ассистент не смог сформировать ответ по результату действия.")
-    return {"text": final["reply"].strip(), "kind": "tool_result", "data": {"tool_id": identifier, "result": result}}
+        }
+        try:
+            preflight()
+            decision = _request(json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            _logger.exception("AGENT trace=%s step=%s failed to generate decision", trace_id, step)
+            return {"text": _result_fallback([x for x in observations if not x.get("prior_turn")], trace_id),
+                    "kind": "text", "data": {"trace_id": trace_id}}
+        if not isinstance(decision, dict):
+            _logger.warning("AGENT trace=%s step=%s invalid decision type", trace_id, step)
+            return {"text": _result_fallback([x for x in observations if not x.get("prior_turn")], trace_id),
+                    "kind": "text", "data": {"trace_id": trace_id}}
+        if pending and decision.get("task_status") == "cancel":
+            conversation.context.pop("pending_action", None)
+            conversation.save(update_fields=["context"])
+            return {"text": decision.get("reply") or "Действие отменено.", "kind": "text", "data": {}}
+        action = decision.get("action")
+        identifier = action.get("id") if isinstance(action, dict) else None
+        if not identifier or step == MAX_AGENT_STEPS:
+            final_text = decision.get("reply", "")
+            # A registered adapter's verified rendering is authoritative on reads.
+            fresh = [x for x in observations if not x.get("prior_turn")]
+            if len(fresh) == 1 and isinstance(fresh[-1].get("result", {}), dict) and fresh[-1]["result"].get("display_text"):
+                final_text = fresh[-1]["result"]["display_text"]
+            if not isinstance(final_text, str) or not final_text.strip():
+                final_text = _result_fallback(fresh, trace_id)
+            return {"text": final_text.strip(), "kind": "text", "data": {}}
+        entry = next((t for t in registry if t["id"] == identifier), None)
+        args = action.get("arguments")
+        if not entry or not isinstance(args, dict):
+            observations.append({"tool_id": str(identifier)[:80], "error": "Unknown tool or invalid arguments; use the published tool schema."})
+            failures += 1
+            if failures >= 2:
+                return {"text": _result_fallback([x for x in observations if "result" in x and not x.get("prior_turn")], trace_id),
+                        "kind": "text", "data": {"trace_id": trace_id}}
+            continue
+        if pending and pending.get("tool_id") == identifier and isinstance(pending.get("arguments"), dict):
+            args = {**pending["arguments"], **args}
+        if entry.get("ui"):
+            data = {"tool_id": identifier}
+            for name, source in entry["ui"].get("options", {}).items():
+                values = execute_tool(source["tool"], user, {})
+                data[name] = values.get(source["field"], [])
+            for name, field_type in entry["ui"].get("fields", {}).items():
+                value = args.get(name)
+                if field_type == "string" and isinstance(value, str) and value.strip():
+                    data[name] = value.strip()
+                if field_type == "integer" and isinstance(value, int) and any(item.get("id") == value for item in data.get("stages", [])):
+                    data[name] = value
+            return {"text": decision.get("reply") or "Уточните параметры.", "kind": entry["ui"]["kind"], "data": data}
+        missing = [name for name in required_input_names(identifier) if args.get(name) in (None, "", [])]
+        if missing:
+            if not entry["read_only"]:
+                conversation.context["pending_action"] = {"tool_id": identifier, "arguments": args}
+                conversation.save(update_fields=["context"])
+                return {"text": decision.get("reply") or "Уточните: " + ", ".join(missing),
+                        "kind": "text", "data": {"pending_tool_id": identifier, "missing": missing}}
+            observations.append({"tool_id": identifier, "error": "Missing required input: " + ", ".join(missing)})
+            failures += 1
+            continue
+        if not entry["read_only"]:
+            # Never execute a mutation inside the autonomous loop.
+            return {"text": decision.get("reply") or "Подтвердите действие.",
+                    "kind": "confirmation_required",
+                    "data": {"tool_id": identifier, "arguments": args}}
+        signature = json.dumps([identifier, args], sort_keys=True, ensure_ascii=False, default=str)
+        if signature in previous:
+            observations.append({"tool_id": identifier, "error": "Repeated identical read; use existing result or choose another tool."})
+            failures += 1
+            if failures >= 2:
+                return {"text": _result_fallback([x for x in observations if "result" in x and not x.get("prior_turn")], trace_id),
+                        "kind": "text", "data": {"trace_id": trace_id}}
+            continue
+        previous.add(signature)
+        try:
+            result = execute_tool(identifier, user, args)
+        except (AssistantToolError, ValueError, TypeError) as exc:
+            _logger.warning("AGENT trace=%s tool=%s rejected reason=%s", trace_id, identifier, str(exc)[:180])
+            observations.append({"tool_id": identifier, "error": str(exc)[:250]})
+            failures += 1
+            if failures >= 2:
+                return {"text": _result_fallback([x for x in observations if "result" in x and not x.get("prior_turn")], trace_id),
+                        "kind": "text", "data": {"trace_id": trace_id}}
+            continue
+        success_count += 1
+        observations.append({"tool_id": identifier, "result": result})
+        _logger.info("AGENT trace=%s read=%s completed step=%s", trace_id, identifier, step)
+        # Retain one verified read for natural follow-up questions, never a write.
+        if isinstance(result, dict) and isinstance(result.get("items"), list):
+            conversation.context["last_agent_read"] = {"tool_id": identifier, "result": result}
+            conversation.save(update_fields=["context"])
+    return {"text": _result_fallback([x for x in observations if "result" in x and not x.get("prior_turn")], trace_id),
+            "kind": "text", "data": {"trace_id": trace_id}}

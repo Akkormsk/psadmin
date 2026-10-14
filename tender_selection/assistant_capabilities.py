@@ -84,3 +84,60 @@ register_tool(AssistantTool(
     False, True, True, resolve_owner_question,
     source="tender_selection.services.answer_tender_owner_question",
 ))
+
+def list_tenders(_user, payload):
+    """Expose the same incoming selection as the site; the agent sees no ORM columns."""
+    from decimal import Decimal
+    from .models import Tender, FilterSettings
+    from .views import _visible_found_tenders
+
+    scope = payload.get("scope", "incoming")
+    limit = payload.get("limit", 5)
+    if scope not in ("incoming", "all") or type(limit) is not int or not 1 <= limit <= 50:
+        raise AssistantToolError("Неверный раздел или количество тендеров (1–50)")
+    if scope == "incoming":
+        settings = FilterSettings.load()
+        queryset = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
+        queryset = queryset.order_by("-created_at", "-pk")
+        rows, _, _ = _visible_found_tenders(
+            queryset, min_price=settings.min_price,
+            include_words=settings.include_words, exclude_words=settings.exclude_words,
+        )
+        rows = rows[:limit]
+    else:
+        rows = list(Tender.objects.order_by("-created_at", "-pk")[:limit])
+    items = []
+    for tender in rows:
+        status_label = "Входящие" if tender.status == Tender.NEW and tender.review == Tender.UNREVIEWED else (
+            "Оценка" if tender.status == Tender.NEW else tender.get_status_display()
+        )
+        items.append({
+            "number": tender.purchase_number or "Не указан",
+            "name": tender.title or tender.object_info or "Без названия",
+            "maximum_price": str(tender.max_price) if tender.max_price is not None else None,
+            "status": status_label,
+        })
+    text_lines = ["Последние тендеры (" + ("входящие" if scope == "incoming" else "все") + "):"]
+    for index, item in enumerate(items, 1):
+        price = item["maximum_price"]
+        if price is not None:
+            price = f"{Decimal(price):,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+        else:
+            price = "не указана"
+        text_lines.append(
+            f"{index}. {item['number']} — {item['name']}\n"
+            f"НМЦК: {price}; статус: {item['status']}"
+        )
+    if not items:
+        text_lines.append("Подходящих тендеров нет.")
+    return {"items": items, "returned_count": len(items), "display_text": "\n".join(text_lines)}
+
+
+register_tool(AssistantTool(
+    "tender.list", "Список тендеров",
+    "Прочитать последние входящие или все тендеры из существующего списка сайта; "
+    "возвращает номер, название, НМЦК и бизнес-статус, применяет настройки отбора сайта.",
+    {"scope": "incoming|all?", "limit": "integer?"},
+    True, False, True, list_tenders,
+    source="tender_selection.assistant_capabilities.list_tenders",
+))

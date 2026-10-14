@@ -1,4 +1,8 @@
 import json
+import logging
+from uuid import uuid4
+
+_agent_logger = logging.getLogger("psadmin.assistant.ui")
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -97,7 +101,14 @@ def conversation_message(request, conversation_id):
     if not isinstance(message, str) or not message.strip():
         return HttpResponseBadRequest("Введите сообщение")
     context = payload.get("context", {}) if isinstance(payload, dict) else {}
-    return JsonResponse({"messages": respond(conversation, request.user, message, context)})
+    try:
+        result_messages = respond(conversation, request.user, message, context)
+    except Exception:
+        trace_id = uuid4().hex[:10]
+        _agent_logger.exception("AGENT trace=%s conversation=%s request failed", trace_id, conversation.pk)
+        add_assistant_message(conversation, "Не удалось завершить запрос. Код диагностики: " + trace_id + ".")
+        result_messages = serialize_messages(conversation)
+    return JsonResponse({"messages": result_messages})
 
 
 @login_required
