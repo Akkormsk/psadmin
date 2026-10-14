@@ -34,7 +34,7 @@ from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
-from .production_actions import activate_cascade_lab_settings, save_cascade_lab_preset
+from .production_actions import activate_cascade_lab_settings, restore_requirement_to_route, save_cascade_lab_preset
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items, refresh_training_example_embedding
 
@@ -1072,13 +1072,10 @@ def drop_requirement_skip_rule(request):
         return JsonResponse({"error": "Менять правила может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        label_normalized = _normalized_requirement_label(str(payload.get("label", "")))[:200]
-        if not label_normalized:
-            raise ValueError
+        result = restore_requirement_to_route(request.user, payload.get("label", ""))
     except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось определить строку ТЗ."}, status=400)
-    removed = RequirementSkipRule.objects.filter(label_normalized=label_normalized).update(is_active=False)
-    return JsonResponse({"dropped": bool(removed)})
+    return JsonResponse(result)
 
 
 @login_required

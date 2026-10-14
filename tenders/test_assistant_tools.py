@@ -93,6 +93,17 @@ class AssistantToolRegistryTests(TestCase):
         service.assert_called_once_with(37)
         self.assertTrue(result["dropped"])
 
+    def test_requirement_skip_restore_uses_the_shared_route_executor(self):
+        from .models import RequirementSkipRule
+
+        RequirementSkipRule.objects.create(label_normalized="формат", label="Формат")
+        result = execute_tool("production.requirement_skip_restore", self.admin, {
+            "label": "Формат",
+        }, confirmed=True)
+
+        self.assertTrue(result["dropped"])
+        self.assertFalse(RequirementSkipRule.objects.get(label_normalized="формат").is_active)
+
     def test_financial_period_lock_is_shared_and_requires_confirmation(self):
         from finance.models import FinancialPeriod
         args = {"period": "2026-10", "closed": True}

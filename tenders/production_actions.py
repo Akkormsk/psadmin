@@ -2,7 +2,7 @@
 from django.db import transaction
 
 from .cascade_settings import text_search_settings
-from .models import CascadeConfigVersion, CascadeLabPreset, Lesson, ProductionTrainingExample, Proposal, Counterparty, ProcessDefinition, TenderKnowledgeSource
+from .models import CascadeConfigVersion, CascadeLabPreset, Lesson, ProductionTrainingExample, Proposal, Counterparty, ProcessDefinition, RequirementSkipRule, TenderKnowledgeSource
 from .proposals import apply_proposal
 
 
@@ -33,6 +33,18 @@ def activate_cascade_lab_settings(user, name, settings):
         name=name, settings=text_search_settings(settings), created_by=user, is_active=True,
     )
     return {"id": version.pk, "name": version.name, "created_at": version.created_at.isoformat()}
+
+
+def restore_requirement_to_route(user, label):
+    """Undo the same learned requirement exclusion as the route UI button."""
+    _require_admin(user)
+    from .services import _normalized_text
+
+    label_normalized = _normalized_text(str(label or ""))[:200]
+    if not label_normalized:
+        raise ValueError("Не удалось определить строку ТЗ.")
+    removed = RequirementSkipRule.objects.filter(label_normalized=label_normalized).update(is_active=False)
+    return {"dropped": bool(removed)}
 
 
 def deactivate_lesson(lesson_id):
