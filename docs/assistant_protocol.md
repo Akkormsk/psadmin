@@ -582,13 +582,3 @@ Feature `fix/m31-generic-read-plan`: описан универсальный к�
 ### M3.1 READ: исправление схемы по реальному логу (2026-10-14, CODE_ONLY)
 
 Trace `c096d10ba7`: первый вызов `read` без `plan`; исправление модели дало ключ `model` вместо `entity` и поле `nmck`, отсутствующее в Django. Ветка `fix/m31-read-schema-validation` приводит структурные варианты плана к единому контракту по актуальным метаданным ORM (`model`→`entity`, уникальные точные подписи полей→имена полей), неизвестные поля отклоняет. При повторной LLM-попытке передаётся каталог точных имён, чтобы не угадывать технические идентификаторы. Нет специального словаря для тендеров. Пользователь попросил не тратить время на новые mock-тесты; ручная повторная проверка TEST остаётся обязательной, успех не гарантирован одним изменением кода.
-
-### M3.1 functional-tool agent (2026-10-14, pre-acceptance)
-
-The planner now sees ONLY permitted, registered business functions; the old generic `read` ORM plan is not advertised. One conversation message can drive up to five sequential read tool calls and inspect returned observations. Mutations remain user-confirmed, never autonomously executed. `tender.list` uses the site's existing `_visible_found_tenders` rules and returns deterministic display_text (purchase number, name, actual `max_price` as НМЦК, human status); the agent falls back to real adapter output if model's follow-up fails. Chat no longer dumps raw tool dictionaries and preserves line breaks. Unexpected server errors return a trace code to the conversation while traceback goes to the TEST log. Last read result is retained for subsequent user turns. Only the TEST environment is eligible for rollout; PROD excluded.
-
-Acceptance requires actual TEST-gateway request producing records; isolated CI with actual Django ORM is necessary but not sufficient. Other business areas still need comparable high-level read adapters; the existence of ACTION registrations alone does not imply broad read coverage.
-
-### M3.1 READ → ACTION handle (2026-10-14)
-
-The real incoming-tender read adapter now returns an internal `tender_id` business handle alongside its user-facing fields. The handle is available to the model for selecting registered, confirmation-protected actions on an already-read item, but is excluded from `display_text`. All mutations remain behind the existing server-side explicit confirmation path. Live TEST smoke of the action-selection path must follow deployment; this is not permission to execute writes in autonomous loops.
