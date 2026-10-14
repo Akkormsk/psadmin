@@ -192,9 +192,11 @@ def reply(conversation, user, message, page_context=None):
     if identifier == "read":
         trace_id = uuid4().hex[:10]
         _logger.warning("READ trace=%s initial=%s", trace_id, _plan_shape(arguments))
-        from .assistant_read import ReadPlanError
+        from .assistant_read import ReadPlanError, normalize_plan, catalogue
         for attempt in range(2):
             try:
+                if isinstance(arguments.get("plan"), dict):
+                    arguments = {**arguments, "plan": normalize_plan(arguments["plan"])}
                 result = execute_tool(identifier, user, arguments)
                 _logger.warning("READ trace=%s success attempt=%s records=%s", trace_id, attempt + 1, result.get("returned_count"))
                 break
@@ -205,7 +207,10 @@ def reply(conversation, user, message, page_context=None):
                 correction = _request(json.dumps({
                     "task": "Repair the internal read tool arguments using the exact validation error and the allowed catalogue. Do not request technical parameters from the user. Never fabricate database results. Return the complete corrected action with arguments.plan.",
                     "request": message, "invalid_arguments": arguments,
-                    "validation_error": str(exc), "read_catalog": read_catalog,
+                    "validation_error": str(exc),
+                    "read_catalog": ([entry for entry in read_catalog if isinstance(arguments.get("plan"), dict) and entry["id"] == arguments["plan"].get("entity")]
+                                     or read_catalog),
+                    "instruction": "Use exactly the entity ID and field NAME values from read_catalog, never display labels. Return action.arguments.plan with entity, fields, filters, order_by, limit; never model or nmck unless listed as a real field.",
                     "response_schema": {"reply": "Russian text", "action": {"id": "read", "arguments": {"plan": "object"}}},
                 }, ensure_ascii=False))
                 action_retry = correction.get("action") if isinstance(correction, dict) else None
