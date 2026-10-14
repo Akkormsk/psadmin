@@ -1,0 +1,78 @@
+name: Live TEST agent ACTION confirmation proof
+on:
+  push:
+    branches:
+      - ops/test-read-diagnostics
+permissions:
+  contents: read
+jobs:
+  action-confirmation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure test SSH
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Verify real model selects ACTION without executing mutation
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "deploy@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          grep -q '7e80323789061dcd2b1092fa0214b1f59fd5cffb' /home/deploy/psadmin-test/.twin-version
+          docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml exec -T test-web python manage.py shell <<'PY'
+          from uuid import uuid4
+          from django.contrib.auth import get_user_model
+          from tender_selection.models import Tender
+          from tenders.assistant_tools import execute_tool
+          from tenders.assistant_conversations import create_conversation, respond
+          import tenders.assistant_agent as agent
+          user = get_user_model()(username="smoke_" + uuid4().hex[:12], is_superuser=True, is_staff=True)
+          user.set_unusable_password()
+          user.save()
+          conversation = None
+          original = agent._request
+          choices = []
+          def trace_ai(prompt):
+              response = original(prompt)
+              action = response.get("action") if isinstance(response, dict) else None
+              if isinstance(action,dict) and action.get("id"):
+                  choices.append(action["id"])
+              return response
+          try:
+              data = execute_tool("tender.list", user, {"scope":"incoming","limit":5})
+              assert data.get("items"), "No visible incoming tenders available"
+              first = data["items"][0]["tender_id"]
+              status = Tender.objects.get(pk=first).status
+              conversation = create_conversation(user, "Read to confirmed action")
+              conversation.context["last_agent_read"] = {"tool_id":"tender.list","result":data}
+              conversation.save(update_fields=["context"])
+              agent._request = trace_ai
+              messages = respond(conversation, user, "Скрой первый тендер из только что показанного списка, но сначала запроси подтверждение.")
+              reply = messages[-1]
+              print("ACTION_CHOICES:", ",".join(choices))
+              print("ACTION_KIND:", reply["kind"])
+              print("ACTION_CONFIRMED_ID_MATCH:", reply.get("data",{}).get("arguments",{}).get("tender_id") == first)
+              assert reply["kind"] == "confirmation_required", "Action confirmation was not requested"
+              assert reply["data"]["tool_id"] == "tender.dismiss"
+              assert reply["data"]["arguments"]["tender_id"] == first
+              assert Tender.objects.get(pk=first).status == status, "DB changed before confirmation"
+              print("REAL_AI_ACTION_PASS: selected existing tender.dismiss and requested confirmation without changing tender")
+          finally:
+              agent._request = original
+              if conversation is not None:
+                  conversation.feedback_events.all().delete()
+                  conversation.delete()
+              user.delete()
+          PY
+          REMOTE
