@@ -84,6 +84,13 @@ def reply(conversation, user, message, page_context=None):
                 "Choose at most one tool action per assistant response; "
                 "the backend does not support multiple tool calls in one turn. "
                 "For tools with a declared UI, select the tool and let its existing UI collect missing inputs. "
+                "For read operations create the plan object yourself from read_catalog. "
+                "The read tool expects arguments.plan = {entity: app_label.ModelName, fields: [field_name], "
+                "filters: [{field: field_name, op: eq|contains|gte|gt|lte|lt|in|isnull, value: value}], "
+                "order_by: -field_name, limit: integer}; optional keys may be omitted. "
+                "Use only entity IDs and field names from read_catalog; do not invent technical identifiers. "
+                "For requests for recent records choose a date field if available or descending id. "
+                "A plan is internal; never ask the user to supply plan, entity, filters or field names. "
                 "For other tools, when required arguments are missing, ask for clarification "
                 "and return action=null until they are available. "
                 "Never invent database records, prices, tool results, or completed actions. "
@@ -139,6 +146,32 @@ def reply(conversation, user, message, page_context=None):
                 data[name] = value
         return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
     missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
+    if identifier == "read":
+        from .assistant_read import ReadPlanError
+        for attempt in range(2):
+            try:
+                result = execute_tool(identifier, user, arguments)
+                break
+            except (AssistantToolError, ReadPlanError, ValueError, TypeError) as exc:
+                if attempt:
+                    return {"text": "Не удалось сформировать корректный запрос к данным. Попробуйте переформулировать задачу.", "kind": "tool_error", "data": {"tool_id": identifier}}
+                correction = _request(json.dumps({
+                    "task": "Repair the internal read tool arguments using the exact validation error and the allowed catalogue. Do not request technical parameters from the user. Never fabricate database results. Return the complete corrected action with arguments.plan.",
+                    "request": message, "invalid_arguments": arguments,
+                    "validation_error": str(exc), "read_catalog": read_catalog,
+                    "response_schema": {"reply": "Russian text", "action": {"id": "read", "arguments": {"plan": "object"}}},
+                }, ensure_ascii=False))
+                action_retry = correction.get("action") if isinstance(correction, dict) else None
+                if not isinstance(action_retry, dict) or action_retry.get("id") != "read" or not isinstance(action_retry.get("arguments"), dict):
+                    return {"text": "Не удалось сформировать корректный запрос к данным. Попробуйте переформулировать задачу.", "kind": "tool_error", "data": {"tool_id": identifier}}
+                arguments = action_retry["arguments"]
+        final = _request(json.dumps({
+            "task": "Answer in concise Russian using only tool_result. Do not invent data or promise further execution.",
+            "tool": selected_tool, "tool_result": result, "response_schema": {"reply": "Russian text"},
+        }, ensure_ascii=False))
+        if not isinstance(final, dict) or not isinstance(final.get("reply"), str):
+            raise TenderAIError("Ассистент не смог сформировать ответ по результату чтения.")
+        return {"text": final["reply"].strip(), "kind": "tool_result", "data": {"tool_id": identifier, "result": result}}
     if missing:
         conversation.context["pending_action"] = {"tool_id": identifier, "arguments": arguments}
         conversation.save(update_fields=["context"])

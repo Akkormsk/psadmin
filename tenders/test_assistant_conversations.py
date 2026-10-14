@@ -83,6 +83,42 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_generic_read_repairs_malformed_plan_without_asking_for_internal_params(self, request, _preflight):
+        from tender_selection.models import Tender
+        item = Tender.objects.create(purchase_number="READ-REPAIR", title="Чтение", collecting_finished_at="2026-09-30T10:00:00Z")
+        request.side_effect = [
+            {"reply": "Читаю данные.", "action": {"id": "read", "arguments": {"plan": []}}},
+            {"reply": "Исправляю запрос.", "action": {"id": "read", "arguments": {"plan": {
+                "entity": "tender_selection.Tender", "fields": ["purchase_number"],
+                "order_by": "-id", "limit": 5,
+            }}}},
+            {"reply": "Найден тендер READ-REPAIR."},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ repair"}, secure=True).json()["conversation"]["id"]
+        reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]),
+                                 data=json.dumps({"message": "Покажи пять последних тендеров"}),
+                                 content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(reply["kind"], "tool_result")
+        self.assertEqual(reply["data"]["result"]["records"][0]["id"], item.pk)
+        self.assertEqual(request.call_count, 3)
+        self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_generic_read_fails_safely_after_one_repair_without_pending_plan(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Читаю данные.", "action": {"id": "read", "arguments": {}}},
+            {"reply": "Повтор.", "action": {"id": "read", "arguments": {"plan": []}}},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ reject"}, secure=True).json()["conversation"]["id"]
+        reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]),
+                                 data=json.dumps({"message": "Покажи последние записи"}),
+                                 content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(reply["kind"], "tool_error")
+        self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
         request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
