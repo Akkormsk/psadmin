@@ -51,6 +51,15 @@ class EvaluationSettingsTests(TestCase):
         )
         self.assertEqual(filters.incoming_ttl_days, 10)
 
+    def test_page_and_shared_executor_use_the_same_validation_and_save_path(self):
+        from .services import save_evaluation_settings
+
+        result = save_evaluation_settings(VALID)
+
+        self.assertEqual(result, {"updated": True})
+        self.assertEqual(FilterSettings.load().risk_warning_days, 10)
+        self.assertEqual(TenderSettings.objects.get(pk=1).roi_good_percent, Decimal("35"))
+
     def test_inconsistent_thresholds_are_rejected(self):
         for broken in (
             {"risk_critical_days": "10"}, {"roi_thin_percent": "35"}, {"vat_rate": "abc"},

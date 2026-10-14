@@ -17,6 +17,34 @@ def create_provider(user, name, stages, source_type="text", raw_content=b"", ext
     return counterparty, staging
 
 
+def create_counterparty_with_knowledge(user, *, name, stage_ids, source_text="", upload=None):
+    """Existing provider-form workflow, reusable by every client channel."""
+    from .models import ProcessDefinition
+    from .services import extract_calculation_source, parse_counterparty_draft
+
+    name = str(name or "").strip()
+    if not isinstance(stage_ids, list) or not all(isinstance(value, int) and not isinstance(value, bool) for value in stage_ids):
+        raise ValueError("Некорректные производственные этапы")
+    stages = list(ProcessDefinition.objects.filter(pk__in=stage_ids, is_active=True))
+    if not name or not stages or len(stages) != len(set(stage_ids)):
+        raise ValueError("Укажите название и хотя бы одну существующую возможность")
+    source_text = str(source_text or "").strip()
+    extracted = extract_calculation_source(source_text=source_text, upload=upload)
+    extracted_text = extracted.get("content", source_text)
+    if upload:
+        upload.seek(0)
+    raw = upload.read() if upload else source_text.encode()
+    provider, staging = create_provider(user, name, stages, "file" if upload else "text", raw, extracted_text)
+    draft_data = parse_counterparty_draft(extracted_text, [stage.name for stage in stages]) if extracted_text else {}
+    draft = create_knowledge_draft(
+        provider, user,
+        {"summary": draft_data.get("summary", extracted_text[:4000]), "input_schema": [], "pricing": {},
+         "ambiguities": draft_data.get("ambiguities", [])},
+        staging=staging,
+    )
+    return {"counterparty_id": provider.pk, "knowledge_version_id": draft.pk}
+
+
 def create_knowledge_draft(counterparty, user, canonical_data, staging=None, stage=None, metadata=None):
     number = CounterpartyKnowledgeVersion.objects.filter(counterparty=counterparty, stage=stage).count() + 1
     return CounterpartyKnowledgeVersion.objects.create(counterparty=counterparty, stage=stage, staging=staging, version_number=number, canonical_data=canonical_data, source_metadata=metadata or {}, created_by=user)

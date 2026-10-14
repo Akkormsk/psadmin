@@ -23,6 +23,31 @@ from .documents import DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
 
+
+RISK_FACTOR_LABELS = (
+    ("samples_required", "Требуются образцы или испытания"),
+    ("samples_impossible", "Образцы нужны в нереальный срок"),
+    ("national_confirmation", "Нацрежим: нужно подтвердить происхождение"),
+    ("national_blocked", "Нацрежим: подтверждение недоступно"),
+    ("delivery_requests", "Поставка по заявкам заказчика"),
+    ("delivery_open_ended", "Поставка по заявкам без ясного срока или объёма"),
+)
+RISK_LEVEL_CHOICES = (("low", "низкий"), ("medium", "средний"), ("high", "высокий"))
+EVALUATION_NUMBERS = (
+    ("risk_warning_days", "Короткий срок", int, 1, 365),
+    ("risk_critical_days", "Критический срок", int, 1, 365),
+    ("roi_good_percent", "ROI зелёной зоны", Decimal, 0, 1000),
+    ("roi_thin_percent", "ROI жёлтой зоны", Decimal, 0, 1000),
+    ("vat_rate", "НДС", Decimal, 0, 50),
+    ("default_reduction_percent", "Снижение по умолчанию", Decimal, 0, 100),
+    ("stats_target_count", "Похожих закупок для прогноза", int, 1, 100),
+    ("stats_min_samples", "Минимум закупок для прогноза", int, 1, 100),
+    ("reduction_hint_min", "Подсказка снижения не меньше", int, 0, 100),
+    ("reduction_hint_max", "Подсказка снижения не больше", int, 0, 100),
+    ("incoming_ttl_days", "Хранить просроченные «Входящие»", int, 1, 365),
+)
+_TENDER_SETTINGS_FIELDS = ("roi_good_percent", "roi_thin_percent", "vat_rate", "default_reduction_percent")
+
 logger = logging.getLogger(__name__)
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -1485,6 +1510,222 @@ def save_selection_settings(payload):
     settings.save()
     return {"updated": True, "min_price": str(settings.min_price),
             "window_days": settings.window_days, "laws": settings.laws}
+
+
+def evaluation_settings_form(payload):
+    values, errors = {}, []
+    for name, label, kind, low, high in EVALUATION_NUMBERS:
+        raw = str(payload.get(name, "")).strip().replace(",", ".")
+        try:
+            value = kind(raw)
+        except (ValueError, InvalidOperation):
+            errors.append(f"{label}: нужно число.")
+            continue
+        if not low <= value <= high:
+            errors.append(f"{label}: допустимо от {low} до {high}.")
+        values[name] = value
+    levels = {}
+    for key, label in RISK_FACTOR_LABELS:
+        level = payload.get(f"level_{key}", "")
+        if level not in dict(RISK_LEVEL_CHOICES):
+            errors.append(f"{label}: выберите уровень риска.")
+        levels[key] = level
+    values["risk_factor_levels"] = levels
+    if errors:
+        return values, errors
+    if values["risk_critical_days"] >= values["risk_warning_days"]:
+        errors.append("Критический срок должен быть меньше короткого.")
+    if values["roi_thin_percent"] >= values["roi_good_percent"]:
+        errors.append("Граница жёлтой зоны ROI должна быть ниже зелёной.")
+    if values["stats_min_samples"] > values["stats_target_count"]:
+        errors.append("Минимум закупок для прогноза не может быть больше их целевого числа.")
+    if values["reduction_hint_min"] >= values["reduction_hint_max"]:
+        errors.append("Нижняя граница подсказки снижения должна быть меньше верхней.")
+    return values, errors
+
+
+@transaction.atomic
+def save_evaluation_settings(payload):
+    """One validation and save path for the settings page and the assistant."""
+    from tenders.models import TenderSettings
+
+    if not isinstance(payload, dict):
+        raise ValueError("Настройки оценки должны быть объектом")
+    values, errors = evaluation_settings_form(payload)
+    if errors:
+        raise ValueError(" ".join(errors))
+    filters = FilterSettings.load()
+    tender_settings = TenderSettings.objects.get_or_create(pk=1)[0]
+    for name, value in values.items():
+        setattr(tender_settings if name in _TENDER_SETTINGS_FIELDS else filters, name, value)
+    filters.save()
+    tender_settings.save()
+    return {"updated": True}
+
+
+def _require_tender_admin(user):
+    if not user.is_superuser:
+        raise ValueError("Недостаточно прав для изменения тендера")
+
+
+def hide_tender(user, tender_id, *, reason=None):
+    _require_tender_admin(user)
+    tender = Tender.objects.filter(pk=tender_id).first()
+    if tender is None:
+        raise ValueError("Тендер не найден")
+    dismiss_tender(tender, reason=reason)
+    return {"tender_id": tender.pk, "status": tender.status}
+
+
+def restore_hidden_tender(user, tender_id):
+    _require_tender_admin(user)
+    tender = Tender.objects.filter(pk=tender_id, status=Tender.DISMISSED).first()
+    if tender is None:
+        raise ValueError("Скрытый тендер не найден")
+    restore_tender(tender)
+    return {"tender_id": tender.pk, "status": tender.status}
+
+
+def update_tender_review(user, tender_id, review):
+    _require_tender_admin(user)
+    tender = Tender.objects.filter(pk=tender_id).first()
+    if tender is None:
+        raise ValueError("Тендер не найден")
+    set_tender_review(tender, review)
+    return {"tender_id": tender.pk, "review": tender.review}
+
+
+def change_forecast_inclusion(user, tender_id):
+    _require_tender_admin(user)
+    tender = Tender.objects.filter(pk=tender_id, status=Tender.DISMISSED).first()
+    if tender is None:
+        raise ValueError("Скрытый тендер не найден")
+    stat = toggle_forecast_inclusion(tender)
+    return {"tender_id": tender.pk, "forecast_included": stat.forecast_included}
+
+
+def create_tender_estimate(user, tender_id):
+    _require_tender_admin(user)
+    tender = Tender.objects.filter(pk=tender_id).first()
+    if tender is None:
+        raise ValueError("Тендер не найден")
+    if tender.status == Tender.PUSHED and tender.estimates.exists():
+        return {"tender_id": tender.pk, "estimate_id": tender.estimates.order_by("pk").first().pk, "created": False}
+    estimate_id = push_to_estimate(tender, user)
+    return {"tender_id": tender.pk, "estimate_id": estimate_id, "created": True}
+
+
+def save_tender_bid(user, estimate_id, *, bid_number="", bid_price=None):
+    _require_tender_admin(user)
+    from tenders.models import TenderEstimate
+
+    estimate = TenderEstimate.objects.filter(pk=estimate_id).select_related("tender").first()
+    if estimate is None:
+        raise ValueError("Расчёт тендера не найден")
+    if bid_price not in (None, ""):
+        try:
+            bid_price = Decimal(str(bid_price).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            if bid_price <= 0:
+                raise InvalidOperation
+        except (InvalidOperation, ValueError, TypeError):
+            raise ValueError("Сумма заявки должна быть положительным числом")
+    else:
+        bid_price = None
+    set_our_bid(estimate, bid_number=bid_number, bid_price=bid_price)
+    return {"tender_id": estimate.tender_id, "bid_number": estimate.tender.bid_number, "bid_price": str(estimate.tender.bid_price) if estimate.tender.bid_price is not None else None}
+
+
+def record_tender_outcome(user, estimate_id, *, status=None, actual_reduction_percent=None):
+    _require_tender_admin(user)
+    from .protocols import ProtocolError
+    from tenders.models import TenderEstimate
+
+    estimate = TenderEstimate.objects.filter(pk=estimate_id).select_related("tender").first()
+    if estimate is None:
+        raise ValueError("Расчёт тендера не найден")
+    tender = estimate.tender
+    try:
+        reduction_percent = Decimal(str(actual_reduction_percent).replace(",", ".")) if actual_reduction_percent not in (None, "") else None
+        if reduction_percent is not None and not Decimal("0") <= reduction_percent <= Decimal("100"):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError("Фактическое снижение должно быть числом от 0 до 100")
+    if status in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED):
+        apply_tender_outcome(estimate, status=status, reduction_percent=reduction_percent, source=Tender.OUTCOME_MANUAL)
+        return {"tender_id": tender.pk, "lifecycle_changed": True, "outcome_status": tender.outcome_status, "mode": "manual"}
+    try:
+        if check_protocol(tender):
+            tender.refresh_from_db()
+            return {"tender_id": tender.pk, "lifecycle_changed": True, "outcome_status": tender.outcome_status, "mode": "protocol"}
+    except ProtocolError as exc:
+        return {"tender_id": tender.pk, "lifecycle_changed": False, "warning": f"ЕИС сейчас не ответил ({exc})"}
+    outcome = fetch_tender_outcome(tender)
+    if not outcome.get("found"):
+        return {"tender_id": tender.pk, "lifecycle_changed": False, "warning": "Контракт по этому номеру закупки пока не найден"}
+    if outcome.get("auto_status"):
+        apply_tender_outcome(
+            estimate, status=outcome["auto_status"], price=outcome.get("price"),
+            reduction_percent=outcome.get("reduction_percent"), source=Tender.OUTCOME_AUTO,
+            reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
+        )
+        tender.refresh_from_db()
+        return {"tender_id": tender.pk, "lifecycle_changed": True, "outcome_status": tender.outcome_status, "mode": "automatic"}
+    tender.contract_price = outcome.get("price")
+    tender.contract_reduction_percent = outcome.get("reduction_percent")
+    tender.outcome_checked_at = timezone.now()
+    tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
+    return {"tender_id": tender.pk, "lifecycle_changed": False, "warning": "Цена контракта найдена, но итог требует ручного решения"}
+
+
+def run_filter_word_audit(user):
+    _require_tender_admin(user)
+    from . import word_audit
+
+    audit = word_audit.run_audit(user)
+    return {"audit_id": audit.pk, "spend_rub": str(audit.spend_rub) if audit.spend_rub is not None else None}
+
+
+def apply_filter_word_audit(user, chosen):
+    _require_tender_admin(user)
+    from . import word_audit
+
+    if not isinstance(chosen, dict):
+        raise ValueError("Нужен набор выбранных слов")
+    values = {
+        kind: [str(word).strip() for word in chosen.get(kind, []) if str(word).strip()]
+        for kind in word_audit.SUGGESTION_KINDS
+    }
+    if any(key not in word_audit.SUGGESTION_KINDS for key in chosen) or not any(values.values()):
+        raise ValueError("Не выбраны изменения фильтра")
+    word_audit.apply_words(**values)
+    return {"applied": {kind: len(words) for kind, words in values.items()}}
+
+
+def run_profile_triage(user):
+    _require_tender_admin(user)
+    settings = FilterSettings.load()
+    if not settings.profile_triage_enabled:
+        raise ValueError("Сначала включите проверку профиля в настройках отбора")
+    from .filtering import match_title, parse_terms
+    from .profile_triage import start_profile_triage_in_background
+
+    candidates = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED, profile_checked_at__isnull=True)
+    ids = []
+    include, exclude = parse_terms(settings.include_words), parse_terms(settings.exclude_words)
+    for tender in candidates.order_by("pk"):
+        if match_title(tender.title, include, exclude)[0]:
+            ids.append(tender.pk)
+        if len(ids) == 100:
+            break
+    start_profile_triage_in_background(ids)
+    return {"tender_ids": ids, "started": len(ids)}
+
+
+def pull_tenders_now(user):
+    _require_tender_admin(user)
+    run = run_pull(max_requests=16)
+    return {"ok": run.ok, "requests_made": run.requests_made, "records_received": run.records_received,
+            "created_count": run.created_count, "duration_seconds": run.duration_seconds, "error": run.error}
 
 @transaction.atomic
 def answer_tender_owner_question(user, tender_id, interaction_id, answer):

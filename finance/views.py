@@ -7,7 +7,7 @@ from django.utils import timezone
 from calendar import monthrange
 
 from .forms import OrderRecordCreateForm
-from .actions import FinanceActionError, _sync_open_manager_lines, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, manager_data as _manager_data, save_manager_settings, save_operating_expenses, set_financial_period_state, update_order_record
+from .actions import FinanceActionError, _sync_open_manager_lines, _sync_open_period_expenses, create_order_record, delete_operating_expense, delete_order_record, manager_data as _manager_data, refresh_period as _refresh_period, save_manager_settings, save_operating_expenses, save_payroll_lines, set_financial_period_state, update_order_record
 from .models import KpiTier, ManagerKpiRate, ManagerSettings
 from .models import FinancialPeriod, OperatingExpense, PayrollLine, PeriodExpense
 from payroll.models import OrderRecord
@@ -25,19 +25,6 @@ PRINTER_LEAVE_DAY_RATE = Decimal("1000")
 def dashboard(request):
     current_period = timezone.localdate().strftime("%Y-%m")
     return redirect(f"/finance/calculation/?period={current_period}")
-
-
-def _refresh_period(period):
-    for line in period.payroll_lines.filter(kind=PayrollLine.MANAGER).select_related("manager"):
-        records = OrderRecord.objects.filter(manager=line.manager, accounting_period=period.code)
-        profit = records.filter(record_type=OrderRecord.RECORD_ORDER).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
-        design_total = records.filter(record_type=OrderRecord.RECORD_DESIGN).aggregate(total=Sum("gross_profit"))["total"] or Decimal("0")
-        rate = ManagerKpiRate.objects.filter(manager=line.manager, tier__threshold__lte=profit).order_by("-tier__threshold").first()
-        line.order_profit = profit
-        line.kpi_percent = rate.percent if rate else Decimal("0")
-        line.kpi_bonus = profit * line.kpi_percent / Decimal("100")
-        line.design_amount = design_total
-        line.save(update_fields=("order_profit", "kpi_percent", "kpi_bonus", "design_amount"))
 
 
 def _sync_open_printer_line(period):
@@ -154,13 +141,20 @@ def calculation(request, order_form=None, open_order_modal=False, order_edit_for
             if is_admin_view
             else ("work_shifts", "leave_shifts")
         )
+        updates = []
         for line in editable_lines:
+            update = {"line_id": line.pk}
             for field in editable_fields:
                 value = request.POST.get(f"{field}_{line.pk}")
                 if value is not None:
-                    setattr(line, field, value or 0)
-            line.save()
-        _refresh_period(period)
+                    update[field] = value
+            if len(update) > 1:
+                updates.append(update)
+        try:
+            save_payroll_lines(request.user, code, updates)
+        except FinanceActionError as exc:
+            messages.error(request, str(exc))
+            return redirect(f"{request.path}?period={code}")
         if request.POST.get("action") == "close" and is_admin_view:
             set_financial_period_state(request.user, code, closed=True)
         return redirect(f"{request.path}?period={code}")

@@ -21,12 +21,13 @@ from .models import ContractStat, DocumentPreview, FilterSettings, Organization,
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
-    CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, apply_tender_outcome, check_protocol, effective_laws,
-    effective_okpd2, enrich_one_org, extras_for, extras_need_refresh, fetch_tender_outcome, notification_for, push_to_estimate,
-    archive_tender, archive_stage_for, risk_assessment_for, run_pull, set_our_bid, start_risk_assessment_in_background,
-    start_extras_refresh_in_background,
+    CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, effective_laws, effective_okpd2, enrich_one_org,
+    extras_for, extras_need_refresh, notification_for, archive_tender, archive_stage_for, risk_assessment_for,
+    start_extras_refresh_in_background, EVALUATION_NUMBERS, RISK_FACTOR_LABELS, RISK_LEVEL_CHOICES,
+    _TENDER_SETTINGS_FIELDS, evaluation_settings_form, save_evaluation_settings,
+    change_forecast_inclusion, create_tender_estimate, hide_tender, restore_hidden_tender, save_tender_bid,
+    update_tender_review, apply_filter_word_audit, pull_tenders_now, record_tender_outcome, run_filter_word_audit, run_profile_triage,
 )
-from .profile_triage import start_profile_triage_in_background
 from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
 
@@ -1106,64 +1107,6 @@ def filter_settings(request):
     })
 
 
-RISK_FACTOR_LABELS = (
-    ("samples_required", "Требуются образцы или испытания"),
-    ("samples_impossible", "Образцы нужны в нереальный срок"),
-    ("national_confirmation", "Нацрежим: нужно подтвердить происхождение"),
-    ("national_blocked", "Нацрежим: подтверждение недоступно"),
-    ("delivery_requests", "Поставка по заявкам заказчика"),
-    ("delivery_open_ended", "Поставка по заявкам без ясного срока или объёма"),
-)
-RISK_LEVEL_CHOICES = (("low", "низкий"), ("medium", "средний"), ("high", "высокий"))
-EVALUATION_NUMBERS = (
-    ("risk_warning_days", "Короткий срок", int, 1, 365),
-    ("risk_critical_days", "Критический срок", int, 1, 365),
-    ("roi_good_percent", "ROI зелёной зоны", Decimal, 0, 1000),
-    ("roi_thin_percent", "ROI жёлтой зоны", Decimal, 0, 1000),
-    ("vat_rate", "НДС", Decimal, 0, 50),
-    ("default_reduction_percent", "Снижение по умолчанию", Decimal, 0, 100),
-    ("stats_target_count", "Похожих закупок для прогноза", int, 1, 100),
-    ("stats_min_samples", "Минимум закупок для прогноза", int, 1, 100),
-    ("reduction_hint_min", "Подсказка снижения не меньше", int, 0, 100),
-    ("reduction_hint_max", "Подсказка снижения не больше", int, 0, 100),
-    ("incoming_ttl_days", "Хранить просроченные «Входящие»", int, 1, 365),
-)
-_TENDER_SETTINGS_FIELDS = ("roi_good_percent", "roi_thin_percent", "vat_rate", "default_reduction_percent")
-
-
-def _parse_evaluation_settings(post) -> tuple[dict, list[str]]:
-    """Значения формы «Настройки оценки» и список ошибок; пустой список — можно сохранять."""
-    values, errors = {}, []
-    for name, label, kind, low, high in EVALUATION_NUMBERS:
-        raw = (post.get(name) or "").strip().replace(",", ".")
-        try:
-            value = kind(raw)
-        except (ValueError, InvalidOperation):
-            errors.append(f"{label}: нужно число.")
-            continue
-        if not low <= value <= high:
-            errors.append(f"{label}: допустимо от {low} до {high}.")
-        values[name] = value
-    levels = {}
-    for key, label in RISK_FACTOR_LABELS:
-        level = post.get(f"level_{key}", "")
-        if level not in dict(RISK_LEVEL_CHOICES):
-            errors.append(f"{label}: выберите уровень риска.")
-        levels[key] = level
-    values["risk_factor_levels"] = levels
-    if errors:
-        return values, errors
-    if values["risk_critical_days"] >= values["risk_warning_days"]:
-        errors.append("Критический срок должен быть меньше короткого.")
-    if values["roi_thin_percent"] >= values["roi_good_percent"]:
-        errors.append("Граница жёлтой зоны ROI должна быть ниже зелёной.")
-    if values["stats_min_samples"] > values["stats_target_count"]:
-        errors.append("Минимум закупок для прогноза не может быть больше их целевого числа.")
-    if values["reduction_hint_min"] >= values["reduction_hint_max"]:
-        errors.append("Нижняя граница подсказки снижения должна быть меньше верхней.")
-    return values, errors
-
-
 @superuser_required
 def evaluation_settings(request):
     """Все числа, по которым оцениваются тендеры: пороги сроков и уровни факторов
@@ -1181,12 +1124,9 @@ def evaluation_settings(request):
     }
     levels = {**DEFAULT_FACTOR_LEVELS, **(filters.risk_factor_levels or {})}
     if request.method == "POST":
-        values, errors = _parse_evaluation_settings(request.POST)
+        values, errors = evaluation_settings_form(request.POST)
         if not errors:
-            for name, value in values.items():
-                setattr(tender_settings if name in _TENDER_SETTINGS_FIELDS else filters, name, value)
-            filters.save()
-            tender_settings.save()
+            save_evaluation_settings(request.POST)
             messages.success(request, "Настройки оценки сохранены.")
             return redirect("tender_selection:evaluation_settings")
         for error in errors:
@@ -1216,15 +1156,14 @@ def word_audit_page(request):
 @superuser_required
 @require_POST
 def word_audit_run(request):
-    from . import word_audit
     from .ai_gateway import AIGatewayError
 
     try:
-        audit = word_audit.run_audit(request.user)
+        audit = run_filter_word_audit(request.user)
     except AIGatewayError as exc:
         messages.error(request, f"Аудит не выполнен: {exc}")
     else:
-        spent = f" Потрачено {audit.spend_rub} ₽." if audit.spend_rub is not None else ""
+        spent = f" Потрачено {audit['spend_rub']} ₽." if audit["spend_rub"] is not None else ""
         messages.success(request, f"Аудит готов.{spent}")
     return redirect("tender_selection:word_audit")
 
@@ -1235,10 +1174,11 @@ def word_audit_apply(request):
     from . import word_audit
 
     chosen = {kind: [w for w in request.POST.getlist(kind) if w.strip()] for kind in word_audit.SUGGESTION_KINDS}
-    if not any(chosen.values()):
+    try:
+        apply_filter_word_audit(request.user, chosen)
+    except ValueError:
         messages.info(request, "Ничего не выбрано.")
         return redirect("tender_selection:word_audit")
-    word_audit.apply_words(**chosen)
     messages.success(request, "Фильтр обновлён: " + ", ".join(
         f"{label} {len(chosen[kind])}" for kind, label in (
             ("add_plus", "+плюс"), ("add_minus", "+минус"), ("remove_plus", "−плюс"), ("remove_minus", "−минус"),
@@ -1250,32 +1190,27 @@ def word_audit_apply(request):
 @superuser_required
 @require_POST
 def profile_triage_run(request):
-    settings = FilterSettings.load()
-    if not settings.profile_triage_enabled:
-        messages.info(request, "Сначала включите Jev-проверку в настройках отбора.")
+    try:
+        result = run_profile_triage(request.user)
+    except ValueError as exc:
+        messages.info(request, str(exc) + ".")
         return redirect("tender_selection:list")
-    rows, _hidden, _expired = _visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED, profile_checked_at__isnull=True),
-        min_price=settings.min_price, include_words=settings.include_words, exclude_words=settings.exclude_words,
-    )
-    ids = [tender.pk for tender in rows[:100]]
-    start_profile_triage_in_background(ids)
-    messages.success(request, f"Jev начал проверку {len(ids)} входящих. Отметки появятся после обновления страницы.")
+    messages.success(request, f"Jev начал проверку {result['started']} входящих. Отметки появятся после обновления страницы.")
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
 
 @superuser_required
 @require_POST
 def pull_now(request):
-    run = run_pull(max_requests=16)
-    if run.ok:
+    run = pull_tenders_now(request.user)
+    if run["ok"]:
         messages.success(
             request,
-            f"Выгрузка: запросов {run.requests_made}, записей {run.records_received}, "
-            f"новых {run.created_count}, за {run.duration_seconds} сек.",
+            f"Выгрузка: запросов {run['requests_made']}, записей {run['records_received']}, "
+            f"новых {run['created_count']}, за {run['duration_seconds']} сек.",
         )
     else:
-        messages.error(request, f"Выгрузка не удалась: {run.error}")
+        messages.error(request, f"Выгрузка не удалась: {run['error']}")
     return redirect("tender_selection:list")
 
 
@@ -1288,8 +1223,8 @@ def push_estimate(request, pk):
             return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
         return redirect("tender_selection:detail", pk=tender.pk)
     try:
-        push_to_estimate(tender, request.user)
-    except Exception as exc:  # noqa: BLE001
+        create_tender_estimate(request.user, tender.pk)
+    except ValueError as exc:
         messages.error(request, f"Не удалось создать просчёт: {exc}")
         return redirect("tender_selection:detail", pk=pk)
     messages.success(request, "Просчёт создан. Позиции подставлены из извещения.")
@@ -1306,58 +1241,21 @@ def enter_outcome(request, pk):
     закупки контракт ещё не найден или свой ИНН не настроен (COMPANY_INN)."""
     from tenders.models import TenderEstimate
 
-    estimate = get_object_or_404(TenderEstimate, pk=pk)
-    tender = estimate.tender
-    manual_status = request.POST.get("status")
-    manual_reduction = request.POST.get("actual_reduction_percent", "").strip()
     try:
-        reduction_percent = Decimal(manual_reduction) if manual_reduction else None
-        if reduction_percent is not None and not Decimal("0") <= reduction_percent <= Decimal("100"):
-            raise InvalidOperation
-    except InvalidOperation:
-        messages.error(request, "Фактическое снижение должно быть числом от 0 до 100.")
-        return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
-
-    lifecycle_changed = manual_status in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED)
-    if lifecycle_changed:
-        apply_tender_outcome(
-            estimate, status=manual_status, reduction_percent=reduction_percent,
-            source=Tender.OUTCOME_MANUAL,
+        result = record_tender_outcome(
+            request.user, pk, status=request.POST.get("status"),
+            actual_reduction_percent=request.POST.get("actual_reduction_percent", ""),
         )
-        messages.success(request, f"Итог внесён вручную: {tender.get_outcome_status_display()}.")
-    else:
-        try:
-            protocol_found = check_protocol(tender)
-        except ProtocolError as exc:
-            protocol_found = False
-            messages.warning(request, f"ЕИС сейчас не ответил ({exc}) — проверю протокол позже автоматически.")
-        if protocol_found:
-            tender.refresh_from_db()
-            messages.success(request, f"Итоговый протокол загружен из ЕИС: {tender.get_outcome_status_display()}.")
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
-            return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
-        outcome = fetch_tender_outcome(tender)
-        if not outcome.get("found"):
-            messages.warning(request, "Контракт по этому номеру закупки в реестре пока не найден — попробуйте позже или внесите итог вручную.")
-        elif outcome.get("auto_status"):
-            apply_tender_outcome(
-                estimate, status=outcome["auto_status"], price=outcome.get("price"),
-                reduction_percent=outcome.get("reduction_percent"), source=Tender.OUTCOME_AUTO,
-                reg_num=outcome.get("reg_num"), exe_start=outcome.get("exe_start"), exe_end=outcome.get("exe_end"),
-            )
-            tender.refresh_from_db()
-            lifecycle_changed = True
-            messages.success(request, f"Итог найден автоматически: {tender.get_outcome_status_display()}.")
-        else:
-            tender.contract_price = outcome.get("price")
-            tender.contract_reduction_percent = outcome.get("reduction_percent")
-            tender.outcome_checked_at = timezone.now()
-            tender.save(update_fields=["contract_price", "contract_reduction_percent", "outcome_checked_at"])
-            messages.info(request, "Цена контракта найдена, но выиграли мы или нет — решите сами кнопками ниже (свой ИНН не настроен).")
+    except ValueError as exc:
+        messages.error(request, str(exc) + ".")
+        return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+    if result.get("warning"):
+        messages.warning(request, result["warning"] + ".")
+    elif result["lifecycle_changed"]:
+        messages.success(request, "Итог торгов обновлён.")
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        if lifecycle_changed:
-            return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
+        if result["lifecycle_changed"]:
+            return JsonResponse({"lifecycle_changed": True, "tender_id": result["tender_id"]})
         return JsonResponse({"lifecycle_changed": False, "refresh_detail": True})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
@@ -1369,15 +1267,11 @@ def save_bid(request, pk):
     from tenders.models import TenderEstimate
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
-    raw_price = request.POST.get("bid_price", "").replace(" ", "").replace(" ", "").replace(",", ".")
     try:
-        bid_price = Decimal(raw_price) if raw_price else None
-        if bid_price is not None and bid_price <= 0:
-            raise InvalidOperation
-    except InvalidOperation:
-        messages.error(request, "Сумма заявки должна быть положительным числом.")
+        save_tender_bid(request.user, estimate.pk, bid_number=request.POST.get("bid_number", ""), bid_price=request.POST.get("bid_price"))
+    except ValueError as exc:
+        messages.error(request, str(exc) + ".")
         return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
-    set_our_bid(estimate, bid_number=request.POST.get("bid_number", ""), bid_price=bid_price)
     messages.success(request, "Данные нашей заявки сохранены.")
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
 
@@ -1386,9 +1280,7 @@ def save_bid(request, pk):
 @require_POST
 def dismiss(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
-    from .services import dismiss_tender
-
-    dismiss_tender(tender, reason=request.POST.get("reason"))
+    hide_tender(request.user, tender.pk, reason=request.POST.get("reason"))
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
@@ -1402,9 +1294,7 @@ def dismiss_estimate(request, pk):
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
     tender = get_object_or_404(Tender, pk=estimate.tender_id)
-    from .services import dismiss_tender
-
-    dismiss_tender(tender)
+    hide_tender(request.user, tender.pk)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
@@ -1414,9 +1304,7 @@ def dismiss_estimate(request, pk):
 @require_POST
 def restore(request, pk):
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
-    from .services import restore_tender
-
-    restore_tender(tender)
+    restore_hidden_tender(request.user, tender.pk)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(f"{reverse('tender_selection:list')}?view=kanban")
@@ -1434,15 +1322,13 @@ def restore_estimate(request, pk):
 @superuser_required
 @require_POST
 def toggle_forecast(request, pk):
-    from .services import toggle_forecast_inclusion
-
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
     try:
-        result = toggle_forecast_inclusion(tender)
+        result = change_forecast_inclusion(request.user, tender.pk)
     except ValueError as exc:
         messages.warning(request, str(exc) + ".")
     else:
-        messages.success(request, "Результат добавлен в прогноз." if result.forecast_included else "Результат исключён из прогноза.")
+        messages.success(request, "Результат добавлен в прогноз." if result["forecast_included"] else "Результат исключён из прогноза.")
     return redirect(f"{reverse('tender_selection:detail', args=[pk])}?from=archive")
 
 
@@ -1541,12 +1427,10 @@ def archive(request):
 def set_review(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     value = request.POST.get("review", "")
-    if value in dict(Tender.REVIEW_CHOICES):
-        was_unreviewed = tender.review == Tender.UNREVIEWED
-        tender.review = value
-        tender.save(update_fields=["review"])
-        if was_unreviewed and value != Tender.UNREVIEWED and not tender.risk_checked_at:
-            start_risk_assessment_in_background(tender.pk)
+    try:
+        update_tender_review(request.user, tender.pk, value)
+    except ValueError:
+        pass
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")

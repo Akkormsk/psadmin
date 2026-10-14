@@ -2,6 +2,7 @@
 from .forms import OrderRecordCreateForm
 from .models import FinancialPeriod, KpiTier, ManagerKpiRate, ManagerSettings, OperatingExpense, PayrollLine, PeriodExpense
 from django.contrib.auth import get_user_model
+from django.db.models import Sum
 from payroll.models import OrderRecord
 
 
@@ -32,6 +33,51 @@ def _sync_open_manager_lines(period, managers):
         line.name = manager.get_full_name().strip() or "Имя не указано"
         line.shift_rate, line.leave_shift_rate, line.design_percent = settings.shift_rate, settings.leave_shift_rate, settings.design_percent
         line.save(update_fields=("name", "shift_rate", "leave_shift_rate", "design_percent"))
+
+
+def refresh_period(period):
+    for line in period.payroll_lines.filter(kind=PayrollLine.MANAGER).select_related("manager"):
+        records = OrderRecord.objects.filter(manager=line.manager, accounting_period=period.code)
+        profit = records.filter(record_type=OrderRecord.RECORD_ORDER).aggregate(total=Sum("gross_profit"))["total"] or 0
+        design_total = records.filter(record_type=OrderRecord.RECORD_DESIGN).aggregate(total=Sum("gross_profit"))["total"] or 0
+        rate = ManagerKpiRate.objects.filter(manager=line.manager, tier__threshold__lte=profit).order_by("-tier__threshold").first()
+        line.order_profit = profit
+        line.kpi_percent = rate.percent if rate else 0
+        line.kpi_bonus = profit * line.kpi_percent / 100
+        line.design_amount = design_total
+        line.save(update_fields=("order_profit", "kpi_percent", "kpi_bonus", "design_amount"))
+
+
+def save_payroll_lines(actor, code, updates):
+    if not isinstance(code, str):
+        raise FinanceActionError("Неверный расчётный период")
+    if not isinstance(updates, list):
+        raise FinanceActionError("Нужен список изменений зарплаты")
+    period, _ = FinancialPeriod.objects.get_or_create(code=code)
+    if period.is_closed:
+        raise FinanceActionError("Закрытый период нельзя изменять")
+    editable = period.payroll_lines.all() if actor.is_superuser else period.payroll_lines.filter(manager=actor)
+    allowed = {line.pk: line for line in editable}
+    editable_fields = (
+        {"work_shifts", "leave_shifts", "fixed_salary", "deductions", "advance"}
+        if actor.is_superuser else {"work_shifts", "leave_shifts"}
+    )
+    changed = []
+    for item in updates:
+        if not isinstance(item, dict) or not isinstance(item.get("line_id"), int):
+            raise FinanceActionError("Некорректная строка зарплаты")
+        line = allowed.get(item["line_id"])
+        if line is None:
+            raise FinanceActionError("Строка зарплаты недоступна")
+        fields = [name for name in editable_fields if name in item]
+        if not fields:
+            continue
+        for name in fields:
+            setattr(line, name, item[name] or 0)
+        line.save(update_fields=fields)
+        changed.append(line.pk)
+    refresh_period(period)
+    return {"period": period.code, "updated_line_ids": changed}
 
 
 def save_manager_settings(actor, values):

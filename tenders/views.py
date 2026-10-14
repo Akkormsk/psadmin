@@ -28,8 +28,8 @@ from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
 from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, CounterpartyKnowledgeVersion, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, ProviderCalculatorBinding
-from .provider_calculators import ProviderCalculatorError, calculate_provider, get_provider_calculator_schema
-from .provider_knowledge import confirm_knowledge, create_knowledge_draft, create_provider
+from .provider_calculators import ProviderCalculatorError, calculate_provider_binding, get_provider_calculator_schema
+from .provider_knowledge import confirm_knowledge, create_counterparty_with_knowledge
 from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
@@ -53,22 +53,16 @@ def provider_list(request):
 def provider_create(request):
     stages = ProcessDefinition.objects.filter(is_active=True)
     if request.method == "POST":
-        selected = list(stages.filter(pk__in=request.POST.getlist("stages")))
-        if not request.POST.get("name", "").strip() or not selected:
-            messages.error(request, "Укажите название и хотя бы одну возможность.")
+        try:
+            result = create_counterparty_with_knowledge(
+                request.user, name=request.POST.get("name", ""),
+                stage_ids=[int(value) for value in request.POST.getlist("stages") if value.isdigit()],
+                source_text=request.POST.get("text", ""), upload=request.FILES.get("source"),
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc) + ".")
         else:
-            uploaded = request.FILES.get("source")
-            text = request.POST.get("text", "").strip()
-            extracted = extract_calculation_source(source_text=text, upload=uploaded)
-            source_text = extracted.get("content", text)
-            if uploaded:
-                uploaded.seek(0)
-            raw = uploaded.read() if uploaded else text.encode()
-            provider, staging = create_provider(request.user, request.POST["name"], selected, "file" if uploaded else "text", raw, source_text)
-            ai_draft = parse_counterparty_draft(source_text, [stage.name for stage in selected]) if source_text else {}
-            # It remains a non-authoritative draft even when AI successfully parsed it.
-            draft = create_knowledge_draft(provider, request.user, {"summary": ai_draft.get("summary", source_text[:4000]), "input_schema": [], "pricing": {}, "ambiguities": ai_draft.get("ambiguities", [])}, staging=staging)
-            return redirect("provider_knowledge_review", version_id=draft.pk)
+            return redirect("provider_knowledge_review", version_id=result["knowledge_version_id"])
     return render(request, "tenders/provider_form.html", {"stages": stages})
 
 
@@ -142,7 +136,7 @@ def provider_workspace(request, provider_id):
         else:
             schema = get_provider_calculator_schema(context["binding"])
             try:
-                context["result"] = _provider_result_display(calculate_provider(context["binding"], {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}))
+                context["result"] = _provider_result_display(calculate_provider_binding(request.user, context["binding"].pk, {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}))
             except ProviderCalculatorError as exc:
                 context["error"] = str(exc)
     if context["binding"]:
@@ -168,7 +162,7 @@ def provider_calculator(request, binding_id):
     if request.method == "POST":
         spec = {item["key"]: request.POST.get(item["key"]) for item in schema["inputs"] if item.get("key")}
         try:
-            result = calculate_provider(binding, spec)
+            result = calculate_provider_binding(request.user, binding.pk, spec)
             result = _provider_result_display(result)
         except ProviderCalculatorError as exc:
             error = str(exc)

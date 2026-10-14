@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal, InvalidOperation
 
-from .models import CalculatorSettings, Estimate, EstimateLine, PriceItem
+from .models import CalculatorSettings, Estimate, EstimateGroup, EstimateLine, PriceItem
 from .services import calculate_sheet_estimate
 
 
@@ -107,3 +107,36 @@ def delete_estimate(actor, estimate_id):
     estimate = estimate_for_user(actor, estimate_id)
     estimate.delete()
     return {"estimate_id": estimate_id, "deleted": True}
+
+
+def bulk_estimates(actor, values):
+    if not isinstance(values, dict):
+        raise CalculatorActionError("Некорректные параметры массового действия")
+    action = values.get("action")
+    estimate_ids = values.get("estimate_ids")
+    if action not in {"group", "ungroup", "delete"} or not isinstance(estimate_ids, list):
+        raise CalculatorActionError("Неизвестное массовое действие")
+    ids = [value for value in estimate_ids if isinstance(value, int) and not isinstance(value, bool)]
+    estimates = Estimate.objects.filter(pk__in=ids)
+    if not actor.is_superuser:
+        estimates = estimates.filter(owner=actor)
+    estimates = list(estimates)
+    if not estimates:
+        raise CalculatorActionError("Выберите хотя бы один расчёт")
+    if action == "group":
+        name = str(values.get("name", "")).strip()[:200]
+        if not name:
+            raise CalculatorActionError("Укажите название группы")
+        if len({estimate.calculator_type for estimate in estimates}) != 1:
+            raise CalculatorActionError("В одну группу можно собрать расчёты одного калькулятора")
+        group, _ = EstimateGroup.objects.get_or_create(
+            owner=actor, calculator_type=estimates[0].calculator_type, name=name,
+        )
+        Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).update(group=group)
+        return {"action": action, "group_id": group.pk, "changed": len(estimates)}
+    if action == "ungroup":
+        Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).update(group=None)
+        return {"action": action, "changed": len(estimates)}
+    deleted = [estimate.pk for estimate in estimates]
+    Estimate.objects.filter(pk__in=deleted).delete()
+    return {"action": action, "deleted_ids": deleted, "changed": len(deleted)}

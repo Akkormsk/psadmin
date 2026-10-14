@@ -67,6 +67,22 @@ class AssistantToolRegistryTests(TestCase):
             }, confirmed=True)
         self.assertFalse(CashTransaction.objects.exists())
 
+    def test_counterparty_creation_reuses_the_provider_form_workflow(self):
+        from unittest.mock import patch
+        from .models import Counterparty, CounterpartyKnowledgeVersion
+
+        payload = {"name": "Новый поставщик", "stage_ids": [self.stage.pk], "source_text": "Прайс на пошив"}
+        with self.assertRaises(AssistantToolConfirmationRequired):
+            execute_tool("provider.create", self.admin, payload)
+        with patch("tenders.services.extract_calculation_source", return_value={"content": "Прайс на пошив"}), \
+                patch("tenders.services.parse_counterparty_draft", return_value={"summary": "Прайс", "ambiguities": []}):
+            result = execute_tool("provider.create", self.admin, payload, confirmed=True)
+
+        provider = Counterparty.objects.get(pk=result["counterparty_id"])
+        self.assertEqual(provider.name, "Новый поставщик")
+        self.assertTrue(provider.stage_links.filter(stage=self.stage).exists())
+        self.assertEqual(CounterpartyKnowledgeVersion.objects.get(pk=result["knowledge_version_id"]).status, CounterpartyKnowledgeVersion.STATUS_DRAFT)
+
     def test_production_lesson_deactivation_uses_shared_service(self):
         from unittest.mock import patch
 
