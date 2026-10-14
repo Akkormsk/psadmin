@@ -66,6 +66,7 @@ class ExtractedItem:
     confidence: Decimal | None
     relationship: str = "split"
     quantity_per_parent: Decimal = Decimal("1")
+    parent_source_item_id: int | None = None
 
 
 class ExistingKnowledgeBatchRouter:
@@ -160,12 +161,66 @@ class GatewayBatchRouter:
 
 
 class GatewayDocumentEnricher:
-    """Triage cached document text, then extract structured items from relevant documents."""
+    """One bounded, evidence-only document analysis for the pre-routing intake stage."""
+
+    # The bounded prompt and one provider attempt make Flash Lite economical.
+    # One ruble is a portfolio target, tracked in diagnostics, not a reason to
+    # leave an unusually rich tender without document analysis.
+    DOCUMENT_INPUT_CHAR_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_INPUT_CHAR_LIMIT", "18000"))
+    DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "1200"))
+    DOCUMENT_AVERAGE_COST_TARGET_RUB = 1.00
+
     def __init__(self, model=None):
-        self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-pro-preview"))
+        # Document composition has its own deliberately inexpensive default;
+        # the general-purpose gateway model must not change it by accident.
+        self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", "gemini/gemini-3.1-flash-lite")
         self.usage = {}
         self.cost_rub = 0.0
         self.diagnostics = {}
+
+    def _bounded_documents(self, documents):
+        """Give every cached document an equal bounded excerpt; never filter by name."""
+        candidates = []
+        for doc in documents:
+            url = doc.get("url")
+            if not url:
+                continue
+            html = DocumentPreview.objects.filter(url=url).values_list("html", flat=True).first() or ""
+            candidates.append({"url": url, "name": doc.get("name", ""), "html": html})
+        if not candidates:
+            return [], []
+
+        per_document_limit = max(1, self.DOCUMENT_INPUT_CHAR_LIMIT // len(candidates))
+        available, considered = [], []
+        for candidate in candidates:
+            excerpt = candidate["html"][:per_document_limit]
+            # Tables are useful when they fit.  If their structured payload is
+            # larger than this document's equal share, retain the original
+            # excerpt instead of silently starving the following documents.
+            entry = {"url": candidate["url"], "name": candidate["name"], "text": excerpt}
+            tables = document_table_payload(excerpt) if excerpt else []
+            candidate_entry = {**entry, "tables": tables}
+            if len(json.dumps(candidate_entry, ensure_ascii=False, default=str)) <= per_document_limit * 2:
+                entry["tables"] = tables
+            available.append(entry)
+            considered.append({
+                "url": candidate["url"], "name": candidate["name"],
+                "cached_text_chars": len(candidate["html"]), "sent_text_chars": len(excerpt),
+                "table_count": len(entry.get("tables", [])),
+            })
+        return available, considered
+
+    def _preflight_cost(self, prompt):
+        """Return a conservative upper estimate, or None when the tariff is unknown."""
+        from .gateway_budget import spend_rub
+
+        # Two characters per token deliberately overestimates normal Russian
+        # document text and keeps the 1 ₽ promise valid before any egress.
+        usage = {
+            "prompt_tokens": (len(prompt) + 1) // 2,
+            "completion_tokens": self.DOCUMENT_OUTPUT_TOKEN_LIMIT,
+        }
+        return spend_rub(usage, self.model), usage
 
     def _record_gateway_failure(self, exc, *, usage, phase, started):
         failure_usage = dict(getattr(exc, "usage", {}) or {})
@@ -188,6 +243,55 @@ class GatewayDocumentEnricher:
             "failure_phase": phase,
             "usage": total_usage,
         }
+
+    def extract_tender(self, *, tender, source_items, documents):
+        """Read every available document once and map evidence back to source rows."""
+        from .gateway_budget import spend_rub
+        from .services import _ai_gateway_json
+
+        started = time.monotonic()
+        self.diagnostics = {}
+        allowed_source_ids = {item.pk for item in source_items}
+        available, considered = self._bounded_documents(documents)
+        if not any(doc["text"] for doc in available):
+            self.diagnostics = {"outcome": "no_data", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
+        payload = {
+            "notification_items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""), "unit": item.unit, "requirements": item.requirements} for item in source_items],
+            "documents": available,
+        }
+        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. Return enrich only for explicitly documented facts about that same notification item. Return split only where a document explicitly replaces an aggregate item with separately named goods. Return component only where contents of an aggregate are explicitly enumerated; quantity_per_parent is the documented amount in one aggregate. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        estimated_cost, estimated_usage = self._preflight_cost(prompt)
+        if estimated_cost is None:
+            self.diagnostics = {"outcome": "unpriced_model", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
+        try:
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1, json_attempts=1)
+        except Exception as exc:
+            self._record_gateway_failure(exc, usage={}, phase="document_analysis", started=started)
+            raise
+        self.usage = extract_usage
+        self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
+        allowed_urls = {doc["url"] for doc in available if doc["text"]}
+        output, rejections = [], []
+        for index, row in enumerate(raw.get("items", []) if isinstance(raw, dict) else []):
+            if not isinstance(row, dict):
+                rejections.append({"index": index, "reason": "not_object"}); continue
+            parent_id = row.get("parent_source_item_id")
+            if not isinstance(parent_id, int) or parent_id not in allowed_source_ids:
+                rejections.append({"index": index, "reason": "invalid_parent_source_item_id"}); continue
+            if not str(row.get("name") or "").strip() or row.get("source_url") not in allowed_urls:
+                rejections.append({"index": index, "reason": "invalid_name_or_source"}); continue
+            confidence = _as_decimal(row.get("confidence"))
+            requirements = row.get("requirements")
+            relationship = str(row.get("relationship") or "").lower()
+            per_parent = _as_decimal(row.get("quantity_per_parent")) or Decimal("1")
+            if confidence is None or not Decimal("0") <= confidence <= Decimal("1") or not isinstance(requirements, dict) or relationship not in {"enrich", "split", "component"} or per_parent <= 0:
+                rejections.append({"index": index, "reason": "invalid_structure"}); continue
+            output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id))
+        outcome = "success" if output else ("validation_failure" if rejections else "no_data")
+        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage, "target_exceeded": self.cost_rub > self.DOCUMENT_AVERAGE_COST_TARGET_RUB}, "extraction": {"selected_urls": sorted(allowed_urls), "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
+        return output
 
     def extract(self, *, tender, aggregate, documents):
         from .gateway_budget import spend_rub
@@ -322,6 +426,32 @@ def queue_visible_backfill(*, limit: int) -> list[TenderComputeJob]:
                 continue
             jobs.append(TenderComputeJob.objects.create(tender=tender, trigger="incoming_backfill", version="v2"))
     return jobs
+
+
+def eligible_existing_recheck_tenders(*, limit: int) -> list[Tender]:
+    """Opt-in future recheck set: current Incoming plus Kanban, never dismissed/archived."""
+    from django.conf import settings
+    if limit < 1 or not settings.CALCULATION_V2_EXISTING_RECHECK_ENABLED:
+        return []
+    already_queued = TenderComputeJob.objects.filter(tender_id=OuterRef("pk"), version="v2-existing-recheck")
+    return list(
+        Tender.objects.filter(status__in=[Tender.NEW, Tender.PUSHED], archived_at__isnull=True)
+        .annotate(has_recheck=Exists(already_queued)).filter(has_recheck=False)
+        .order_by("-published_at", "pk")[:limit]
+    )
+
+
+def queue_existing_recheck(*, limit: int) -> list[TenderComputeJob]:
+    from django.conf import settings
+    if not settings.CALCULATION_V2_EXISTING_RECHECK_ENABLED:
+        return []
+    return [
+        TenderComputeJob.objects.get_or_create(
+            tender=tender, version="v2-existing-recheck",
+            defaults={"trigger": "owner_enabled_existing_recheck"},
+        )[0]
+        for tender in eligible_existing_recheck_tenders(limit=limit)
+    ]
 
 
 def _notification_rows(tender: Tender) -> list[dict]:
@@ -491,16 +621,44 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
     if not quality["enrichment_recommended"]:
         return {"created": [], "state": "no_data", "diagnostics": {"outcome": "no_data", "reason": "not_recommended"}}
     active = active_calculation_items(tender)
+    extract_tender = getattr(enricher, "extract_tender", None)
+    if callable(extract_tender):
+        extracted = extract_tender(tender=tender, source_items=active, documents=quality["documents"])
+        detail = getattr(enricher, "diagnostics", {}) or {}
+        outcome = detail.get("outcome")
+        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
+            return {"created": [], "state": outcome, "diagnostics": [detail]}
+        parents = {item.pk: item for item in active}
+        proposals = []
+        for entry in extracted:
+            parent = parents.get(entry.parent_source_item_id)
+            if parent is None:
+                continue
+            payload = {"parent": parent.pk, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)}
+            proposal, _ = TenderSourceItem.objects.get_or_create(
+                tender=tender,
+                source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
+                defaults={"source_type": "document_proposal", "original_text": entry.name, "quantity": entry.quantity,
+                          "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance,
+                          "metadata": {"relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)},
+                          "confidence": entry.confidence, "parent": parent, "is_active": False},
+            )
+            proposals.append(proposal)
+        return {"created": proposals, "state": "needs_review" if proposals else "no_data", "diagnostics": [detail]}
+    else:
+        extracted_groups = None
     groups = {}
-    for item in active:
-        groups.setdefault(_normal(item.original_text), []).append(item)
+    if extracted_groups is None:
+        for item in active:
+            groups.setdefault(_normal(item.original_text), []).append(item)
     created, diagnostics, extracted_any = [], [], False
-    for group in groups.values():
-        extracted = enricher.extract(tender=tender, aggregate=group[0], documents=quality["documents"])
+    for group, extracted in extracted_groups or ((group, None) for group in groups.values()):
+        if extracted is None:
+            extracted = enricher.extract(tender=tender, aggregate=group[0], documents=quality["documents"])
         detail = getattr(enricher, "diagnostics", {}) or {}
         diagnostics.append(detail)
         outcome = detail.get("outcome")
-        if outcome in {"system_extraction_failure", "validation_failure"}:
+        if outcome in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
             return {"created": created, "state": outcome, "diagnostics": diagnostics}
         if not extracted:
             continue
@@ -751,7 +909,7 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
         quality = assess_quality(job.tender, source_items)
         enrichment_started = time.monotonic()
         enrichment = enrich_suspicious_tender(job.tender, quality, enricher)
-        if enrichment["state"] in {"system_extraction_failure", "validation_failure"}:
+        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
             job.status = TenderComputeJob.Status.PARTIAL
             job.completed_at = timezone.now()
             job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
@@ -759,6 +917,13 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
             job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
             return job
         derived = enrichment["created"]
+        if enrichment["state"] == "needs_review":
+            job.status = TenderComputeJob.Status.NEEDS_REVIEW
+            job.completed_at = timezone.now()
+            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
+            job.diagnostics = {"source_item_count": len(source_items), "active_item_count": len(active_calculation_items(job.tender)), "document_proposal_count": len(derived), "documents_inspected": len(quality["documents"]), "enrichment": enrichment["diagnostics"], "enrichment_state": enrichment["state"], "ai_cost_rub": str(job.total_cost), "document_enrichment_ms": round((time.monotonic() - enrichment_started) * 1000, 2), "total_ms": round((time.monotonic() - started) * 1000, 2)}
+            job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
+            return job
         job.status = TenderComputeJob.Status.ROUTING
         job.save(update_fields=["status", "updated_at"])
         decisions = route_tender_batch(job, router)

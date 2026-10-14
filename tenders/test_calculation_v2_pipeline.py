@@ -284,25 +284,45 @@ class FullCompositionRegressionTests(TestCase):
             cost_rub = 0
 
             def extract(self, **kwargs):
-                if kwargs["aggregate"].original_text != "Набор сувенирный":
+                if kwargs["aggregate"].original_text != "Агрегированная позиция":
                     return []
                 document = kwargs["documents"][0]["url"]
                 return [
-                    ExtractedItem("Ручка", Decimal("100"), "шт.", {"Материал": "пластик"}, {"document_url": document, "page_or_section": "таблица 2"}, Decimal("0.95")),
-                    ExtractedItem("Блокнот", Decimal("100"), "шт.", {"Формат": "A5"}, {"document_url": document, "page_or_section": "таблица 2"}, Decimal("0.95")),
-                    ExtractedItem("Кружка", Decimal("100"), "шт.", {"Объём": "330 мл"}, {"document_url": document, "page_or_section": "таблица 2"}, Decimal("0.95")),
+                    ExtractedItem("Компонент Альфа", Decimal("100"), "шт.", {"Параметр": "значение"}, {"document_url": document, "page_or_section": "таблица 2"}, Decimal("0.95")),
+                    ExtractedItem("Компонент Бета", Decimal("100"), "шт.", {"Параметр": "значение"}, {"document_url": document, "page_or_section": "таблица 2"}, Decimal("0.95")),
+                    ExtractedItem("Компонент Гамма", Decimal("100"), "шт.", {"Параметр": "значение"}, {"document_url": document, "page_or_section": "таблица 2"}, Decimal("0.95")),
                 ]
 
-        tender = self.tender([raw_item("Набор сувенирный", "100"), raw_item("Инструкция", "100")])
+        tender = self.tender([raw_item("Агрегированная позиция", "100"), raw_item("Независимая позиция", "100")])
         originals = ingest_source_items(tender)
         result = enrich_suspicious_tender(tender, assess_quality(tender, originals), BundleEnricher())
 
         self.assertEqual(result["state"], "success")
-        self.assertEqual(sorted(item.original_text for item in active_calculation_items(tender)), ["Блокнот", "Инструкция", "Кружка", "Ручка"])
-        source = TenderSourceItem.objects.get(tender=tender, source_type="notification", original_text="Набор сувенирный")
+        self.assertEqual(sorted(item.original_text for item in active_calculation_items(tender)), ["Компонент Альфа", "Компонент Бета", "Компонент Гамма", "Независимая позиция"])
+        source = TenderSourceItem.objects.get(tender=tender, source_type="notification", original_text="Агрегированная позиция")
         self.assertFalse(source.is_active)
         self.assertEqual(source.derived_items.filter(is_active=True).count(), 3)
         self.assertEqual(source.derived_items.filter(is_active=True).first().provenance["page_or_section"], "таблица 2")
+
+    def test_tender_wide_agent_stages_document_findings_for_review(self):
+        class TenderEnricher:
+            diagnostics = {"outcome": "success"}
+            cost_rub = 0
+
+            def extract_tender(self, *, source_items, documents, **kwargs):
+                parent = source_items[0]
+                return [ExtractedItem("Компонент", Decimal("100"), "шт.", {}, {"document_url": documents[0]["url"], "page_or_section": "таблица 2", "evidence": "Компонент"}, Decimal("0.95"), "split", Decimal("1"), parent.pk)]
+
+        tender = self.tender([raw_item("Агрегированная позиция", "100")])
+        originals = ingest_source_items(tender)
+        result = enrich_suspicious_tender(tender, assess_quality(tender, originals), TenderEnricher())
+
+        self.assertEqual(result["state"], "needs_review")
+        originals[0].refresh_from_db()
+        self.assertTrue(originals[0].is_active)
+        proposal = TenderSourceItem.objects.get(tender=tender, source_type="document_proposal")
+        self.assertFalse(proposal.is_active)
+        self.assertEqual(proposal.parent_id, originals[0].pk)
 
     def test_document_that_adds_no_fact_does_not_create_an_enriched_item(self):
         class SameAsNotificationEnricher:

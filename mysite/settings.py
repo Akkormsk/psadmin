@@ -213,6 +213,9 @@ STEP4_DECISION_CACHE_STALE_DAYS = int(os.getenv("STEP4_DECISION_CACHE_STALE_DAYS
 STEP4_DECISION_CACHE_CONTRACT_VERSION = os.getenv("STEP4_DECISION_CACHE_CONTRACT_VERSION", "step4-v1")
 
 CALCULATION_V2_ENABLED = os.getenv("CALCULATION_V2_ENABLED", "0") == "1"
+# Disabled by default: a future explicit recheck of existing Incoming/Kanban
+# tenders must never start merely because code was deployed.
+CALCULATION_V2_EXISTING_RECHECK_ENABLED = os.getenv("CALCULATION_V2_EXISTING_RECHECK_ENABLED", "0") == "1"
 
 # V2 preparation is independently controlled: code can be deployed without
 # spending AI budget until an operator explicitly enables its worker.

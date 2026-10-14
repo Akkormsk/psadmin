@@ -48,29 +48,29 @@ class TenderDetailCompositionPresentationTests(TestCase):
             "source": {
                 "commonInfo": {"purchaseObjectInfo": "Сувениры"},
                 "notificationInfo": {"purchaseObjectsInfo": {"notDrugPurchaseObjectsInfo": {"purchaseObject": [
-                    {"name": "Набор сувенирный", "quantity": {"value": "100"}, "OKEI": {"nationalCode": "796"}},
-                    {"name": "Инструкция", "quantity": {"value": "100"}, "OKEI": {"nationalCode": "796"}},
+                    {"name": "Агрегированная позиция", "quantity": {"value": "100"}, "OKEI": {"nationalCode": "796"}},
+                    {"name": "Независимая позиция", "quantity": {"value": "100"}, "OKEI": {"nationalCode": "796"}},
                 ]}}},
                 "attachmentsInfo": {"attachmentInfo": [{"fileName": "ТЗ", "url": "https://example.test/spec"}]},
             }
         }
         tender = Tender.objects.create(purchase_number="composition-ui-1", title="Сувениры", notification_raw=payload)
-        parent = TenderSourceItem.objects.create(tender=tender, source_key="notification:kit", source_type="notification", original_text="Набор сувенирный", quantity="100", unit="шт.", is_active=False)
-        TenderSourceItem.objects.create(tender=tender, source_key="notification:instruction", source_type="notification", original_text="Инструкция", quantity="100", unit="шт.")
-        TenderSourceItem.objects.create(tender=tender, source_key="derived:pen", source_type="document_extraction", original_text="Ручка", quantity="100", unit="шт.", parent=parent, requirements={"Материал": "пластик"}, provenance={"document_url": "https://example.test/spec", "page_or_section": "таблица 2", "evidence": "Ручка шариковая"})
-        TenderSourceItem.objects.create(tender=tender, source_key="derived:mug", source_type="document_extraction", original_text="Кружка", quantity="100", unit="шт.", parent=parent, requirements={"Объём": "330 мл"}, provenance={"document_url": "https://example.test/spec", "page_or_section": "таблица 2"})
+        parent = TenderSourceItem.objects.create(tender=tender, source_key="notification:aggregate", source_type="notification", original_text="Агрегированная позиция", quantity="100", unit="шт.", is_active=False)
+        TenderSourceItem.objects.create(tender=tender, source_key="notification:independent", source_type="notification", original_text="Независимая позиция", quantity="100", unit="шт.")
+        TenderSourceItem.objects.create(tender=tender, source_key="derived:alpha", source_type="document_extraction", original_text="Компонент Альфа", quantity="100", unit="шт.", parent=parent, requirements={"Параметр": "значение"}, provenance={"document_url": "https://example.test/spec", "page_or_section": "таблица 2", "evidence": "Компонент Альфа"})
+        TenderSourceItem.objects.create(tender=tender, source_key="derived:beta", source_type="document_extraction", original_text="Компонент Бета", quantity="100", unit="шт.", parent=parent, requirements={"Свойство": "значение"}, provenance={"document_url": "https://example.test/spec", "page_or_section": "таблица 2"})
 
         with patch("tender_selection.views.notification_for", return_value=payload):
             response = self.client.get(reverse("tender_selection:detail", args=[tender.pk]), secure=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Ручка")
-        self.assertContains(response, "Кружка")
-        self.assertContains(response, "Инструкция")
+        self.assertContains(response, "Компонент Альфа")
+        self.assertContains(response, "Компонент Бета")
+        self.assertContains(response, "Независимая позиция")
         self.assertContains(response, "Из ТЗ")
         self.assertContains(response, "Показать исходную запись")
-        self.assertContains(response, "Набор сувенирный")
-        self.assertContains(response, "Ручка шариковая")
+        self.assertContains(response, "Агрегированная позиция")
+        self.assertContains(response, "Компонент Альфа")
     def test_enrichment_badge_discloses_only_the_fields_added_from_document(self):
         payload = {"source": {"commonInfo": {"purchaseObjectInfo": "Папки"}, "notificationInfo": {"purchaseObjectsInfo": {"notDrugPurchaseObjectsInfo": {"purchaseObject": [{"name": "Папка", "quantity": {"value": "20"}, "OKEI": {"nationalCode": "796"}}]}}}, "attachmentsInfo": {"attachmentInfo": [{"fileName": "ТЗ", "url": "https://example.test/spec"}]}}}
         tender = Tender.objects.create(purchase_number="composition-ui-2", title="Папки", notification_raw=payload)

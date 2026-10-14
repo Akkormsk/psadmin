@@ -269,3 +269,16 @@ body.workspace-embedded .ts-detail--document .ts-linkchip {
 .ts-components { margin: 8px 0 2px; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
 .ts-components li { margin: 3px 0; }
 .ts-components span { color: var(--ink-3); }
+
+.ts-document-proposals { margin: 16px 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.ts-document-proposals > h3 { margin: 0; }
+.ts-document-proposals__lead { margin: 8px 0 14px; color: var(--ink-2); font-size: 14px; }
+.ts-document-proposal { padding: 14px 0; border-top: 1px solid var(--border); }
+.ts-document-proposal:first-of-type { border-top: 0; }
+.ts-document-proposal > header { margin-bottom: 10px; }
+.ts-document-proposal__table { margin: 0; font-size: 13px; }
+.ts-document-proposal__table th, .ts-document-proposal__table td { vertical-align: top; }
+.ts-document-proposal__table .ts-chars { margin: 0; }
+.ts-document-proposal__evidence { max-width: 420px; margin: 6px 0 0; color: var(--ink-2); font-size: 12px; }
+.ts-document-proposal__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ts-document-proposal__actions .button-success, .ts-document-proposal__actions .button-secondary { min-height: 40px; border-radius: var(--radius-md); }
