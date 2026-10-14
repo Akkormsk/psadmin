@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from .assistant_tools import AssistantToolConfirmationRequired, AssistantToolError, available_tools, execute_tool, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, AssistantToolError, available_tools, execute_tool, required_input_names, workflow_catalog
 from .gateway_budget import preflight, spend_rub
 from .services import TenderAIError, _ai_gateway_json
 
@@ -56,7 +56,6 @@ def reply(conversation, user, message, page_context=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
     planning_tools = _planning_tools(tools, user)
-    from .assistant_catalog import workflow_catalog
     workflows = workflow_catalog(user, tools)
     read_catalog = []
     if any(tool["id"] == "read" and tool["available"] for tool in tools):

@@ -18,9 +18,9 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(capability_issues(self.admin), [])
 
     def test_workflow_encyclopedia_reuses_only_registered_capabilities(self):
-        from .assistant_catalog import action_catalog, catalog, workflow_catalog
+        from .assistant_tools import catalog, workflow_catalog
 
-        actions = action_catalog(self.admin)
+        actions = available_tools(self.admin)
         workflows = workflow_catalog(self.admin, actions)
         published = {action["id"] for action in actions}
         grouped = [tool_id for goal in workflows for tool_id in goal["actions"]]
@@ -28,15 +28,6 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(len(grouped), len(set(grouped)))
         self.assertEqual(catalog(self.admin)["workflows"], workflows)
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
-
-    def test_site_route_inventory_is_not_mistaken_for_executable_tools(self):
-        from .assistant_catalog import site_route_inventory, catalog
-        routes = site_route_inventory()
-        self.assertTrue(any("cash" in item["route"] for item in routes))
-        self.assertTrue(any("tenders" in item["route"] for item in routes))
-        source = catalog(self.admin)
-        self.assertEqual(source["site_route_inventory"], routes)
-        self.assertNotIn("site_route_inventory", catalog(self.user))
 
     def test_action_contract_rejects_false_strings_and_wrong_array_shapes(self):
         with self.assertRaisesRegex(Exception, "true или false"):
@@ -62,9 +53,10 @@ class AssistantToolRegistryTests(TestCase):
         admin_tools = {item["id"]: item for item in available_tools(self.admin)}
         user_tools = {item["id"]: item for item in available_tools(self.user)}
 
-        self.assertIn("provider.calculate", admin_tools)
-        self.assertTrue(admin_tools["provider.create_draft"]["requires_confirmation"])
-        self.assertFalse(user_tools["provider.create_draft"]["available"])
+        self.assertIn("cash.transaction_create", admin_tools)
+        self.assertTrue(admin_tools["cash.transaction_create"]["requires_confirmation"])
+        self.assertFalse(user_tools["cash.transaction_create"]["available"])
+        self.assertTrue({"provider.find", "process.list", "provider.create_draft", "provider.calculator_schema", "provider.calculate"}.isdisjoint(admin_tools))
 
     def test_required_fields_checked_after_confirmation(self):
         from cash.models import CashTransaction
@@ -74,30 +66,6 @@ class AssistantToolRegistryTests(TestCase):
                 "direction": "expense", "reason": "Доставка",
             }, confirmed=True)
         self.assertFalse(CashTransaction.objects.exists())
-
-    def test_mutating_provider_draft_requires_confirmation(self):
-        payload = {"name": "Черновой пошив", "stage_ids": [self.stage.pk], "source_text": "Прайс получен"}
-
-        with self.assertRaises(AssistantToolConfirmationRequired):
-            execute_tool("provider.create_draft", self.admin, payload)
-        result = execute_tool("provider.create_draft", self.admin, payload, confirmed=True)
-
-        self.assertEqual(result["status"], "draft")
-        self.assertEqual(execute_tool("provider.find", self.admin, {"query": "Черновой"})["counterparties"][0]["name"], "Черновой пошив")
-
-    def test_provider_knowledge_confirm_is_shared_and_requires_owner_approval(self):
-        from .models import CounterpartyKnowledgeVersion
-        provider = execute_tool("provider.create_draft", self.admin, {
-            "name": "Проверка знаний", "stage_ids": [self.stage.pk],
-            "source_text": "Тестовая инструкция", 
-        }, confirmed=True)
-        args = {"version_id": provider["knowledge_version_id"]}
-        with self.assertRaises(AssistantToolConfirmationRequired):
-            execute_tool("provider.knowledge_confirm", self.admin, args)
-        result = execute_tool("provider.knowledge_confirm", self.admin, args, confirmed=True)
-        self.assertEqual(result["status"], CounterpartyKnowledgeVersion.STATUS_CONFIRMED)
-        with self.assertRaisesRegex(Exception, "не найден или уже обработан"):
-            execute_tool("provider.knowledge_confirm", self.admin, args, confirmed=True)
 
     def test_production_lesson_deactivation_uses_shared_service(self):
         from unittest.mock import patch
@@ -351,7 +319,7 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(any(item["model"] == "cash.CashTransaction" for item in result["models"]))
         actions = {item["id"]: item for item in result["actions"]}
         self.assertIn("cash.transaction_update", actions)
-        self.assertIn("tender.filter_words_update", actions)
+        self.assertIn("tender.discovery_settings", actions)
         self.assertTrue(actions["cash.transaction_update"]["source"])
 
     def test_published_action_sources_resolve_to_real_callables(self):

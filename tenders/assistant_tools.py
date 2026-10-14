@@ -7,9 +7,6 @@ from typing import Any, Callable
 
 from django.apps import apps
 
-from .models import Counterparty, CounterpartyKnowledgeVersion, ProcessDefinition, ProviderCalculatorBinding
-from .provider_calculators import calculate_provider, get_provider_calculator_schema
-from .provider_knowledge import create_knowledge_draft, create_provider
 
 
 class AssistantToolError(Exception):
@@ -148,49 +145,6 @@ def required_input_names(identifier: str) -> list[str]:
     ]
 
 
-def _find_counterparty(_user, payload):
-    query = str(payload.get("query", "")).strip()
-    matches = Counterparty.objects.filter(is_active=True)
-    if query:
-        matches = matches.filter(name__icontains=query)
-    return {"counterparties": [{"id": item.pk, "name": item.name} for item in matches.order_by("name")[:20]]}
-
-
-def _list_stages(_user, _payload):
-    return {"stages": [{"id": item.pk, "name": item.name} for item in ProcessDefinition.objects.filter(is_active=True).order_by("name")]}
-
-
-def _create_provider_draft(user, payload):
-    name = str(payload.get("name", "")).strip()
-    stage_ids = payload.get("stage_ids")
-    source_text = str(payload.get("source_text", "")).strip()
-    if not name or not isinstance(stage_ids, list) or not source_text:
-        raise AssistantToolError("Нужны название, этапы и источник прайса")
-    stages = list(ProcessDefinition.objects.filter(pk__in=stage_ids, is_active=True))
-    if len(stages) != len(set(stage_ids)):
-        raise AssistantToolError("Один или несколько этапов недоступны")
-    provider, staging = create_provider(user, name, stages, extracted_text=source_text)
-    version = create_knowledge_draft(provider, user, {"summary": source_text[:4000], "input_schema": [], "pricing": {}}, staging=staging)
-    return {"provider_id": provider.pk, "knowledge_version_id": version.pk, "status": version.status}
-
-
-def _calculator_schema(_user, payload):
-    binding = ProviderCalculatorBinding.objects.select_related("link__counterparty", "link__stage", "knowledge_version").filter(pk=payload.get("binding_id"), is_active=True).first()
-    if not binding:
-        raise AssistantToolError("Калькулятор не найден")
-    return {"binding_id": binding.pk, "schema": get_provider_calculator_schema(binding)}
-
-
-def _calculate_provider(_user, payload):
-    binding = ProviderCalculatorBinding.objects.select_related("link__counterparty", "link__stage", "knowledge_version").filter(pk=payload.get("binding_id"), is_active=True).first()
-    if not binding:
-        raise AssistantToolError("Калькулятор не найден")
-    spec = payload.get("spec")
-    if not isinstance(spec, dict):
-        raise AssistantToolError("Не заданы параметры расчёта")
-    return {"binding_id": binding.pk, "quote": calculate_provider(binding, spec)}
-
-
 def _read_data(user, payload):
     from .assistant_read import ReadPlanError, execute
 
@@ -200,17 +154,35 @@ def _read_data(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
-def _catalog(user, _payload):
-    from .assistant_catalog import catalog
+def workflow_catalog(user, actions=None):
+    """One runtime encyclopedia assembled solely from registered actions."""
+    actions = available_tools(user) if actions is None else actions
+    groups = {}
+    for action in actions:
+        namespace = action["id"].split(".", 1)[0]
+        groups.setdefault(namespace, []).append(action)
+    return [
+        {
+            "id": namespace,
+            "actions": [action["id"] for action in members],
+            "available": any(action["available"] for action in members),
+            "requires_confirmation": any(action["requires_confirmation"] for action in members),
+        }
+        for namespace, members in sorted(groups.items())
+    ]
 
+
+def catalog(user):
+    from .assistant_read import catalogue
+
+    actions = available_tools(user)
+    return {"models": catalogue(), "actions": actions, "workflows": workflow_catalog(user, actions)}
+
+
+def _catalog(user, _payload):
     return catalog(user)
 
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", {"plan": "object"}, True, False, True, _read_data))
-register_tool(AssistantTool("provider.find", "Найти контрагента", "Ищет активных контрагентов.", {"query": "string"}, True, False, False, _find_counterparty))
-register_tool(AssistantTool("process.list", "Список этапов", "Показывает доступные этапы производства.", {"type": "object"}, True, False, False, _list_stages))
-register_tool(AssistantTool("provider.create_draft", "Создать черновик контрагента", "Создаёт черновик и не подтверждает знания автоматически.", {"name": "string", "stage_ids": "integer[]", "source_text": "string"}, False, True, True, _create_provider_draft, {"kind": "provider_upload", "fields": {"name": "string", "stage_id": "integer"}, "options": {"stages": {"tool": "process.list", "field": "stages"}}}))
-register_tool(AssistantTool("provider.calculator_schema", "Входы калькулятора", "Показывает подтверждённую схему калькулятора.", {"binding_id": "integer"}, True, False, False, _calculator_schema))
-register_tool(AssistantTool("provider.calculate", "Рассчитать у контрагента", "Запускает детерминированный калькулятор с заданными входами.", {"binding_id": "integer", "spec": "object"}, True, False, False, _calculate_provider))

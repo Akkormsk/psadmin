@@ -2,8 +2,7 @@
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
-from tenders.assistant_catalog import site_route_inventory, workflow_catalog
-from tenders.assistant_tools import available_tools, capability_issues
+from tenders.assistant_tools import available_tools, capability_issues, workflow_catalog
 
 
 class Command(BaseCommand):
@@ -20,11 +19,9 @@ class Command(BaseCommand):
         user = AuditUser()
         actions = available_tools(user)
         workflows = workflow_catalog(user, actions)
-        routes = site_route_inventory()
         issues = capability_issues(user)
         self.stdout.write(f"Registered actions: {len(actions)}")
         self.stdout.write(f"Business workflows: {len(workflows)}")
-        self.stdout.write(f"Site routes (not equivalent to actions): {len(routes)}")
         for workflow in workflows:
             self.stdout.write(f"  {workflow['id']}: {len(workflow['actions'])} actions")
         if issues:

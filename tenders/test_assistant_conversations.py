@@ -35,7 +35,7 @@ class AssistantConversationTests(TestCase):
         messages = reply.json()["messages"]
         self.assertEqual(messages[-1]["role"], "assistant")
         self.assertEqual(messages[-1]["kind"], "tool_result")
-        self.assertTrue(any(item["id"] == "provider.calculate" for item in messages[-1]["data"]["result"]["tools"]))
+        self.assertTrue(any(item["id"] == "cash.transaction_create" for item in messages[-1]["data"]["result"]["tools"]))
 
         interaction = OwnerInteraction.objects.get(pk=conversation_id)
         self.assertEqual(interaction.context["kind"], "assistant_conversation")
@@ -152,47 +152,6 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
 
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_model_can_run_stage_registry_without_keyword_routing(self, request, _preflight):
-        stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
-        request.side_effect = [
-            {"reply": "Сейчас проверю реестр.", "action": {"id": "process.list", "arguments": {}}},
-            {"reply": "Доступен этап: Швейный этап."},
-        ]
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Этапы"}, secure=True).json()["conversation"]["id"]
-
-        reply = self.client.post(
-            reverse("assistant_conversation_message", args=[conversation_id]),
-            data=json.dumps({"message": "Какие у тебя есть этапы?"}),
-            content_type="application/json",
-            secure=True,
-        )
-
-        message = reply.json()["messages"][-1]
-        self.assertEqual(message["text"], "Доступен этап: Швейный этап.")
-        self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["result"]["stages"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_model_opens_registered_provider_form_without_creating_a_draft(self, _request, _preflight):
-        stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
-        _request.return_value = {"reply": "Проверьте данные и прикрепите XLS.", "action": {"id": "provider.create_draft", "arguments": {"name": "Атекс", "stage_id": stage.pk}}}
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Контрагент"}, secure=True).json()["conversation"]["id"]
-
-        reply = self.client.post(
-            reverse("assistant_conversation_message", args=[conversation_id]),
-            data=json.dumps({"message": "Создай контрагента по пошиву"}),
-            content_type="application/json",
-            secure=True,
-        )
-
-        message = reply.json()["messages"][-1]
-        self.assertEqual(message["kind"], "provider_upload")
-        self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["stages"])
-        self.assertEqual(message["data"]["name"], "Атекс")
-        self.assertEqual(message["data"]["stage_id"], stage.pk)
-
     def test_global_drawer_has_context_chips_and_real_suggestion_actions(self):
         response = self.client.get(reverse("tender_home"), secure=True)
         self.assertContains(response, 'assistant-context-summary')
@@ -200,8 +159,8 @@ class AssistantConversationTests(TestCase):
         self.assertContains(response, 'event.key === "Enter" && !event.shiftKey')
         self.assertContains(response, 'assistant-tool-result')
         self.assertContains(response, 'assistant-message--pending')
-        self.assertContains(response, 'Если формула или валюта неверны, не подтверждайте прайс')
-        self.assertNotContains(response, 'Нужно уточнить формулу')
+        self.assertNotContains(response, 'data-sewing-upload')
+        self.assertNotContains(response, 'data-sewing-confirm')
 
     def test_legacy_assistant_url_returns_to_global_drawer_host(self):
         response = self.client.get(reverse("assistant_console"), secure=True)
