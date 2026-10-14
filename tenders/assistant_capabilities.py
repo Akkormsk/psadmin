@@ -4,7 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
-from .production_actions import deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback
+from .production_actions import activate_cascade_lab_settings, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback, save_cascade_lab_preset
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
 
 
@@ -232,6 +232,21 @@ register_tool(AssistantTool(
     "Разбирает свободное описание исправлений на независимые предложения для проверки. Записывает только ожидающие подтверждения предложения, не изменяет глобальные правила.",
     {"text": "string"}, False, True, True, prepare_production_changes,
     source="tenders.production_actions.draft_production_feedback",
+))
+
+register_tool(AssistantTool(
+    "cascade.preset_save", "Сохранить набор настроек лаборатории Cascade",
+    "Сохраняет именованный набор настроек тем же исполнителем, что кнопка лаборатории Cascade.",
+    {"name": "string", "settings": "object"}, False, True, True,
+    lambda user, payload: save_cascade_lab_preset(user, payload["name"], payload["settings"]),
+    source="tenders.production_actions.save_cascade_lab_preset",
+))
+register_tool(AssistantTool(
+    "cascade.settings_activate", "Применить настройки Cascade",
+    "Создаёт и активирует версию настроек Cascade тем же исполнителем, что кнопка лаборатории.",
+    {"name": "string?", "settings": "object"}, False, True, True,
+    lambda user, payload: activate_cascade_lab_settings(user, payload.get("name"), payload["settings"]),
+    source="tenders.production_actions.activate_cascade_lab_settings",
 ))
 
 def save_business_estimate(user, payload):

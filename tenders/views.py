@@ -34,6 +34,7 @@ from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
+from .production_actions import activate_cascade_lab_settings, save_cascade_lab_preset
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items, refresh_training_example_embedding
 
@@ -439,14 +440,9 @@ def cascade_lab_preset_save(request):
     if not _cascade_lab_allowed(request):
         return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
     try:
-        name = str(request.POST.get("name") or "").strip()[:200]
-        settings = text_search_settings(_lab_json(request.POST.get("settings"), {}))
-        if not name:
-            raise ValueError("Введите название набора настроек.")
-        preset, created = CascadeLabPreset.objects.update_or_create(
-            created_by=request.user, name=name, defaults={"settings": settings},
-        )
-        return JsonResponse({"id": preset.pk, "name": preset.name, "settings": preset.settings, "created": created})
+        return JsonResponse(save_cascade_lab_preset(
+            request.user, request.POST.get("name"), _lab_json(request.POST.get("settings"), {}),
+        ))
     except (ValueError, json.JSONDecodeError) as exc:
         return JsonResponse({"error": str(exc) or "Некорректные настройки."}, status=400)
 
@@ -457,14 +453,9 @@ def cascade_lab_activate(request):
     if not _cascade_lab_allowed(request):
         return JsonResponse({"error": "Лаборатория доступна только администратору."}, status=403)
     try:
-        name = str(request.POST.get("name") or "Текущие настройки").strip()[:200]
-        settings = text_search_settings(_lab_json(request.POST.get("settings"), {}))
-        with transaction.atomic():
-            CascadeConfigVersion.objects.filter(is_active=True).update(is_active=False)
-            version = CascadeConfigVersion.objects.create(
-                name=name, settings=settings, created_by=request.user, is_active=True,
-            )
-        return JsonResponse({"id": version.pk, "name": version.name, "created_at": version.created_at.isoformat()})
+        return JsonResponse(activate_cascade_lab_settings(
+            request.user, request.POST.get("name"), _lab_json(request.POST.get("settings"), {}),
+        ))
     except (ValueError, json.JSONDecodeError) as exc:
         return JsonResponse({"error": str(exc) or "Некорректные настройки."}, status=400)
 

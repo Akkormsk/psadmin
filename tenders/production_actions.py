@@ -1,8 +1,38 @@
 """Backend production-knowledge actions shared by UI and assistant."""
 from django.db import transaction
 
-from .models import Lesson, ProductionTrainingExample, Proposal, Counterparty, ProcessDefinition, TenderKnowledgeSource
+from .cascade_settings import text_search_settings
+from .models import CascadeConfigVersion, CascadeLabPreset, Lesson, ProductionTrainingExample, Proposal, Counterparty, ProcessDefinition, TenderKnowledgeSource
 from .proposals import apply_proposal
+
+
+def _require_admin(user):
+    if not getattr(user, "is_superuser", False):
+        raise ValueError("Действие доступно только администратору")
+
+
+def save_cascade_lab_preset(user, name, settings):
+    """Save the same named Cascade Lab preset as the settings button."""
+    _require_admin(user)
+    name = str(name or "").strip()[:200]
+    if not name:
+        raise ValueError("Введите название набора настроек.")
+    preset, created = CascadeLabPreset.objects.update_or_create(
+        created_by=user, name=name, defaults={"settings": text_search_settings(settings)},
+    )
+    return {"id": preset.pk, "name": preset.name, "settings": preset.settings, "created": created}
+
+
+@transaction.atomic
+def activate_cascade_lab_settings(user, name, settings):
+    """Activate one Cascade configuration with the exact UI side effects."""
+    _require_admin(user)
+    name = str(name or "Текущие настройки").strip()[:200]
+    CascadeConfigVersion.objects.filter(is_active=True).update(is_active=False)
+    version = CascadeConfigVersion.objects.create(
+        name=name, settings=text_search_settings(settings), created_by=user, is_active=True,
+    )
+    return {"id": version.pk, "name": version.name, "created_at": version.created_at.isoformat()}
 
 
 def deactivate_lesson(lesson_id):
