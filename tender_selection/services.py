@@ -1748,3 +1748,31 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     interaction.answered_at = timezone.now()
     interaction.save(update_fields=["status", "answered_at"])
     return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
+
+
+@transaction.atomic
+def decide_document_proposals(user, tender_id, parent_id, decision):
+    """Apply the complete document-composition decision used by the tender card."""
+    _require_tender_admin(user)
+    from tenders.models import TenderSourceItem
+
+    if decision not in {"accept", "reject"}:
+        raise ValueError("Нужно выбрать: принять или отклонить предложения")
+    parent = TenderSourceItem.objects.filter(pk=parent_id, tender_id=tender_id).first()
+    if parent is None:
+        raise ValueError("Исходная позиция тендера не найдена")
+    proposals = list(TenderSourceItem.objects.filter(
+        tender_id=tender_id, parent=parent, source_type="document_proposal",
+    ))
+    if not proposals:
+        raise ValueError("Предложения из документации не найдены")
+    if decision == "accept":
+        for proposal in proposals:
+            proposal.source_type = "document_extraction"
+            proposal.is_active = True
+            proposal.save(update_fields=["source_type", "is_active"])
+        parent.is_active = False
+        parent.save(update_fields=["is_active"])
+    else:
+        TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
+    return {"tender_id": tender_id, "decision": decision, "changed": len(proposals)}

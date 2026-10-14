@@ -3,7 +3,7 @@ from tenders.assistant_tools import AssistantTool, AssistantToolError, register_
 
 from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
-    apply_filter_word_audit, pull_tenders_now, run_filter_word_audit, run_profile_triage,
+    apply_filter_word_audit, decide_document_proposals, pull_tenders_now, run_filter_word_audit, run_profile_triage,
     record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid, update_tender_review,
 )
 
@@ -160,4 +160,14 @@ register_tool(AssistantTool(
     {"tender_id": "integer", "interaction_id": "integer", "answer": "string"},
     False, True, True, _answer_owner_question,
     source="tender_selection.services.answer_tender_owner_question",
+))
+register_tool(AssistantTool(
+    "tender.document_proposals", "Принять или отклонить состав из документации",
+    "Применяет к позиции тендера найденный в документации состав либо отклоняет его тем же исполнителем, что карточка тендера.",
+    {"tender_id": "integer", "parent_id": "integer", "decision": "accept|reject"},
+    False, True, True,
+    lambda user, payload: _tender_action(
+        decide_document_proposals, user, payload, "tender_id", "parent_id", "decision",
+    ),
+    source="tender_selection.services.decide_document_proposals",
 ))

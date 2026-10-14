@@ -27,6 +27,7 @@ from .services import (
     _TENDER_SETTINGS_FIELDS, evaluation_settings_form, save_evaluation_settings,
     change_forecast_inclusion, create_tender_estimate, hide_tender, restore_hidden_tender, save_tender_bid,
     update_tender_review, apply_filter_word_audit, pull_tenders_now, record_tender_outcome, run_filter_word_audit, run_profile_triage,
+    decide_document_proposals,
 )
 from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
@@ -876,23 +877,15 @@ def owner_interaction_answer(request, pk, interaction_pk):
 @require_POST
 def document_proposal_action(request, pk, parent_pk):
     tender = get_object_or_404(Tender, pk=pk)
-    from tenders.models import TenderSourceItem
-
-    parent = get_object_or_404(TenderSourceItem, pk=parent_pk, tender=tender)
-    proposals = list(TenderSourceItem.objects.filter(tender=tender, parent=parent, source_type="document_proposal"))
-    if not proposals:
-        messages.error(request, "Предложения из документации не найдены.")
+    decision = "accept" if request.POST.get("action") == "accept" else "reject"
+    try:
+        decide_document_proposals(request.user, tender.pk, parent_pk, decision)
+    except ValueError as exc:
+        messages.error(request, str(exc))
         return redirect(reverse("tender_selection:detail", args=[tender.pk]))
-    if request.POST.get("action") == "accept":
-        for proposal in proposals:
-            proposal.source_type = "document_extraction"
-            proposal.is_active = True
-            proposal.save(update_fields=["source_type", "is_active"])
-        parent.is_active = False
-        parent.save(update_fields=["is_active"])
+    if decision == "accept":
         messages.success(request, "Состав из документации принят. Расчёт можно запустить заново.")
     else:
-        TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
         messages.info(request, "Предложения из документации отклонены.")
     return redirect(reverse("tender_selection:detail", args=[tender.pk]))
 
