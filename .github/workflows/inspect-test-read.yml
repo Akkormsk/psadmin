@@ -1,5 +1,8 @@
 name: Inspect TEST READ trace (no deploy)
 on:
+  push:
+    branches:
+      - ops/test-read-diagnostics
   workflow_dispatch:
     inputs:
       trace_id:
@@ -16,7 +19,7 @@ jobs:
       SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
       SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
-      TRACE_ID: ${{ inputs.trace_id }}
+      TRACE_ID: ${{ inputs.trace_id || 'c096d10ba7' }}
     steps:
       - name: Validate trace code
         shell: bash
