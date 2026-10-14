@@ -81,6 +81,9 @@ def reply(conversation, user, message, page_context=None):
                 "Use the conversation history and provided context; do not ask again for information already given. "
                 "You may propose a plan and continue discussing it over several user messages. "
                 "Use tools only when you need real PSADMIN data or must execute an existing business operation. "
+                "When a user explicitly requests records or facts from PSADMIN, execute a read-only tool in this turn; never merely promise to fetch data. "
+                "Use runtime catalogue to select relevant fields and scope; distinguish incoming from all records. "
+                "When tool data arrives answer the original question fully with every requested field; omit internal metadata. "
                 "Choose at most one tool action per assistant response; "
                 "the backend does not support multiple tool calls in one turn. "
                 "For tools with a declared UI, select the tool and let its existing UI collect missing inputs. "
@@ -121,9 +124,32 @@ def reply(conversation, user, message, page_context=None):
         return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
     action = plan.get("action")
     if not isinstance(action, dict) or not action.get("id"):
-        if pending:
-            return {"text": (plan["reply"].strip() or "Уточните недостающие параметры задачи."), "kind": "text", "data": {"pending_tool_id": pending.get("tool_id")}}
-        return {"text": plan["reply"].strip(), "kind": "text", "data": {}}
+        # A bounded follow-up for a promised data fetch that was not executed.
+        # The planner still chooses the entity using the runtime catalogue.
+        if not pending and read_catalog:
+            reply_text = plan["reply"].strip().lower()
+            future_claim = any(phrase in reply_text for phrase in (
+                "сейчас получ", "сейчас провер", "сейчас подготов",
+                "я выполню запрос", "я запрошу", "получу данные", "запрошу данные",
+            ))
+            if future_claim:
+                retry = _request(json.dumps({
+                    "task": "Your previous answer only promised a data lookup. If the user requested PSADMIN records, select a read-only tool NOW and construct its complete internal arguments from the catalogue. Otherwise return action=null and a truthful final reply. Never invent results.",
+                    "message": message,
+                    "previous_reply": plan["reply"],
+                    "tools": [item for item in planning_tools if item.get("available") and item.get("read_only")],
+                    "read_catalog": read_catalog,
+                    "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}},
+                }, ensure_ascii=False))
+                if isinstance(retry, dict) and isinstance(retry.get("action"), dict):
+                    retry_id = retry["action"].get("id")
+                    if retry_id in {item["id"] for item in tools if item["read_only"] and item["available"]}:
+                        plan = retry
+                        action = retry["action"]
+        if not isinstance(action, dict) or not action.get("id"):
+            if pending:
+                return {"text": (plan["reply"].strip() or "Уточните недостающие параметры задачи."), "kind": "text", "data": {"pending_tool_id": pending.get("tool_id")}}
+            return {"text": plan["reply"].strip(), "kind": "text", "data": {}}
     identifier = action.get("id")
     arguments = action.get("arguments", {})
     if not isinstance(identifier, str) or not isinstance(arguments, dict):
@@ -166,8 +192,8 @@ def reply(conversation, user, message, page_context=None):
                     return {"text": "Не удалось сформировать корректный запрос к данным. Попробуйте переформулировать задачу.", "kind": "tool_error", "data": {"tool_id": identifier}}
                 arguments = action_retry["arguments"]
         final = _request(json.dumps({
-            "task": "Answer in concise Russian using only tool_result. Do not invent data or promise further execution.",
-            "tool": selected_tool, "tool_result": result, "response_schema": {"reply": "Russian text"},
+            "task": "Answer the original user request concisely using only tool_result. For a list include each requested field for every returned record. If a requested field is missing, say so rather than invent it. Avoid internal metadata and IDs unless requested.",
+            "original_request": message, "tool": selected_tool, "tool_result": result, "response_schema": {"reply": "Russian text"},
         }, ensure_ascii=False))
         if not isinstance(final, dict) or not isinstance(final.get("reply"), str):
             raise TenderAIError("Ассистент не смог сформировать ответ по результату чтения.")
