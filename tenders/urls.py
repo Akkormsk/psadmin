@@ -9,6 +9,7 @@ urlpatterns = [
     path("assistant/conversations/new/", assistant_ui.conversation_new, name="assistant_conversation_new"),
     path("assistant/conversations/<int:conversation_id>/", assistant_ui.conversation_detail, name="assistant_conversation_detail"),
     path("assistant/conversations/<int:conversation_id>/message/", assistant_ui.conversation_message, name="assistant_conversation_message"),
+    path("assistant/conversations/<int:conversation_id>/actions/<int:event_id>/confirm/", assistant_ui.conversation_action_confirm, name="assistant_conversation_action_confirm"),
     path("assistant/conversations/<int:conversation_id>/sewing/upload/", assistant_ui.conversation_sewing_upload, name="assistant_conversation_sewing_upload"),
     path("assistant/conversations/<int:conversation_id>/sewing/confirm/", assistant_ui.conversation_sewing_confirm, name="assistant_conversation_sewing_confirm"),
     path("", views.home, name="tender_home"),

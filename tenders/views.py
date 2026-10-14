@@ -1173,38 +1173,13 @@ def production_counterparty_confirm(request):
     через Proposal (см. tenders/proposals.py), одним batch на карточку."""
     if not request.user.is_superuser:
         return JsonResponse({"error": "Добавлять контрагентов может только администратор."}, status=403)
+    from .production_actions import confirm_counterparty_with_stages
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        name = str(payload.get("name", "")).strip()[:200]
-        if not name:
-            raise ValueError
-        notes = str(payload.get("notes", ""))[:2000]
-        stage_ids = [int(value) for value in payload.get("stage_ids", []) if str(value).isdigit()]
-        source_id = payload.get("source_id")
+        result = confirm_counterparty_with_stages(request.user, payload)
     except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось прочитать форму контрагента."}, status=400)
-
-    counterparty_proposal = Proposal.objects.create(
-        type=Proposal.TYPE_CREATE_COUNTERPARTY, payload={"name": name, "notes": notes},
-        summary=f"Новый контрагент «{name}»", created_by=request.user,
-    )
-    apply_proposal(counterparty_proposal, request.user)
-    counterparty = Counterparty.objects.get(name=name)
-    stages = {stage.pk: stage for stage in ProcessDefinition.objects.filter(pk__in=stage_ids)}
-    for stage_id in stage_ids:
-        stage = stages.get(stage_id)
-        if stage is None:
-            continue
-        link_proposal = Proposal.objects.create(
-            type=Proposal.TYPE_LINK_STAGE_COUNTERPARTY, batch_id=counterparty_proposal.batch_id,
-            payload={"stage_id": stage.pk, "counterparty_id": counterparty.pk},
-            summary=f"Связать «{stage.name}» и «{name}»", created_by=request.user,
-        )
-        apply_proposal(link_proposal, request.user)
-    if source_id:
-        TenderKnowledgeSource.objects.filter(pk=source_id, counterparty__isnull=True).update(counterparty=counterparty)
-    linked_stage_names = list(counterparty.stage_links.select_related("stage").values_list("stage__name", flat=True))
-    return JsonResponse({"id": counterparty.pk, "name": counterparty.name, "stage_names": linked_stage_names})
+    return JsonResponse(result)
 
 
 @login_required
@@ -1216,32 +1191,12 @@ def production_feedback_draft(request):
     применяется здесь — только на production_feedback_confirm."""
     if not request.user.is_superuser:
         return JsonResponse({"error": "Учить «Базу производства» может только администратор."}, status=403)
-    text = request.POST.get("text", "").strip()
-    if not text:
-        return JsonResponse({"error": "Напишите, что изменить."}, status=400)
-    active_stages = list(ProcessDefinition.objects.filter(is_active=True).values("id", "name"))
-    active_counterparties = list(Counterparty.objects.filter(is_active=True).values("id", "name"))
+    from .production_actions import draft_production_feedback
     try:
-        items = parse_production_feedback(text, active_stages, active_counterparties)
-    except TenderAIError as exc:
+        result = draft_production_feedback(request.user, request.POST.get("text", ""))
+    except (TenderAIError, ValueError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-
-    batch_id = None
-    proposals = []
-    for item in items:
-        proposal = Proposal.objects.create(
-            type=item["type"], payload=payload_from_feedback_item(item["type"], item["raw"]),
-            summary=item["summary"], source_text=text, created_by=request.user,
-            **({"batch_id": batch_id} if batch_id else {}),
-        )
-        batch_id = batch_id or proposal.batch_id
-        proposals.append(proposal)
-    return JsonResponse({
-        "batch_id": str(batch_id),
-        "items": [{"id": p.pk, "type": p.type, "type_display": p.get_type_display(), "summary": p.summary, "payload": p.payload} for p in proposals],
-        "active_stages": active_stages, "active_counterparties": active_counterparties,
-    })
-
+    return JsonResponse(result)
 
 @login_required
 @require_POST
@@ -1275,8 +1230,8 @@ def drop_lesson(request):
         lesson_id = int(json.loads(request.POST.get("payload", "{}")).get("lesson_id"))
     except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось определить урок."}, status=400)
-    dropped = Lesson.objects.filter(pk=lesson_id, is_active=True).update(is_active=False)
-    return JsonResponse({"dropped": bool(dropped)})
+    from .production_actions import deactivate_lesson
+    return JsonResponse({"dropped": deactivate_lesson(lesson_id)})
 
 
 @login_required
@@ -1285,21 +1240,11 @@ def drop_lesson(request):
 def drop_route_knowledge(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Менять знания может только администратор."}, status=403)
+    from .production_actions import deactivate_route_knowledge
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        if payload.get("example_id"):
-            example_id = int(payload["example_id"])
-            changed = ProductionTrainingExample.objects.filter(pk=example_id).update(is_active=False)
-            Lesson.objects.filter(session__confirmed_example_id=example_id, scope__in=["route", "production_step"]).update(is_active=False)
-        else:
-            lesson = Lesson.objects.get(pk=int(payload["lesson_id"]), scope__in=["route", "production_step"])
-            lesson.is_active = False
-            lesson.save(update_fields=["is_active"])
-            # The confirmed route also contains this correction; stop recalling both representations.
-            if lesson.session_id and lesson.session.confirmed_example_id:
-                ProductionTrainingExample.objects.filter(pk=lesson.session.confirmed_example_id).update(is_active=False)
-            changed = True
-    except (ValueError, TypeError, KeyError, json.JSONDecodeError, Lesson.DoesNotExist):
+        changed = deactivate_route_knowledge(payload)
+    except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось определить сохранённый опыт."}, status=400)
     return JsonResponse({"dropped": bool(changed)})
 
@@ -1632,78 +1577,10 @@ def calculator_knowledge_proposal(request):
 
 
 def _persist_tender_estimate(request, estimate, settings, *, pipeline=False):
-    """Parse the posted tender state and write it to ``estimate`` (creating
-    one when it is ``None``). Returns ``(estimate, error, meta)`` — ``error``
-    is a message string when nothing was saved, ``meta`` carries
-    ``incomplete`` and the parsed ``posted_lines`` / ``posted_analysis``
-    (kept even on a validation error so the form can re-render them).
-    Shared by the plain form POST and the autosave endpoint."""
-    meta = {"incomplete": False, "posted_lines": None, "posted_analysis": None}
-    try:
-        raw_lines = json.loads(request.POST.get("lines_json", "[]"))
-        raw_analysis = json.loads(request.POST.get("document_analysis_json", "{}"))
-    except json.JSONDecodeError:
-        return estimate, "Проверьте товарные позиции.", meta
-    meta["posted_lines"] = raw_lines if isinstance(raw_lines, list) else []
-    meta["posted_analysis"] = raw_analysis if isinstance(raw_analysis, dict) else {}
-    try:
-        tender_number = request.POST.get("tender_number", "").strip()
-        name = request.POST.get("name", "").strip()
-        reduction_percent = _number(request.POST.get("reduction_percent"), str(settings.default_reduction_percent))
-        russia_delivery = _number(request.POST.get("russia_delivery"))
-        if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
-            raise ValueError
-        lines = []
-        calculation_complete = True
-        for row in meta["posted_lines"]:
-            line = {
-                "name": str(row.get("name", "")).strip(),
-                "quantity": _number(row.get("quantity")),
-                "nmck_unit": _number(row.get("nmck_unit")),
-                "material_unit": _number(row.get("material_unit")),
-                "application_unit": _number(row.get("application_unit")),
-                "logistics_unit": _number(row.get("logistics_unit")),
-                "product_url": str(row.get("product_url", "")).strip(),
-                "comment": str(row.get("comment", "")).strip(),
-                "requirements": row.get("requirements") if isinstance(row.get("requirements"), dict) else {},
-            }
-            has_expense = any(line[key] > 0 for key in ("material_unit", "application_unit", "logistics_unit"))
-            if min(line["quantity"], line["nmck_unit"], line["material_unit"], line["application_unit"], line["logistics_unit"]) < 0:
-                raise ValueError
-            if not line["name"] or line["quantity"] <= 0 or line["nmck_unit"] <= 0 or not has_expense:
-                calculation_complete = False
-            lines.append(line)
-        if not lines:
-            lines.append({"name": "", "quantity": Decimal("0"), "nmck_unit": Decimal("0"), "material_unit": Decimal("0"), "application_unit": Decimal("0"), "logistics_unit": Decimal("0"), "product_url": "", "comment": "", "requirements": {}})
-            calculation_complete = False
-    except (ValueError, TypeError, InvalidOperation):
-        return estimate, "Проверьте реквизиты тендера и товарные позиции.", meta
+    """Shared HTTP wrapper around reusable calculation persistence."""
+    from .estimate_actions import persist_estimate
+    return persist_estimate(request.user, request.POST, estimate, settings, pipeline=pipeline)
 
-    calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
-    is_new = estimate is None
-    estimate = estimate or (TenderEstimate(owner=request.user) if pipeline else OrderEstimate(owner=request.user))
-    if request.user.is_superuser and request.POST.get("owner_id"):
-        estimate.owner = get_object_or_404(get_user_model(), pk=request.POST["owner_id"])
-    estimate.tender_number = tender_number[:100]
-    estimate.name = name[:300]
-    estimate.reduction_percent = reduction_percent
-    estimate.russia_delivery = russia_delivery
-    estimate.result_notes = request.POST.get("result_notes", "").strip()[:5000]
-    estimate.vat_rate_snapshot = settings.vat_rate
-    estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
-    estimate.summary_snapshot["is_incomplete"] = not calculation_complete
-    estimate.document_analysis = meta["posted_analysis"] or {}
-    if not pipeline and not estimate.order_id:
-        estimate.order = Order.objects.create(name=estimate.name)
-    elif not pipeline:
-        estimate.order.name = estimate.name
-        estimate.order.save(update_fields=["name", "updated_at"])
-    estimate.save()
-    estimate.lines.all().delete()
-    line_model = TenderLine if pipeline else OrderLine
-    line_model.objects.bulk_create([line_model(estimate=estimate, sort_order=index, **line) for index, line in enumerate(lines)])
-    meta["incomplete"] = not calculation_complete
-    return estimate, None, meta
 
 
 def _saved_estimates_for(request):
@@ -1862,41 +1739,21 @@ def save_estimate(request, pk=None, pipeline=False):
 @login_required
 @require_POST
 def duplicate_estimate(request, pk, pipeline=False):
+    from .estimate_actions import duplicate_estimate as duplicate_shared
     model = TenderEstimate if pipeline else OrderEstimate
-    line_model = TenderLine if pipeline else OrderLine
-    original = _estimate_for_user(request, pk, model)
-    lines = list(original.lines.all())
-    name = f"{original.name} (копия)"[:300]
-    copy = model.objects.create(
-        owner=request.user,
-        **({"tender": original.tender} if pipeline else {"order": Order.objects.create(name=name)}),
-        tender_number=original.tender_number,
-        name=name,
-        reduction_percent=original.reduction_percent,
-        russia_delivery=original.russia_delivery,
-        result_notes="",
-        vat_rate_snapshot=original.vat_rate_snapshot,
-        summary_snapshot=original.summary_snapshot,
-        document_analysis=original.document_analysis,
-    )
-    line_model.objects.bulk_create([
-        line_model(
-            estimate=copy, sort_order=line.sort_order, name=line.name, quantity=line.quantity,
-            nmck_unit=line.nmck_unit, material_unit=line.material_unit,
-            application_unit=line.application_unit, logistics_unit=line.logistics_unit,
-            product_url=line.product_url, comment=line.comment, requirements=line.requirements,
-        )
-        for line in lines
-    ])
-    messages.success(request, f"Создана копия просчёта № {original.tender_number}.")
-    return redirect("tender_pipeline_estimate" if pipeline else "tender_estimate", pk=copy.pk)
+    _estimate_for_user(request, pk, model)
+    result = duplicate_shared(request.user, pk, pipeline)
+    messages.success(request, "Создана копия просчёта.")
+    return redirect("tender_pipeline_estimate" if pipeline else "tender_estimate", pk=result["estimate_id"])
 
 
 @login_required
 @require_POST
 def delete_estimate(request, pk, pipeline=False):
-    estimate = _estimate_for_user(request, pk, TenderEstimate if pipeline else OrderEstimate)
-    estimate.delete()
+    from .estimate_actions import delete_estimate as delete_shared
+    model = TenderEstimate if pipeline else OrderEstimate
+    _estimate_for_user(request, pk, model)
+    delete_shared(request.user, pk, pipeline)
     messages.success(request, "Расчёт удалён.")
     return redirect("tender_pipeline_home" if pipeline else "tender_home")
 
@@ -1904,50 +1761,28 @@ def delete_estimate(request, pk, pipeline=False):
 @login_required
 @require_POST
 def update_estimate_status(request, pk, pipeline=True):
-    from tender_selection.models import Tender
+    from .estimate_actions import EstimateActionError, set_tender_estimate_status
 
     estimate = _estimate_for_user(request, pk, TenderEstimate)
-    status = request.POST.get("status", "")
-    if status not in dict(Tender.OUTCOME_STATUS_CHOICES) or not estimate.tender_id:
-        return HttpResponse(status=400)
-    if status == Tender.OUTCOME_PENDING and (estimate.summary_snapshot or {}).get("is_incomplete", True):
-        return HttpResponse("Завершите расчёт перед переходом в торги.", status=400)
-    tender = estimate.tender
-    tender.outcome_status = status
-    update_fields = ["outcome_status"]
-    # «Архивировать — невыгодно» — тоже терминальное решение по этому тендеру
-    # (участвовать не будем), уходит в архив сразу же, как и настоящий факт
-    # торгов (см. apply_tender_outcome) — не нужно отдельно жать «Скрыть».
-    if status == Tender.OUTCOME_NOT_PARTICIPATED:
-        from tender_selection.services import archive_tender
-
-        tender.save(update_fields=update_fields)
-        archive_tender(tender)
-    else:
-        tender.save(update_fields=update_fields)
+    try:
+        outcome = set_tender_estimate_status(request.user, pk, request.POST.get("status", ""))
+    except EstimateActionError as exc:
+        return HttpResponse(str(exc), status=400)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({
-            "status": status,
-            "label": tender.get_outcome_status_display(),
-            "requires_result": status in {Tender.OUTCOME_LOST, Tender.OUTCOME_WON},
-        })
-    # Кнопка теперь живёт на странице тендера (не здесь) — туда и возвращаем.
+        return JsonResponse({key: outcome[key] for key in ("status", "label", "requires_result")})
     return redirect("tender_selection:detail", pk=estimate.tender_id)
 
 
 @login_required
 @require_POST
 def update_order_status(request, pk):
-    estimate = _estimate_for_user(request, pk, OrderEstimate)
-    status = request.POST.get("status", "")
-    if status not in dict(Order.STATUS_CHOICES):
-        return HttpResponse(status=400)
-    if not estimate.order_id:
-        estimate.order = Order.objects.create(name=estimate.name)
-        estimate.save(update_fields=["order"])
-    order = estimate.order
-    order.status = status
-    order.save(update_fields=["status", "updated_at"])
+    from .estimate_actions import EstimateActionError, set_order_estimate_status
+
+    _estimate_for_user(request, pk, OrderEstimate)
+    try:
+        state = set_order_estimate_status(request.user, pk, request.POST.get("status", ""))
+    except EstimateActionError as exc:
+        return HttpResponse(str(exc), status=400)
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse({"status": status, "label": order.get_status_display()})
+        return JsonResponse({"status": state["status"], "label": state["label"]})
     return redirect("tender_home")

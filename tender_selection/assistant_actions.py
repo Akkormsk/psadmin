@@ -1,0 +1,126 @@
+"""Adapters for existing tender-selection services; no selection logic lives here."""
+from decimal import Decimal, InvalidOperation
+
+from .models import Tender
+from .services import apply_tender_outcome, archive_tender, dismiss_tender, push_to_estimate, restore_tender, run_pull, set_our_bid, set_tender_review, start_risk_assessment_in_background, toggle_forecast_inclusion, update_filter_words as save_filter_words
+
+
+def pull(_user, payload):
+    run = run_pull(max_requests=int(payload.get("max_requests", 16)))
+    return {"run_id": run.pk, "ok": run.ok, "created": run.created_count, "updated": run.updated_count, "error": run.error}
+
+
+def push_to_calculation(user, payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id")).first()
+    if not tender:
+        raise ValueError("Тендер не найден")
+    return {"estimate_id": push_to_estimate(tender, user), "tender_id": tender.pk}
+
+
+def start_risk(_user, payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id")).first()
+    if not tender:
+        raise ValueError("Тендер не найден")
+    start_risk_assessment_in_background(tender.pk)
+    return {"tender_id": tender.pk, "status": "started"}
+
+
+def archive(_user, payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id")).first()
+    if not tender:
+        raise ValueError("Тендер не найден")
+    archive_tender(tender)
+    return {"tender_id": tender.pk, "status": tender.status}
+
+
+def dismiss(_user, payload):
+    tender = _tender(payload)
+    dismiss_tender(tender, reason=payload.get("reason"))
+    return {"tender_id": tender.pk, "status": tender.status}
+
+
+def restore(_user, payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id"), status=Tender.DISMISSED).first()
+    if not tender:
+        raise ValueError("Скрытый тендер не найден")
+    restore_tender(tender)
+    return {"tender_id": tender.pk, "status": tender.status}
+
+
+def set_review(_user, payload):
+    tender = _tender(payload)
+    value = payload.get("review")
+    set_tender_review(tender, value)
+    return {"tender_id": tender.pk, "review": tender.review}
+
+
+def save_bid(_user, payload):
+    from tenders.models import TenderEstimate
+
+    estimate = TenderEstimate.objects.filter(pk=payload.get("estimate_id")).first()
+    if not estimate:
+        raise ValueError("Просчёт тендера не найден")
+    raw_price = payload.get("bid_price")
+    try:
+        bid_price = Decimal(str(raw_price)) if raw_price not in (None, "") else None
+        if bid_price is not None and bid_price <= 0:
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        raise ValueError("Сумма заявки должна быть положительным числом")
+    set_our_bid(estimate, bid_number=str(payload.get("bid_number", "")), bid_price=bid_price)
+    return {"estimate_id": estimate.pk, "tender_id": estimate.tender_id, "bid_number": estimate.tender.bid_number, "bid_price": str(estimate.tender.bid_price) if estimate.tender.bid_price is not None else None}
+
+
+def set_outcome(_user, payload):
+    from tenders.models import TenderEstimate
+
+    estimate = TenderEstimate.objects.filter(pk=payload.get("estimate_id")).first()
+    status = payload.get("status")
+    if not estimate or status not in (Tender.OUTCOME_WON, Tender.OUTCOME_LOST, Tender.OUTCOME_NOT_PARTICIPATED):
+        raise ValueError("Неверный просчёт или итог тендера")
+    try:
+        reduction = Decimal(str(payload["actual_reduction_percent"])) if payload.get("actual_reduction_percent") not in (None, "") else None
+        if reduction is not None and not Decimal("0") <= reduction <= Decimal("100"):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        raise ValueError("Фактическое снижение должно быть числом от 0 до 100")
+    apply_tender_outcome(estimate, status=status, reduction_percent=reduction, source=Tender.OUTCOME_MANUAL)
+    estimate.tender.refresh_from_db()
+    return {"estimate_id": estimate.pk, "tender_id": estimate.tender_id, "outcome_status": estimate.tender.outcome_status}
+
+
+def update_filter_words(_user, payload):
+    settings = save_filter_words(include_words=payload.get("include_words"), exclude_words=payload.get("exclude_words"))
+    return {"include_words": settings.include_words, "exclude_words": settings.exclude_words}
+
+
+def word_audit_run(user, _payload):
+    from .word_audit import run_audit
+
+    audit = run_audit(user)
+    return {"word_audit_id": audit.pk, "spend_rub": str(audit.spend_rub) if audit.spend_rub is not None else None}
+
+
+def word_audit_apply(_user, payload):
+    from .word_audit import SUGGESTION_KINDS, apply_words
+
+    chosen = {kind: payload.get(kind, []) for kind in SUGGESTION_KINDS}
+    if not all(isinstance(words, list) and all(isinstance(word, str) for word in words) for words in chosen.values()):
+        raise ValueError("Наборы слов должны быть списками")
+    apply_words(**chosen)
+    return {"applied": {kind: len(words) for kind, words in chosen.items()}}
+
+
+def toggle_forecast(_user, payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id")).first()
+    if not tender:
+        raise ValueError("Скрытый тендер не найден")
+    stat = toggle_forecast_inclusion(tender)
+    return {"tender_id": tender.pk, "forecast_included": stat.forecast_included}
+
+
+def _tender(payload):
+    tender = Tender.objects.filter(pk=payload.get("tender_id")).first()
+    if not tender:
+        raise ValueError("Тендер не найден")
+    return tender

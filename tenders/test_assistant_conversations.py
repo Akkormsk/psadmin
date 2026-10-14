@@ -59,6 +59,101 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_fake_ai_receives_read_metadata_and_executes_a_generic_plan(self, request, _preflight):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(purchase_number="CHAT-READ", title="Каталог", collecting_finished_at="2026-09-30T10:00:00Z", outcome_status=Tender.OUTCOME_LOST)
+
+        def fake_gateway(prompt):
+            payload = json.loads(prompt)
+            if "tool_result" in payload:
+                self.assertEqual(payload["tool_result"]["records"][0]["id"], tender.pk)
+                self.assertEqual(payload["tool_result"]["records"][0]["collecting_finished_at"], "2026-09-30T10:00:00+00:00")
+                return {"reply": "Найден тендер CHAT-READ."}
+            self.assertIn("cash", {goal["id"] for goal in payload["workflows"]})
+            schema = next(item for item in payload["read_catalog"] if item["id"] == "tender_selection.Tender")
+            self.assertIn("outcome_status", {field["name"] for field in schema["fields"]})
+            return {"reply": "Проверяю тендер.", "action": {"id": "read", "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "outcome_status", "collecting_finished_at"], "filters": [{"field": "id", "op": "eq", "value": tender.pk}]}}}}
+
+        request.side_effect = fake_gateway
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ"}, secure=True).json()["conversation"]["id"]
+        reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Покажи тендер"}), content_type="application/json", secure=True)
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(reply.json()["messages"][-1]["kind"], "tool_result")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
+        request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
+        message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(message["kind"], "confirmation_required")
+        first = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_old_confirmation_is_invalid_after_newer_conversation_message(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        request.side_effect = [
+            {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Устаревший расход"}}},
+            {"reply": "Проверим заново.", "action": None},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Устаревшее подтверждение"}, secure=True).json()["conversation"]["id"]
+        endpoint = reverse("assistant_conversation_message", args=[conversation_id])
+        first = self.client.post(endpoint, data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(first["kind"], "confirmation_required")
+        self.client.post(endpoint, data=json.dumps({"message": "Погоди, я хочу изменить условия"}), content_type="application/json", secure=True)
+        confirmation = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, first["id"]]), {"accept": "yes"}, secure=True)
+        self.assertEqual(confirmation.status_code, 409)
+        self.assertFalse(CashTransaction.objects.filter(reason="Устаревший расход").exists())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_cancelled_action_is_consumed_without_writing_data(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Отмена"}}}
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
+        message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
+        cancelled = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "no"}, secure=True)
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertFalse(CashTransaction.objects.filter(reason="Отмена").exists())
+        self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_missing_parameters_are_kept_in_same_conversation(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Какова сумма расхода?", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "reason": "Доставка"}}},
+            {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"amount": "15000"}}},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
+        first = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход на доставку"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(first["kind"], "text")
+        self.assertIn("amount", first["data"]["missing"])
+        second = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "15 000"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(second["kind"], "confirmation_required")
+        self.assertEqual(second["data"]["arguments"]["reason"], "Доставка")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_pending_macro_task_can_be_explicitly_cancelled(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Укажите сумму.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "reason": "Доставка"}}},
+            {"reply": "Задача отменена.", "action": None, "task_status": "cancel"},
+        ]
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Отмена задачи"}, secure=True).json()["conversation"]["id"]
+        endpoint = reverse("assistant_conversation_message", args=[conversation_id])
+        self.client.post(endpoint, data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True)
+        response = self.client.post(endpoint, data=json.dumps({"message": "Отмена, не добавляй расход"}), content_type="application/json", secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_model_can_run_stage_registry_without_keyword_routing(self, request, _preflight):
         stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
         request.side_effect = [

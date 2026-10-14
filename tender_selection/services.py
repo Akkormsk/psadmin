@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 MSK = ZoneInfo("Europe/Moscow")
 UTC = ZoneInfo("UTC")
 
+
+def clear_tender_document_previews(tender) -> None:
+    """Shared side effect of hiding a tender from every entry point."""
+    from .notification import parse_notification
+
+    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    urls = [doc.get("url") for doc in (card or {}).get("documents", []) if doc.get("url")]
+    if urls:
+        DocumentPreview.objects.filter(url__in=urls).delete()
+
 # служебные слова в названии организации -> в аббревиатуру / выкинуть
 _ORG_ABBR = [
     ("федеральное государственное бюджетное образовательное учреждение высшего образования", "ФГБОУ ВО"),
@@ -1262,6 +1272,56 @@ def archive_tender(tender) -> None:
     tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
 
 
+def dismiss_tender(tender, *, reason=None) -> None:
+    """The sole implementation behind the UI and assistant 'hide tender' action."""
+    from .models import TenderDismissalFeedback
+
+    if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
+        TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
+    clear_tender_document_previews(tender)
+    archive_tender(tender)
+
+
+def restore_tender(tender) -> None:
+    if tender.status != Tender.DISMISSED:
+        raise ValueError("Скрытый тендер не найден")
+    tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
+    tender.archived_at = None
+    tender.archived_from_stage = ""
+    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+
+
+def set_tender_review(tender, review) -> None:
+    if review not in dict(Tender.REVIEW_CHOICES):
+        raise ValueError("Недопустимый статус проверки")
+    was_unreviewed = tender.review == Tender.UNREVIEWED
+    tender.review = review
+    tender.save(update_fields=["review"])
+    if was_unreviewed and review != Tender.UNREVIEWED and not tender.risk_checked_at:
+        start_risk_assessment_in_background(tender.pk)
+
+
+def update_filter_words(*, include_words, exclude_words):
+    if not isinstance(include_words, str) or not isinstance(exclude_words, str):
+        raise ValueError("Нужны текстовые плюс- и минус-слова")
+    settings = FilterSettings.load()
+    settings.include_words = include_words.strip()
+    settings.exclude_words = exclude_words.strip()
+    settings.save(update_fields=["include_words", "exclude_words"])
+    return settings
+
+
+def toggle_forecast_inclusion(tender):
+    if tender.status != Tender.DISMISSED:
+        raise ValueError("Скрытый тендер не найден")
+    stat = ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first()
+    if stat is None:
+        raise ValueError("Результат торгов ещё не попал в статистику прогноза")
+    stat.forecast_included = not stat.forecast_included
+    stat.save(update_fields=["forecast_included"])
+    return stat
+
+
 PROTOCOL_RECHECK = timedelta(minutes=30)
 # Уже завершённые (итог внесён вручную) — дозаполняем протоколом для статистики, но не чаще раза в сутки.
 PROTOCOL_BACKFILL_RECHECK = timedelta(days=1)
@@ -1375,3 +1435,75 @@ def retry_pending_protocols(*, limit: int = 6, pause: float = PROTOCOL_PAUSE_SEC
             logger.warning("protocols: ЕИС не ответил по %s (%s) — продолжим в следующий тик", tender.purchase_number, exc)
             break
     return attempted, succeeded
+
+@transaction.atomic
+def save_selection_settings(payload):
+    """Update tender discovery settings from UI or assistant with one contract."""
+    if not isinstance(payload, dict):
+        raise ValueError("Настройки должны быть объектом")
+    settings = FilterSettings.load()
+    if "include_words" in payload:
+        settings.include_words = str(payload["include_words"]).strip()
+    if "exclude_words" in payload:
+        settings.exclude_words = str(payload["exclude_words"]).strip()
+    if "profile_triage_enabled" in payload:
+        value = payload["profile_triage_enabled"]
+        if not isinstance(value, bool):
+            raise ValueError("Режим автоматического отбора должен быть логическим значением")
+        settings.profile_triage_enabled = value
+    if "min_price" in payload:
+        try:
+            price = Decimal(str(payload["min_price"]))
+            if not price.is_finite() or price < 0:
+                raise ValueError
+        except (InvalidOperation, ValueError, TypeError):
+            raise ValueError("Минимальная цена должна быть неотрицательным числом")
+        settings.min_price = price
+    if "window_days" in payload:
+        try:
+            days = int(payload["window_days"])
+        except (ValueError, TypeError):
+            raise ValueError("Неверный период поиска")
+        if not 1 <= days <= 365:
+            raise ValueError("Период поиска должен быть от 1 до 365 дней")
+        settings.window_days = days
+    if "okpd2_codes" in payload:
+        codes = payload["okpd2_codes"]
+        if not isinstance(codes, list) or not all(isinstance(x, str) for x in codes):
+            raise ValueError("Неверный список кодов ОКПД2")
+        settings.okpd2_codes = codes
+    if "regions" in payload:
+        regions = payload["regions"]
+        if not isinstance(regions, list) or not all(str(x).isdigit() for x in regions):
+            raise ValueError("Неверный список регионов")
+        settings.regions = [str(x) for x in regions]
+    if "laws" in payload:
+        laws = payload["laws"]
+        if not isinstance(laws, list) or not laws or any(x not in ("fz44", "fz223") for x in laws):
+            raise ValueError("Необходимо выбрать 44-ФЗ, 223-ФЗ или оба закона")
+        settings.laws = laws
+    settings.save()
+    return {"updated": True, "min_price": str(settings.min_price),
+            "window_days": settings.window_days, "laws": settings.laws}
+
+@transaction.atomic
+def answer_tender_owner_question(user, tender_id, interaction_id, answer):
+    """Resolve a tender owner question and preserve its evidence event."""
+    from tenders.models import OwnerFeedbackEvent, OwnerInteraction
+
+    answer = str(answer).strip()
+    if not answer:
+        raise ValueError("Введите ответ, чтобы закрыть вопрос")
+    interaction = OwnerInteraction.objects.select_for_update().filter(
+        pk=interaction_id, tender_id=tender_id, status="open",
+    ).first()
+    if interaction is None:
+        raise ValueError("Вопрос не найден или уже закрыт")
+    OwnerFeedbackEvent.objects.create(
+        interaction=interaction, actor=user, raw_text=answer,
+        payload={"answer": answer}, scope="current_tender",
+    )
+    interaction.status = "resolved"
+    interaction.answered_at = timezone.now()
+    interaction.save(update_fields=["status", "answered_at"])
+    return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}

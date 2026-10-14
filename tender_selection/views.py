@@ -861,16 +861,12 @@ def owner_interaction_answer(request, pk, interaction_pk):
     if not answer:
         messages.error(request, "Введите ответ, чтобы закрыть вопрос.")
         return redirect(redirect_url)
-    OwnerFeedbackEvent.objects.create(
-        interaction=interaction,
-        actor=request.user,
-        raw_text=answer,
-        payload={"answer": answer},
-        scope="current_tender",
-    )
-    interaction.status = "resolved"
-    interaction.answered_at = timezone.now()
-    interaction.save(update_fields=["status", "answered_at"])
+    from .services import answer_tender_owner_question
+    try:
+        answer_tender_owner_question(request.user, tender.pk, interaction.pk, answer)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect(redirect_url)
     messages.success(request, "Ответ сохранён для этого тендера.")
     return redirect(redirect_url)
 
@@ -923,10 +919,9 @@ def _doc_by_idx(tender, idx):
 
 
 def _clear_tender_document_previews(tender):
-    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
-    urls = [doc.get("url") for doc in (card or {}).get("documents", []) if doc.get("url")]
-    if urls:
-        DocumentPreview.objects.filter(url__in=urls).delete()
+    from .services import clear_tender_document_previews
+
+    return clear_tender_document_previews(tender)
 
 
 
@@ -1080,15 +1075,22 @@ def eis_diag(request):
 def filter_settings(request):
     settings = FilterSettings.load()
     if request.method == "POST":
-        settings.include_words = request.POST.get("include_words", "").strip()
-        settings.exclude_words = request.POST.get("exclude_words", "").strip()
-        settings.profile_triage_enabled = request.POST.get("profile_triage_enabled") == "1"
-        settings.min_price = request.POST.get("min_price") or 0
-        settings.window_days = request.POST.get("window_days") or 7
-        settings.okpd2_codes = request.POST.getlist("okpd2")
-        settings.regions = [r for r in request.POST.getlist("region") if r.isdigit()]
-        settings.laws = [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"]
-        settings.save()
+        from .services import save_selection_settings
+
+        try:
+            save_selection_settings({
+                "include_words": request.POST.get("include_words", ""),
+                "exclude_words": request.POST.get("exclude_words", ""),
+                "profile_triage_enabled": request.POST.get("profile_triage_enabled") == "1",
+                "min_price": request.POST.get("min_price") or 0,
+                "window_days": request.POST.get("window_days") or 7,
+                "okpd2_codes": request.POST.getlist("okpd2"),
+                "regions": [r for r in request.POST.getlist("region") if r.isdigit()],
+                "laws": [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"],
+            })
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("tender_selection:settings")
         messages.success(request, "Настройки подбора сохранены.")
         return redirect("tender_selection:list")
 
@@ -1384,11 +1386,9 @@ def save_bid(request, pk):
 @require_POST
 def dismiss(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
-    reason = request.POST.get("reason")
-    if tender.review == Tender.UNREVIEWED and reason in dict(TenderDismissalFeedback.REASON_CHOICES):
-        TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
-    _clear_tender_document_previews(tender)
-    archive_tender(tender)
+    from .services import dismiss_tender
+
+    dismiss_tender(tender, reason=request.POST.get("reason"))
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
@@ -1402,8 +1402,9 @@ def dismiss_estimate(request, pk):
 
     estimate = get_object_or_404(TenderEstimate, pk=pk)
     tender = get_object_or_404(Tender, pk=estimate.tender_id)
-    _clear_tender_document_previews(tender)
-    archive_tender(tender)
+    from .services import dismiss_tender
+
+    dismiss_tender(tender)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return _dismiss_redirect(request)
@@ -1413,11 +1414,9 @@ def dismiss_estimate(request, pk):
 @require_POST
 def restore(request, pk):
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
-    # Со стадий расчёта и дальше — обратно на доску, а не во «Входящие».
-    tender.status = Tender.PUSHED if tender.estimates.exists() else Tender.NEW
-    tender.archived_at = None
-    tender.archived_from_stage = ""
-    tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+    from .services import restore_tender
+
+    restore_tender(tender)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(f"{reverse('tender_selection:list')}?view=kanban")
@@ -1435,14 +1434,15 @@ def restore_estimate(request, pk):
 @superuser_required
 @require_POST
 def toggle_forecast(request, pk):
+    from .services import toggle_forecast_inclusion
+
     tender = get_object_or_404(Tender, pk=pk, status=Tender.DISMISSED)
-    stat = ContractStat.objects.filter(law=tender.law, purchase_number=tender.purchase_number, own_funnel=True).first()
-    if stat is None:
-        messages.warning(request, "Результат торгов ещё не попал в статистику прогноза.")
+    try:
+        result = toggle_forecast_inclusion(tender)
+    except ValueError as exc:
+        messages.warning(request, str(exc) + ".")
     else:
-        stat.forecast_included = not stat.forecast_included
-        stat.save(update_fields=["forecast_included"])
-        messages.success(request, "Результат добавлен в прогноз." if stat.forecast_included else "Результат исключён из прогноза.")
+        messages.success(request, "Результат добавлен в прогноз." if result.forecast_included else "Результат исключён из прогноза.")
     return redirect(f"{reverse('tender_selection:detail', args=[pk])}?from=archive")
 
 

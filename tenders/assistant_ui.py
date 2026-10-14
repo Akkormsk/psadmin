@@ -2,10 +2,11 @@ import json
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.db import transaction
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .assistant_tools import available_tools
+from .assistant_tools import AssistantToolError, available_tools, execute_tool
 from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
 from .models import CounterpartyKnowledgeVersion, ProcessDefinition
 from .provider_knowledge import confirm_sewing_price_list, create_sewing_provider_draft
@@ -100,6 +101,38 @@ def conversation_message(request, conversation_id):
 
 
 @login_required
+def conversation_action_confirm(request, conversation_id, event_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    with transaction.atomic():
+        conversation = conversation_for_user(request.user, conversation_id)
+        if not conversation:
+            return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+        conversation = type(conversation).objects.select_for_update().get(pk=conversation.pk)
+        event = conversation.feedback_events.filter(pk=event_id).first()
+        payload = event.payload if event else {}
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        used = list(conversation.context.get("confirmed_action_events", []))
+        if (not event or payload.get("kind") != "confirmation_required" or event.pk in used
+                or conversation.feedback_events.filter(pk__gt=event.pk).exists()):
+            return JsonResponse({"detail": "Подтверждение недействительно, устарело или уже использовано"}, status=409)
+        used.append(event.pk)
+        conversation.context["confirmed_action_events"] = used
+        # Consume before execution under the same transaction: retries cannot
+        # issue a second write even when the client repeats a click.
+        conversation.save(update_fields=["context"])
+        if request.POST.get("accept") != "yes":
+            add_assistant_message(conversation, "Действие отменено.")
+            return JsonResponse({"messages": serialize_messages(conversation)})
+        try:
+            result = execute_tool(data["tool_id"], request.user, data.get("arguments", {}), confirmed=True)
+        except (KeyError, AssistantToolError) as exc:
+            return JsonResponse({"detail": str(exc)}, status=400)
+        add_assistant_message(conversation, "Действие выполнено.", "tool_result", {"tool_id": data["tool_id"], "result": result})
+    return JsonResponse({"messages": serialize_messages(conversation)})
+
+
+@login_required
 def conversation_sewing_upload(request, conversation_id):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required")
@@ -138,6 +171,8 @@ def conversation_sewing_confirm(request, conversation_id):
     if not conversation:
         return JsonResponse({"detail": "Беседа не найдена"}, status=404)
     version = get_object_or_404(CounterpartyKnowledgeVersion, pk=request.POST.get("version_id"))
+    if not conversation.feedback_events.filter(payload__kind="sewing_review", payload__data__version_id=version.pk).exists():
+        return JsonResponse({"detail": "Прайс не был загружен в эту беседу"}, status=403)
     try:
         confirmed, binding = confirm_sewing_price_list(version, request.user, request.POST.get("currency", ""), request.POST.get("formula_confirmed") == "yes")
     except ValueError as error:

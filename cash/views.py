@@ -17,6 +17,7 @@ from . import modulbank
 from .forms import CashReconciliationForm, CashTransactionForm
 from .models import BankPayment, BankSyncState, CashAuditLog, CashReconciliation, CashTransaction
 from .services import balance_for_date
+from .actions import CashActionError, create_transaction, delete_transaction, save_reconciliation, sync_bank, toggle_bank_payment_visibility, update_transaction
 
 BANK_WINDOW_DAYS = modulbank.WINDOW_DAYS
 
@@ -138,10 +139,12 @@ def transaction_create(request):
     prefix = f"create-{account}" if request.method == "POST" and f"create-{account}-operation_date" in request.POST else None
     form = CashTransactionForm(request.POST or None, initial={"operation_date": selected_date, "account": account}, prefix=prefix)
     if request.method == "POST" and form.is_valid():
-        transaction = form.save(commit=False)
-        transaction.created_by = request.user
-        transaction.save()
-        _write_audit(request.user, CashAuditLog.ACTION_CREATED, f"Создал операцию: {_transaction_text(_snapshot(transaction))}", transaction)
+        values = {name: form.cleaned_data[name] for name in CashTransactionForm.Meta.fields}
+        try:
+            transaction_id = create_transaction(request.user, values)["transaction_id"]
+        except CashActionError:
+            return render(request, "cash/transaction_form.html", {"form": form, "selected_date": selected_date, "title": "Новая операция"})
+        transaction = CashTransaction.objects.get(pk=transaction_id)
         messages.success(request, "Операция добавлена.")
         return redirect(_cash_url(transaction.operation_date))
     return render(request, "cash/transaction_form.html", {"form": form, "selected_date": selected_date, "title": "Новая операция"})
@@ -153,12 +156,11 @@ def transaction_update(request, pk):
     before = _snapshot(transaction)
     form = CashTransactionForm(request.POST or None, instance=transaction, prefix=f"edit-{pk}")
     if request.method == "POST" and form.is_valid():
-        transaction = form.save()
-        after = _snapshot(transaction)
-        fields = (("date", "дата"), ("account", "счёт"), ("direction", "тип"), ("amount", "сумма"), ("reason", "основание"))
-        changed = [f"{label}: {before[key]} → {after[key]}" for key, label in fields if before[key] != after[key]]
-        if changed:
-            _write_audit(request.user, CashAuditLog.ACTION_UPDATED, f"Изменил операцию #{transaction.pk}: " + "; ".join(changed), transaction)
+        values = {name: form.cleaned_data[name] for name in CashTransactionForm.Meta.fields}
+        try:
+            update_transaction(request.user, transaction.pk, values)
+        except CashActionError:
+            return render(request, "cash/transaction_form.html", {"form": form, "selected_date": transaction.operation_date, "title": "Изменить операцию", "transaction": transaction})
         messages.success(request, "Операция сохранена.")
         return redirect(_cash_url(transaction.operation_date))
     return render(request, "cash/transaction_form.html", {"form": form, "selected_date": transaction.operation_date, "title": "Изменить операцию", "transaction": transaction})
@@ -169,8 +171,7 @@ def transaction_delete(request, pk):
     transaction = get_object_or_404(CashTransaction, pk=pk)
     if request.method == "POST":
         selected_date = transaction.operation_date
-        _write_audit(request.user, CashAuditLog.ACTION_DELETED, f"Удалил операцию: {_transaction_text(_snapshot(transaction))}")
-        transaction.delete()
+        delete_transaction(request.user, transaction.pk)
         messages.success(request, "Операция удалена.")
         return redirect(_cash_url(selected_date))
     return redirect(_cash_url(transaction.operation_date))
@@ -181,18 +182,8 @@ def transaction_delete(request, pk):
 def reconcile(request):
     form = CashReconciliationForm(request.POST or None, initial={"effective_date": _selected_date(request)})
     if request.method == "POST" and form.is_valid():
-        reconciliation, created = CashReconciliation.objects.update_or_create(
-            effective_date=form.cleaned_data["effective_date"],
-            defaults={
-                "cash_balance": form.cleaned_data["cash_balance"],
-                "card_balance": form.cleaned_data["card_balance"],
-                "note": form.cleaned_data["note"],
-                "created_by": request.user,
-            },
-        )
-        note = f" {reconciliation.note}" if reconciliation.note else ""
-        action = "Создал" if created else "Обновил"
-        _write_audit(request.user, CashAuditLog.ACTION_RECONCILED, f"{action} сверку на {reconciliation.effective_date:%d.%m.%Y}: наличные {reconciliation.cash_balance:.2f} ₽, карта {reconciliation.card_balance:.2f} ₽.{note}")
+        reconciliation_data = save_reconciliation(request.user, form.cleaned_data)
+        reconciliation = CashReconciliation.objects.get(pk=reconciliation_data["reconciliation_id"])
         messages.success(request, "Сверка сохранена. Все последующие остатки теперь считаются от неё.")
         return redirect(_cash_url(reconciliation.effective_date))
     return render(request, "cash/reconcile_form.html", {"form": form, "selected_date": _selected_date(request)})
@@ -208,9 +199,8 @@ def audit_log(request):
 @require_POST
 def bank_sync_now(request):
     try:
-        touched = modulbank.sync()
-    except modulbank.ModulbankError as error:
-        modulbank.record_sync_error(str(error))
+        touched = sync_bank(request.user)["touched"]
+    except CashActionError as error:
         messages.error(request, f"Синхронизация с банком не удалась: {error}")
     else:
         messages.success(request, f"Синхронизация с банком выполнена. Обработано платежей: {touched}.")
@@ -222,10 +212,7 @@ def bank_sync_now(request):
 @require_POST
 def bank_payment_toggle(request, pk):
     payment = get_object_or_404(BankPayment, pk=pk)
-    payment.hidden_from_managers = not payment.hidden_from_managers
-    payment.save(update_fields=["hidden_from_managers"])
-    verb = "Скрыл от менеджеров" if payment.hidden_from_managers else "Показал менеджерам"
-    _write_audit(request.user, CashAuditLog.ACTION_UPDATED, f"{verb} платёж из банка на {payment.amount:.2f} ₽ от «{payment.counterparty_name}» ({payment.operation_date:%d.%m.%Y})")
+    toggle_bank_payment_visibility(request.user, payment.pk)
     messages.success(request, "Видимость платежа обновлена.")
     next_url = request.POST.get("next") or ""
     if not url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
