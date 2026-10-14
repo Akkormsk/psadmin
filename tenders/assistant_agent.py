@@ -163,7 +163,7 @@ def reply(conversation, user, message, page_context=None):
             final_text = decision.get("reply", "")
             # A registered adapter's verified rendering is authoritative on reads.
             fresh = [x for x in observations if not x.get("prior_turn")]
-            if fresh and isinstance(fresh[-1].get("result", {}), dict) and fresh[-1]["result"].get("display_text"):
+            if len(fresh) == 1 and isinstance(fresh[-1].get("result", {}), dict) and fresh[-1]["result"].get("display_text"):
                 final_text = fresh[-1]["result"]["display_text"]
             if not isinstance(final_text, str) or not final_text.strip():
                 final_text = _result_fallback(fresh, trace_id)
