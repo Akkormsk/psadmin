@@ -2,6 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import logging
+from uuid import uuid4
+
+_logger = logging.getLogger("psadmin.assistant.read")
+
+def _plan_shape(arguments):
+    """Operational trace of generated READ structure, never filter values."""
+    plan = arguments.get("plan") if isinstance(arguments, dict) else None
+    if not isinstance(plan, dict):
+        return {"plan_type": type(plan).__name__, "argument_keys": sorted(arguments) if isinstance(arguments, dict) else []}
+    return {"entity": plan.get("entity") if isinstance(plan.get("entity"), str) else None,
+            "keys": sorted(plan),
+            "fields": plan.get("fields") if isinstance(plan.get("fields"), list) and all(isinstance(v, str) for v in plan["fields"]) else "invalid-or-omitted",
+            "filter_fields": [v.get("field") for v in plan.get("filters", []) if isinstance(v, dict) and isinstance(v.get("field"), str)] if isinstance(plan.get("filters"), list) else "invalid-or-omitted",
+            "filter_ops": [v.get("op") for v in plan.get("filters", []) if isinstance(v, dict) and isinstance(v.get("op"), str)] if isinstance(plan.get("filters"), list) else "invalid-or-omitted",
+            "order_by": plan.get("order_by") if isinstance(plan.get("order_by"), str) else None,
+            "limit_type": type(plan.get("limit")).__name__, "limit": plan.get("limit") if type(plan.get("limit")) is int else None}
 
 from .assistant_tools import AssistantToolConfirmationRequired, AssistantToolError, available_tools, execute_tool, required_input_names
 from .gateway_budget import preflight, spend_rub
@@ -173,14 +190,18 @@ def reply(conversation, user, message, page_context=None):
         return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
     missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
     if identifier == "read":
+        trace_id = uuid4().hex[:10]
+        _logger.warning("READ trace=%s initial=%s", trace_id, _plan_shape(arguments))
         from .assistant_read import ReadPlanError
         for attempt in range(2):
             try:
                 result = execute_tool(identifier, user, arguments)
+                _logger.warning("READ trace=%s success attempt=%s records=%s", trace_id, attempt + 1, result.get("returned_count"))
                 break
             except (AssistantToolError, ReadPlanError, ValueError, TypeError) as exc:
+                _logger.warning("READ trace=%s rejected attempt=%s exception=%s reason=%s shape=%s", trace_id, attempt + 1, type(exc).__name__, str(exc)[:180], _plan_shape(arguments))
                 if attempt:
-                    return {"text": "Не удалось сформировать корректный запрос к данным. Попробуйте переформулировать задачу.", "kind": "tool_error", "data": {"tool_id": identifier}}
+                    return {"text": f"Не удалось сформировать корректный запрос к данным. Код диагностики: {trace_id}.", "kind": "tool_error", "data": {"tool_id": identifier, "trace_id": trace_id}}
                 correction = _request(json.dumps({
                     "task": "Repair the internal read tool arguments using the exact validation error and the allowed catalogue. Do not request technical parameters from the user. Never fabricate database results. Return the complete corrected action with arguments.plan.",
                     "request": message, "invalid_arguments": arguments,
@@ -191,6 +212,7 @@ def reply(conversation, user, message, page_context=None):
                 if not isinstance(action_retry, dict) or action_retry.get("id") != "read" or not isinstance(action_retry.get("arguments"), dict):
                     return {"text": "Не удалось сформировать корректный запрос к данным. Попробуйте переформулировать задачу.", "kind": "tool_error", "data": {"tool_id": identifier}}
                 arguments = action_retry["arguments"]
+                _logger.warning("READ trace=%s repaired_shape=%s", trace_id, _plan_shape(arguments))
         final = _request(json.dumps({
             "task": "Answer the original user request concisely using only tool_result. For a list include each requested field for every returned record. If a requested field is missing, say so rather than invent it. Avoid internal metadata and IDs unless requested.",
             "original_request": message, "tool": selected_tool, "tool_result": result, "response_schema": {"reply": "Russian text"},
