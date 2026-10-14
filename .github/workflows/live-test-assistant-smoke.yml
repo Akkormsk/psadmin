@@ -59,6 +59,32 @@ jobs:
               assert "НМЦК" in answer["text"] and "статус:" in answer["text"].lower()
               assert answer["role"] == "assistant"
               print("REAL_AI_CHAT_PASS: real model selected tool; Django returned business fields; human-readable answer present")
+              # Observe actual gateway decisions without simulating any AI response.
+              import tenders.assistant_agent as agent
+              original = agent._request
+              chosen = []
+              def inspect(prompt):
+                  response = original(prompt)
+                  action = response.get("action") if isinstance(response, dict) else None
+                  if isinstance(action, dict) and action.get("id"):
+                      chosen.append(action["id"])
+                  return response
+              agent._request = inspect
+              second = None
+              try:
+                  second = create_conversation(user, "Two real registered business reads")
+                  mixed = respond(second, user, "Покажи последние 5 входящих тендеров и отдельно перечисли доступные этапы производства.")
+                  print("MULTI_AI_TOOL_CHOICES:", ",".join(chosen))
+                  print("MULTI_AI_ANSWER_LENGTH:", len(mixed[-1].get("text","")))
+                  assert "tender.list" in chosen, "AI did not select tender list in combined task"
+                  assert "process.list" in chosen, "AI did not select production stages in combined task"
+                  assert mixed[-1]["text"].strip(), "AI produced no combined final reply"
+                  print("REAL_MULTI_TOOL_PASS: real AI selected and executed two business reads in one turn")
+              finally:
+                  agent._request = original
+                  if second is not None:
+                      second.feedback_events.all().delete()
+                      second.delete()
           finally:
               if conversation is not None:
                   conversation.feedback_events.all().delete()
