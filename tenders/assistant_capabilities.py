@@ -1,7 +1,7 @@
 """Published production knowledge capabilities using existing UI services."""
 from .assistant_tools import AssistantTool, AssistantToolError, register_tool
 from .models import CounterpartyKnowledgeVersion, Proposal
-from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge
+from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
 from .production_actions import deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback
@@ -38,6 +38,13 @@ def calculate_counterparty(user, payload):
     try:
         return calculate_provider_binding(user, payload["binding_id"], payload["parameters"])
     except ProviderCalculatorError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def remove_counterparty_knowledge_action(user, payload):
+    try:
+        return remove_counterparty_knowledge(user, counterparty_id=payload["counterparty_id"], version_id=payload["knowledge_version_id"])
+    except ValueError as exc:
         raise AssistantToolError(str(exc)) from exc
 
 
@@ -91,6 +98,11 @@ register_tool(AssistantTool(
     "Принимает проверенную версию знаний/прайса; выполняет штатную замену прежней версии. Неподтверждённые условия прайса запрещены.",
     {"version_id": "integer", "note": "string?"}, False, True, True,
     confirm_provider_knowledge, source="tenders.provider_knowledge.confirm_knowledge",
+))
+register_tool(AssistantTool(
+    "provider.knowledge_remove", "Удалить черновик или скрыть устаревшие знания контрагента", "Использует действие карточки контрагента; действующий подтверждённый прайс удалить нельзя.",
+    {"counterparty_id": "integer", "knowledge_version_id": "integer"}, False, True, True,
+    remove_counterparty_knowledge_action, source="tenders.provider_knowledge.remove_counterparty_knowledge",
 ))
 register_tool(AssistantTool(
     "provider.calculator_run", "Рассчитать у контрагента", "Вызывает выбранный действующий калькулятор контрагента тем же исполнителем, что страница его калькулятора.",

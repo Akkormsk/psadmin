@@ -45,6 +45,20 @@ def create_counterparty_with_knowledge(user, *, name, stage_ids, source_text="",
     return {"counterparty_id": provider.pk, "knowledge_version_id": draft.pk}
 
 
+def remove_counterparty_knowledge(user, *, counterparty_id, version_id):
+    version = CounterpartyKnowledgeVersion.objects.filter(pk=version_id, counterparty_id=counterparty_id).first()
+    if version is None:
+        raise ValueError("Версия знаний не найдена")
+    if version.status == CounterpartyKnowledgeVersion.STATUS_DRAFT:
+        version.delete()
+        return {"knowledge_version_id": version_id, "deleted": True}
+    if version.status in {CounterpartyKnowledgeVersion.STATUS_SUPERSEDED, CounterpartyKnowledgeVersion.STATUS_INACTIVE}:
+        version.source_metadata = {**version.source_metadata, "hidden": True}
+        version.save(update_fields=["source_metadata"])
+        return {"knowledge_version_id": version.pk, "hidden": True}
+    raise ValueError("Активный прайс нельзя удалить: сначала подтвердите новый")
+
+
 def create_knowledge_draft(counterparty, user, canonical_data, staging=None, stage=None, metadata=None):
     number = CounterpartyKnowledgeVersion.objects.filter(counterparty=counterparty, stage=stage).count() + 1
     return CounterpartyKnowledgeVersion.objects.create(counterparty=counterparty, stage=stage, staging=staging, version_number=number, canonical_data=canonical_data, source_metadata=metadata or {}, created_by=user)

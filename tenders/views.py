@@ -29,7 +29,7 @@ from openpyxl import load_workbook
 
 from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, CounterpartyKnowledgeVersion, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, ProviderCalculatorBinding
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding, get_provider_calculator_schema
-from .provider_knowledge import confirm_knowledge, create_counterparty_with_knowledge
+from .provider_knowledge import confirm_knowledge, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
@@ -115,14 +115,10 @@ def provider_workspace(request, provider_id):
     remove_version_id = request.POST.get("remove_version_id") if request.method == "POST" else None
     remove_error = None
     if remove_version_id:
-        version = get_object_or_404(CounterpartyKnowledgeVersion, pk=remove_version_id, counterparty=provider)
-        if version.status == CounterpartyKnowledgeVersion.STATUS_DRAFT:
-            version.delete()
-        elif version.status in {CounterpartyKnowledgeVersion.STATUS_SUPERSEDED, CounterpartyKnowledgeVersion.STATUS_INACTIVE}:
-            version.source_metadata = {**version.source_metadata, "hidden": True}
-            version.save(update_fields=["source_metadata"])
-        else:
-            remove_error = "Активный прайс нельзя удалить: сначала подтвердите новый."
+        try:
+            remove_counterparty_knowledge(request.user, counterparty_id=provider.pk, version_id=remove_version_id)
+        except ValueError as exc:
+            remove_error = str(exc)
     raw_binding_id = request.POST.get("binding_id") if request.method == "POST" else request.GET.get("binding_id")
     binding_id = int(raw_binding_id) if str(raw_binding_id or "").isdigit() else None
     tab = request.POST.get("tab", "calculator") if request.method == "POST" else request.GET.get("tab", "overview")
