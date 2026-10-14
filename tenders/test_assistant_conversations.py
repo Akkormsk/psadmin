@@ -119,6 +119,36 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_promised_database_fetch_is_completed_in_same_turn(self, request, _preflight):
+        from tender_selection.models import Tender
+        tender = Tender.objects.create(purchase_number="READ-SAME-TURN", title="Полиграфия")
+        def response(prompt):
+            payload = json.loads(prompt)
+            if "previous_reply" in payload:
+                return {"reply": "Читаю данные.", "action": {"id": "read", "arguments": {
+                    "plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "title"], "limit": 5, "order_by": "-id"}
+                }}}
+            if "tool_result" in payload:
+                self.assertEqual(payload["original_request"], "Покажи последние 5 тендеров")
+                self.assertEqual(payload["tool_result"]["records"][0]["purchase_number"], tender.purchase_number)
+                return {"reply": "READ-SAME-TURN — Полиграфия"}
+            return {"reply": "Сейчас получу данные.", "action": None}
+        request.side_effect = response
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ same turn"}, secure=True).json()["conversation"]["id"]
+        result = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Покажи последние 5 тендеров"}), content_type="application/json", secure=True).json()["messages"][-1]
+        self.assertEqual(result["kind"], "tool_result")
+        self.assertIn("READ-SAME-TURN", result["text"])
+        self.assertEqual(request.call_count, 3)
+
+    def test_read_result_is_not_rendered_as_raw_debug_output(self):
+        from pathlib import Path
+        from django.conf import settings
+        template = (Path(settings.BASE_DIR) / "templates" / "base.html").read_text(encoding="utf-8")
+        self.assertIn('item.data.tool_id !== "read"', template)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
         request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
