@@ -112,6 +112,7 @@ def list_tenders(_user, payload):
             "Оценка" if tender.status == Tender.NEW else tender.get_status_display()
         )
         items.append({
+            "tender_id": tender.pk,  # Business handle for confirmed ACTION tools; never shown as a column.
             "number": tender.purchase_number or "Не указан",
             "name": tender.title or tender.object_info or "Без названия",
             "maximum_price": str(tender.max_price) if tender.max_price is not None else None,
