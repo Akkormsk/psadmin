@@ -1,0 +1,44 @@
+name: Verify removal of scenario-specific tool on TEST
+on:
+  push:
+    branches: [ops/test-read-diagnostics]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: SSH setup
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Real TEST Django registry verification
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "deploy@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          grep -q '7480fafdae9c8ad6f23fef08dd95c645a14df10f' /home/deploy/psadmin-test/.twin-version
+          docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml exec -T test-web python manage.py shell <<'PY'
+          from django.contrib.auth import get_user_model
+          from tenders.assistant_tools import available_tools
+          user = get_user_model()(username="verification_only", is_superuser=True, is_staff=True)
+          tool_ids = {item["id"] for item in available_tools(user)}
+          assert "tender.list" not in tool_ids, "Hardcoded tender.list is still registered!"
+          assert "read" in tool_ids, "Previous universal READ was not restored!"
+          from tender_selection import assistant_capabilities
+          assert not hasattr(assistant_capabilities, "list_tenders")
+          print("REMOVAL_VERIFIED: tender.list and list_tenders absent in actual TEST Django")
+          print("READ_RESTORED: generic read registered in actual TEST Django")
+          PY
+          REMOTE
