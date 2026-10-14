@@ -1,0 +1,47 @@
+name: Inspect TEST READ trace (no deploy)
+on:
+  workflow_dispatch:
+    inputs:
+      trace_id:
+        description: "10 lowercase hex characters from TEST assistant error"
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+      TRACE_ID: ${{ inputs.trace_id }}
+    steps:
+      - name: Validate trace code
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TRACE_ID" =~ ^[0-9a-f]{10}$ ]] || { echo "::error::Invalid trace code"; exit 2; }
+      - name: Configure strict SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Read matching TEST logs only
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "deploy@$SSH_HOST" "bash -s -- '$TRACE_ID'" <<'REMOTE'
+          set -euo pipefail
+          trace="$1"
+          [[ "$trace" =~ ^[0-9a-f]{10}$ ]] || exit 2
+          docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml logs --no-color --since 48h test-web 2>&1 \
+            | grep -F "READ trace=$trace " | tail -n 20 || true
+          REMOTE
