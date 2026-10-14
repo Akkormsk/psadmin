@@ -35,7 +35,7 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Read matching TEST logs only
+      - name: Read recent TEST HTTP errors and traceback signatures
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +45,6 @@ jobs:
           set -euo pipefail
           trace="$1"
           [[ "$trace" =~ ^[0-9a-f]{10}$ ]] || exit 2
-          docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml logs --no-color --since 48h test-web 2>&1 \
-            | grep -F "READ trace=$trace " | tail -n 20 || true
+          docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml logs --no-color --since 35m test-web 2>&1 \
+            | grep -E "READ trace=|Internal Server Error|Traceback|^.*Error:|^.*Exception:|  File |POST /tenders/assistant/conversations/|Bad Request" | tail -n 100 || true
           REMOTE
