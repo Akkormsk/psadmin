@@ -104,6 +104,22 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(result["dropped"])
         self.assertFalse(RequirementSkipRule.objects.get(label_normalized="формат").is_active)
 
+    def test_stage_proposal_confirmation_uses_the_shared_route_executor(self):
+        from .models import ProductionTrainingSession
+
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.admin, position_name="Папка", requirements={},
+            current_hypothesis={"stage_proposals": [{
+                "id": "assembly", "name": "Сборка", "description": "Собрать изделие", "role": "production",
+            }]},
+        )
+        result = execute_tool("production.stage_proposal_confirm", self.admin, {
+            "session_id": session.pk, "proposal_id": "assembly",
+        }, confirmed=True)
+
+        self.assertTrue(result["route_refresh_required"])
+        self.assertTrue(ProcessDefinition.objects.filter(name="Сборка").exists())
+
     def test_financial_period_lock_is_shared_and_requires_confirmation(self):
         from finance.models import FinancialPeriod
         args = {"period": "2026-10", "closed": True}

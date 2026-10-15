@@ -34,7 +34,7 @@ from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
-from .production_actions import activate_cascade_lab_settings, restore_requirement_to_route, save_cascade_lab_preset
+from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage as confirm_route_stage, restore_requirement_to_route, save_cascade_lab_preset
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items, refresh_training_example_embedding
 
@@ -1030,37 +1030,10 @@ def confirm_proposed_stage(request):
         return JsonResponse({"error": "Создавать этапы может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.select_for_update().get(
-            pk=payload.get("session_id"), created_by=request.user, is_confirmed=False,
-        )
-        proposal_id = str(payload.get("proposal_id", "")).strip()
-        hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-        proposals = hypothesis.get("stage_proposals", [])
-        proposed = next((item for item in proposals if isinstance(item, dict) and item.get("id") == proposal_id), None)
-        if not isinstance(proposed, dict):
-            raise ValueError
+        result = confirm_route_stage(request.user, payload.get("session_id"), str(payload.get("proposal_id", "")).strip())
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Этап не найден или маршрут устарел. Обновите расчёт."}, status=400)
-
-    role = proposed.get("role")
-    stage_payload = {
-        "name": proposed.get("name"),
-        "description": proposed.get("description", ""),
-        "supplies_input": role == "supply",
-        "performs_production": role == "production",
-        "terminal_mode": "always" if role == "completion" else "sometimes",
-    }
-    proposal = Proposal.objects.create(
-        type=Proposal.TYPE_CREATE_STAGE, payload=stage_payload,
-        summary=f"Новый этап «{stage_payload['name']}» — предложен из маршрута", created_by=request.user,
-    )
-    apply_proposal(proposal, request.user)
-    stage = ProcessDefinition.objects.get(name=stage_payload["name"])
-
-    hypothesis["stage_proposals"] = [item for item in proposals if item.get("id") != proposal_id]
-    session.current_hypothesis = hypothesis
-    session.save(update_fields=["current_hypothesis", "updated_at"])
-    return JsonResponse({**hypothesis, "session_id": session.pk, "route_refresh_required": True})
+    return JsonResponse(result)
 
 
 @login_required

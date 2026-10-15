@@ -4,7 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
-from .production_actions import activate_cascade_lab_settings, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback, restore_requirement_to_route, save_cascade_lab_preset
+from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback, restore_requirement_to_route, save_cascade_lab_preset
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
 
 
@@ -254,6 +254,13 @@ register_tool(AssistantTool(
     {"label": "string"}, False, True, True,
     lambda user, payload: restore_requirement_to_route(user, payload["label"]),
     source="tenders.production_actions.restore_requirement_to_route",
+))
+register_tool(AssistantTool(
+    "production.stage_proposal_confirm", "Добавить предложенный этап производства",
+    "Подтверждает один предложенный этап маршрута; затем маршрут нужно пересчитать, как и после нажатия кнопки на сайте.",
+    {"session_id": "integer", "proposal_id": "string"}, False, True, True,
+    lambda user, payload: confirm_proposed_stage(user, payload["session_id"], payload["proposal_id"]),
+    source="tenders.production_actions.confirm_proposed_stage",
 ))
 
 def save_business_estimate(user, payload):

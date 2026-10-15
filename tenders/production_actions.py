@@ -2,7 +2,7 @@
 from django.db import transaction
 
 from .cascade_settings import text_search_settings
-from .models import CascadeConfigVersion, CascadeLabPreset, Lesson, ProductionTrainingExample, Proposal, Counterparty, ProcessDefinition, RequirementSkipRule, TenderKnowledgeSource
+from .models import CascadeConfigVersion, CascadeLabPreset, Lesson, ProductionTrainingExample, ProductionTrainingSession, Proposal, Counterparty, ProcessDefinition, RequirementSkipRule, TenderKnowledgeSource
 from .proposals import apply_proposal
 
 
@@ -45,6 +45,37 @@ def restore_requirement_to_route(user, label):
         raise ValueError("Не удалось определить строку ТЗ.")
     removed = RequirementSkipRule.objects.filter(label_normalized=label_normalized).update(is_active=False)
     return {"dropped": bool(removed)}
+
+
+@transaction.atomic
+def confirm_proposed_stage(user, session_id, proposal_id):
+    """Create one approved route stage, exactly as the route panel does."""
+    _require_admin(user)
+    session = ProductionTrainingSession.objects.select_for_update().filter(
+        pk=session_id, created_by=user, is_confirmed=False,
+    ).first()
+    if session is None:
+        raise ValueError("Этап не найден или маршрут устарел. Обновите расчёт.")
+    hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
+    proposals = hypothesis.get("stage_proposals", [])
+    proposed = next((item for item in proposals if isinstance(item, dict) and item.get("id") == proposal_id), None)
+    if not isinstance(proposed, dict):
+        raise ValueError("Этап не найден или маршрут устарел. Обновите расчёт.")
+    role = proposed.get("role")
+    stage_payload = {
+        "name": proposed.get("name"), "description": proposed.get("description", ""),
+        "supplies_input": role == "supply", "performs_production": role == "production",
+        "terminal_mode": "always" if role == "completion" else "sometimes",
+    }
+    proposal = Proposal.objects.create(
+        type=Proposal.TYPE_CREATE_STAGE, payload=stage_payload,
+        summary=f"Новый этап «{stage_payload['name']}» — предложен из маршрута", created_by=user,
+    )
+    apply_proposal(proposal, user)
+    hypothesis["stage_proposals"] = [item for item in proposals if item.get("id") != proposal_id]
+    session.current_hypothesis = hypothesis
+    session.save(update_fields=["current_hypothesis", "updated_at"])
+    return {**hypothesis, "session_id": session.pk, "route_refresh_required": True}
 
 
 def deactivate_lesson(lesson_id):
