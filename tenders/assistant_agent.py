@@ -130,7 +130,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
     return result
 
 
-def _validate_plan_steps(plan, tools, user):
+def _validate_plan_steps(plan, tools):
     if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
         raise TenderAIError("Ассистент не сформировал корректный план.")
     status = plan.get("status")
@@ -167,13 +167,6 @@ def _validate_plan_steps(plan, tools, user):
             source = value["from"]
             if source != "user" and source not in known_ids:
                 raise TenderAIError("Шаг плана ссылается на ещё не полученный результат.")
-        if identifier == "read" and all(value["from"] == "user" for value in step["inputs"]):
-            from .assistant_read import ReadPlanError, validate_plan
-
-            try:
-                validate_plan(user, step["arguments"].get("plan"))
-            except ReadPlanError as exc:
-                raise TenderAIError(f"Шаг чтения ссылается на неверные данные: {exc}") from exc
         known_ids.add(step_id)
         validated.append(step)
     return validated
@@ -232,7 +225,7 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
     )
     preflight()
     plan = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
-    steps = _validate_plan_steps(plan, tools, user)
+    steps = _validate_plan_steps(plan, tools)
     if plan["status"] == "needs_input":
         return {"text": plan["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
     _finish_state(conversation)
