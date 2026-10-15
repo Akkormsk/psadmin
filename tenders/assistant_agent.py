@@ -61,6 +61,9 @@ def _run_state(conversation, message):
     state.setdefault("results", [])
     if not isinstance(state["results"], list):
         state["results"] = []
+    state.setdefault("errors", [])
+    if not isinstance(state["errors"], list):
+        state["errors"] = []
     return state
 
 
@@ -92,6 +95,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "If required information is absent, return status needs_input and one concise Russian question. "
                 "If the result is complete, return status final and explain it using only completed_step_results. "
                 "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
+                "If execution_errors is non-empty, correct the rejected step using its exact backend reason; do not use a failed result as input or finish successfully. "
                 "Return valid JSON matching response_schema."
             ),
             "registered_tools": _tool_catalogue(tools),
@@ -111,6 +115,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "execution_plan": state.get("plan", []),
             "latest_user_message": message,
             "completed_step_results": state["results"],
+            "execution_errors": state.get("errors", [])[-3:],
             "response_schema": {
                 "reply": "concise Russian text",
                 "status": "next|needs_input|final|cancel",
@@ -352,26 +357,32 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                 raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
             _finish_state(conversation)
             return {"text": decision["reply"].strip(), "kind": "tool_result", "data": {"steps": state["results"]}}
-        if identifier == "compute":
-            result = _compute(arguments, state["results"])
-        else:
-            tool = next(item for item in tools if item["id"] == identifier)
-            missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
-            if missing:
-                _save_state(conversation, state)
-                return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
-            if tool["requires_confirmation"]:
-                state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
-                _save_state(conversation, state)
-                return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
-            try:
+        try:
+            if identifier == "compute":
+                result = _compute(arguments, state["results"])
+            else:
+                tool = next(item for item in tools if item["id"] == identifier)
+                missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
+                if missing:
+                    _save_state(conversation, state)
+                    return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
+                if tool["requires_confirmation"]:
+                    state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
+                    _save_state(conversation, state)
+                    return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
                 result = execute_tool(identifier, user, arguments)
-            except AssistantToolError as exc:
-                raise TenderAIError(str(exc)) from exc
+        except (AssistantToolError, TenderAIError) as exc:
+            state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
+            _save_state(conversation, state)
+            message, attachments, image_data_urls = "", [], None
+            continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
+        state["errors"] = []
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
-    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.")
+    errors = state.get("errors", [])
+    suffix = f" Последняя причина: {errors[-1]['error']}" if errors else ""
+    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.{suffix}")
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):

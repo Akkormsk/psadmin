@@ -178,6 +178,43 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_corrects_a_rejected_read_before_returning_to_user(self, request, _preflight):
+        request.side_effect = [
+            self._plan([{
+                "id": "read_tenders", "tool_id": "read", "purpose": "Прочитать тендеры",
+                "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"]}},
+                "inputs": [{"from": "user", "value": "тендеры"}], "outputs": ["тендеры"],
+            }]),
+            {
+                "reply": "Читаю тендеры.", "status": "next", "basis": "user_supplied",
+                "next_step": {
+                    "tool_id": "read", "purpose": "Прочитать тендеры",
+                    "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["unknown_field"], "filters": [], "order_by": "-id", "limit": 20}},
+                },
+            },
+            {
+                "reply": "Исправляю чтение.", "status": "next", "basis": "user_supplied",
+                "next_step": {
+                    "tool_id": "read", "purpose": "Прочитать тендеры",
+                    "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"], "filters": [], "order_by": "-id", "limit": 20}},
+                },
+            },
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Покажи тендеры"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["text"], "Готово.")
+        self.assertEqual(request.call_count, 4)
+        correction_prompt = json.loads(request.call_args_list[2].args[0])
+        self.assertEqual(correction_prompt["execution_errors"][0]["error"], "Запрошены недоступные поля")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_action_in_plan_does_not_change_data(self, request, _preflight):
         from cash.models import CashTransaction
 
