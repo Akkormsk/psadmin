@@ -19,7 +19,7 @@ from django.db.models import Q
 import os
 
 from . import gosplan
-from .documents import DocumentError, extract_preview, fetch_document
+from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
 
@@ -435,13 +435,68 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
             raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
 
 
-def _store_preview(url, name, data: bytes) -> str:
+def store_document_preview(url, name, data: bytes) -> dict:
+    """Run the site's document parser and persist its preview cache once."""
     result = extract_preview(data, name)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),
     })
-    return result.get("html", "")
+    return result
+
+
+def _store_preview(url, name, data: bytes) -> str:
+    return store_document_preview(url, name, data).get("html", "")
+
+
+def _tender_document(user, tender_id, document_index):
+    """Resolve one visible tender attachment under the same access rule as its screen."""
+    _require_tender_admin(user)
+    if not isinstance(document_index, int) or isinstance(document_index, bool):
+        raise ValueError("Неверный номер документа")
+    tender = Tender.objects.filter(pk=tender_id).first()
+    if tender is None:
+        raise ValueError("Тендер не найден")
+    from .notification import parse_notification
+
+    documents = parse_notification(tender.notification_raw).get("documents", []) if tender.notification_raw else []
+    if not 0 <= document_index < len(documents):
+        raise ValueError("Документ не найден")
+    document = documents[document_index]
+    url, name = str(document.get("url", "")), str(document.get("name", ""))
+    if not url or not name:
+        raise ValueError("Документ не содержит ссылки или имени")
+    return tender, url, name
+
+
+def _document_result(name, result):
+    return {
+        "name": name, "kind": result.get("kind", ""), "html": result.get("html", ""),
+        "error": result.get("error", ""), "zip_entries": result.get("zip_entries", []),
+    }
+
+
+def preview_tender_document(user, tender_id, document_index, *, refresh=False):
+    """Use the same fetch, parse and cache workflow as the tender document button."""
+    tender, url, name = _tender_document(user, tender_id, document_index)
+    cached = DocumentPreview.objects.filter(url=url).first()
+    if cached and not refresh:
+        return _document_result(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
+    try:
+        result = store_document_preview(url, name, _fetch_doc_bytes(tender, url, name))
+    except DocumentError as exc:
+        return _document_result(name, {"error": str(exc)})
+    return _document_result(name, result)
+
+
+def upload_tender_document_preview(user, tender_id, document_index, content):
+    """Parse a manually supplied replacement file for an existing tender attachment."""
+    _tender, url, name = _tender_document(user, tender_id, document_index)
+    if not isinstance(content, bytes) or not content:
+        raise ValueError("Файл не выбран")
+    if len(content) > MAX_BYTES:
+        raise ValueError("Файл слишком большой для предпросмотра")
+    return _document_result(name, store_document_preview(url, name, content))
 
 
 def document_html(tender, url, name, **fetch_kwargs) -> str:

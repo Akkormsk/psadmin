@@ -15,19 +15,19 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
-from .documents import MAX_BYTES, DocumentError, extract_preview, extract_zip_entry
+from .documents import DocumentError, extract_preview, extract_zip_entry
 from .filtering import match_title, parse_terms
-from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender, TenderDismissalFeedback
+from .models import ContractStat, FilterSettings, Organization, PullRun, Tender, TenderDismissalFeedback
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
 from .services import (
-    CATEGORY_GROUPS, _fetch_doc_bytes, reduction_percent_from, effective_laws, effective_okpd2, enrich_one_org,
+    CATEGORY_GROUPS, _fetch_doc_bytes, preview_tender_document, reduction_percent_from, effective_laws, effective_okpd2, enrich_one_org,
     extras_for, extras_need_refresh, notification_for, archive_tender, archive_stage_for, risk_assessment_for,
     start_extras_refresh_in_background, EVALUATION_NUMBERS, RISK_FACTOR_LABELS, RISK_LEVEL_CHOICES,
     _TENDER_SETTINGS_FIELDS, evaluation_settings_form, save_evaluation_settings,
     change_forecast_inclusion, create_tender_estimate, hide_tender, restore_hidden_tender, save_tender_bid,
     update_tender_review, apply_filter_word_audit, pull_tenders_now, record_tender_outcome, run_filter_word_audit, run_profile_triage,
-    decide_document_proposals,
+    decide_document_proposals, upload_tender_document_preview,
 )
 from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
@@ -929,27 +929,11 @@ def _result_json(name, result):
 @tender_viewer_required
 def doc_preview(request, pk, idx):
     tender = get_object_or_404(Tender, pk=pk)
-    doc, err = _doc_by_idx(tender, idx)
-    if err:
-        return err
-    url, name = doc.get("url", ""), doc.get("name", "")
-
-    cached = DocumentPreview.objects.filter(url=url).first()
-    if cached and request.GET.get("refresh") != "1":
-        return _result_json(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
-
     try:
-        data = _fetch_doc_bytes(tender, url, name)
-    except DocumentError as exc:
-        # сетевые сбои не кэшируем — на проде повтор может пройти
-        return _result_json(name, {"error": str(exc)})
-
-    result = extract_preview(data, name)
-    DocumentPreview.objects.update_or_create(url=url, defaults={
-        "filename": name, "kind": result.get("kind", ""),
-        "html": result.get("html", ""), "error": result.get("error", ""),
-    })
-    return _result_json(name, result)
+        result = preview_tender_document(request.user, tender.pk, idx, refresh=request.GET.get("refresh") == "1")
+    except ValueError as exc:
+        return _result_json("", {"error": str(exc)})
+    return _result_json(result["name"], result)
 
 
 @tender_viewer_required
@@ -959,23 +943,14 @@ def doc_upload(request, pk, idx):
     пользователь скачивает файл сам и загружает сюда, дальше тот же разбор
     (extract_preview), что и при автоскачивании."""
     tender = get_object_or_404(Tender, pk=pk)
-    doc, err = _doc_by_idx(tender, idx)
-    if err:
-        return err
-    url, name = doc.get("url", ""), doc.get("name", "")
-
     uploaded = request.FILES.get("file")
-    if not uploaded:
-        return _result_json(name, {"error": "Файл не выбран."})
-    if uploaded.size > MAX_BYTES:
-        return _result_json(name, {"error": "Файл слишком большой для предпросмотра."})
-
-    result = extract_preview(uploaded.read(), name)
-    DocumentPreview.objects.update_or_create(url=url, defaults={
-        "filename": name, "kind": result.get("kind", ""),
-        "html": result.get("html", ""), "error": result.get("error", ""),
-    })
-    return _result_json(name, result)
+    try:
+        result = upload_tender_document_preview(
+            request.user, tender.pk, idx, uploaded.read() if uploaded else b"",
+        )
+    except ValueError as exc:
+        return _result_json("", {"error": str(exc)})
+    return _result_json(result["name"], result)
 
 
 @tender_viewer_required

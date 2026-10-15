@@ -148,6 +148,40 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(ProductionTrainingExample.objects.get(pk=result["example_id"]).position_name, "Тестовая папка")
 
+    def test_start_evaluation_is_a_fixed_high_level_tender_action(self):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(purchase_number="assistant-review")
+        from unittest.mock import patch
+        with patch("tender_selection.services.start_risk_assessment_in_background"):
+            result = execute_tool("tender.start_evaluation", self.admin, {
+                "tender_id": tender.pk,
+            }, confirmed=True)
+
+        tender.refresh_from_db()
+        self.assertEqual(result["review"], Tender.INTERESTING)
+        self.assertEqual(tender.review, Tender.INTERESTING)
+
+    def test_document_preview_is_available_through_the_shared_executor(self):
+        from unittest.mock import patch
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(
+            purchase_number="assistant-document",
+            notification_raw={"source": {"attachmentsInfo": {"attachmentInfo": [{
+                "url": "https://zakupki.gov.ru/contract", "fileName": "Контракт.docx",
+                "docKindInfo": {"name": "Проект контракта"},
+            }]}}},
+        )
+        with patch("tender_selection.services._fetch_doc_bytes", return_value=b"raw"), \
+                patch("tender_selection.services.extract_preview", return_value={"kind": "docx", "html": "<p>контракт</p>"}):
+            result = execute_tool("tender.document_preview", self.admin, {
+                "tender_id": tender.pk, "document_index": 0,
+            })
+
+        self.assertEqual(result["name"], "Контракт.docx")
+        self.assertEqual(result["html"], "<p>контракт</p>")
+
     def test_stage_proposal_confirmation_uses_the_shared_route_executor(self):
         from .models import ProductionTrainingSession
 

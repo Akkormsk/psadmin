@@ -4,7 +4,8 @@ from tenders.assistant_tools import AssistantTool, AssistantToolError, register_
 from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     apply_filter_word_audit, decide_document_proposals, pull_tenders_now, run_filter_word_audit, run_profile_triage,
-    record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid,
+    preview_tender_document, record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid,
+    update_tender_review,
 )
 
 
@@ -41,6 +42,24 @@ def _tender_action(call, user, payload, *names):
 def _hide_tender(user, payload):
     try:
         return hide_tender(user, payload["tender_id"], reason=payload.get("reason"))
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _start_evaluation(user, payload):
+    from .models import Tender
+
+    return _tender_action(update_tender_review, user, {
+        "tender_id": payload["tender_id"], "review": Tender.INTERESTING,
+    }, "tender_id", "review")
+
+
+def _preview_tender_document(user, payload):
+    try:
+        return preview_tender_document(
+            user, payload["tender_id"], payload["document_index"],
+            refresh=payload.get("refresh", False),
+        )
     except ValueError as exc:
         raise AssistantToolError(str(exc)) from exc
 
@@ -115,6 +134,18 @@ register_tool(AssistantTool(
     "tender.hide", "Скрыть неподходящий тендер", "Архивирует тендер тем же исполнителем, что кнопка интерфейса, и сохраняет причину для входящего тендера.",
     {"tender_id": "integer", "reason": "string?"}, False, True, True, _hide_tender,
     source="tender_selection.services.hide_tender",
+))
+register_tool(AssistantTool(
+    "tender.start_evaluation", "Взять тендер в работу",
+    "Точно повторяет кнопку «В работу»: переводит входящий тендер на оценку и запускает штатную фоновую оценку рисков. Не даёт произвольно менять технический статус.",
+    {"tender_id": "integer"}, False, True, True, _start_evaluation,
+    source="tender_selection.services.update_tender_review",
+))
+register_tool(AssistantTool(
+    "tender.document_preview", "Разобрать документ тендера",
+    "Получает документ существующего тендера из ЕИС или кэша и возвращает его проверяемый разбор тем же исполнителем, что кнопка просмотра документа.",
+    {"tender_id": "integer", "document_index": "integer", "refresh": "boolean?"}, True, False, True,
+    _preview_tender_document, source="tender_selection.services.preview_tender_document",
 ))
 register_tool(AssistantTool(
     "tender.forecast_toggle", "Включить или исключить тендер из прогноза", "Переключает существующую запись статистики тем же правилом, что архив тендеров.",

@@ -4,6 +4,9 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.urls import reverse
 from django.utils import timezone
 
 from . import documents, services
@@ -48,6 +51,39 @@ class DocumentHtmlTests(TestCase):
 
         self.assertEqual(html, "<p>текст</p>")
         self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).html, "<p>текст</p>")
+
+
+class TenderDocumentExecutorTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_superuser("document-admin", "document@example.test", "password")
+        self.tender = Tender.objects.create(purchase_number="executor-1", notification_raw=_notification())
+
+    def test_manual_upload_uses_shared_tender_document_executor(self):
+        with patch.object(services, "extract_preview", return_value={"kind": "docx", "html": "<p>из файла</p>"}):
+            result = services.upload_tender_document_preview(self.admin, self.tender.pk, 1, b"raw")
+
+        self.assertEqual(result["name"], "Проект контракта.docx")
+        self.assertEqual(result["html"], "<p>из файла</p>")
+        self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).html, "<p>из файла</p>")
+
+    def test_remote_preview_uses_shared_tender_document_executor(self):
+        with patch.object(services, "_fetch_doc_bytes", return_value=b"raw"), \
+                patch.object(services, "extract_preview", return_value={"kind": "docx", "html": "<p>из ЕИС</p>"}):
+            result = services.preview_tender_document(self.admin, self.tender.pk, 1)
+
+        self.assertEqual(result["name"], "Проект контракта.docx")
+        self.assertEqual(result["html"], "<p>из ЕИС</p>")
+
+    def test_document_screen_upload_uses_the_same_executor(self):
+        self.client.force_login(self.admin)
+        with patch.object(services, "extract_preview", return_value={"kind": "docx", "html": "<p>из экрана</p>"}):
+            response = self.client.post(
+                reverse("tender_selection:doc_upload", args=[self.tender.pk, 1]),
+                {"file": SimpleUploadedFile("contract.docx", b"raw")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["html"], "<p>из экрана</p>")
 
     def test_stale_zip_preview_is_reparsed(self):
         DocumentPreview.objects.create(url=CONTRACT_URL, filename="Проект контракта.doc.zip", kind="zip", html="<p>Архив</p>")
