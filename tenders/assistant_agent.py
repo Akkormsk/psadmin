@@ -8,6 +8,9 @@ from .gateway_budget import preflight, spend_rub
 from .services import TenderAIError, _ai_gateway_json
 
 
+MAX_PLAN_STEPS = 20
+
+
 # 2026-10-13: Раньше брались первые 20 событий, поэтому новые сообщения терялись.
 # Прежняя реализация (оставлена для истории):
 # def _history(conversation):
@@ -52,6 +55,54 @@ def _planning_tools(tools, user):
     return prepared
 
 
+def _validated_plan(raw_plan, tools):
+    if not isinstance(raw_plan, dict):
+        raise TenderAIError("Ассистент не сформировал структурированный план.")
+    raw_steps = raw_plan.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps or len(raw_steps) > MAX_PLAN_STEPS:
+        raise TenderAIError(f"План должен содержать от 1 до {MAX_PLAN_STEPS} шагов.")
+    known_tools = {tool["id"]: tool for tool in tools}
+    steps = []
+    for number, raw_step in enumerate(raw_steps, start=1):
+        if not isinstance(raw_step, dict):
+            raise TenderAIError("В плане есть некорректный шаг.")
+        tool_id = raw_step.get("tool_id")
+        arguments = raw_step.get("arguments", {})
+        purpose = raw_step.get("purpose", "")
+        dependencies = raw_step.get("depends_on", [])
+        tool = known_tools.get(tool_id)
+        if tool is None:
+            raise TenderAIError("План ссылается на отсутствующую возможность PSADMIN.")
+        if not tool["available"]:
+            raise TenderAIError("План содержит действие, недоступное текущему пользователю.")
+        if not isinstance(arguments, dict) or not isinstance(purpose, str) or not isinstance(dependencies, list):
+            raise TenderAIError("В плане указаны некорректные параметры шага.")
+        if not all(isinstance(item, int) and 0 < item < number for item in dependencies):
+            raise TenderAIError("Шаг плана может зависеть только от предыдущих шагов.")
+        missing = [name for name in required_input_names(tool_id) if arguments.get(name) in (None, "", [])]
+        if missing:
+            status = "needs_input"
+        elif dependencies:
+            status = "ready_after_previous_steps"
+        else:
+            status = "ready"
+        steps.append({
+            "number": number,
+            "tool_id": tool_id,
+            "name": tool["name"],
+            "purpose": purpose.strip()[:500],
+            "provided_inputs": sorted(arguments),
+            "missing_inputs": missing,
+            "depends_on": dependencies,
+            "requires_confirmation": tool["requires_confirmation"],
+            "status": status,
+        })
+    raw_gaps = raw_plan.get("gaps", [])
+    if not isinstance(raw_gaps, list) or not all(isinstance(item, str) for item in raw_gaps):
+        raise TenderAIError("В плане некорректно описаны ограничения.")
+    return {"steps": steps, "gaps": [item.strip()[:500] for item in raw_gaps if item.strip()][:10]}
+
+
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
@@ -81,15 +132,12 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
                 "Attached documents are temporary user-provided context. Use only their supplied safe metadata/text or image input; "
                 "never claim that an attachment has already become a PSADMIN business record. "
                 "You may propose a plan and continue discussing it over several user messages. "
-                "Use tools only when you need real PSADMIN data or must execute an existing business operation. "
-                "Choose at most one tool action per assistant response; "
-                "the backend does not support multiple tool calls in one turn. "
-                "For tools with a declared UI, select the tool and let its existing UI collect missing inputs. "
-                "For other tools, when required arguments are missing, ask for clarification "
-                "and return action=null until they are available. "
+                "For every request that needs PSADMIN data or a business operation, return a structured multi-step plan. "
+                "Each step must use exactly one registered tool_id and declare its arguments, purpose, and prior dependencies. "
+                "Use read for verified data and registered actions for real site operations; never invent a tool. "
+                "List unavailable needed capabilities only in plan.gaps. "
+                "This is planning mode: no step is executed yet, even when it is ready. "
                 "Never invent database records, prices, tool results, or completed actions. "
-                "Never claim an operation succeeded without a real tool result. "
-                "Only registered tools may be executed. "
                 "Preserve all backend permission checks and required confirmations. "
                 "Return valid JSON matching response_schema."
             ),
@@ -102,7 +150,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
             "attachments": attachments or [],
             "history": _history(conversation),
             "message": message,
-            "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}, "task_status": "continue|cancel"},
+            "response_schema": {"reply": "Russian text", "plan": {"steps": [{"tool_id": "registered tool id", "purpose": "why this step is needed", "arguments": "object", "depends_on": "previous step numbers"}], "gaps": ["missing real capability"]}, "task_status": "continue|cancel"},
         },
         ensure_ascii=False,
     )
@@ -114,7 +162,19 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
         conversation.context.pop("pending_action", None)
         conversation.save(update_fields=["context"])
         return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+    if plan.get("plan") is not None:
+        return {"text": plan["reply"].strip(), "kind": "plan", "data": _validated_plan(plan["plan"], tools)}
     action = plan.get("action")
+    if isinstance(action, dict) and action.get("id"):
+        return {
+            "text": plan["reply"].strip(),
+            "kind": "plan",
+            "data": _validated_plan({"steps": [{
+                "tool_id": action.get("id"),
+                "purpose": "Действие предложено для выполнения после проверки плана.",
+                "arguments": action.get("arguments", {}),
+            }], "gaps": []}, tools),
+        }
     if not isinstance(action, dict) or not action.get("id"):
         if pending:
             return {"text": (plan["reply"].strip() or "Уточните недостающие параметры задачи."), "kind": "text", "data": {"pending_tool_id": pending.get("tool_id")}}

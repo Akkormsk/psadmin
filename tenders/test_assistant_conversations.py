@@ -35,8 +35,8 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(reply.status_code, 200)
         messages = reply.json()["messages"]
         self.assertEqual(messages[-1]["role"], "assistant")
-        self.assertEqual(messages[-1]["kind"], "tool_result")
-        self.assertTrue(any(item["id"] == "cash.transaction_create" for item in messages[-1]["data"]["result"]["tools"]))
+        self.assertEqual(messages[-1]["kind"], "plan")
+        self.assertEqual(messages[-1]["data"]["steps"][0]["tool_id"], "assistant.capabilities")
 
         interaction = OwnerInteraction.objects.get(pk=conversation_id)
         self.assertEqual(interaction.context["kind"], "assistant_conversation")
@@ -80,18 +80,62 @@ class AssistantConversationTests(TestCase):
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ"}, secure=True).json()["conversation"]["id"]
         reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Покажи тендер"}), content_type="application/json", secure=True)
         self.assertEqual(reply.status_code, 200)
-        self.assertEqual(reply.json()["messages"][-1]["kind"], "tool_result")
+        self.assertEqual(reply.json()["messages"][-1]["kind"], "plan")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
+    def test_multi_step_plan_is_validated_and_not_executed(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        request.return_value = {
+            "reply": "Сначала проверю данные, затем подготовлю расход для подтверждения.",
+            "plan": {
+                "steps": [
+                    {"tool_id": "read", "purpose": "Проверить операции за период", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["id"]}}},
+                    {"tool_id": "cash.transaction_create", "purpose": "Подготовить расход", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}, "depends_on": [1]},
+                ],
+                "gaps": [],
+            },
+        }
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "План"}, secure=True).json()["conversation"]["id"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Проверь расходы и добавь доставку"}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 200)
+        message = reply.json()["messages"][-1]
+        self.assertEqual(message["kind"], "plan")
+        self.assertEqual([step["tool_id"] for step in message["data"]["steps"]], ["read", "cash.transaction_create"])
+        self.assertEqual(message["data"]["steps"][1]["status"], "ready_after_previous_steps")
+        self.assertFalse(CashTransaction.objects.filter(reason="Доставка").exists())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Сделаю.", "plan": {"steps": [{"tool_id": "invented.action", "purpose": "Несуществующее действие", "arguments": {}}], "gaps": []}})
+    def test_plan_rejects_an_unregistered_operation(self, _request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "План"}, secure=True).json()["conversation"]["id"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Сделай невозможное"}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 400)
+        self.assertIn("отсутствующую возможность", reply.json()["detail"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_direct_action_is_stubbed_as_a_plan_until_plan_execution_is_enabled(self, request, _preflight):
         request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
         message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(message["kind"], "confirmation_required")
-        first = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
+        self.assertEqual(message["kind"], "plan")
+        self.assertEqual(message["data"]["steps"][0]["tool_id"], "cash.transaction_create")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -105,7 +149,7 @@ class AssistantConversationTests(TestCase):
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Устаревшее подтверждение"}, secure=True).json()["conversation"]["id"]
         endpoint = reverse("assistant_conversation_message", args=[conversation_id])
         first = self.client.post(endpoint, data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(first["kind"], "confirmation_required")
+        self.assertEqual(first["kind"], "plan")
         self.client.post(endpoint, data=json.dumps({"message": "Погоди, я хочу изменить условия"}), content_type="application/json", secure=True)
         confirmation = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, first["id"]]), {"accept": "yes"}, secure=True)
         self.assertEqual(confirmation.status_code, 409)
@@ -120,7 +164,7 @@ class AssistantConversationTests(TestCase):
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
         message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
         cancelled = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "no"}, secure=True)
-        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.status_code, 409)
         self.assertFalse(CashTransaction.objects.filter(reason="Отмена").exists())
         self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
 
@@ -133,11 +177,10 @@ class AssistantConversationTests(TestCase):
         ]
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
         first = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход на доставку"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(first["kind"], "text")
-        self.assertIn("amount", first["data"]["missing"])
+        self.assertEqual(first["kind"], "plan")
+        self.assertIn("amount", first["data"]["steps"][0]["missing_inputs"])
         second = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "15 000"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(second["kind"], "confirmation_required")
-        self.assertEqual(second["data"]["arguments"]["reason"], "Доставка")
+        self.assertEqual(second["kind"], "plan")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")

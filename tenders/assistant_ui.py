@@ -7,6 +7,7 @@ from django.shortcuts import redirect
 
 from .assistant_tools import AssistantToolError, execute_tool
 from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_messages, upload_attachment
+from .services import TenderAIError
 
 
 @login_required
@@ -68,7 +69,11 @@ def conversation_message(request, conversation_id):
     if not isinstance(message, str) or (not message.strip() and not attachments):
         return HttpResponseBadRequest("Введите сообщение")
     context = payload.get("context", {}) if isinstance(payload, dict) else {}
-    return JsonResponse({"messages": respond(conversation, request.user, message, context, attachments)})
+    try:
+        messages = respond(conversation, request.user, message, context, attachments)
+    except TenderAIError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+    return JsonResponse({"messages": messages})
 
 
 @login_required
