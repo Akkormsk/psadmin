@@ -34,7 +34,7 @@ from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
-from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage as confirm_route_stage, restore_requirement_to_route, save_cascade_lab_preset
+from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage as confirm_route_stage, reopen_confirmed_route, restore_requirement_to_route, save_cascade_lab_preset
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
 from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items, refresh_training_example_embedding
 
@@ -859,30 +859,10 @@ def reopen_production_hypothesis(request):
         return JsonResponse({"error": "Редактировать принятый расчёт может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        accepted = ProductionTrainingSession.objects.select_for_update().get(
-            pk=payload.get("session_id"), created_by=request.user, is_confirmed=True,
-        )
+        result = reopen_confirmed_route(request.user, payload.get("session_id"))
     except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Принятый расчёт не найден."}, status=400)
-
-    if accepted.confirmed_example_id:
-        ProductionTrainingExample.objects.filter(pk=accepted.confirmed_example_id).update(is_active=False)
-    Lesson.objects.filter(session=accepted).update(is_active=False)
-    draft_hypothesis = copy.deepcopy(accepted.current_hypothesis)
-    draft_hypothesis.update({
-        "is_confirmed": False,
-        "revision_parent_session_id": accepted.pk,
-    })
-    draft = ProductionTrainingSession.objects.create(
-        created_by=request.user,
-        position_name=accepted.position_name,
-        requirements=copy.deepcopy(accepted.requirements),
-        current_hypothesis=draft_hypothesis,
-    )
-    draft_hypothesis["session_id"] = draft.pk
-    draft.current_hypothesis = draft_hypothesis
-    draft.save(update_fields=["current_hypothesis", "updated_at"])
-    return JsonResponse(draft_hypothesis)
+    return JsonResponse(result)
 
 
 @login_required

@@ -120,6 +120,20 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(result["route_refresh_required"])
         self.assertTrue(ProcessDefinition.objects.filter(name="Сборка").exists())
 
+    def test_reopening_confirmed_route_uses_the_shared_executor(self):
+        from .models import ProductionTrainingSession
+
+        accepted = ProductionTrainingSession.objects.create(
+            created_by=self.admin, position_name="Папка", requirements={"format": "A4"},
+            current_hypothesis={"route": {"processes": []}}, is_confirmed=True,
+        )
+        result = execute_tool("production.route_reopen", self.admin, {
+            "session_id": accepted.pk,
+        }, confirmed=True)
+
+        self.assertNotEqual(result["session_id"], accepted.pk)
+        self.assertFalse(ProductionTrainingSession.objects.get(pk=result["session_id"]).is_confirmed)
+
     def test_financial_period_lock_is_shared_and_requires_confirmation(self):
         from finance.models import FinancialPeriod
         args = {"period": "2026-10", "closed": True}

@@ -4,7 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
-from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback, restore_requirement_to_route, save_cascade_lab_preset
+from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback, reopen_confirmed_route, restore_requirement_to_route, save_cascade_lab_preset
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
 
 
@@ -261,6 +261,13 @@ register_tool(AssistantTool(
     {"session_id": "integer", "proposal_id": "string"}, False, True, True,
     lambda user, payload: confirm_proposed_stage(user, payload["session_id"], payload["proposal_id"]),
     source="tenders.production_actions.confirm_proposed_stage",
+))
+register_tool(AssistantTool(
+    "production.route_reopen", "Вернуть подтверждённый маршрут на доработку",
+    "Создаёт редактируемую версию подтверждённого маршрута и сохраняет историю прежней версии, как кнопка экрана маршрута.",
+    {"session_id": "integer"}, False, True, True,
+    lambda user, payload: reopen_confirmed_route(user, payload["session_id"]),
+    source="tenders.production_actions.reopen_confirmed_route",
 ))
 
 def save_business_estimate(user, payload):

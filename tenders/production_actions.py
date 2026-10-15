@@ -1,4 +1,5 @@
 """Backend production-knowledge actions shared by UI and assistant."""
+import copy
 from django.db import transaction
 
 from .cascade_settings import text_search_settings
@@ -76,6 +77,30 @@ def confirm_proposed_stage(user, session_id, proposal_id):
     session.current_hypothesis = hypothesis
     session.save(update_fields=["current_hypothesis", "updated_at"])
     return {**hypothesis, "session_id": session.pk, "route_refresh_required": True}
+
+
+@transaction.atomic
+def reopen_confirmed_route(user, session_id):
+    """Return one confirmed route to an editable draft, preserving its history."""
+    _require_admin(user)
+    accepted = ProductionTrainingSession.objects.select_for_update().filter(
+        pk=session_id, created_by=user, is_confirmed=True,
+    ).first()
+    if accepted is None:
+        raise ValueError("Принятый расчёт не найден.")
+    if accepted.confirmed_example_id:
+        ProductionTrainingExample.objects.filter(pk=accepted.confirmed_example_id).update(is_active=False)
+    Lesson.objects.filter(session=accepted).update(is_active=False)
+    hypothesis = copy.deepcopy(accepted.current_hypothesis if isinstance(accepted.current_hypothesis, dict) else {})
+    hypothesis.update({"is_confirmed": False, "revision_parent_session_id": accepted.pk})
+    draft = ProductionTrainingSession.objects.create(
+        created_by=user, position_name=accepted.position_name,
+        requirements=copy.deepcopy(accepted.requirements), current_hypothesis=hypothesis,
+    )
+    hypothesis["session_id"] = draft.pk
+    draft.current_hypothesis = hypothesis
+    draft.save(update_fields=["current_hypothesis", "updated_at"])
+    return hypothesis
 
 
 def deactivate_lesson(lesson_id):
