@@ -4,7 +4,7 @@ from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
-from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_feedback, reopen_confirmed_route, restore_requirement_to_route, save_cascade_lab_preset
+from .production_actions import add_route_calculation_sources, confirm_proposed_stage, confirm_route_training, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_counterparty, draft_production_feedback, reopen_confirmed_route, restore_requirement_to_route, revise_route_build, save_manual_training_example, select_route_catalog_product, start_route_build
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
 
 
@@ -235,20 +235,6 @@ register_tool(AssistantTool(
 ))
 
 register_tool(AssistantTool(
-    "cascade.preset_save", "Сохранить набор настроек лаборатории Cascade",
-    "Сохраняет именованный набор настроек тем же исполнителем, что кнопка лаборатории Cascade.",
-    {"name": "string", "settings": "object"}, False, True, True,
-    lambda user, payload: save_cascade_lab_preset(user, payload["name"], payload["settings"]),
-    source="tenders.production_actions.save_cascade_lab_preset",
-))
-register_tool(AssistantTool(
-    "cascade.settings_activate", "Применить настройки Cascade",
-    "Создаёт и активирует версию настроек Cascade тем же исполнителем, что кнопка лаборатории.",
-    {"name": "string?", "settings": "object"}, False, True, True,
-    lambda user, payload: activate_cascade_lab_settings(user, payload.get("name"), payload["settings"]),
-    source="tenders.production_actions.activate_cascade_lab_settings",
-))
-register_tool(AssistantTool(
     "production.requirement_skip_restore", "Вернуть требование ТЗ в подбор",
     "Отменяет сохранённое исключение строки ТЗ тем же исполнителем, что кнопка маршрута.",
     {"label": "string"}, False, True, True,
@@ -268,6 +254,71 @@ register_tool(AssistantTool(
     {"session_id": "integer"}, False, True, True,
     lambda user, payload: reopen_confirmed_route(user, payload["session_id"]),
     source="tenders.production_actions.reopen_confirmed_route",
+))
+register_tool(AssistantTool(
+    "production.catalog_product_select", "Выбрать товар поставщика для маршрута",
+    "Фиксирует явно выбранный товар в текущем маршруте и сохраняет решение для последующего расчёта.",
+    {"session_id": "integer", "line": "object", "product_id": "string", "step_id": "string?"}, False, True, True,
+    lambda user, payload: select_route_catalog_product(user, payload),
+    source="tenders.production_actions.select_route_catalog_product",
+))
+register_tool(AssistantTool(
+    "production.route_confirm", "Подтвердить маршрут и сохранить обучение",
+    "Подтверждает готовый маршрут, сохраняет его знания и отмеченные исключения ТЗ тем же действием, что кнопка расчёта.",
+    {"session_id": "integer"}, False, True, True,
+    lambda user, payload: confirm_route_training(user, payload["session_id"]),
+    source="tenders.production_actions.confirm_route_training",
+))
+register_tool(AssistantTool(
+    "provider.production_draft", "Подготовить карточку производственного контрагента",
+    "Разбирает текст или ссылку на данные контрагента в проверяемый черновик; карточка контрагента создаётся отдельным подтверждаемым действием.",
+    {"text": "string?", "url": "string?"}, False, True, True,
+    lambda user, payload: draft_production_counterparty(user, payload.get("text", ""), payload.get("url", "")),
+    source="tenders.production_actions.draft_production_counterparty",
+))
+register_tool(AssistantTool(
+    "production.calculation_sources_add", "Добавить источники в расчёт маршрута",
+    "Добавляет один или несколько проверяемых источников и пересчитывает текущий маршрут тем же исполнителем, что экран расчёта.",
+    {"session_id": "integer", "line": "object", "sources": "array?", "source_text": "string?", "source_url": "string?", "feedback": "string?"}, False, True, True,
+    lambda user, payload: add_route_calculation_sources(user, payload),
+    source="tenders.production_actions.add_route_calculation_sources",
+))
+def start_production_route(user, payload):
+    from .views import _ASSISTANT_STALE_AFTER, _record_stage, _submit_assistant_job
+    return start_route_build(
+        user, payload["line"], payload.get("start_catalog") is True,
+        submit_job=_submit_assistant_job, record_stage=_record_stage, stale_after=_ASSISTANT_STALE_AFTER,
+    )
+
+
+register_tool(AssistantTool(
+    "production.route_build", "Построить маршрут производства",
+    "Запускает существующее фоновое построение маршрута для позиции; возвращает идентификатор сессии для продолжения диалога.",
+    {"line": "object", "start_catalog": "boolean?"}, False, True, True,
+    start_production_route, source="tenders.production_actions.start_route_build",
+))
+
+def revise_production_route(user, payload):
+    from .views import _ASSISTANT_STALE_AFTER, _record_stage, _submit_assistant_job
+    return revise_route_build(
+        user, payload, submit_job=_submit_assistant_job,
+        record_stage=_record_stage, stale_after=_ASSISTANT_STALE_AFTER,
+    )
+
+
+register_tool(AssistantTool(
+    "production.route_revise", "Уточнить и пересчитать маршрут производства",
+    "Продолжает тот же диалог маршрута: учитывает ответы, подтверждённые требования или замечание и запускает штатный пересчёт.",
+    {"session_id": "integer", "line": "object", "feedback": "string?", "question_answers": "object?", "accepted_requirement_proposals": "array?", "instructions": "array?", "clear_ranking": "boolean?", "refresh": "boolean?", "scope": "string?", "step_id": "string?", "learn_for_similar": "boolean?"},
+    False, True, True, revise_production_route,
+    source="tenders.production_actions.revise_route_build",
+))
+register_tool(AssistantTool(
+    "production.training_example_save", "Сохранить ручной пример производственного маршрута",
+    "Сохраняет введённый на экране пример, создаёт недостающие этапы и заменяет прежний активный пример этой позиции.",
+    {"production_type": "string", "line": "object", "features": "array?", "routes": "array", "note": "string?"},
+    False, True, True, lambda user, payload: save_manual_training_example(user, payload),
+    source="tenders.production_actions.save_manual_training_example",
 ))
 
 def save_business_estimate(user, payload):

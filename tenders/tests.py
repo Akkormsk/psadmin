@@ -1068,7 +1068,7 @@ class TenderTests(TestCase):
         self.assertIn("tender-requirements-tz__head", content)
         self.assertIn("tender-clarification-chips", content)
 
-    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.production_actions.build_training_hypothesis")
     def test_question_answers_become_current_order_clarifications(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -1116,7 +1116,7 @@ class TenderTests(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.requirements["clarifications"], [clarification])
 
-    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.production_actions.build_training_hypothesis")
     def test_confirmed_name_requirements_become_current_order_clarifications(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -1160,7 +1160,7 @@ class TenderTests(TestCase):
         self.assertEqual(clarification["value"], "А5")
         self.assertEqual(clarification["source_type"], "manager_clarification")
 
-    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.production_actions.build_training_hypothesis")
     def test_admin_feedback_creates_structured_turn_and_updates_session(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -1192,7 +1192,7 @@ class TenderTests(TestCase):
         self.assertEqual(turn.feedback, "Считать у подрядчика под ключ")
         self.assertEqual(turn.understood_changes, ["Выбран подрядчик под ключ"])
 
-    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.production_actions.build_training_hypothesis")
     def test_revise_forwards_the_block_scope_to_the_builder(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -1210,7 +1210,7 @@ class TenderTests(TestCase):
 
         self.assertEqual(build.call_args.kwargs["recompute"], "catalog")
 
-    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.production_actions.build_training_hypothesis")
     def test_revise_defaults_to_a_full_rebuild_when_no_scope_is_given(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -1315,7 +1315,7 @@ class TenderTests(TestCase):
         self.assertEqual(response.json()["requirement_skips_saved"], 0)
         self.assertFalse(RequirementSkipRule.objects.exists())
 
-    @patch("tenders.views.build_training_hypothesis")
+    @patch("tenders.production_actions.build_training_hypothesis")
     def test_revise_forwards_requirements_scope_and_needs_no_feedback(self, build):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -2427,8 +2427,8 @@ class TenderTests(TestCase):
         with self.assertRaisesMessage(Exception, "Локальные и служебные адреса"):
             _validate_public_url("http://127.0.0.1/price")
 
-    @patch("tenders.views.build_training_hypothesis")
-    @patch("tenders.views.extract_calculation_source")
+    @patch("tenders.services.build_training_hypothesis")
+    @patch("tenders.services.extract_calculation_source")
     def test_admin_can_attach_source_before_any_cost_exists(self, extract, rebuild):
         self.user.is_superuser = True
         self.user.is_staff = True
@@ -2476,8 +2476,8 @@ class TenderTests(TestCase):
         self.assertIn("Sirio Pearl", feedback)
         self.assertNotIn("cost_index", json.loads(response.wsgi_request.POST["payload"]))
 
-    @patch("tenders.views.build_training_hypothesis")
-    @patch("tenders.views.extract_calculation_source")
+    @patch("tenders.services.build_training_hypothesis")
+    @patch("tenders.services.extract_calculation_source")
     def test_admin_can_attach_multiple_sources_in_one_recalculation(self, extract, rebuild):
         self.user.is_superuser = True
         self.user.is_staff = True

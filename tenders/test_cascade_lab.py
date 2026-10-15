@@ -7,7 +7,6 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from .assistant_tools import execute_tool
 from .cascade import Cascade
 from .cascade_lab import _decode_output, _encode_output, execute_cascade_steps
 from .models import CascadeConfigVersion, CascadeLabPreset, CatalogProduct, CatalogSupplier, ProductionTrainingSession, TenderEstimate, TenderLine
@@ -119,14 +118,6 @@ class CascadeLabViewTests(TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(CascadeLabPreset.objects.count(), 1)
         self.assertEqual(CascadeLabPreset.objects.get().settings["top"], 15)
-
-    def test_assistant_uses_the_same_cascade_preset_executor(self):
-        result = execute_tool("cascade.preset_save", self.admin, {
-            "name": "Через ассистента", "settings": {"top": 12},
-        }, confirmed=True)
-
-        self.assertEqual(result["name"], "Через ассистента")
-        self.assertEqual(CascadeLabPreset.objects.get(pk=result["id"]).settings["top"], 12)
 
     @patch("tenders.views.execute_cascade_steps")
     def test_execute_uses_explicit_target_step(self, execute):

@@ -5,7 +5,7 @@ from django.test import TestCase
 from datetime import date
 
 from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, required_input_names
-from .models import ProcessDefinition
+from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
 class AssistantToolRegistryTests(TestCase):
@@ -104,6 +104,50 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(result["dropped"])
         self.assertFalse(RequirementSkipRule.objects.get(label_normalized="формат").is_active)
 
+    def test_route_build_uses_the_same_executor_as_the_route_screen(self):
+        from unittest.mock import patch
+        from .models import ProductionTrainingSession
+
+        payload = {"line": {"name": "Папка", "quantity": 100, "requirements": {}}}
+        with patch("tenders.views._submit_assistant_job") as submit:
+            result = execute_tool("production.route_build", self.admin, payload, confirmed=True)
+
+        session = ProductionTrainingSession.objects.get(pk=result["session_id"])
+        self.assertEqual(result["status"], "processing")
+        self.assertEqual(session.position_name, "Папка")
+        self.assertEqual(submit.call_args.args[0], session.pk)
+
+    def test_route_revision_uses_the_shared_route_executor(self):
+        from unittest.mock import patch
+        from .models import ProductionTrainingSession
+
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.admin, position_name="Папка", requirements={},
+            current_hypothesis={"route": {"name": "Черновик"}},
+        )
+        payload = {
+            "session_id": session.pk,
+            "line": {"name": "Папка", "quantity": 100, "requirements": {}},
+            "feedback": "Уточнить материал",
+        }
+        with patch("tenders.views._submit_assistant_job") as submit:
+            result = execute_tool("production.route_revise", self.admin, payload, confirmed=True)
+
+        self.assertEqual(result["status"], "processing")
+        self.assertEqual(submit.call_args.args[0], session.pk)
+
+    def test_manual_route_example_uses_the_shared_screen_executor(self):
+        from .models import ProductionType, ProductionTrainingExample
+
+        kind = ProductionType.objects.create(code="assistant-example", name="Тестовый тип")
+        result = execute_tool("production.training_example_save", self.admin, {
+            "production_type": kind.code,
+            "line": {"name": "Тестовая папка", "requirements": {}},
+            "routes": [{"name": "Печать", "processes": [{"name": "Печать", "role": "production"}]}],
+        }, confirmed=True)
+
+        self.assertEqual(ProductionTrainingExample.objects.get(pk=result["example_id"]).position_name, "Тестовая папка")
+
     def test_stage_proposal_confirmation_uses_the_shared_route_executor(self):
         from .models import ProductionTrainingSession
 
@@ -133,6 +177,52 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertNotEqual(result["session_id"], accepted.pk)
         self.assertFalse(ProductionTrainingSession.objects.get(pk=result["session_id"]).is_confirmed)
+
+    def test_catalog_selection_uses_the_shared_route_executor(self):
+        from unittest.mock import patch
+        from .models import ProductionTrainingSession
+
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.admin, position_name="Папка", requirements={}, current_hypothesis={},
+        )
+        selected = {"catalog_selection": {"id": "sku-1", "name": "Папка", "supplier_code": "test"}}
+        with patch("tenders.services.apply_catalog_candidate", return_value=selected):
+            result = execute_tool("production.catalog_product_select", self.admin, {
+                "session_id": session.pk, "line": {"name": "Папка", "quantity": 100}, "product_id": "sku-1",
+            }, confirmed=True)
+
+        self.assertEqual(result["session_id"], session.pk)
+        self.assertEqual(CatalogMatchDecision.objects.filter(session=session, decision="selected").count(), 1)
+
+    def test_production_counterparty_draft_uses_the_shared_executor(self):
+        from unittest.mock import patch
+
+        with patch("tenders.services.extract_calculation_source", return_value={
+            "source_type": "text", "url": "", "content": "Печать", "structured_data": {},
+        }), patch("tenders.services.parse_counterparty_draft", return_value={
+            "name": "Тестовый поставщик", "notes": "", "suggested_stage_names": [],
+        }):
+            result = execute_tool("provider.production_draft", self.admin, {"text": "Печать"}, confirmed=True)
+
+        self.assertEqual(result["name"], "Тестовый поставщик")
+        self.assertTrue(result["source_id"])
+
+    def test_calculation_source_action_uses_the_shared_executor(self):
+        from unittest.mock import patch
+        from .models import ProductionTrainingSession
+
+        session = ProductionTrainingSession.objects.create(
+            created_by=self.admin, position_name="Папка", requirements={}, current_hypothesis={"costs": []},
+        )
+        with patch("tenders.services.extract_calculation_source", return_value={
+            "source_type": "text", "url": "", "content": "Цена", "structured_data": {},
+        }), patch("tenders.services.build_training_hypothesis", return_value={"costs": []}):
+            result = execute_tool("production.calculation_sources_add", self.admin, {
+                "session_id": session.pk, "line": {"name": "Папка", "quantity": 10}, "source_text": "Цена",
+            }, confirmed=True)
+
+        self.assertEqual(result["session_id"], session.pk)
+        self.assertEqual(TenderKnowledgeSource.objects.count(), 1)
 
     def test_financial_period_lock_is_shared_and_requires_confirmation(self):
         from finance.models import FinancialPeriod

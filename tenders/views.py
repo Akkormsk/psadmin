@@ -27,16 +27,16 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from openpyxl import load_workbook
 
-from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, CounterpartyKnowledgeVersion, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingExample, ProductionTrainingSession, ProductionTrainingTurn, ProductionType, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, ProviderCalculatorBinding
+from .models import CascadeConfigVersion, CascadeLabPreset, CatalogCategory, CatalogMatchDecision, CatalogProduct, CatalogSyncRun, CatalogSupplier, Counterparty, CounterpartyKnowledgeVersion, Lesson, Order, OrderEstimate, OrderLine, ProcessDefinition, ProductionTrainingSession, ProductionTrainingTurn, Proposal, RequirementSkipRule, StageCounterpartyLink, TenderEstimate, TenderKnowledgeSource, TenderLine, TenderSettings, ProviderCalculatorBinding
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding, get_provider_calculator_schema
 from .provider_knowledge import confirm_knowledge, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .proposals import apply_batch, apply_proposal, payload_from_feedback_item
 from .knowledge import export_knowledge_bundle
 from .cascade_lab import execute_cascade_steps
 from .cascade_settings import text_search_settings
-from .production_actions import activate_cascade_lab_settings, confirm_proposed_stage as confirm_route_stage, reopen_confirmed_route, restore_requirement_to_route, save_cascade_lab_preset
+from .production_actions import activate_cascade_lab_settings, add_route_calculation_sources, confirm_proposed_stage as confirm_route_stage, confirm_route_training, draft_production_counterparty, reopen_confirmed_route, restore_requirement_to_route, revise_route_build, save_cascade_lab_preset, save_manual_training_example, select_route_catalog_product, start_route_build
 from .catalog import CatalogSyncError, GiftsXmlClient, _gifts_text, sync_gifts_catalog, sync_gifts_categories
-from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items, refresh_training_example_embedding
+from .services import TenderAIError, _normalized_text as _normalized_requirement_label, _resolve_line_match, analyze_tender_requirements, apply_catalog_candidate, apply_verified_source_quote, build_training_hypothesis, calculate_tender, detect_tender_document_type, extract_calculation_source, inspect_tender_document, learn_lessons_from_session, parse_counterparty_draft, parse_production_feedback, recognize_tender_items
 
 
 logger = logging.getLogger(__name__)
@@ -785,45 +785,14 @@ def production_route_preview(request):
         return JsonResponse({"error": "ИИ-расчёт пока доступен только администратору."}, status=403)
     try:
         line = json.loads(request.POST.get("line_json", "{}"))
-        if not isinstance(line, dict) or not str(line.get("name", "")).strip() or _number(line.get("quantity")) <= 0:
-            raise ValueError
-    except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError):
-        return JsonResponse({"error": "Сначала заполните позицию и примените требования ТЗ."}, status=400)
-    start_catalog = request.POST.get("start_catalog") == "1"
-    position_name = str(line.get("name", ""))[:500]
-    running = ProductionTrainingSession.objects.filter(
-        created_by=request.user,
-        position_name=position_name,
-        is_confirmed=False,
-        current_hypothesis__status="processing",
-        updated_at__gte=timezone.now() - _ASSISTANT_STALE_AFTER,
-    ).order_by("-updated_at").first()
-    if running is not None:
-        return JsonResponse({"status": "processing", "session_id": running.pk}, status=202)
-    session = ProductionTrainingSession.objects.create(
-        created_by=request.user,
-        position_name=position_name,
-        requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
-        current_hypothesis={"status": "processing"},
-    )
-
-    def work(session):
-        hypothesis = build_training_hypothesis(line, progress_callback=lambda stage: _record_stage(session.pk, stage))
-        if start_catalog:
-            step_id = next(
-                (step.get("id") for step in hypothesis.get("route", {}).get("processes", [])
-                 if step.get("kind") == "catalog"),
-                "",
-            )
-            hypothesis = build_training_hypothesis(
-                line, current=hypothesis, recompute="catalog", step_id=step_id,
-                progress_callback=lambda stage: _record_stage(session.pk, stage),
-            )
-        ProductionTrainingTurn.objects.create(session=session, hypothesis=hypothesis)
-        return hypothesis
-
-    _submit_assistant_job(session.pk, work)
-    return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
+        result = start_route_build(
+            request.user, line, request.POST.get("start_catalog") == "1",
+            submit_job=_submit_assistant_job, record_stage=_record_stage,
+            stale_after=_ASSISTANT_STALE_AFTER,
+        )
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse(result, status=202)
 
 
 @login_required
@@ -872,131 +841,13 @@ def revise_production_hypothesis(request):
         return JsonResponse({"error": "Обучать ассистента может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
-        line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
-        feedback = str(payload.get("feedback", "")).strip()
-        question_answers = payload.get("question_answers") if isinstance(payload.get("question_answers"), dict) else None
-        accepted_requirement_proposals = (
-            payload.get("accepted_requirement_proposals")
-            if isinstance(payload.get("accepted_requirement_proposals"), list) else None
+        result = revise_route_build(
+            request.user, payload, submit_job=_submit_assistant_job,
+            record_stage=_record_stage, stale_after=_ASSISTANT_STALE_AFTER,
         )
-        # Removing a correction chip resends the reduced instruction list.
-        instructions_override = payload.get("instructions") if isinstance(payload.get("instructions"), list) else None
-        clear_ranking = bool(payload.get("clear_ranking"))
-        # A bare recompute after a server-side change the payload does not
-        # itself carry (a lesson was just deactivated).
-        refresh = bool(payload.get("refresh"))
-        # Which dialogue block's "Учесть и пересчитать" was pressed. The box
-        # the admin typed in decides the scope — no LLM guesses which block a
-        # comment belongs to. "catalog" keeps the route and search plan
-        # untouched; anything else is a full rebuild.
-        scope = str(payload.get("scope", "all")).strip().lower()
-        learn_for_similar = bool(payload.get("learn_for_similar", not scope.endswith("_current")))
-        if scope.endswith("_current"):
-            scope = scope.removesuffix("_current")
-        step_id = str(payload.get("step_id", "")).strip()
-        # "requirements" (the ТЗ-checkbox recompute) is catalog-scoped too —
-        # the route and the search plan do not change, only which rows the
-        # matcher is allowed to look at.
-        recompute = "catalog" if scope in {"catalog", "requirements"} else "production" if scope == "production_price" else "all"
-        if len(feedback) > 3000 or not str(line.get("name", "")).strip() or _number(line.get("quantity")) <= 0:
-            raise ValueError
-        # A "requirements" recompute carries its change in the line payload
-        # (the ТЗ-row `selected` flags); a chip removal carries it in
-        # instructions_override or clear_ranking; "production_price" needs
-        # only step_id — none of these need feedback text.
-        if (not feedback and question_answers is None and accepted_requirement_proposals is None
-                and instructions_override is None and not clear_ranking and not refresh
-                and scope not in {"requirements", "catalog", "production_price"}):
-            raise ValueError
-    except (ValueError, TypeError, InvalidOperation, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
+    except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось продолжить диалог. Обновите гипотезу и повторите."}, status=400)
-    prior = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-    if prior.get("status") == "processing":
-        if not _assistant_job_is_stale(session):
-            return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
-        saved_hypothesis = line.get("requirements", {}).get("production", {})
-        if (
-            isinstance(saved_hypothesis, dict)
-            and str(saved_hypothesis.get("session_id")) == str(session.pk)
-            and isinstance(saved_hypothesis.get("route"), dict)
-        ):
-            prior = saved_hypothesis
-        prior = {key: value for key, value in prior.items() if key not in {"status", "stage", "stage_label"}}
-    if scope == "requirements" and not prior.get("catalog_search_started"):
-        prior["requirement_selection"] = line.get("requirements", {}).get("requirements", [])
-        session.current_hypothesis = prior
-        session.save(update_fields=["current_hypothesis", "updated_at"])
-        return JsonResponse({**prior, "session_id": session.pk})
-    if question_answers is not None or accepted_requirement_proposals is not None:
-        questions = {
-            str(question.get("id")): question for question in prior.get("questions", [])
-            if isinstance(question, dict) and question.get("id")
-        }
-        allowed = set(questions)
-        answers = {str(key): str(value).strip()[:1000] for key, value in (question_answers or {}).items()
-                   if str(key) in allowed and str(value).strip()}
-        prior = {**prior, "question_answers": {**prior.get("question_answers", {}), **answers}}
-        requirements = dict(line.get("requirements")) if isinstance(line.get("requirements"), dict) else {}
-        prior_requirements = session.requirements if isinstance(session.requirements, dict) else {}
-        existing = requirements.get("clarifications")
-        if not isinstance(existing, list):
-            existing = prior_requirements.get("clarifications", [])
-        clarifications = {
-            str(item.get("question_id")): dict(item) for item in existing
-            if isinstance(item, dict) and item.get("question_id")
-        }
-        for question_id, answer in answers.items():
-            clarifications[question_id] = {
-                "question_id": question_id,
-                "label": str(questions[question_id].get("text", "")).strip()[:500],
-                "value": answer,
-                "source": "Моё уточнение",
-                "source_type": "manager_clarification",
-                "selected": True,
-            }
-        proposals = {
-            str(item.get("id")): item for item in prior.get("requirement_proposals", [])
-            if isinstance(item, dict) and item.get("id")
-        }
-        for proposal_id in accepted_requirement_proposals or []:
-            proposal = proposals.get(str(proposal_id))
-            if proposal is None:
-                continue
-            clarifications[f"name-{proposal_id}"] = {
-                "question_id": f"name-{proposal_id}",
-                "label": str(proposal.get("label", "")).strip()[:500],
-                "value": str(proposal.get("value", "")).strip()[:1000],
-                "source": "Из названия · подтверждено",
-                "source_type": "manager_clarification",
-                "selected": True,
-            }
-        requirements["clarifications"] = list(clarifications.values())
-        line = {**line, "requirements": requirements}
-
-    def work(session):
-        hypothesis = build_training_hypothesis(
-            line, current=prior, feedback=feedback,
-            progress_callback=lambda stage: _record_stage(session.pk, stage),
-            instructions_override=instructions_override, recompute=recompute,
-            clear_ranking=clear_ranking,
-            learn_for_similar=learn_for_similar,
-            **({"step_id": step_id} if step_id else {}),
-        )
-        session.position_name = str(line.get("name", ""))[:500]
-        session.requirements = line.get("requirements") if isinstance(line.get("requirements"), dict) else {}
-        ProductionTrainingTurn.objects.create(
-            session=session, feedback=feedback,
-            understood_changes=hypothesis.get("understood_changes", []), hypothesis=hypothesis,
-        )
-        return hypothesis
-
-    session.current_hypothesis = {**prior, "status": "processing"}
-    session.save(update_fields=["current_hypothesis", "updated_at"])
-    _submit_assistant_job(session.pk, work, fallback=prior)
-    return JsonResponse({"status": "processing", "session_id": session.pk}, status=202)
-
-
+    return JsonResponse(result, status=202 if result.get("status") == "processing" else 200)
 @login_required
 @require_POST
 @transaction.atomic
@@ -1065,34 +916,12 @@ def production_counterparty_draft(request):
     источников расчёта), а сам Counterparty — только на подтверждении."""
     if not request.user.is_superuser:
         return JsonResponse({"error": "Добавлять контрагентов может только администратор."}, status=403)
-    text = request.POST.get("text", "")
-    url = request.POST.get("url", "")
-    upload = request.FILES.get("file")
-    if upload is not None:
-        if Path(upload.name).suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
-            return JsonResponse({"error": "Пока принимаем скриншот (PNG/JPG), текст или ссылку — без PDF/Excel."}, status=400)
-        if upload.size > 20 * 1024 * 1024:
-            return JsonResponse({"error": "Файл больше 20 МБ."}, status=400)
     try:
-        source = extract_calculation_source(source_text=text, source_url=url, upload=upload)
-        active_stages = list(ProcessDefinition.objects.filter(is_active=True).values("id", "name"))
-        draft = parse_counterparty_draft(source["content"], [stage["name"] for stage in active_stages])
-    except TenderAIError as exc:
+        return JsonResponse(draft_production_counterparty(
+            request.user, request.POST.get("text", ""), request.POST.get("url", ""), request.FILES.get("file"),
+        ))
+    except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-    raw_file, raw_file_name, raw_file_content_type = None, "", ""
-    if upload is not None:
-        upload.seek(0)
-        raw_file, raw_file_name, raw_file_content_type = upload.read(), upload.name[:255], (upload.content_type or "")[:100]
-    knowledge_source = TenderKnowledgeSource.objects.create(
-        title=draft["name"][:300], source_type=source["source_type"], url=source["url"],
-        content_summary=source["content"][:4000], structured_data=source["structured_data"],
-        raw_file=raw_file, raw_file_name=raw_file_name, raw_file_content_type=raw_file_content_type,
-        created_by=request.user,
-    )
-    return JsonResponse({
-        "source_id": knowledge_source.pk, "name": draft["name"], "notes": draft["notes"],
-        "suggested_stage_names": draft["suggested_stage_names"], "active_stages": active_stages,
-    })
 
 
 @login_required
@@ -1186,57 +1015,9 @@ def select_catalog_product(request):
     if not request.user.is_superuser:
         return JsonResponse({"error": "Выбирать товары для обучения может только администратор."}, status=403)
     try:
-        payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
-        line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
-        product_id = str(payload.get("product_id", "")).strip()[:100]
-        if not product_id:
-            raise ValueError
-        if not str(line.get("name", "")).strip():
-            raise ValueError
-    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
+        return JsonResponse(select_route_catalog_product(request.user, json.loads(request.POST.get("payload", "{}"))))
+    except (ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({"error": "Не удалось выбрать товар поставщика. Обновите гипотезу."}, status=400)
-    try:
-        prior = session.current_hypothesis
-        if prior.get("route", {}).get("schema_version") == 1:
-            from .routes import catalog_step_state, merge_catalog_step
-            step, state = catalog_step_state(prior, str(payload.get("step_id", "")))
-            selected = apply_catalog_candidate({**prior, **state}, line, product_id)
-            hypothesis = merge_catalog_step(prior, selected, line, step["id"])
-        else:
-            hypothesis = apply_catalog_candidate(prior, line, product_id)
-        hypothesis["session_id"] = session.pk
-        session.current_hypothesis = hypothesis
-        session.save(update_fields=["current_hypothesis", "updated_at"])
-        selection = hypothesis.get("catalog_selection", {})
-        CatalogMatchDecision.objects.create(
-            session=session,
-            product=None,
-            supplier_code=str(selection.get("supplier_code") or "oasis")[:50],
-            product_external_id=str(selection.get("external_id") or selection.get("id") or "")[:100],
-            product_article=str(selection.get("article") or "")[:120],
-            product_snapshot={
-                key: selection.get(key) for key in (
-                    "external_id", "article", "name", "price", "stock", "url", "category", "matches",
-                    "supplier_code", "supplier_name", "supplier_site",
-                )
-            },
-            decision="selected",
-            reason_codes=[
-                "backend_exact_match" if selection.get("fit") == "exact" else "admin_override_mismatch",
-                "selected_by_admin",
-            ],
-            requirement_signature={
-                "name": str(line.get("name", ""))[:500],
-                "quantity": str(line.get("quantity", ""))[:50],
-                "requirements": line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
-            },
-            created_by=request.user,
-        )
-        supplier_name = str(selection.get("supplier_name") or selection.get("supplier_code") or "поставщика")
-        change = f"Выбран товар поставщика {supplier_name}: {selection.get('name', 'товар')} · арт. {selection.get('article', '')}".strip()
-        ProductionTrainingTurn.objects.create(session=session, feedback=change, understood_changes=[change], hypothesis=hypothesis)
-        return JsonResponse(hypothesis)
     except TenderAIError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     except Exception:
@@ -1250,155 +1031,9 @@ def add_calculation_source(request):
         return JsonResponse({"error": "Добавлять источники расчёта может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        session = ProductionTrainingSession.objects.get(pk=payload.get("session_id"), created_by=request.user, is_confirmed=False)
-        line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
-        hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-        costs = hypothesis.get("costs") if isinstance(hypothesis.get("costs"), list) else []
-        if not str(line.get("name", "")).strip():
-            raise ValueError
-        raw_sources = payload.get("sources") if isinstance(payload.get("sources"), list) else [payload]
-        if not raw_sources or len(raw_sources) > 6:
-            raise ValueError
-    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist, TenderKnowledgeSource.DoesNotExist):
-        return JsonResponse({"error": "Не удалось определить статью расчёта или источник."}, status=400)
-
-    try:
-        prepared_sources = []
-        batch_mode = isinstance(payload.get("sources"), list)
-        administrator_feedback = str(payload.get("feedback", "")).strip()[:6000]
-        for source_index, raw_source in enumerate(raw_sources):
-            if not isinstance(raw_source, dict):
-                raise ValueError
-            raw_cost_index = raw_source.get("cost_index")
-            cost_index = int(raw_cost_index) if raw_cost_index not in (None, "") else None
-            if cost_index is not None and (cost_index < 0 or cost_index >= len(costs)):
-                raise ValueError
-            upload = request.FILES.get(f"file_{source_index}" if batch_mode else "file")
-            if upload is not None and upload.size > 10 * 1024 * 1024:
-                return JsonResponse({"error": f"Файл источника № {source_index + 1} больше 10 МБ."}, status=400)
-            existing = None
-            target_name = costs[cost_index].get("name", "") if cost_index is not None else ""
-            if raw_source.get("source_id"):
-                existing = TenderKnowledgeSource.objects.get(pk=raw_source["source_id"], is_active=True)
-            if existing:
-                if existing.url:
-                    extracted = extract_calculation_source(
-                        source_url=existing.url,
-                        selection_context={"line": line, "feedback": administrator_feedback, "target_name": target_name},
-                    )
-                    refreshed = extracted.get("structured_data") if isinstance(extracted.get("structured_data"), dict) else {}
-                    existing.content_summary = extracted["content"]
-                    existing.structured_data = {
-                        **(existing.structured_data if isinstance(existing.structured_data, dict) else {}),
-                        **refreshed,
-                    }
-                    existing.save(update_fields=["content_summary", "structured_data", "updated_at"])
-                else:
-                    extracted = {
-                        "content": existing.content_summary,
-                        "source_type": existing.source_type,
-                        "url": existing.url,
-                        "structured_data": existing.structured_data if isinstance(existing.structured_data, dict) else {},
-                    }
-                source = existing
-            else:
-                extracted = extract_calculation_source(
-                    source_text=str(raw_source.get("source_text", "")),
-                    source_url=str(raw_source.get("source_url", "")),
-                    upload=upload,
-                    selection_context={"line": line, "feedback": administrator_feedback, "target_name": target_name},
-                )
-                title = str(raw_source.get("title", "")).strip() or str(raw_source.get("supplier_name", "")).strip() or target_name or f"Источник для {line.get('name')}"
-                extracted_structured = extracted.get("structured_data") if isinstance(extracted.get("structured_data"), dict) else {}
-                source = TenderKnowledgeSource.objects.create(
-                    title=title[:300],
-                    supplier_name=str(raw_source.get("supplier_name", "")).strip()[:200],
-                    source_type=extracted["source_type"],
-                    url=extracted["url"],
-                    content_summary=extracted["content"],
-                    structured_data={
-                        "scope": "cost" if cost_index is not None else "position",
-                        "position_name": str(line.get("name", ""))[:300],
-                        "cost_name": target_name,
-                        **extracted_structured,
-                    },
-                    created_by=request.user,
-                    is_active=False,
-                )
-            prepared_sources.append({
-                "source": source,
-                "extracted": extracted,
-                "cost_index": cost_index,
-                "target": costs[cost_index] if cost_index is not None else None,
-            })
-
-        feedback_parts = [administrator_feedback] if administrator_feedback else []
-        for source_index, prepared in enumerate(prepared_sources, start=1):
-            source, target, extracted = prepared["source"], prepared["target"], prepared["extracted"]
-            if target is not None:
-                instruction = (
-                    f"Для статьи «{target.get('name', 'расход')}» добавлен проверяемый источник «{source}». "
-                    "Пересчитай эту статью по данным источника, не копируй итог из похожего заказа."
-                )
-            else:
-                instruction = (
-                    f"К позиции добавлен проверяемый источник «{source}». Сам определи, к какому процессу, "
-                    "материалу или статье цены он относится. Используй его только в подходящем маршруте; "
-                    "наличие источника само по себе не подтверждает маршрут и не делает его оптимальным."
-                )
-            feedback_parts.append(f"ИСТОЧНИК № {source_index}. {instruction}\nДАННЫЕ ИСТОЧНИКА:\n{extracted['content'][:12000]}")
-        feedback_parts.append("Сохрани универсальные процессы, подробные формулы, все промежуточные действия и способы адаптации к текущему тиражу. Не смешивай предложения разных поставщиков в одну цену.")
-        feedback = "\n\n".join(feedback_parts)
-        updated = build_training_hypothesis(line, current=hypothesis, feedback=feedback)
-        for prepared in prepared_sources:
-            structured = prepared["extracted"].get("structured_data") if isinstance(prepared["extracted"].get("structured_data"), dict) else {}
-            updated = apply_verified_source_quote(
-                updated,
-                line,
-                structured.get("price_quote"),
-                str(prepared["source"]),
-                prepared["source"].url,
-                prepared["target"],
-            )
-        updated["session_id"] = session.pk
-        attached_sources = hypothesis.get("sources") if isinstance(hypothesis.get("sources"), list) else []
-        new_source_ids = {prepared["source"].pk for prepared in prepared_sources}
-        source_cards = [{
-            "id": prepared["source"].pk,
-            "title": prepared["source"].title,
-            "supplier_name": prepared["source"].supplier_name,
-            "source_type": prepared["source"].source_type,
-            "url": prepared["source"].url,
-            "scope": "cost" if prepared["target"] is not None else "position",
-            "cost_name": prepared["target"].get("name", "") if prepared["target"] is not None else "",
-            "is_pending": not prepared["source"].is_active,
-        } for prepared in prepared_sources]
-        updated["sources"] = [value for value in attached_sources if value.get("id") not in new_source_ids] + source_cards
-        updated_costs = updated.get("costs") if isinstance(updated.get("costs"), list) else []
-        for prepared in prepared_sources:
-            source, target, cost_index = prepared["source"], prepared["target"], prepared["cost_index"]
-            if target is None:
-                continue
-            matching = next((item for item in updated_costs if str(item.get("name", "")).casefold() == str(target.get("name", "")).casefold()), None)
-            if matching is None and cost_index < len(updated_costs):
-                matching = updated_costs[cost_index]
-            if matching is not None:
-                structured = prepared["extracted"].get("structured_data") if isinstance(prepared["extracted"].get("structured_data"), dict) else {}
-                matching.update({
-                    "source": str(source), "source_id": source.pk,
-                    "source_type": "supplier" if structured.get("price_quote") else source.source_type,
-                    "source_url": source.url, "source_date": source.updated_at.date().isoformat(),
-                })
-        session.current_hypothesis = updated
-        session.save(update_fields=["current_hypothesis", "updated_at"])
-        ProductionTrainingTurn.objects.create(
-            session=session, feedback=feedback, understood_changes=updated.get("understood_changes", []), hypothesis=updated,
-        )
-        return JsonResponse(updated)
-    except TenderAIError as exc:
+        return JsonResponse(add_route_calculation_sources(request.user, payload, request.FILES))
+    except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-    except Exception:
-        return JsonResponse({"error": "Не удалось прочитать источник или пересчитать статью."}, status=400)
 
 
 @login_required
@@ -1409,96 +1044,12 @@ def confirm_production_type(request):
         return JsonResponse({"error": "Добавлять учебные примеры может только администратор."}, status=403)
     try:
         payload = json.loads(request.POST.get("payload", "{}"))
-        line = payload.get("line") if isinstance(payload.get("line"), dict) else {}
         session_id = payload.get("session_id")
         if session_id:
-            # "Принять и обучить" accepts the calculation and writes every
-            # catalog/requirements instruction the admin gave this session
-            # to the Lesson table, with the context it was learned in. A
-            # run with nothing to learn (a product picked, no feedback) is
-            # fine — it just closes the session.
-            session = ProductionTrainingSession.objects.select_for_update().get(pk=session_id, created_by=request.user, is_confirmed=False)
-            hypothesis = session.current_hypothesis if isinstance(session.current_hypothesis, dict) else {}
-            if hypothesis.get("status") in {"processing", "error"}:
-                return JsonResponse({"error": "Дождитесь успешного построения маршрута."}, status=400)
-            saved = 0
-            if hypothesis.get("catalog_steps"):
-                for step_id, state in hypothesis["catalog_steps"].items():
-                    instructions = [entry for entry in hypothesis.get("session_instructions", []) if entry.get("step_id", step_id) == step_id]
-                    saved += learn_lessons_from_session({**state, "session_instructions": instructions}, session, request.user)
-            else:
-                saved = learn_lessons_from_session(hypothesis, session, request.user)
-            from .routes import confirm_route
-            saved += confirm_route(hypothesis, session, request.user)
-            # Learn every ТЗ row the admin left unchecked — its label comes
-            # pre-unchecked in every future tender (RequirementSkipRule).
-            skipped = 0
-            selection = hypothesis.get("requirement_selection", [])
-            for row in selection if isinstance(selection, list) else []:
-                if (not isinstance(row, dict) or row.get("selected") is not False
-                        or row.get("source_type") == "manager_clarification"):
-                    continue
-                label = str(row.get("label", "")).strip()[:200]
-                label_normalized = _normalized_requirement_label(label)
-                if not label_normalized:
-                    continue
-                _, created = RequirementSkipRule.objects.get_or_create(
-                    label_normalized=label_normalized,
-                    defaults={"label": label, "example_value": str(row.get("value", ""))[:500], "created_by": request.user, "is_active": True},
-                )
-                if not created:
-                    RequirementSkipRule.objects.filter(label_normalized=label_normalized, is_active=False).update(is_active=True)
-                skipped += int(created)
-            session.is_confirmed = True
-            session.current_hypothesis = {**hypothesis, "is_confirmed": True}
-            session.save(update_fields=["is_confirmed", "current_hypothesis", "updated_at"])
-            parts = ["Маршрут принят и сохранён." if session.confirmed_example_id else "Расчёт принят."]
-            parts.append(f"Новых уроков: {saved}." if saved else "Новых уроков нет.")
-            if skipped:
-                parts.append(f"Строк ТЗ вынесено из подбора навсегда: {skipped}.")
-            return JsonResponse({"message": " ".join(parts), "lessons_saved": saved, "rules_saved": saved, "requirement_skips_saved": skipped})
-        production_type = ProductionType.objects.get(code=payload.get("production_type"), is_active=True)
-        name = str(line.get("name", "")).strip()
-        if not name:
-            raise ValueError
-        features = payload.get("features") if isinstance(payload.get("features"), list) else []
-        raw_routes = payload.get("routes") if isinstance(payload.get("routes"), list) else []
-    except (ValueError, TypeError, json.JSONDecodeError, ProductionType.DoesNotExist, ProductionTrainingSession.DoesNotExist):
+            return JsonResponse(confirm_route_training(request.user, session_id))
+        return JsonResponse(save_manual_training_example(request.user, payload))
+    except (ValueError, TypeError, json.JSONDecodeError, ProductionTrainingSession.DoesNotExist):
         return JsonResponse({"error": "Не удалось сохранить учебный пример."}, status=400)
-    routes = []
-    for route_index, raw_route in enumerate(raw_routes[:5]):
-        if not isinstance(raw_route, dict):
-            continue
-        processes = []
-        for raw_process in raw_route.get("processes", [])[:12]:
-            if not isinstance(raw_process, dict):
-                continue
-            role = raw_process.get("role") if raw_process.get("role") in {"supply", "production", "completion"} else "production"
-            process_name = str(raw_process.get("name", "")).strip()[:200]
-            if not process_name:
-                continue
-            ProcessDefinition.objects.get_or_create(name=process_name, role=role)
-            processes.append({"role": role, "name": process_name, "reason": str(raw_process.get("reason", ""))[:300]})
-        if processes:
-            routes.append({"name": str(raw_route.get("name", "")).strip()[:120] or f"Маршрут {route_index + 1}", "reason": str(raw_route.get("reason", ""))[:300], "processes": processes})
-    if not routes:
-        return JsonResponse({"error": "Добавьте хотя бы один процесс в маршрут."}, status=400)
-    example = ProductionTrainingExample.objects.create(
-        production_type=production_type,
-        position_name=name[:500],
-        requirements=line.get("requirements") if isinstance(line.get("requirements"), dict) else {},
-        features=[str(value)[:300] for value in features[:10]],
-        routes=routes,
-        note=str(payload.get("note", ""))[:500],
-        created_by=request.user,
-    )
-    refresh_training_example_embedding(example)
-    ProductionTrainingExample.objects.filter(
-        production_type=production_type,
-        position_name__iexact=name,
-        is_active=True,
-    ).exclude(pk=example.pk).update(is_active=False, superseded_by=example)
-    return JsonResponse({"message": f"Пример сохранён: {production_type.name}.", "example_id": example.pk})
 
 
 @login_required
