@@ -48,23 +48,6 @@ def _request(prompt, image_data_urls=None):
     return result
 
 
-def _trace_block(direction, payload):
-    """Plain-text diagnostic record of an already performed exchange.
-
-    This is deliberately only a rendering helper: it neither changes a model
-    prompt nor adds data to the agent state.
-    """
-    if isinstance(payload, str):
-        text = payload
-    else:
-        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    return f"{direction}\n{text}"
-
-
-def _trace_response(trace, *, kind="text", data=None):
-    return {"text": "\n\n".join(trace), "kind": kind, "data": data or {}}
-
-
 def _tool_catalogue(tools):
     """Give the model only the contract it needs to choose a next action."""
     return [
@@ -97,7 +80,7 @@ def _finish_state(conversation):
     conversation.save(update_fields=["context"])
 
 
-def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejection=None):
+def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
     read_catalog = []
     if any(tool["id"] == "read" and tool["available"] for tool in tools):
         from .assistant_read import catalogue
@@ -113,7 +96,6 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "If required information is absent, return status needs_input and one concise Russian question. "
                 "If the result is complete, return status final and explain it using only completed_step_results. "
                 "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
-                "If previous_backend_rejection is present, correct that request before choosing another step. "
                 "Return valid JSON matching response_schema."
             ),
             "registered_tools": _tool_catalogue(tools),
@@ -132,7 +114,6 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "original_task": state["task"],
             "latest_user_message": message,
             "completed_step_results": state["results"],
-            "previous_backend_rejection": rejection,
             "response_schema": {
                 "reply": "concise Russian text",
                 "status": "next|needs_input|final|cancel",
@@ -144,7 +125,120 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
     )
     preflight()
     result = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
-    return result, prompt
+    if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
+        raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
+    return result
+
+
+def _validate_plan_steps(plan, tools, user):
+    if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
+        raise TenderAIError("Ассистент не сформировал корректный план.")
+    status = plan.get("status")
+    if status not in {"ready", "needs_input", "cancel"}:
+        raise TenderAIError("Ассистент не указал состояние плана.")
+    steps = plan.get("steps", [])
+    if status == "needs_input":
+        if steps not in (None, []):
+            raise TenderAIError("План с уточняющим вопросом не должен содержать шаги.")
+        return []
+    if status == "cancel":
+        return []
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_AGENT_STEPS:
+        raise TenderAIError("План должен содержать от одного до восьми шагов.")
+    known_ids = set()
+    validated = []
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != {"id", "tool_id", "purpose", "arguments", "inputs", "outputs"}:
+            raise TenderAIError("Шаг плана имеет неверную структуру.")
+        step_id, identifier = step["id"], step["tool_id"]
+        if not isinstance(step_id, str) or not step_id or step_id in known_ids:
+            raise TenderAIError("У шагов плана должны быть уникальные идентификаторы.")
+        if not isinstance(identifier, str) or not isinstance(step["purpose"], str) or not isinstance(step["arguments"], dict):
+            raise TenderAIError("Шаг плана содержит неверную команду или параметры.")
+        if identifier != "compute":
+            tool = next((item for item in tools if item["id"] == identifier), None)
+            if tool is None or not tool["available"]:
+                raise TenderAIError("План ссылается на недоступную функцию.")
+        if not isinstance(step["inputs"], list) or not isinstance(step["outputs"], list) or not all(isinstance(value, str) and value for value in step["outputs"]):
+            raise TenderAIError("У шага плана должны быть указаны входы и выходы.")
+        for value in step["inputs"]:
+            if not isinstance(value, dict) or set(value) != {"from", "value"} or not isinstance(value["value"], str):
+                raise TenderAIError("Связь между шагами плана имеет неверную структуру.")
+            source = value["from"]
+            if source != "user" and source not in known_ids:
+                raise TenderAIError("Шаг плана ссылается на ещё не полученный результат.")
+        if identifier == "read" and all(value["from"] == "user" for value in step["inputs"]):
+            from .assistant_read import ReadPlanError, validate_plan
+
+            try:
+                validate_plan(user, step["arguments"].get("plan"))
+            except ReadPlanError as exc:
+                raise TenderAIError(f"Шаг чтения ссылается на неверные данные: {exc}") from exc
+        known_ids.add(step_id)
+        validated.append(step)
+    return validated
+
+
+def _format_plan(reply, steps):
+    lines = [reply.strip(), "", "План действий (исполнение пока отключено):"]
+    for number, step in enumerate(steps, start=1):
+        inputs = "; ".join(f"{value['from']}: {value['value']}" for value in step["inputs"]) or "нет"
+        outputs = "; ".join(step["outputs"])
+        lines.extend((
+            f"{number}. {step['purpose']}",
+            f"   Команда: {step['tool_id']}",
+            f"   Вход: {inputs}",
+            f"   Выход: {outputs}",
+        ))
+    return "\n".join(lines)
+
+
+def _plan_task(conversation, user, message, tools, page_context, attachments, image_data_urls):
+    from .assistant_read import catalogue
+
+    prompt = json.dumps(
+        {
+            "task": (
+                "You are PSADMIN's Russian-speaking agent. Before execution, design a complete theoretical route to a verified final result. "
+                "Use only registered actions, read, and compute. Do not invent functions, records, or results. "
+                "For every step name the exact tool_id, known arguments, inputs and outputs; an input from a prior step must name that step. "
+                "For an initial read use arguments.plan with entity (never model), fields, filters, order_by and limit from read_catalog. "
+                "This is planning only: do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
+                "Return valid JSON matching response_schema."
+            ),
+            "registered_tools": _tool_catalogue(tools),
+            "workflows": workflow_catalog(user, tools),
+            "read_catalog": catalogue(compact=True),
+            "compute": {"tool_id": "compute", "operations": sorted(_COMPUTE_OPERATIONS)},
+            "business_context": conversation.context.get("business_context", {}),
+            "page_context": page_context or {},
+            "attachments": attachments or [],
+            "history": _history(conversation),
+            "user_message": message,
+            "response_schema": {
+                "reply": "concise Russian text",
+                "status": "ready|needs_input|cancel",
+                "steps": [{
+                    "id": "unique step id",
+                    "tool_id": "registered id, read, or compute",
+                    "purpose": "why this step is needed",
+                    "arguments": "known object arguments; use an empty object when a value must come from a previous step",
+                    "inputs": [{"from": "user or earlier step id", "value": "what is received"}],
+                    "outputs": ["what this step produces for a later step or final answer"],
+                }],
+            },
+        },
+        ensure_ascii=False,
+    )
+    preflight()
+    plan = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
+    steps = _validate_plan_steps(plan, tools, user)
+    if plan["status"] == "needs_input":
+        return {"text": plan["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
+    _finish_state(conversation)
+    if plan["status"] == "cancel":
+        return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+    return {"text": _format_plan(plan["reply"], steps), "kind": "text", "data": {"plan": steps}}
 
 
 def _next_step(decision, tools):
@@ -251,88 +345,48 @@ def _compute(arguments, results):
     return {"operation": operation, "value": _decimal_text(value)}
 
 
-def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls, trace=None):
-    trace = list(trace or [])
-    rejection = None
+def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
     for _ in range(MAX_AGENT_STEPS):
-        decision, prompt = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejection)
-        trace.extend((_trace_block("BACKEND → LLM", prompt), _trace_block("LLM → BACKEND", decision)))
-        if not isinstance(decision, dict) or not isinstance(decision.get("reply"), str):
-            error = "Ассистент вернул неполный ответ."
-            trace.append(_trace_block("BACKEND VALIDATION", {"error": error}))
-            rejection = {"error": error, "response": decision}
-            message, attachments, image_data_urls = "", [], None
-            continue
+        decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
         status = decision.get("status")
         if status == "cancel":
             _finish_state(conversation)
-            return _trace_response(trace)
-        try:
-            identifier, arguments, purpose = _next_step(decision, tools)
-        except TenderAIError as exc:
-            error = str(exc)
-            trace.append(_trace_block("BACKEND VALIDATION", {"error": error}))
-            rejection = {"error": error, "response": decision}
-            message, attachments, image_data_urls = "", [], None
-            continue
+            return {"text": decision["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+        identifier, arguments, purpose = _next_step(decision, tools)
         if status == "needs_input":
             _save_state(conversation, state)
-            return _trace_response(trace, data={"task_pending": True})
+            return {"text": decision["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
         if status == "final":
             if not state["results"] and decision.get("basis") not in {"user_supplied", "unavailable"}:
-                error = "Ассистент завершил задачу без проверенного результата."
-                trace.append(_trace_block("BACKEND VALIDATION", {"error": error}))
-                rejection = {"error": error, "response": decision}
-                message, attachments, image_data_urls = "", [], None
-                continue
+                raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
             _finish_state(conversation)
-            return _trace_response(trace, data={"steps": state["results"]})
+            return {"text": decision["reply"].strip(), "kind": "tool_result", "data": {"steps": state["results"]}}
         if identifier == "compute":
-            trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
-            try:
-                result = _compute(arguments, state["results"])
-            except TenderAIError as exc:
-                error = str(exc)
-                trace.append(_trace_block("TOOL → BACKEND", {"error": error}))
-                rejection = {"tool_id": identifier, "arguments": arguments, "error": error}
-                message, attachments, image_data_urls = "", [], None
-                continue
+            result = _compute(arguments, state["results"])
         else:
             tool = next(item for item in tools if item["id"] == identifier)
             missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
             if missing:
                 _save_state(conversation, state)
-                return _trace_response(trace, data={"task_pending": True, "missing": missing})
+                return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
             if tool["requires_confirmation"]:
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
                 _save_state(conversation, state)
-                return _trace_response(trace, kind="confirmation_required", data={"tool_id": identifier, "arguments": arguments})
+                return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
             try:
-                trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
                 result = execute_tool(identifier, user, arguments)
             except AssistantToolError as exc:
-                error = str(exc)
-                trace.append(_trace_block("TOOL → BACKEND", {"error": error}))
-                if identifier == "read":
-                    rejection = {"tool_id": identifier, "arguments": arguments, "error": error}
-                    message, attachments, image_data_urls = "", [], None
-                    continue
-                return _trace_response(trace)
-        trace.append(_trace_block("TOOL → BACKEND", result))
-        rejection = None
+                raise TenderAIError(str(exc)) from exc
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
-    trace.append(_trace_block("BACKEND", {"error": f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск."}))
-    _save_state(conversation, state)
-    return _trace_response(trace, data={"task_pending": True})
+    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.")
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
-    """Run a bounded sequence of registered, backend-validated steps."""
+    """Build and validate a route; execution remains deliberately disabled."""
     tools = available_tools(user)
-    state = _run_state(conversation, message)
-    return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+    return _plan_task(conversation, user, message, tools, page_context, attachments, image_data_urls)
 
 
 def continue_after_confirmation(conversation, user, tool_id, result):
@@ -350,7 +404,4 @@ def continue_after_confirmation(conversation, user, tool_id, result):
         "result": result,
     })
     _save_state(conversation, state)
-    return _execute_loop(
-        conversation, user, "", state, available_tools(user), None, [], None,
-        trace=[_trace_block("TOOL → BACKEND", result)],
-    )
+    return _execute_loop(conversation, user, "", state, available_tools(user), None, [], None)
