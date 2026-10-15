@@ -22,8 +22,8 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_builds_a_validated_multistep_plan_without_execution(self, request, _preflight):
-        request.return_value = self._plan([
+    def test_builds_a_plan_then_executes_its_steps(self, request, _preflight):
+        plan = self._plan([
             {
                 "id": "lost_tenders", "tool_id": "read", "purpose": "Найти проигранные тендеры за сентябрь",
                 "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "contract_reduction_percent"]}},
@@ -43,6 +43,31 @@ class AssistantConversationTests(TestCase):
                 "outputs": ["три тендера для финального ответа"],
             },
         ])
+        request.side_effect = [
+            plan,
+            {
+                "reply": "Читаю тендеры.", "status": "next", "basis": "user_supplied",
+                "next_step": {
+                    "tool_id": "read", "purpose": "Найти проигранные тендеры",
+                    "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "contract_reduction_percent"], "filters": [], "order_by": "-id", "limit": 20}},
+                },
+            },
+            {
+                "reply": "Считаю количество найденных строк.", "status": "next", "basis": "verified_steps",
+                "next_step": {
+                    "tool_id": "compute", "purpose": "Посчитать найденные тендеры",
+                    "arguments": {"operation": "count", "inputs": [{"step": 1, "path": "records[]"}]},
+                },
+            },
+            {
+                "reply": "Отбираю три записи.", "status": "next", "basis": "verified_steps",
+                "next_step": {
+                    "tool_id": "read", "purpose": "Получить три тендера",
+                    "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "contract_reduction_percent"], "filters": [], "order_by": "-id", "limit": 3}},
+                },
+            },
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
 
         response = self.client.post(
             reverse("assistant_conversation_message", args=[self._conversation()]),
@@ -52,12 +77,12 @@ class AssistantConversationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         message = response.json()["messages"][-1]
-        self.assertIn("План действий (исполнение пока отключено)", message["text"])
-        self.assertIn("Команда: read", message["text"])
-        self.assertIn("Команда: compute", message["text"])
-        self.assertIn("lost_tenders: значения фактического снижения", message["text"])
-        self.assertEqual([step["id"] for step in message["data"]["plan"]], ["lost_tenders", "average_reduction", "top_three"])
-        self.assertEqual(request.call_count, 1)
+        self.assertEqual(message["text"], "Готово.")
+        self.assertEqual(message["kind"], "tool_result")
+        self.assertEqual([step["tool_id"] for step in message["data"]["steps"]], ["read", "compute", "read"])
+        self.assertEqual(request.call_count, 5)
+        execution_prompt = json.loads(request.call_args_list[1].args[0])
+        self.assertEqual([step["id"] for step in execution_prompt["execution_plan"]], ["lost_tenders", "average_reduction", "top_three"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -114,17 +139,62 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_answer_to_a_clarification_continues_the_existing_plan(self, request, _preflight):
+        request.side_effect = [
+            self._plan([{
+                "id": "read_tenders", "tool_id": "read", "purpose": "Прочитать тендеры",
+                "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"]}},
+                "inputs": [{"from": "user", "value": "месяц"}], "outputs": ["тендеры"],
+            }]),
+            {"reply": "За какой месяц показать тендеры?", "status": "needs_input", "basis": "unavailable"},
+            {
+                "reply": "Читаю тендеры за сентябрь.", "status": "next", "basis": "user_supplied",
+                "next_step": {
+                    "tool_id": "read", "purpose": "Прочитать тендеры",
+                    "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"], "filters": [], "order_by": "-id", "limit": 20}},
+                },
+            },
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+        conversation_id = self._conversation()
+
+        first = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Покажи тендеры"}), content_type="application/json", secure=True,
+        )
+        second = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "За сентябрь"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.json()["messages"][-1]["data"]["task_pending"])
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["messages"][-1]["text"], "Готово.")
+        self.assertEqual(request.call_count, 4)
+        continuation_prompt = json.loads(request.call_args_list[2].args[0])
+        self.assertEqual(continuation_prompt["latest_user_message"], "За сентябрь")
+        self.assertEqual(continuation_prompt["execution_plan"][0]["id"], "read_tenders")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_action_in_plan_does_not_change_data(self, request, _preflight):
         from cash.models import CashTransaction
 
-        request.return_value = self._plan([
+        request.side_effect = [self._plan([
             {
                 "id": "create_expense", "tool_id": "cash.transaction_create", "purpose": "Создать операцию кассы",
                 "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "1", "reason": "тест"},
                 "inputs": [{"from": "user", "value": "дата, счёт, направление, сумма и причина"}],
                 "outputs": ["предложение операции для подтверждения"],
             },
-        ])
+        ]), {
+            "reply": "Подготовил операцию кассы для подтверждения.", "status": "next", "basis": "user_supplied",
+            "next_step": {
+                "tool_id": "cash.transaction_create", "purpose": "Создать операцию кассы",
+                "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "1", "reason": "тест"},
+            },
+        }]
 
         response = self.client.post(
             reverse("assistant_conversation_message", args=[self._conversation()]),
@@ -133,7 +203,7 @@ class AssistantConversationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(CashTransaction.objects.filter(reason="тест").exists())
-        self.assertIn("cash.transaction_create", response.json()["messages"][-1]["text"])
+        self.assertEqual(response.json()["messages"][-1]["kind"], "confirmation_required")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")

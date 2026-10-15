@@ -1,9 +1,4 @@
-"""Small, validated execution loop for the global PSADMIN assistant.
-
-The model chooses only the next step. The backend owns validation,
-permissions, execution, confirmations and the hand-off of verified results to
-the following step. There are no business-specific branches here.
-"""
+"""Plan-first, validated execution loop for the global PSADMIN assistant."""
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
@@ -89,7 +84,8 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
         {
             "task": (
                 "You are PSADMIN's Russian-speaking agent. Solve the user's task to a verified final result. "
-                "Choose exactly one next step at a time, see its real result, then choose the next step. "
+                "Use execution_plan as the intended route: start with its first unfinished step, see its real result, then choose the next step. "
+                "Change that route only when a verified result makes the planned step impossible or unnecessary. "
                 "Never invent tools, database values, calculations, or completed actions. "
                 "Use read for application data and registered actions only for real site operations. "
                 "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
@@ -112,6 +108,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "attachments": attachments or [],
             "history": _history(conversation),
             "original_task": state["task"],
+            "execution_plan": state.get("plan", []),
             "latest_user_message": message,
             "completed_step_results": state["results"],
             "response_schema": {
@@ -192,12 +189,12 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
     prompt = json.dumps(
         {
             "task": (
-                "You are PSADMIN's Russian-speaking agent. Before execution, design a complete theoretical route to a verified final result. "
+                "You are PSADMIN's Russian-speaking agent. Before controlled execution, design a complete route to a verified final result. "
                 "Use only registered actions, read, and compute. Do not invent functions, records, or results. "
                 "For every step name the exact tool_id, known arguments, inputs and outputs. Every step must list at least one input: "
                 "use from=user for conditions from the user's request, or the earlier step id for a prior result; never use an empty inputs list. "
                 "For an initial read use arguments.plan with entity (never model), fields, filters, order_by and limit from read_catalog. "
-                "This is planning only: do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
+                "Do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
                 "Return valid JSON matching response_schema."
             ),
             "registered_tools": _tool_catalogue(tools),
@@ -378,9 +375,19 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
-    """Build and validate a route; execution remains deliberately disabled."""
+    """Plan a route once, then execute it through the existing validated loop."""
     tools = available_tools(user)
-    return _plan_task(conversation, user, message, tools, page_context, attachments, image_data_urls)
+    state = conversation.context.get("agent_run")
+    if isinstance(state, dict) and isinstance(state.get("task"), str) and isinstance(state.get("results"), list):
+        return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+    planned = _plan_task(conversation, user, message, tools, page_context, attachments, image_data_urls)
+    steps = planned["data"].get("plan")
+    if not isinstance(steps, list):
+        return planned
+    state = _run_state(conversation, message)
+    state["plan"] = steps
+    _save_state(conversation, state)
+    return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
 
 
 def continue_after_confirmation(conversation, user, tool_id, result):
