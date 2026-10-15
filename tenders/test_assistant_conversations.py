@@ -100,6 +100,31 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_invalid_llm_step_is_shown_then_repaired(self, request, _preflight):
+        def fake_gateway(prompt):
+            payload = json.loads(prompt)
+            if not payload.get("previous_backend_rejection"):
+                return {"reply": "Готово.", "status": "final", "basis": "user_supplied", "next_step": {
+                    "tool_id": "read", "purpose": "лишний шаг", "arguments": {"plan": {}},
+                }}
+            self.assertEqual(payload["previous_backend_rejection"]["error"], "Шаг можно передавать только со статусом next.")
+            return {"reply": "Готово.", "status": "final", "basis": "user_supplied"}
+
+        request.side_effect = fake_gateway
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Переведи фразу"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        text = response.json()["messages"][-1]["text"]
+        self.assertIn('"status": "final"', text)
+        self.assertIn('"next_step"', text)
+        self.assertIn("Шаг можно передавать только со статусом next.", text)
+        self.assertEqual(text.count("LLM → BACKEND"), 2)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_confirmed_action_continues_the_same_task(self, request, _preflight):
         from cash.models import CashTransaction
 
@@ -184,25 +209,27 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_final_without_a_verified_or_user_supplied_basis_is_rejected(self, request, _preflight):
+    def test_final_without_a_verified_or_user_supplied_basis_is_shown_and_not_accepted(self, request, _preflight):
         request.return_value = {"reply": "Придуманный итог", "status": "final", "basis": "verified_steps"}
         response = self.client.post(
             reverse("assistant_conversation_message", args=[self._conversation()]), data=json.dumps({"message": "Сколько тендеров?"}),
             content_type="application/json", secure=True,
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("без проверенного результата", response.json()["detail"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("без проверенного результата", response.json()["messages"][-1]["text"])
+        self.assertEqual(request.call_count, 8)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_unregistered_action_is_rejected(self, request, _preflight):
+    def test_unregistered_action_is_shown_and_not_executed(self, request, _preflight):
         request.return_value = {"reply": "Делаю.", "status": "next", "next_step": {"tool_id": "invented.action", "purpose": "нет", "arguments": {}}}
         response = self.client.post(
             reverse("assistant_conversation_message", args=[self._conversation()]), data=json.dumps({"message": "Сделай невозможное"}),
             content_type="application/json", secure=True,
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("вне энциклопедии", response.json()["detail"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("вне энциклопедии", response.json()["messages"][-1]["text"])
+        self.assertEqual(request.call_count, 8)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request", return_value={"reply": "Вижу прайс.", "status": "final", "basis": "user_supplied"})

@@ -144,8 +144,6 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
     )
     preflight()
     result = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
-    if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
-        raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
     return result, prompt
 
 
@@ -259,17 +257,34 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
     for _ in range(MAX_AGENT_STEPS):
         decision, prompt = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejection)
         trace.extend((_trace_block("BACKEND → LLM", prompt), _trace_block("LLM → BACKEND", decision)))
+        if not isinstance(decision, dict) or not isinstance(decision.get("reply"), str):
+            error = "Ассистент вернул неполный ответ."
+            trace.append(_trace_block("BACKEND VALIDATION", {"error": error}))
+            rejection = {"error": error, "response": decision}
+            message, attachments, image_data_urls = "", [], None
+            continue
         status = decision.get("status")
         if status == "cancel":
             _finish_state(conversation)
             return _trace_response(trace)
-        identifier, arguments, purpose = _next_step(decision, tools)
+        try:
+            identifier, arguments, purpose = _next_step(decision, tools)
+        except TenderAIError as exc:
+            error = str(exc)
+            trace.append(_trace_block("BACKEND VALIDATION", {"error": error}))
+            rejection = {"error": error, "response": decision}
+            message, attachments, image_data_urls = "", [], None
+            continue
         if status == "needs_input":
             _save_state(conversation, state)
             return _trace_response(trace, data={"task_pending": True})
         if status == "final":
             if not state["results"] and decision.get("basis") not in {"user_supplied", "unavailable"}:
-                raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
+                error = "Ассистент завершил задачу без проверенного результата."
+                trace.append(_trace_block("BACKEND VALIDATION", {"error": error}))
+                rejection = {"error": error, "response": decision}
+                message, attachments, image_data_urls = "", [], None
+                continue
             _finish_state(conversation)
             return _trace_response(trace, data={"steps": state["results"]})
         if identifier == "compute":
