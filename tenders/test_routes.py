@@ -110,7 +110,7 @@ class RouteTests(RouteFixtures, TestCase):
         route = {"route": {"processes": [{"id": "catalog-only", "kind": "catalog"}]}}
         catalog = {"route": route["route"], "catalog_search_started": True}
         with patch("tenders.views._submit_assistant_job") as submit, patch(
-            "tenders.views.build_training_hypothesis", side_effect=[route, catalog]
+            "tenders.production_actions.build_training_hypothesis", side_effect=[route, catalog]
         ) as build:
             response = self.client.post(
                 reverse("tender_production_route_preview"),
@@ -261,7 +261,7 @@ class RouteTests(RouteFixtures, TestCase):
     def test_explicit_start_endpoint_needs_no_feedback_and_passes_step(self):
         current = self.build()
         session = ProductionTrainingSession.objects.create(created_by=self.user, position_name="Пакет", current_hypothesis=current)
-        with patch("tenders.views._submit_assistant_job") as submit, patch("tenders.views.build_training_hypothesis", return_value=current) as build:
+        with patch("tenders.views._submit_assistant_job") as submit, patch("tenders.production_actions.build_training_hypothesis", return_value=current) as build:
             response = self.client.post(reverse("tender_revise_production_hypothesis"), {"payload": json.dumps({"session_id": session.pk, "line": self.line, "scope": "catalog", "step_id": "purchase"})})
             self.assertEqual(response.status_code, 202)
             submit.call_args.args[1](session)

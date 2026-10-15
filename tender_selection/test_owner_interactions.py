@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
+from tenders.assistant_tools import execute_tool
 from tenders.models import OwnerFeedbackEvent, OwnerInteraction, TenderSourceItem
 
 from .models import Tender
@@ -56,5 +57,24 @@ class OwnerInteractionAnswerTests(TestCase):
         self.item.refresh_from_db(); other.refresh_from_db(); proposal.refresh_from_db()
         self.assertFalse(self.item.is_active)
         self.assertTrue(other.is_active)
+        self.assertTrue(proposal.is_active)
+        self.assertEqual(proposal.source_type, "document_extraction")
+
+    def test_document_proposal_action_uses_the_same_executor_as_the_assistant(self):
+        proposal = TenderSourceItem.objects.create(
+            tender=self.tender, source_key="proposal:assistant", source_type="document_proposal",
+            original_text="Деталь", parent=self.item, is_active=False,
+        )
+
+        result = execute_tool("tender.document_proposals", self.admin, {
+            "tender_id": self.tender.pk,
+            "parent_id": self.item.pk,
+            "decision": "accept",
+        }, confirmed=True)
+
+        self.assertEqual(result, {"tender_id": self.tender.pk, "decision": "accept", "changed": 1})
+        self.item.refresh_from_db()
+        proposal.refresh_from_db()
+        self.assertFalse(self.item.is_active)
         self.assertTrue(proposal.is_active)
         self.assertEqual(proposal.source_type, "document_extraction")

@@ -344,8 +344,8 @@ class OutcomeAndExtrasRegressionTests(TestCase):
         )
 
     def test_protocol_check_receives_tender_not_estimate(self):
-        with patch("tender_selection.views.check_protocol", return_value=False) as check, \
-                patch("tender_selection.views.fetch_tender_outcome", return_value={"found": False}) as fetch:
+        with patch("tender_selection.services.check_protocol", return_value=False) as check, \
+                patch("tender_selection.services.fetch_tender_outcome", return_value={"found": False}) as fetch:
             response = self.client.post(
                 reverse("tender_selection:enter_outcome", args=[self.estimate.pk]),
                 HTTP_X_REQUESTED_WITH="XMLHttpRequest",

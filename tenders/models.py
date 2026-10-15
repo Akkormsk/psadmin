@@ -1047,6 +1047,18 @@ class OwnerFeedbackEvent(models.Model):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError("OwnerFeedbackEvent is immutable")
         return super().save(*args, **kwargs)
+
+
+class ConversationAttachment(models.Model):
+    """Temporary input owned by one assistant conversation."""
+    conversation = models.ForeignKey(OwnerInteraction, on_delete=models.CASCADE, related_name="attachments")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="assistant_attachments")
+    name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    kind = models.CharField(max_length=16)
+    content = models.BinaryField()
+    extracted_text = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 class KnowledgeRecord(models.Model):
     feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 

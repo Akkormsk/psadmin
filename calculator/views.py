@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .models import CalculatorSettings, Estimate, EstimateGroup, PriceItem
-from .actions import CalculatorActionError, delete_estimate as delete_saved_estimate, duplicate_estimate as duplicate_saved_estimate, save_estimate as save_shared_estimate
+from .actions import CalculatorActionError, bulk_estimates as run_bulk_estimates, delete_estimate as delete_saved_estimate, duplicate_estimate as duplicate_saved_estimate, save_estimate as save_shared_estimate
 
 
 def _settings():
@@ -127,30 +127,18 @@ def delete_estimate(request, pk):
 @login_required
 @require_POST
 def bulk_estimates(request):
-    ids = [int(value) for value in request.POST.getlist("estimate_ids") if value.isdigit()]
-    estimates = Estimate.objects.filter(pk__in=ids)
-    if not request.user.is_superuser:
-        estimates = estimates.filter(owner=request.user)
-    estimates = list(estimates)
-    action = request.POST.get("action")
-    if not estimates:
-        messages.error(request, "Выберите хотя бы один расчёт.")
-    elif action == "group":
-        name = request.POST.get("name", "").strip()[:200]
-        if not name:
-            messages.error(request, "Укажите название группы.")
-        elif len({estimate.calculator_type for estimate in estimates}) != 1:
-            messages.error(request, "В одну группу можно собрать расчёты одного калькулятора.")
-        else:
-            group, _ = EstimateGroup.objects.get_or_create(owner=request.user, calculator_type=estimates[0].calculator_type, name=name)
-            Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).update(group=group)
-            messages.success(request, f"Расчёты собраны в группу «{group.name}».")
-    elif action == "ungroup":
-        Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).update(group=None)
-        messages.success(request, "Расчёты убраны из группы.")
-    elif action == "delete":
-        Estimate.objects.filter(pk__in=[estimate.pk for estimate in estimates]).delete()
-        messages.success(request, "Выбранные расчёты удалены.")
+    try:
+        result = run_bulk_estimates(request.user, {
+            "action": request.POST.get("action"),
+            "name": request.POST.get("name", ""),
+            "estimate_ids": [int(value) for value in request.POST.getlist("estimate_ids") if value.isdigit()],
+        })
+    except CalculatorActionError as exc:
+        messages.error(request, str(exc) + ".")
     else:
-        messages.error(request, "Неизвестное массовое действие.")
+        messages.success(request, {
+            "group": "Расчёты собраны в группу.",
+            "ungroup": "Расчёты убраны из группы.",
+            "delete": "Выбранные расчёты удалены.",
+        }[result["action"]])
     return redirect(f"{reverse('calculator_home')}?calculator={request.POST.get('calculator_type', Estimate.TYPE_SHEET)}")

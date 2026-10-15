@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from .actions import save_estimate
+from .actions import bulk_estimates, save_estimate
 from .models import CalculatorSettings, Estimate, EstimateGroup, PriceItem
 from .services import calculate_sheet_estimate
 
@@ -61,6 +61,20 @@ class SheetCalculatorTests(TestCase):
         page = self.client.get(reverse("calculator_home"))
         self.assertContains(page, "Весенняя кампания")
         self.assertContains(page, "200.00")
+
+    def test_bulk_grouping_uses_the_shared_business_action(self):
+        first = Estimate.objects.create(owner=self.user, name="Буклет")
+        second = Estimate.objects.create(owner=self.user, name="Листовка")
+
+        result = bulk_estimates(self.user, {
+            "action": "group", "name": "Весенняя кампания", "estimate_ids": [first.pk, second.pk],
+        })
+
+        self.assertEqual(result["changed"], 2)
+        self.assertCountEqual(
+            EstimateGroup.objects.get(owner=self.user, name="Весенняя кампания").estimates.values_list("pk", flat=True),
+            [first.pk, second.pk],
+        )
 
     def test_wide_calculator_uses_its_formula(self):
         settings = CalculatorSettings.objects.create(hourly_rate=Decimal("550"))

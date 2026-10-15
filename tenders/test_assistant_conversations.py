@@ -2,10 +2,11 @@ import json
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import OwnerFeedbackEvent, OwnerInteraction, ProcessDefinition
+from .models import ConversationAttachment, OwnerFeedbackEvent, OwnerInteraction, ProcessDefinition
 
 
 class AssistantConversationTests(TestCase):
@@ -34,8 +35,8 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(reply.status_code, 200)
         messages = reply.json()["messages"]
         self.assertEqual(messages[-1]["role"], "assistant")
-        self.assertEqual(messages[-1]["kind"], "tool_result")
-        self.assertTrue(any(item["id"] == "provider.calculate" for item in messages[-1]["data"]["result"]["tools"]))
+        self.assertEqual(messages[-1]["kind"], "plan")
+        self.assertEqual(messages[-1]["data"]["steps"][0]["tool_id"], "assistant.capabilities")
 
         interaction = OwnerInteraction.objects.get(pk=conversation_id)
         self.assertEqual(interaction.context["kind"], "assistant_conversation")
@@ -79,84 +80,63 @@ class AssistantConversationTests(TestCase):
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ"}, secure=True).json()["conversation"]["id"]
         reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Покажи тендер"}), content_type="application/json", secure=True)
         self.assertEqual(reply.status_code, 200)
-        self.assertEqual(reply.json()["messages"][-1]["kind"], "tool_result")
+        self.assertEqual(reply.json()["messages"][-1]["kind"], "plan")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_generic_read_repairs_malformed_plan_without_asking_for_internal_params(self, request, _preflight):
-        from tender_selection.models import Tender
-        item = Tender.objects.create(purchase_number="READ-REPAIR", title="Чтение", collecting_finished_at="2026-09-30T10:00:00Z")
-        request.side_effect = [
-            {"reply": "Читаю данные.", "action": {"id": "read", "arguments": {"plan": []}}},
-            {"reply": "Исправляю запрос.", "action": {"id": "read", "arguments": {"plan": {
-                "entity": "tender_selection.Tender", "fields": ["purchase_number"],
-                "order_by": "-id", "limit": 5,
-            }}}},
-            {"reply": "Найден тендер READ-REPAIR."},
-        ]
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ repair"}, secure=True).json()["conversation"]["id"]
-        reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]),
-                                 data=json.dumps({"message": "Покажи пять последних тендеров"}),
-                                 content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(reply["kind"], "tool_result")
-        self.assertEqual(reply["data"]["result"]["records"][0]["id"], item.pk)
-        self.assertEqual(request.call_count, 3)
-        self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
+    def test_multi_step_plan_is_validated_and_not_executed(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        request.return_value = {
+            "reply": "Сначала проверю данные, затем подготовлю расход для подтверждения.",
+            "plan": {
+                "steps": [
+                    {"tool_id": "read", "purpose": "Проверить операции за период", "expected_result": "Список операций", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["id"]}}},
+                    {"tool_id": "cash.transaction_create", "purpose": "Подготовить расход", "expected_result": "Черновик операции для подтверждения", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}, "depends_on": [1]},
+                ],
+                "gaps": [],
+            },
+        }
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "План"}, secure=True).json()["conversation"]["id"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Проверь расходы и добавь доставку"}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 200)
+        message = reply.json()["messages"][-1]
+        self.assertEqual(message["kind"], "plan")
+        self.assertEqual([step["tool_id"] for step in message["data"]["steps"]], ["read", "cash.transaction_create"])
+        self.assertEqual(message["data"]["steps"][1]["status"], "ready_after_previous_steps")
+        self.assertEqual(message["data"]["steps"][1]["expected_result"], "Черновик операции для подтверждения")
+        self.assertFalse(CashTransaction.objects.filter(reason="Доставка").exists())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Сделаю.", "plan": {"steps": [{"tool_id": "invented.action", "purpose": "Несуществующее действие", "arguments": {}}], "gaps": []}})
+    def test_plan_rejects_an_unregistered_operation(self, _request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "План"}, secure=True).json()["conversation"]["id"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Сделай невозможное"}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 400)
+        self.assertIn("отсутствующую возможность", reply.json()["detail"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_generic_read_fails_safely_after_one_repair_without_pending_plan(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Читаю данные.", "action": {"id": "read", "arguments": {}}},
-            {"reply": "Повтор.", "action": {"id": "read", "arguments": {"plan": []}}},
-        ]
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ reject"}, secure=True).json()["conversation"]["id"]
-        reply = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]),
-                                 data=json.dumps({"message": "Покажи последние записи"}),
-                                 content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(reply["kind"], "tool_error")
-        self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_promised_database_fetch_is_completed_in_same_turn(self, request, _preflight):
-        from tender_selection.models import Tender
-        tender = Tender.objects.create(purchase_number="READ-SAME-TURN", title="Полиграфия")
-        def response(prompt):
-            payload = json.loads(prompt)
-            if "previous_reply" in payload:
-                return {"reply": "Читаю данные.", "action": {"id": "read", "arguments": {
-                    "plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number", "title"], "limit": 5, "order_by": "-id"}
-                }}}
-            if "tool_result" in payload:
-                self.assertEqual(payload["original_request"], "Покажи последние 5 тендеров")
-                self.assertEqual(payload["tool_result"]["records"][0]["purchase_number"], tender.purchase_number)
-                return {"reply": "READ-SAME-TURN — Полиграфия"}
-            return {"reply": "Сейчас получу данные.", "action": None}
-        request.side_effect = response
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "READ same turn"}, secure=True).json()["conversation"]["id"]
-        result = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]),
-            data=json.dumps({"message": "Покажи последние 5 тендеров"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(result["kind"], "tool_result")
-        self.assertIn("READ-SAME-TURN", result["text"])
-        self.assertEqual(request.call_count, 3)
-
-    def test_read_result_is_not_rendered_as_raw_debug_output(self):
-        from pathlib import Path
-        from django.conf import settings
-        template = (Path(settings.BASE_DIR) / "templates" / "base.html").read_text(encoding="utf-8")
-        self.assertIn('item.data.tool_id !== "read"', template)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_confirmed_action_executes_once_from_conversation_event(self, request, _preflight):
+    def test_direct_action_is_stubbed_as_a_plan_until_plan_execution_is_enabled(self, request, _preflight):
         request.return_value = {"reply": "Подтвердите расход.", "action": {"id": "cash.transaction_create", "arguments": {"operation_date": "2026-10-12", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}}}
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
         message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(message["kind"], "confirmation_required")
-        first = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
+        self.assertEqual(message["kind"], "plan")
+        self.assertEqual(message["data"]["steps"][0]["tool_id"], "cash.transaction_create")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -170,7 +150,7 @@ class AssistantConversationTests(TestCase):
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Устаревшее подтверждение"}, secure=True).json()["conversation"]["id"]
         endpoint = reverse("assistant_conversation_message", args=[conversation_id])
         first = self.client.post(endpoint, data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(first["kind"], "confirmation_required")
+        self.assertEqual(first["kind"], "plan")
         self.client.post(endpoint, data=json.dumps({"message": "Погоди, я хочу изменить условия"}), content_type="application/json", secure=True)
         confirmation = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, first["id"]]), {"accept": "yes"}, secure=True)
         self.assertEqual(confirmation.status_code, 409)
@@ -185,7 +165,7 @@ class AssistantConversationTests(TestCase):
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
         message = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход"}), content_type="application/json", secure=True).json()["messages"][-1]
         cancelled = self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "no"}, secure=True)
-        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.status_code, 409)
         self.assertFalse(CashTransaction.objects.filter(reason="Отмена").exists())
         self.assertEqual(self.client.post(reverse("assistant_conversation_action_confirm", args=[conversation_id, message["id"]]), {"accept": "yes"}, secure=True).status_code, 409)
 
@@ -198,11 +178,10 @@ class AssistantConversationTests(TestCase):
         ]
         conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Расход"}, secure=True).json()["conversation"]["id"]
         first = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "Добавь расход на доставку"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(first["kind"], "text")
-        self.assertIn("amount", first["data"]["missing"])
+        self.assertEqual(first["kind"], "plan")
+        self.assertIn("amount", first["data"]["steps"][0]["missing_inputs"])
         second = self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": "15 000"}), content_type="application/json", secure=True).json()["messages"][-1]
-        self.assertEqual(second["kind"], "confirmation_required")
-        self.assertEqual(second["data"]["arguments"]["reason"], "Доставка")
+        self.assertEqual(second["kind"], "plan")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -218,47 +197,6 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("pending_action", OwnerInteraction.objects.get(pk=conversation_id).context)
 
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_model_can_run_stage_registry_without_keyword_routing(self, request, _preflight):
-        stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
-        request.side_effect = [
-            {"reply": "Сейчас проверю реестр.", "action": {"id": "process.list", "arguments": {}}},
-            {"reply": "Доступен этап: Швейный этап."},
-        ]
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Этапы"}, secure=True).json()["conversation"]["id"]
-
-        reply = self.client.post(
-            reverse("assistant_conversation_message", args=[conversation_id]),
-            data=json.dumps({"message": "Какие у тебя есть этапы?"}),
-            content_type="application/json",
-            secure=True,
-        )
-
-        message = reply.json()["messages"][-1]
-        self.assertEqual(message["text"], "Доступен этап: Швейный этап.")
-        self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["result"]["stages"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_model_opens_registered_provider_form_without_creating_a_draft(self, _request, _preflight):
-        stage = ProcessDefinition.objects.create(name="Швейный этап", role=ProcessDefinition.ROLE_PRODUCTION)
-        _request.return_value = {"reply": "Проверьте данные и прикрепите XLS.", "action": {"id": "provider.create_draft", "arguments": {"name": "Атекс", "stage_id": stage.pk}}}
-        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Контрагент"}, secure=True).json()["conversation"]["id"]
-
-        reply = self.client.post(
-            reverse("assistant_conversation_message", args=[conversation_id]),
-            data=json.dumps({"message": "Создай контрагента по пошиву"}),
-            content_type="application/json",
-            secure=True,
-        )
-
-        message = reply.json()["messages"][-1]
-        self.assertEqual(message["kind"], "provider_upload")
-        self.assertIn({"id": stage.pk, "name": stage.name}, message["data"]["stages"])
-        self.assertEqual(message["data"]["name"], "Атекс")
-        self.assertEqual(message["data"]["stage_id"], stage.pk)
-
     def test_global_drawer_has_context_chips_and_real_suggestion_actions(self):
         response = self.client.get(reverse("tender_home"), secure=True)
         self.assertContains(response, 'assistant-context-summary')
@@ -266,8 +204,8 @@ class AssistantConversationTests(TestCase):
         self.assertContains(response, 'event.key === "Enter" && !event.shiftKey')
         self.assertContains(response, 'assistant-tool-result')
         self.assertContains(response, 'assistant-message--pending')
-        self.assertContains(response, 'Если формула или валюта неверны, не подтверждайте прайс')
-        self.assertNotContains(response, 'Нужно уточнить формулу')
+        self.assertNotContains(response, 'data-sewing-upload')
+        self.assertNotContains(response, 'data-sewing-confirm')
 
     def test_legacy_assistant_url_returns_to_global_drawer_host(self):
         response = self.client.get(reverse("assistant_console"), secure=True)
@@ -285,3 +223,98 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(interaction.status, "archived")
         self.assertEqual(interaction.feedback_events.count(), 1)
         self.assertEqual(self.client.get(reverse("assistant_conversations"), secure=True).json()["conversations"], [])
+
+    def test_uploaded_attachment_belongs_to_conversation_and_is_removed_with_history(self):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Прайс"}, secure=True).json()["conversation"]["id"]
+
+        uploaded = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("price.csv", b"name,price\nshirt,500\n", content_type="text/csv")},
+            secure=True,
+        )
+
+        self.assertEqual(uploaded.status_code, 201)
+        attachment = uploaded.json()["attachment"]
+        self.assertEqual(attachment["name"], "price.csv")
+        self.assertEqual(attachment["kind"], "document")
+        self.assertEqual(ConversationAttachment.objects.get(pk=attachment["id"]).conversation_id, conversation_id)
+        self.client.post(reverse("assistant_conversations_clear"), secure=True)
+        self.assertFalse(ConversationAttachment.objects.filter(pk=attachment["id"]).exists())
+
+    def test_attachment_cannot_be_read_or_reused_from_another_conversation(self):
+        first = self.client.post(reverse("assistant_conversation_new"), {"title": "Первая"}, secure=True).json()["conversation"]["id"]
+        second = self.client.post(reverse("assistant_conversation_new"), {"title": "Вторая"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[first]),
+            {"file": SimpleUploadedFile("note.txt", b"secret price", content_type="text/plain")},
+            secure=True,
+        ).json()["attachment"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[second]),
+            data=json.dumps({"message": "Посмотри файл", "attachment_ids": [attachment["id"]]}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 400)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Вижу прайс.", "action": None})
+    def test_uploaded_document_is_provided_to_agent_by_safe_reference(self, request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Прайс"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("price.csv", b"name,price\nshirt,500\n", content_type="text/csv")},
+            secure=True,
+        ).json()["attachment"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Это прайс", "attachment_ids": [attachment["id"]]}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 200)
+        prompt = json.loads(request.call_args.args[0])
+        self.assertEqual(prompt["attachments"], [{"id": attachment["id"], "name": "price.csv", "kind": "document", "text": "name,price\nshirt,500"}])
+        self.assertNotIn("content", prompt["attachments"][0])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Продолжаю.", "action": None})
+    def test_attachment_remains_available_for_the_next_message_in_the_same_conversation(self, request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Прайс"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("price.csv", b"name,price\nshirt,500\n", content_type="text/csv")},
+            secure=True,
+        ).json()["attachment"]
+        endpoint = reverse("assistant_conversation_message", args=[conversation_id])
+        self.client.post(endpoint, data=json.dumps({"message": "Это прайс", "attachment_ids": [attachment["id"]]}), content_type="application/json", secure=True)
+
+        reply = self.client.post(endpoint, data=json.dumps({"message": "Какая цена футболки?"}), content_type="application/json", secure=True)
+
+        self.assertEqual(reply.status_code, 200)
+        prompt = json.loads(request.call_args.args[0])
+        self.assertEqual(prompt["attachments"][0]["id"], attachment["id"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Вижу скриншот.", "action": None})
+    def test_uploaded_image_is_passed_to_the_visual_gateway_without_a_file_path(self, request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Скриншот"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("screen.png", b"png-bytes", content_type="image/png")},
+            secure=True,
+        ).json()["attachment"]
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Что на скриншоте?", "attachment_ids": [attachment["id"]]}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(request.call_args.kwargs["image_data_urls"][0].startswith("data:image/png;base64,"))

@@ -148,3 +148,15 @@ def calculate_provider(binding, calculation_spec, context=None, persist=True):
     if persist:
         ProviderCalculationQuote.objects.create(binding=binding, knowledge_version=binding.knowledge_version, calculation_spec=calculation_spec, result=result, status=result["status"])
     return result
+
+
+def calculate_provider_binding(user, binding_id, calculation_spec):
+    """Shared executor behind both provider calculator pages and the assistant."""
+    binding = ProviderCalculatorBinding.objects.select_related(
+        "link__counterparty", "link__stage", "knowledge_version",
+    ).filter(pk=binding_id, is_active=True).first()
+    if binding is None:
+        raise ProviderCalculatorError("Калькулятор не найден или отключён")
+    if not isinstance(calculation_spec, dict):
+        raise ProviderCalculatorError("Некорректные параметры калькулятора")
+    return calculate_provider(binding, calculation_spec)

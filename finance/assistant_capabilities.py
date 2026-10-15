@@ -56,6 +56,13 @@ def save_managers(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def save_payroll(user, payload):
+    try:
+        return actions.save_payroll_lines(user, payload["period"], payload["updates"])
+    except actions.FinanceActionError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
 _FIELDS = {"record_type": "order|design", "order_number": "string", "gross_profit": "number", "accounting_period": "YYYY-MM", "manager": "user id for owner"}
 register_tool(AssistantTool("finance.order_record_create", "Создать закрытый заказ", "Действие существующей финансовой формы.", _FIELDS, False, True, True, create, source="finance.actions.create_order_record"))
 register_tool(AssistantTool("finance.order_record_update", "Изменить закрытый заказ", "Действие существующей финансовой формы.", {"order_record_id": "integer", **_FIELDS}, False, True, True, update, source="finance.actions.update_order_record"))
@@ -68,3 +75,7 @@ register_tool(AssistantTool("finance.period_lock", "Закрыть или отк
     "Закрывает проверенный расчётный период либо вновь разрешает его редактирование. Существующая финансовая страница использует тот же исполнитель.",
     {"period": "YYYY-MM", "closed": "boolean"}, False, True, True,
     set_period_state, source="finance.actions.set_financial_period_state"))
+register_tool(AssistantTool("finance.payroll_save", "Сохранить данные зарплаты за период",
+    "Сохраняет доступные пользователю смены и начисления, затем пересчитывает тот же финансовый период, что страница зарплаты.",
+    {"period": "YYYY-MM", "updates": "array"}, False, True, False,
+    save_payroll, source="finance.actions.save_payroll_lines"))

@@ -1,86 +1,198 @@
-"""Published metadata for existing tender-selection entry points.
-
-Temporary bridge while the remaining view-only execution paths are moved into
-the shared services module.  This module owns publication; the agent core does
-not enumerate tender actions.
-"""
+"""Published references to tender-selection executors shared with the site."""
 from tenders.assistant_tools import AssistantTool, AssistantToolError, register_tool
-from . import assistant_actions
 
-
-def _call(name):
-    def execute(user, payload):
-        try:
-            return getattr(assistant_actions, name)(user, payload)
-        except ValueError as exc:
-            raise AssistantToolError(str(exc)) from exc
-    return execute
-
-
-_ACTIONS = (
-    ("tender.pull", "Обновить тендеры", {"max_requests": "integer?"}, "pull", "tender_selection.services.run_pull"),
-    ("tender.push_to_calculation", "Передать тендер в расчёт", {"tender_id": "integer"}, "push_to_calculation", "tender_selection.services.push_to_estimate"),
-    ("tender.risk_assessment", "Оценить риски тендера", {"tender_id": "integer"}, "start_risk", "tender_selection.services.start_risk_assessment_in_background"),
-    ("tender.archive", "Архивировать тендер", {"tender_id": "integer"}, "archive", "tender_selection.services.archive_tender"),
-    ("tender.dismiss", "Скрыть тендер", {"tender_id": "integer", "reason": "string?"}, "dismiss", "tender_selection.services.dismiss_tender"),
-    ("tender.restore", "Восстановить тендер", {"tender_id": "integer"}, "restore", "tender_selection.services.restore_tender"),
-    ("tender.review_set", "Изменить статус проверки тендера", {"tender_id": "integer", "review": "unreviewed|interesting"}, "set_review", "tender_selection.services.set_tender_review"),
-    ("tender.bid_save", "Сохранить ставку по тендеру", {"estimate_id": "integer", "bid_number": "string?", "bid_price": "number?"}, "save_bid", "tender_selection.services.set_our_bid"),
-    ("tender.outcome_set", "Зафиксировать итог тендера", {"estimate_id": "integer", "status": "won|lost|not_participated", "actual_reduction_percent": "number?"}, "set_outcome", "tender_selection.services.apply_tender_outcome"),
-    ("tender.filter_words_update", "Изменить плюс- и минус-слова", {"include_words": "string", "exclude_words": "string"}, "update_filter_words", "tender_selection.services.update_filter_words"),
-    ("tender.word_audit_run", "Запустить аудит слов", {}, "word_audit_run", "tender_selection.word_audit.run_audit"),
-    ("tender.word_audit_apply", "Применить результаты аудита слов", {"add_plus": "string[]", "add_minus": "string[]", "remove_plus": "string[]", "remove_minus": "string[]"}, "word_audit_apply", "tender_selection.word_audit.apply_words"),
-    ("tender.forecast_toggle", "Изменить участие результата в прогнозе", {"tender_id": "integer"}, "toggle_forecast", "tender_selection.services.toggle_forecast_inclusion"),
+from .services import (
+    answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
+    apply_filter_word_audit, decide_document_proposals, pull_tenders_now, run_filter_word_audit, run_profile_triage,
+    preview_tender_document, record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid,
+    update_tender_review,
 )
-_ACTION_DESCRIPTIONS = {
-    "tender.pull": "Получить новые и изменённые закупки из подключённого источника, обновить существующие записи и сохранить результат выгрузки.",
-    "tender.push_to_calculation": "Создать расчёт тендера с позициями из извещения и перевести его на этап подготовки цены.",
-    "tender.risk_assessment": "Запустить штатную фоновую оценку юридических, коммерческих и сроковых рисков конкретной закупки.",
-    "tender.archive": "Архивировать выбранную закупку с сохранением истории и связанных данных.",
-    "tender.dismiss": "Скрыть неинтересную закупку, сохранить причину и выполнить штатную очистку связанных предпросмотров.",
-    "tender.restore": "Вернуть ранее скрытую закупку в рабочий список без создания копии.",
-    "tender.review_set": "Изменить ручную отметку проверки входящей закупки на «интересно» либо «не рассмотрено».",
-    "tender.bid_save": "Сохранить номер и цену нашей заявки для конкретного просчёта тендера.",
-    "tender.outcome_set": "Ручная отметка результата закупки; не является официальной проверкой протокола ЕИС и должна быть подтверждена владельцем.",
-    "tender.filter_words_update": "Обновить включающие и исключающие слова поиска с немедленным использованием штатной фильтрации.",
-    "tender.word_audit_run": "Запустить AI-аудит поисковых слов и создать предложения по их изменению; расходует бюджет модели.",
-    "tender.word_audit_apply": "Принять выбранные рекомендации аудита: добавить или удалить плюс- и минус-слова.",
-    "tender.forecast_toggle": "Включить или исключить зарегистрированный результат закупки из статистики прогноза снижения цены.",
-}
-for identifier, name, schema, handler, source in _ACTIONS:
-    register_tool(AssistantTool(identifier, name, _ACTION_DESCRIPTIONS[identifier], schema, False, True, True, _call(handler), source=source))
 
-def save_discovery_settings(user, payload):
-    from .services import save_selection_settings
+
+def _save_discovery_settings(_user, payload):
     try:
         return save_selection_settings(payload)
     except ValueError as exc:
         raise AssistantToolError(str(exc)) from exc
 
 
-register_tool(AssistantTool(
-    "tender.discovery_settings", "Настроить поиск и отбор закупок",
-    "Изменяет фильтры поиска тендеров: ключевые слова, ценовой порог, период, категории ОКПД2, регионы, законы и автоматический отбор. Неуказанные настройки сохраняются без изменений.",
-    {"include_words": "string?", "exclude_words": "string?", "profile_triage_enabled": "boolean?",
-     "min_price": "number?", "window_days": "integer?", "okpd2_codes": "string[]?",
-     "regions": "string[]?", "laws": "string[]?"},
-    False, True, True, save_discovery_settings,
-    source="tender_selection.services.save_selection_settings",
-))
-
-def resolve_owner_question(user, payload):
-    from .services import answer_tender_owner_question
+def _answer_owner_question(user, payload):
     try:
-        return answer_tender_owner_question(user, payload["tender_id"],
-                                            payload["interaction_id"], payload["answer"])
+        return answer_tender_owner_question(
+            user, payload["tender_id"], payload["interaction_id"], payload["answer"],
+        )
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _save_evaluation_settings(_user, payload):
+    try:
+        return save_evaluation_settings(payload)
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _tender_action(call, user, payload, *names):
+    try:
+        return call(user, *(payload[name] for name in names))
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _hide_tender(user, payload):
+    try:
+        return hide_tender(user, payload["tender_id"], reason=payload.get("reason"))
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _start_evaluation(user, payload):
+    from .models import Tender
+
+    return _tender_action(update_tender_review, user, {
+        "tender_id": payload["tender_id"], "review": Tender.INTERESTING,
+    }, "tender_id", "review")
+
+
+def _preview_tender_document(user, payload):
+    try:
+        return preview_tender_document(
+            user, payload["tender_id"], payload["document_index"],
+            refresh=payload.get("refresh", False),
+        )
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _save_bid(user, payload):
+    try:
+        return save_tender_bid(user, payload["estimate_id"], bid_number=payload.get("bid_number", ""), bid_price=payload.get("bid_price"))
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _no_argument_action(call, user, payload):
+    try:
+        return call(user)
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _apply_word_audit(user, payload):
+    try:
+        return apply_filter_word_audit(user, payload["changes"])
+    except ValueError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
+def _record_outcome(user, payload):
+    try:
+        return record_tender_outcome(
+            user, payload["estimate_id"], status=payload.get("status"),
+            actual_reduction_percent=payload.get("actual_reduction_percent"),
+        )
     except ValueError as exc:
         raise AssistantToolError(str(exc)) from exc
 
 
 register_tool(AssistantTool(
+    "tender.discovery_settings", "Настроить поиск и отбор закупок",
+    "Изменяет действующие правила поиска тем же общим исполнителем, что и настройки сайта.",
+    {"include_words": "string?", "exclude_words": "string?", "profile_triage_enabled": "boolean?",
+     "min_price": "number?", "window_days": "integer?", "okpd2_codes": "string[]?",
+     "regions": "string[]?", "laws": "string[]?"},
+    False, True, True, _save_discovery_settings,
+    source="tender_selection.services.save_selection_settings",
+))
+register_tool(AssistantTool(
+    "tender.outcome_record", "Получить или сохранить результат торгов", "Проверяет протокол/контракт либо сохраняет явно выбранный итог торгов тем же общим исполнителем, что карточка тендера.",
+    {"estimate_id": "integer", "status": "won|lost|not_participated?", "actual_reduction_percent": "number?"},
+    False, True, True, _record_outcome, source="tender_selection.services.record_tender_outcome",
+))
+register_tool(AssistantTool(
+    "tender.word_audit_run", "Запустить аудит плюс- и минус-слов", "Запускает ту же проверку правил отбора, что кнопка страницы аудита.",
+    {}, False, True, True, lambda user, payload: _no_argument_action(run_filter_word_audit, user, payload),
+    source="tender_selection.services.run_filter_word_audit",
+))
+register_tool(AssistantTool(
+    "tender.word_audit_apply", "Применить выбранные предложения аудита слов", "Применяет только явно выбранные изменения фильтра через тот же исполнитель, что страница аудита.",
+    {"changes": "object"}, False, True, True, _apply_word_audit,
+    source="tender_selection.services.apply_filter_word_audit",
+))
+register_tool(AssistantTool(
+    "tender.profile_triage_run", "Запустить проверку входящих тендеров", "Запускает штатную фоновую проверку до 100 доступных входящих тендеров.",
+    {}, False, True, True, lambda user, payload: _no_argument_action(run_profile_triage, user, payload),
+    source="tender_selection.services.run_profile_triage",
+))
+register_tool(AssistantTool(
+    "tender.pull", "Получить новые тендеры", "Запускает ту же ограниченную выгрузку из ГосПлан, что кнопка входящих тендеров.",
+    {}, False, True, True, lambda user, payload: _no_argument_action(pull_tenders_now, user, payload),
+    source="tender_selection.services.pull_tenders_now",
+))
+
+register_tool(AssistantTool(
+    "tender.hide", "Скрыть неподходящий тендер", "Архивирует тендер тем же исполнителем, что кнопка интерфейса, и сохраняет причину для входящего тендера.",
+    {"tender_id": "integer", "reason": "string?"}, False, True, True, _hide_tender,
+    source="tender_selection.services.hide_tender",
+))
+register_tool(AssistantTool(
+    "tender.start_evaluation", "Взять тендер в работу",
+    "Точно повторяет кнопку «В работу»: переводит входящий тендер на оценку и запускает штатную фоновую оценку рисков. Не даёт произвольно менять технический статус.",
+    {"tender_id": "integer"}, False, True, True, _start_evaluation,
+    source="tender_selection.services.update_tender_review",
+))
+register_tool(AssistantTool(
+    "tender.document_preview", "Разобрать документ тендера",
+    "Получает документ существующего тендера из ЕИС или кэша и возвращает его проверяемый разбор тем же исполнителем, что кнопка просмотра документа.",
+    {"tender_id": "integer", "document_index": "integer", "refresh": "boolean?"}, True, False, True,
+    _preview_tender_document, source="tender_selection.services.preview_tender_document",
+))
+register_tool(AssistantTool(
+    "tender.forecast_toggle", "Включить или исключить тендер из прогноза", "Переключает существующую запись статистики тем же правилом, что архив тендеров.",
+    {"tender_id": "integer"}, False, True, True,
+    lambda user, payload: _tender_action(change_forecast_inclusion, user, payload, "tender_id"),
+    source="tender_selection.services.change_forecast_inclusion",
+))
+register_tool(AssistantTool(
+    "tender.send_to_calculation", "Передать тендер в расчёт", "Создаёт или возвращает существующий расчёт тендера через штатный сервис воронки.",
+    {"tender_id": "integer"}, False, True, True,
+    lambda user, payload: _tender_action(create_tender_estimate, user, payload, "tender_id"),
+    source="tender_selection.services.create_tender_estimate",
+))
+register_tool(AssistantTool(
+    "tender.bid_save", "Сохранить нашу ставку по тендеру", "Сохраняет номер и сумму нашей заявки тем же сервисом, по которому система сопоставляет протокол торгов.",
+    {"estimate_id": "integer", "bid_number": "string?", "bid_price": "number?"}, False, True, True, _save_bid,
+    source="tender_selection.services.save_tender_bid",
+))
+
+register_tool(AssistantTool(
+    "tender.evaluation_settings", "Сохранить правила оценки тендеров",
+    "Сохраняет пороги риска, ROI, НДС и прогноз тем же валидатором, что страница настроек оценки.",
+    {"risk_warning_days": "integer", "risk_critical_days": "integer", "roi_good_percent": "number",
+     "roi_thin_percent": "number", "vat_rate": "number", "default_reduction_percent": "number",
+     "stats_target_count": "integer", "stats_min_samples": "integer", "reduction_hint_min": "integer",
+     "reduction_hint_max": "integer", "incoming_ttl_days": "integer", "level_samples_required": "low|medium|high",
+     "level_samples_impossible": "low|medium|high", "level_national_confirmation": "low|medium|high",
+     "level_national_blocked": "low|medium|high", "level_delivery_requests": "low|medium|high",
+     "level_delivery_open_ended": "low|medium|high"},
+    False, True, True, _save_evaluation_settings,
+    source="tender_selection.services.save_evaluation_settings",
+))
+
+register_tool(AssistantTool(
     "tender.owner_question_answer", "Ответить на запрос уточнения по тендеру",
-    "Сохраняет ответ на открытый вопрос с записью в журнал и закрывает вопрос, как это делает карточка тендера.",
+    "Сохраняет ответ и закрывает вопрос тем же общим исполнителем, что карточка тендера.",
     {"tender_id": "integer", "interaction_id": "integer", "answer": "string"},
-    False, True, True, resolve_owner_question,
+    False, True, True, _answer_owner_question,
     source="tender_selection.services.answer_tender_owner_question",
+))
+register_tool(AssistantTool(
+    "tender.document_proposals", "Принять или отклонить состав из документации",
+    "Применяет к позиции тендера найденный в документации состав либо отклоняет его тем же исполнителем, что карточка тендера.",
+    {"tender_id": "integer", "parent_id": "integer", "decision": "accept|reject"},
+    False, True, True,
+    lambda user, payload: _tender_action(
+        decide_document_proposals, user, payload, "tender_id", "parent_id", "decision",
+    ),
+    source="tender_selection.services.decide_document_proposals",
 ))

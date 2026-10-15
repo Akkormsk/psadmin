@@ -128,63 +128,6 @@ def catalogue():
     return sorted(items, key=lambda item: item["id"])
 
 
-
-def _field_aliases(model):
-    """Resolve display labels only when unique; never infer arbitrary ORM columns."""
-    result = {}
-    for name, descriptor in _base_fields(model).items():
-        field = descriptor["field"]
-        for alias in (name, str(getattr(field, "verbose_name", ""))):
-            key = alias.strip().casefold()
-            if key:
-                if key in result and result[key] != name:
-                    result[key] = None
-                elif key not in result:
-                    result[key] = name
-    return result
-
-
-def normalize_plan(plan):
-    """Canonicalise harmless LLM schema variations against live model metadata.
-
-    Unknown fields are never silently substituted or dropped.
-    """
-    if not isinstance(plan, dict):
-        raise ReadPlanError("План чтения должен быть объектом")
-    result = dict(plan)
-    if "entity" not in result and "model" in result:
-        result["entity"] = result.pop("model")
-    identifier = result.get("entity")
-    if isinstance(identifier, str) and "." not in identifier:
-        matches = [item["id"] for item in catalogue()
-                   if item["id"].rsplit(".", 1)[-1].casefold() == identifier.casefold()]
-        if len(matches) == 1:
-            result["entity"] = matches[0]
-    model, _, fields = _entity(result.get("entity"))
-    aliases = _field_aliases(model)
-    def resolve(name):
-        if not isinstance(name, str):
-            raise ReadPlanError("Поле должно быть строкой")
-        if name in fields:
-            return name
-        canonical = aliases.get(name.strip().casefold())
-        if canonical:
-            return canonical
-        raise ReadPlanError("Недоступное поле: " + name[:80])
-    if "fields" in result and isinstance(result["fields"], list):
-        result["fields"] = [resolve(name) for name in result["fields"]]
-    if "order_by" in result and isinstance(result["order_by"], str):
-        order = result["order_by"]
-        result["order_by"] = ("-" if order.startswith("-") else "") + resolve(order.lstrip("-"))
-    if "filters" in result and isinstance(result["filters"], list):
-        result["filters"] = [
-            {**item, "field": resolve(item["field"])}
-            if isinstance(item, dict) and "field" in item else item
-            for item in result["filters"]
-        ]
-    return result
-
-
 def _value(value):
     return _json_safe_value(value)
 
