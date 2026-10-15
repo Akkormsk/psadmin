@@ -1,12 +1,111 @@
 from __future__ import annotations
 
+import base64
+from pathlib import Path
+
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 
 from .assistant_agent import reply
-from .models import OwnerFeedbackEvent, OwnerInteraction
+from .models import ConversationAttachment, OwnerFeedbackEvent, OwnerInteraction
+from .services import TenderAIError, extract_tender_source
 
 
 CONVERSATION_KIND = "assistant_conversation"
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENT_TEXT_CHARS = 12_000
+MAX_ATTACHMENTS_PER_MESSAGE = 5
+MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 3
+_TEXT_SUFFIXES = {".txt", ".csv"}
+_DOCUMENT_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".doc", ".docx", ".docm"}
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def _attachment_kind(name):
+    suffix = Path(name).suffix.lower()
+    if suffix in _IMAGE_TYPES:
+        return "image", _IMAGE_TYPES[suffix]
+    if suffix in _TEXT_SUFFIXES:
+        return "document", "text/plain" if suffix == ".txt" else "text/csv"
+    if suffix in _DOCUMENT_SUFFIXES:
+        return "document", "application/octet-stream"
+    raise ValueError("Поддерживаются PDF, Excel, Word, CSV, TXT и изображения PNG/JPEG/WebP.")
+
+
+def _attachment_text(name, content):
+    suffix = Path(name).suffix.lower()
+    if suffix in _TEXT_SUFFIXES:
+        return content.decode("utf-8-sig", errors="replace").strip()[:MAX_ATTACHMENT_TEXT_CHARS]
+    if suffix not in _DOCUMENT_SUFFIXES:
+        return ""
+    try:
+        text, _truncated = extract_tender_source(SimpleUploadedFile(name, content))
+    except (TenderAIError, OSError, UnicodeError, ValueError):
+        return ""
+    return text[:MAX_ATTACHMENT_TEXT_CHARS]
+
+
+def upload_attachment(conversation, user, uploaded):
+    if uploaded is None:
+        raise ValueError("Выберите файл.")
+    name = Path(str(getattr(uploaded, "name", ""))).name
+    if not name:
+        raise ValueError("У файла нет имени.")
+    kind, content_type = _attachment_kind(name)
+    content = uploaded.read(MAX_ATTACHMENT_BYTES + 1)
+    if not content:
+        raise ValueError("Нельзя прикрепить пустой файл.")
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise ValueError("Размер вложения не должен превышать 10 МБ.")
+    return ConversationAttachment.objects.create(
+        conversation=conversation,
+        created_by=user,
+        name=name,
+        content_type=content_type,
+        kind=kind,
+        content=content,
+        extracted_text=_attachment_text(name, content),
+    )
+
+
+def serialize_attachment(attachment, *, include_text=False):
+    result = {"id": attachment.pk, "name": attachment.name, "kind": attachment.kind}
+    if include_text and attachment.extracted_text:
+        result["text"] = attachment.extracted_text
+    return result
+
+
+def message_attachments(conversation, user, attachment_ids):
+    if attachment_ids in (None, []):
+        return []
+    if not isinstance(attachment_ids, list) or len(attachment_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
+        raise ValueError("Можно передать не более пяти вложений.")
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in attachment_ids):
+        raise ValueError("Некорректный идентификатор вложения.")
+    attachments = list(ConversationAttachment.objects.filter(
+        conversation=conversation, created_by=user, pk__in=attachment_ids,
+    ).order_by("pk"))
+    if len(attachments) != len(set(attachment_ids)):
+        raise ValueError("Вложение не принадлежит этой беседе.")
+    if sum(item.kind == "image" for item in attachments) > MAX_IMAGE_ATTACHMENTS_PER_MESSAGE:
+        raise ValueError("Можно передать не более трёх изображений за раз.")
+    return attachments
+
+
+def active_attachments(conversation, user):
+    identifiers = conversation.context.get("attachment_ids", [])
+    if not isinstance(identifiers, list):
+        return []
+    return list(ConversationAttachment.objects.filter(
+        conversation=conversation, created_by=user, pk__in=identifiers[-MAX_ATTACHMENTS_PER_MESSAGE:],
+    ).order_by("pk"))
+
+
+def attachment_image_urls(attachments):
+    return [
+        f"data:{attachment.content_type};base64,{base64.b64encode(bytes(attachment.content)).decode('ascii')}"
+        for attachment in attachments if attachment.kind == "image"
+    ]
 
 
 def _conversations(user):
@@ -14,7 +113,9 @@ def _conversations(user):
 
 
 def archive_conversations(user):
-    return _conversations(user).update(status="archived")
+    conversations = _conversations(user)
+    ConversationAttachment.objects.filter(conversation__in=conversations).delete()
+    return conversations.update(status="archived")
 
 
 def create_conversation(user, title="", context=None):
@@ -71,11 +172,21 @@ def add_assistant_message(conversation, text, kind="text", data=None):
     return _add_message(conversation, None, "assistant", text, kind, data)
 
 
-def respond(conversation, user, text, context=None):
+def respond(conversation, user, text, context=None, attachments=None):
     text = text.strip()
     context = {key: str(value)[:240] for key, value in (context or {}).items() if key in {"page", "label", "tender_id", "line_id"} and value not in (None, "")}
-    _add_message(conversation, user, "user", text, context=context)
-    response = reply(conversation, user, text, context)
+    attachments = attachments or active_attachments(conversation, user)
+    if attachments:
+        conversation.context["attachment_ids"] = [item.pk for item in attachments][-MAX_ATTACHMENTS_PER_MESSAGE:]
+        conversation.save(update_fields=["context"])
+    if not text and attachments:
+        text = "Прикреплён файл: " + ", ".join(item.name for item in attachments)
+    _add_message(conversation, user, "user", text, data={"attachments": [serialize_attachment(item) for item in attachments]}, context=context)
+    response = reply(
+        conversation, user, text, context,
+        attachments=[serialize_attachment(item, include_text=True) for item in attachments],
+        image_data_urls=attachment_image_urls(attachments),
+    )
     _add_message(conversation, user, "assistant", response["text"], response["kind"], response["data"])
     return serialize_messages(conversation)
 

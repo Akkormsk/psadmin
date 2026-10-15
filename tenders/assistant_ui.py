@@ -6,7 +6,7 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect
 
 from .assistant_tools import AssistantToolError, execute_tool
-from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, respond, serialize_conversation, serialize_messages
+from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_messages, upload_attachment
 
 
 @login_required
@@ -60,10 +60,29 @@ def conversation_message(request, conversation_id):
     except (TypeError, ValueError):
         return HttpResponseBadRequest("Некорректное сообщение")
     message = payload.get("message", "") if isinstance(payload, dict) else ""
-    if not isinstance(message, str) or not message.strip():
+    attachment_ids = payload.get("attachment_ids", []) if isinstance(payload, dict) else []
+    try:
+        attachments = message_attachments(conversation, request.user, attachment_ids)
+    except ValueError as exc:
+        return HttpResponseBadRequest(str(exc))
+    if not isinstance(message, str) or (not message.strip() and not attachments):
         return HttpResponseBadRequest("Введите сообщение")
     context = payload.get("context", {}) if isinstance(payload, dict) else {}
-    return JsonResponse({"messages": respond(conversation, request.user, message, context)})
+    return JsonResponse({"messages": respond(conversation, request.user, message, context, attachments)})
+
+
+@login_required
+def conversation_attachment(request, conversation_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    try:
+        attachment = upload_attachment(conversation, request.user, request.FILES.get("file"))
+    except ValueError as exc:
+        return HttpResponseBadRequest(str(exc))
+    return JsonResponse({"attachment": {"id": attachment.pk, "name": attachment.name, "kind": attachment.kind}}, status=201)
 
 
 @login_required

@@ -28,11 +28,11 @@ def _history(conversation):
     ]
 
 
-def _request(prompt):
+def _request(prompt, image_data_urls=None):
     model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite"))
     # 2026-10-13: Увеличен предел ответа для более содержательного диалога.
     # Было: result, usage = _ai_gateway_json(prompt, model=model, max_tokens=700, timeout=45, network_attempts=1)
-    result, usage = _ai_gateway_json(prompt, model=model, max_tokens=1800, timeout=45, network_attempts=1)
+    result, usage = _ai_gateway_json(prompt, model=model, max_tokens=1800, timeout=45, network_attempts=1, image_data_urls=image_data_urls)
     spend_rub(usage, model)
     return result
 
@@ -52,7 +52,7 @@ def _planning_tools(tools, user):
     return prepared
 
 
-def reply(conversation, user, message, page_context=None):
+def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
     """Lets the model choose from the registry; execution remains backend-only."""
     tools = available_tools(user)
     planning_tools = _planning_tools(tools, user)
@@ -78,6 +78,8 @@ def reply(conversation, user, message, page_context=None):
                 "Do not force tool usage during an ordinary conversation. "
                 "Ask preferably one useful question at a time. "
                 "Use the conversation history and provided context; do not ask again for information already given. "
+                "Attached documents are temporary user-provided context. Use only their supplied safe metadata/text or image input; "
+                "never claim that an attachment has already become a PSADMIN business record. "
                 "You may propose a plan and continue discussing it over several user messages. "
                 "Use tools only when you need real PSADMIN data or must execute an existing business operation. "
                 "Choose at most one tool action per assistant response; "
@@ -97,6 +99,7 @@ def reply(conversation, user, message, page_context=None):
             "conversation_context": conversation.context.get("business_context", {}),
             "pending_action": pending,
             "page_context": page_context or {},
+            "attachments": attachments or [],
             "history": _history(conversation),
             "message": message,
             "response_schema": {"reply": "Russian text", "action": {"id": "tool id or null", "arguments": "object"}, "task_status": "continue|cancel"},
@@ -104,7 +107,7 @@ def reply(conversation, user, message, page_context=None):
         ensure_ascii=False,
     )
     preflight()
-    plan = _request(prompt)
+    plan = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
     if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
     if pending and plan.get("task_status") == "cancel":

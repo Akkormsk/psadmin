@@ -9,6 +9,7 @@ urlpatterns = [
     path("assistant/conversations/new/", assistant_ui.conversation_new, name="assistant_conversation_new"),
     path("assistant/conversations/<int:conversation_id>/", assistant_ui.conversation_detail, name="assistant_conversation_detail"),
     path("assistant/conversations/<int:conversation_id>/message/", assistant_ui.conversation_message, name="assistant_conversation_message"),
+    path("assistant/conversations/<int:conversation_id>/attachments/", assistant_ui.conversation_attachment, name="assistant_conversation_attachment"),
     path("assistant/conversations/<int:conversation_id>/actions/<int:event_id>/confirm/", assistant_ui.conversation_action_confirm, name="assistant_conversation_action_confirm"),
     path("", views.home, name="tender_home"),
     path("cascade-lab/", views.cascade_lab, name="cascade_lab"),

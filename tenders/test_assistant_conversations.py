@@ -2,10 +2,11 @@ import json
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import OwnerFeedbackEvent, OwnerInteraction, ProcessDefinition
+from .models import ConversationAttachment, OwnerFeedbackEvent, OwnerInteraction, ProcessDefinition
 
 
 class AssistantConversationTests(TestCase):
@@ -178,3 +179,98 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(interaction.status, "archived")
         self.assertEqual(interaction.feedback_events.count(), 1)
         self.assertEqual(self.client.get(reverse("assistant_conversations"), secure=True).json()["conversations"], [])
+
+    def test_uploaded_attachment_belongs_to_conversation_and_is_removed_with_history(self):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Прайс"}, secure=True).json()["conversation"]["id"]
+
+        uploaded = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("price.csv", b"name,price\nshirt,500\n", content_type="text/csv")},
+            secure=True,
+        )
+
+        self.assertEqual(uploaded.status_code, 201)
+        attachment = uploaded.json()["attachment"]
+        self.assertEqual(attachment["name"], "price.csv")
+        self.assertEqual(attachment["kind"], "document")
+        self.assertEqual(ConversationAttachment.objects.get(pk=attachment["id"]).conversation_id, conversation_id)
+        self.client.post(reverse("assistant_conversations_clear"), secure=True)
+        self.assertFalse(ConversationAttachment.objects.filter(pk=attachment["id"]).exists())
+
+    def test_attachment_cannot_be_read_or_reused_from_another_conversation(self):
+        first = self.client.post(reverse("assistant_conversation_new"), {"title": "Первая"}, secure=True).json()["conversation"]["id"]
+        second = self.client.post(reverse("assistant_conversation_new"), {"title": "Вторая"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[first]),
+            {"file": SimpleUploadedFile("note.txt", b"secret price", content_type="text/plain")},
+            secure=True,
+        ).json()["attachment"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[second]),
+            data=json.dumps({"message": "Посмотри файл", "attachment_ids": [attachment["id"]]}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 400)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Вижу прайс.", "action": None})
+    def test_uploaded_document_is_provided_to_agent_by_safe_reference(self, request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Прайс"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("price.csv", b"name,price\nshirt,500\n", content_type="text/csv")},
+            secure=True,
+        ).json()["attachment"]
+
+        reply = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Это прайс", "attachment_ids": [attachment["id"]]}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(reply.status_code, 200)
+        prompt = json.loads(request.call_args.args[0])
+        self.assertEqual(prompt["attachments"], [{"id": attachment["id"], "name": "price.csv", "kind": "document", "text": "name,price\nshirt,500"}])
+        self.assertNotIn("content", prompt["attachments"][0])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Продолжаю.", "action": None})
+    def test_attachment_remains_available_for_the_next_message_in_the_same_conversation(self, request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Прайс"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("price.csv", b"name,price\nshirt,500\n", content_type="text/csv")},
+            secure=True,
+        ).json()["attachment"]
+        endpoint = reverse("assistant_conversation_message", args=[conversation_id])
+        self.client.post(endpoint, data=json.dumps({"message": "Это прайс", "attachment_ids": [attachment["id"]]}), content_type="application/json", secure=True)
+
+        reply = self.client.post(endpoint, data=json.dumps({"message": "Какая цена футболки?"}), content_type="application/json", secure=True)
+
+        self.assertEqual(reply.status_code, 200)
+        prompt = json.loads(request.call_args.args[0])
+        self.assertEqual(prompt["attachments"][0]["id"], attachment["id"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request", return_value={"reply": "Вижу скриншот.", "action": None})
+    def test_uploaded_image_is_passed_to_the_visual_gateway_without_a_file_path(self, request, _preflight):
+        conversation_id = self.client.post(reverse("assistant_conversation_new"), {"title": "Скриншот"}, secure=True).json()["conversation"]["id"]
+        attachment = self.client.post(
+            reverse("assistant_conversation_attachment", args=[conversation_id]),
+            {"file": SimpleUploadedFile("screen.png", b"png-bytes", content_type="image/png")},
+            secure=True,
+        ).json()["attachment"]
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[conversation_id]),
+            data=json.dumps({"message": "Что на скриншоте?", "attachment_ids": [attachment["id"]]}),
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(request.call_args.kwargs["image_data_urls"][0].startswith("data:image/png;base64,"))
