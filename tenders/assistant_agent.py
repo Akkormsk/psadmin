@@ -159,7 +159,7 @@ def _validate_plan_steps(plan, tools):
             tool = next((item for item in tools if item["id"] == identifier), None)
             if tool is None or not tool["available"]:
                 raise TenderAIError("План ссылается на недоступную функцию.")
-        if not isinstance(step["inputs"], list) or not isinstance(step["outputs"], list) or not all(isinstance(value, str) and value for value in step["outputs"]):
+        if not isinstance(step["inputs"], list) or not step["inputs"] or not isinstance(step["outputs"], list) or not all(isinstance(value, str) and value for value in step["outputs"]):
             raise TenderAIError("У шага плана должны быть указаны входы и выходы.")
         for value in step["inputs"]:
             if not isinstance(value, dict) or set(value) != {"from", "value"} or not isinstance(value["value"], str):
@@ -194,7 +194,8 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
             "task": (
                 "You are PSADMIN's Russian-speaking agent. Before execution, design a complete theoretical route to a verified final result. "
                 "Use only registered actions, read, and compute. Do not invent functions, records, or results. "
-                "For every step name the exact tool_id, known arguments, inputs and outputs; an input from a prior step must name that step. "
+                "For every step name the exact tool_id, known arguments, inputs and outputs. Every step must list at least one input: "
+                "use from=user for conditions from the user's request, or the earlier step id for a prior result; never use an empty inputs list. "
                 "For an initial read use arguments.plan with entity (never model), fields, filters, order_by and limit from read_catalog. "
                 "This is planning only: do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
                 "Return valid JSON matching response_schema."

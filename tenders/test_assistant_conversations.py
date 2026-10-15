@@ -79,6 +79,26 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_plan_requires_an_explicit_input_for_every_step(self, request, _preflight):
+        request.return_value = self._plan([
+            {
+                "id": "lost_tenders", "tool_id": "read", "purpose": "Найти проигранные тендеры",
+                "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"]}},
+                "inputs": [], "outputs": ["тендеры"],
+            },
+        ])
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Найди проигранные тендеры за сентябрь"}),
+            content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("входы", response.json()["detail"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_plan_asks_for_missing_user_data_without_steps(self, request, _preflight):
         request.return_value = self._plan([], reply="Укажите сумму и дату расхода.", status="needs_input")
 
