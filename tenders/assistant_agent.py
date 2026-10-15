@@ -1,238 +1,297 @@
+"""Small, validated execution loop for the global PSADMIN assistant.
+
+The model chooses only the next step. The backend owns validation,
+permissions, execution, confirmations and the hand-off of verified results to
+the following step. There are no business-specific branches here.
+"""
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import json
+import logging
 import os
+import re
 
-from .assistant_tools import AssistantToolConfirmationRequired, AssistantToolError, available_tools, execute_tool, required_input_names, workflow_catalog
-from .gateway_budget import preflight, spend_rub
+from .assistant_tools import (
+    AssistantToolError,
+    available_tools,
+    execute_tool,
+    required_input_names,
+    workflow_catalog,
+)
+from .gateway_budget import preflight, report_line, spend_rub
 from .services import TenderAIError, _ai_gateway_json
 
 
-MAX_PLAN_STEPS = 20
+logger = logging.getLogger(__name__)
+MAX_AGENT_STEPS = 8
+_COMPUTE_OPERATIONS = {"count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"}
+_REFERENCE_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\])?)*$")
 
 
-# 2026-10-13: Раньше брались первые 20 событий, поэтому новые сообщения терялись.
-# Прежняя реализация (оставлена для истории):
-# def _history(conversation):
-#     return [
-#         {"role": (event.payload or {}).get("role", "user"), "text": event.raw_text}
-#         for event in conversation.feedback_events.order_by("created_at", "pk")[:20]
-#     ]
 def _history(conversation):
-    events = list(
-        conversation.feedback_events.order_by("-created_at", "-pk")[:20]
-    )
+    events = list(conversation.feedback_events.order_by("-created_at", "-pk")[:20])
     return [
-        {
-            "role": (event.payload or {}).get("role", "user"),
-            "text": event.raw_text,
-        }
+        {"role": (event.payload or {}).get("role", "user"), "text": event.raw_text}
         for event in reversed(events)
     ]
 
 
 def _request(prompt, image_data_urls=None):
     model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite"))
-    # 2026-10-13: Увеличен предел ответа для более содержательного диалога.
-    # Было: result, usage = _ai_gateway_json(prompt, model=model, max_tokens=700, timeout=45, network_attempts=1)
-    result, usage = _ai_gateway_json(prompt, model=model, max_tokens=1800, timeout=45, network_attempts=1, image_data_urls=image_data_urls)
-    spend_rub(usage, model)
+    result, usage = _ai_gateway_json(
+        prompt, model=model, max_tokens=1200, timeout=45, network_attempts=1,
+        image_data_urls=image_data_urls,
+    )
+    cost = spend_rub(usage, model)
+    logger.info("assistant gateway model=%s; %s%s", model, report_line(usage, {model: usage}), f"; call ~{cost:.4f} ₽" if cost is not None else "")
     return result
 
 
-def _planning_tools(tools, user):
-    prepared = []
-    for tool in tools:
-        item = dict(tool)
-        if tool.get("ui"):
-            ui = dict(tool["ui"])
-            options = {}
-            for name, source in ui.get("options", {}).items():
-                options[name] = execute_tool(source["tool"], user, {}).get(source["field"], [])
-            ui["options"] = options
-            item["ui"] = ui
-        prepared.append(item)
-    return prepared
+def _tool_catalogue(tools):
+    """Give the model only the contract it needs to choose a next action."""
+    return [
+        {
+            key: tool[key]
+            for key in ("id", "name", "description", "input_schema", "read_only", "requires_confirmation", "available")
+        }
+        for tool in tools
+    ]
 
 
-def _validated_plan(raw_plan, tools):
-    if not isinstance(raw_plan, dict):
-        raise TenderAIError("Ассистент не сформировал структурированный план.")
-    raw_steps = raw_plan.get("steps")
-    if not isinstance(raw_steps, list) or not raw_steps or len(raw_steps) > MAX_PLAN_STEPS:
-        raise TenderAIError(f"План должен содержать от 1 до {MAX_PLAN_STEPS} шагов.")
-    known_tools = {tool["id"]: tool for tool in tools}
-    steps = []
-    for number, raw_step in enumerate(raw_steps, start=1):
-        if not isinstance(raw_step, dict):
-            raise TenderAIError("В плане есть некорректный шаг.")
-        tool_id = raw_step.get("tool_id")
-        arguments = raw_step.get("arguments", {})
-        purpose = raw_step.get("purpose", "")
-        expected_result = raw_step.get("expected_result", "")
-        dependencies = raw_step.get("depends_on", [])
-        tool = known_tools.get(tool_id)
-        if tool is None:
-            raise TenderAIError("План ссылается на отсутствующую возможность PSADMIN.")
-        if not tool["available"]:
-            raise TenderAIError("План содержит действие, недоступное текущему пользователю.")
-        if not isinstance(arguments, dict) or not isinstance(purpose, str) or not isinstance(expected_result, str) or not isinstance(dependencies, list):
-            raise TenderAIError("В плане указаны некорректные параметры шага.")
-        if not all(isinstance(item, int) and 0 < item < number for item in dependencies):
-            raise TenderAIError("Шаг плана может зависеть только от предыдущих шагов.")
-        missing = [name for name in required_input_names(tool_id) if arguments.get(name) in (None, "", [])]
-        if missing:
-            status = "needs_input"
-        elif dependencies:
-            status = "ready_after_previous_steps"
-        else:
-            status = "ready"
-        steps.append({
-            "number": number,
-            "tool_id": tool_id,
-            "name": tool["name"],
-            "purpose": purpose.strip()[:500],
-            "expected_result": expected_result.strip()[:500],
-            "provided_inputs": sorted(arguments),
-            "missing_inputs": missing,
-            "depends_on": dependencies,
-            "requires_confirmation": tool["requires_confirmation"],
-            "status": status,
-        })
-    raw_gaps = raw_plan.get("gaps", [])
-    if not isinstance(raw_gaps, list) or not all(isinstance(item, str) for item in raw_gaps):
-        raise TenderAIError("В плане некорректно описаны ограничения.")
-    return {"steps": steps, "gaps": [item.strip()[:500] for item in raw_gaps if item.strip()][:10]}
+def _run_state(conversation, message):
+    state = conversation.context.get("agent_run")
+    if not isinstance(state, dict) or not isinstance(state.get("task"), str):
+        state = {"task": message, "results": []}
+    state.setdefault("results", [])
+    if not isinstance(state["results"], list):
+        state["results"] = []
+    return state
 
 
-def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
-    """Lets the model choose from the registry; execution remains backend-only."""
-    tools = available_tools(user)
-    planning_tools = _planning_tools(tools, user)
-    workflows = workflow_catalog(user, tools)
+def _save_state(conversation, state):
+    conversation.context["agent_run"] = state
+    conversation.save(update_fields=["context"])
+
+
+def _finish_state(conversation):
+    conversation.context.pop("agent_run", None)
+    conversation.context.pop("pending_action", None)
+    conversation.save(update_fields=["context"])
+
+
+def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
     read_catalog = []
     if any(tool["id"] == "read" and tool["available"] for tool in tools):
-        # This is the same metadata source the ORM executor validates against.
         from .assistant_read import catalogue
-        read_catalog = catalogue()
-    pending = conversation.context.get("pending_action", {})
+        read_catalog = catalogue(compact=True)
     prompt = json.dumps(
         {
-            # 2026-10-13: Старый промпт превращал AI в диспетчера инструмента;
-            # теперь разрешаем самостоятельное обсуждение и уточнения, сохраняя
-            # лимит в один инструмент за ход и все серверные проверки.
-            # Было:
-            # "task": "You are a concise Russian business assistant. Understand the user's request naturally. Choose at most one action only from tools. Select the tool for the direct request, not a preparatory lookup: a list/read tool is valid only when the user explicitly asks to view that list. Never claim an action happened until tool_result is supplied. When the user asks to start a tool with ui, select that tool immediately: its declared form collects the required inputs and the tool is not executed until that form is confirmed. Copy values explicitly stated by the user into ui action arguments; select an option only by its exact id from the supplied ui options. For another tool, if required inputs or confirmation are missing, explain what is needed and action must be null.",
             "task": (
-                "You are PSADMIN's Russian-speaking business assistant. "
-                "Your main goal is to understand the user's intent and help solve their task. "
-                "You may reason about the problem, discuss alternatives, explain decisions, "
-                "ask clarifying questions, and guide multi-step work naturally. "
-                "Do not force tool usage during an ordinary conversation. "
-                "Ask preferably one useful question at a time. "
-                "Use the conversation history and provided context; do not ask again for information already given. "
-                "Attached documents are temporary user-provided context. Use only their supplied safe metadata/text or image input; "
-                "never claim that an attachment has already become a PSADMIN business record. "
-                "You may propose a plan and continue discussing it over several user messages. "
-                "For every request that needs PSADMIN data or a business operation, return a structured multi-step plan. "
-                "Each step must use exactly one registered tool_id and declare its arguments, purpose, expected_result, and prior dependencies. "
-                "Use read for verified data and registered actions for real site operations; never invent a tool. "
-                "List unavailable needed capabilities only in plan.gaps. "
-                "This is planning mode: no step is executed yet, even when it is ready. "
-                "Never invent database records, prices, tool results, or completed actions. "
-                "Preserve all backend permission checks and required confirmations. "
+                "You are PSADMIN's Russian-speaking agent. Solve the user's task to a verified final result. "
+                "Choose exactly one next step at a time, see its real result, then choose the next step. "
+                "Never invent tools, database values, calculations, or completed actions. "
+                "Use read for application data and registered actions only for real site operations. "
+                "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
+                "If required information is absent, return status needs_input and one concise Russian question. "
+                "If the result is complete, return status final and explain it using only completed_step_results. "
+                "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
                 "Return valid JSON matching response_schema."
             ),
-            "tools": planning_tools,
-            "workflows": workflows,
+            "registered_tools": _tool_catalogue(tools),
+            "workflows": workflow_catalog(user, tools),
             "read_catalog": read_catalog,
-            "conversation_context": conversation.context.get("business_context", {}),
-            "pending_action": pending,
+            "compute": {
+                "tool_id": "compute",
+                "operations": sorted(_COMPUTE_OPERATIONS),
+                "arguments": {"operation": "one listed operation", "inputs": [{"step": "completed step number", "path": "safe result path"}]},
+                "rule": "inputs must reference only completed_step_results; use [] to collect a list field",
+            },
+            "business_context": conversation.context.get("business_context", {}),
             "page_context": page_context or {},
             "attachments": attachments or [],
             "history": _history(conversation),
-            "message": message,
-            "response_schema": {"reply": "Russian text", "plan": {"steps": [{"tool_id": "registered tool id", "purpose": "why this step is needed", "expected_result": "verified output expected from this step", "arguments": "object", "depends_on": "previous step numbers"}], "gaps": ["missing real capability"]}, "task_status": "continue|cancel"},
+            "original_task": state["task"],
+            "latest_user_message": message,
+            "completed_step_results": state["results"],
+            "response_schema": {
+                "reply": "concise Russian text",
+                "status": "next|needs_input|final|cancel",
+                "basis": "verified_steps|user_supplied|unavailable",
+                "next_step": {"tool_id": "registered id or compute", "purpose": "why this next step is needed", "arguments": "object"},
+            },
         },
         ensure_ascii=False,
     )
     preflight()
-    plan = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
-    if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
+    result = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
+    if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
-    if pending and plan.get("task_status") == "cancel":
-        conversation.context.pop("pending_action", None)
-        conversation.save(update_fields=["context"])
-        return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
-    if plan.get("plan") is not None:
-        return {"text": plan["reply"].strip(), "kind": "plan", "data": _validated_plan(plan["plan"], tools)}
-    action = plan.get("action")
-    if isinstance(action, dict) and action.get("id"):
-        return {
-            "text": plan["reply"].strip(),
-            "kind": "plan",
-            "data": _validated_plan({"steps": [{
-                "tool_id": action.get("id"),
-                "purpose": "Действие предложено для выполнения после проверки плана.",
-                "expected_result": "Результат штатной операции будет проверен перед следующим шагом.",
-                "arguments": action.get("arguments", {}),
-            }], "gaps": []}, tools),
-        }
-    if not isinstance(action, dict) or not action.get("id"):
-        if pending:
-            return {"text": (plan["reply"].strip() or "Уточните недостающие параметры задачи."), "kind": "text", "data": {"pending_tool_id": pending.get("tool_id")}}
-        return {"text": plan["reply"].strip(), "kind": "text", "data": {}}
-    identifier = action.get("id")
-    arguments = action.get("arguments", {})
-    if not isinstance(identifier, str) or not isinstance(arguments, dict):
-        raise TenderAIError("Ассистент вернул некорректное действие.")
-    if identifier not in {tool["id"] for tool in tools}:
-        raise TenderAIError("Ассистент запросил действие вне реестра.")
-    if pending and pending.get("tool_id") == identifier and isinstance(pending.get("arguments"), dict):
-        arguments = {**pending["arguments"], **arguments}
-    selected_tool = next(tool for tool in tools if tool["id"] == identifier)
-    if selected_tool.get("ui"):
-        data = {"tool_id": identifier}
-        for name, source in selected_tool["ui"].get("options", {}).items():
-            values = execute_tool(source["tool"], user, {})
-            data[name] = values.get(source["field"], [])
-        for name, field_type in selected_tool["ui"].get("fields", {}).items():
-            value = arguments.get(name)
-            if field_type == "string" and isinstance(value, str) and value.strip():
-                data[name] = value.strip()
-            if field_type == "integer" and isinstance(value, int) and any(item.get("id") == value for item in data.get("stages", [])):
-                data[name] = value
-        return {"text": plan["reply"].strip(), "kind": selected_tool["ui"]["kind"], "data": data}
-    missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
-    if missing:
-        conversation.context["pending_action"] = {"tool_id": identifier, "arguments": arguments}
-        conversation.save(update_fields=["context"])
-        labels = ", ".join(missing)
-        text = plan["reply"].strip() or f"Уточните: {labels}."
-        if labels not in text:
-            text = f"{text}\nНужны параметры: {labels}."
-        return {"text": text, "kind": "text", "data": {"pending_tool_id": identifier, "missing": missing}}
-    if pending:
-        conversation.context.pop("pending_action", None)
-        conversation.save(update_fields=["context"])
+    return result
+
+
+def _next_step(decision, tools):
+    status = decision.get("status", "")
+    if status not in {"next", "needs_input", "final", "cancel"}:
+        raise TenderAIError("Ассистент вернул некорректный статус шага.")
+    step = decision.get("next_step")
+    if status == "next":
+        if not isinstance(step, dict) or not isinstance(step.get("tool_id"), str) or not isinstance(step.get("arguments"), dict):
+            raise TenderAIError("Ассистент не указал корректный следующий шаг.")
+        identifier = step["tool_id"]
+        if identifier != "compute":
+            tool = next((item for item in tools if item["id"] == identifier), None)
+            if tool is None:
+                raise TenderAIError("Ассистент запросил действие вне энциклопедии.")
+            if not tool["available"]:
+                raise TenderAIError("Ассистент запросил действие без прав доступа.")
+        return identifier, step["arguments"], str(step.get("purpose", "")).strip()[:500]
+    if step is not None:
+        raise TenderAIError("Шаг можно передавать только со статусом next.")
+    return None, None, ""
+
+
+def _reference_value(results, reference):
+    if not isinstance(reference, dict) or set(reference) != {"step", "path"}:
+        raise TenderAIError("Вычисление должно ссылаться на результат предыдущего шага.")
+    step, path = reference["step"], reference["path"]
+    if not isinstance(step, int) or isinstance(step, bool) or not 1 <= step <= len(results):
+        raise TenderAIError("Вычисление ссылается на несуществующий результат шага.")
+    if not isinstance(path, str) or not _REFERENCE_PATH.fullmatch(path):
+        raise TenderAIError("Некорректный путь к результату предыдущего шага.")
+    values = [results[step - 1]["result"]]
+    for part in path.split("."):
+        list_mode = part.endswith("[]")
+        index_match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]", part)
+        key = part[:-2] if list_mode else (index_match.group(1) if index_match else part)
+        next_values = []
+        for value in values:
+            if not isinstance(value, dict) or key not in value:
+                raise TenderAIError("Вычисление ссылается на отсутствующее поле результата.")
+            selected = value[key]
+            if list_mode:
+                if not isinstance(selected, list):
+                    raise TenderAIError("Вычисление ожидает список в результате шага.")
+                next_values.extend(selected)
+            elif index_match:
+                index = int(index_match.group(2))
+                if not isinstance(selected, list) or index >= len(selected):
+                    raise TenderAIError("Вычисление ссылается на отсутствующий элемент результата.")
+                next_values.append(selected[index])
+            else:
+                next_values.append(selected)
+        values = next_values
+    return values if len(values) != 1 or "[]" in path else values[0]
+
+
+def _numbers(value):
+    values = value if isinstance(value, list) else [value]
     try:
-        result = execute_tool(identifier, user, arguments)
-    except AssistantToolConfirmationRequired:
-        return {"text": plan["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
-    except AssistantToolError as exc:
-        return {"text": str(exc), "kind": "tool_error", "data": {"tool_id": identifier}}
-    final = _request(
-        json.dumps(
-            {
-                "task": "Answer in concise Russian using only tool_result. Do not invent data or promise further execution.",
-                "draft": plan["reply"],
-                "tool": selected_tool,
-                "tool_result": result,
-                "response_schema": {"reply": "Russian text"},
-            },
-            ensure_ascii=False,
-        )
-    )
-    if not isinstance(final, dict) or not isinstance(final.get("reply"), str):
-        raise TenderAIError("Ассистент не смог сформировать ответ по результату действия.")
-    return {"text": final["reply"].strip(), "kind": "tool_result", "data": {"tool_id": identifier, "result": result}}
+        return [Decimal(str(item)) for item in values]
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise TenderAIError("Вычисление доступно только для числовых результатов.") from exc
+
+
+def _decimal_text(value):
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _compute(arguments, results):
+    if not isinstance(arguments, dict) or set(arguments) != {"operation", "inputs"}:
+        raise TenderAIError("Некорректные параметры вычисления.")
+    operation, inputs = arguments["operation"], arguments["inputs"]
+    if operation not in _COMPUTE_OPERATIONS or not isinstance(inputs, list) or not inputs:
+        raise TenderAIError("Некорректное вычисление.")
+    values = [_reference_value(results, item) for item in inputs]
+    flattened = []
+    for value in values:
+        flattened.extend(value if isinstance(value, list) else [value])
+    if operation == "count":
+        return {"operation": operation, "value": len(flattened)}
+    numbers = _numbers(flattened)
+    if operation == "sum":
+        value = sum(numbers)
+    elif operation == "avg":
+        value = sum(numbers) / len(numbers)
+    elif operation == "min":
+        value = min(numbers)
+    elif operation == "max":
+        value = max(numbers)
+    elif operation in {"subtract", "divide", "percent_change"}:
+        if len(numbers) != 2:
+            raise TenderAIError("Для этого вычисления нужны ровно два числовых значения.")
+        if operation == "subtract":
+            value = numbers[0] - numbers[1]
+        elif operation == "divide":
+            if numbers[1] == 0:
+                raise TenderAIError("Деление на ноль запрещено.")
+            value = numbers[0] / numbers[1]
+        else:
+            if numbers[0] == 0:
+                raise TenderAIError("Процентное изменение от нуля не определено.")
+            value = (numbers[1] - numbers[0]) / numbers[0] * 100
+    return {"operation": operation, "value": _decimal_text(value)}
+
+
+def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
+    for _ in range(MAX_AGENT_STEPS):
+        decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+        status = decision.get("status")
+        if status == "cancel":
+            _finish_state(conversation)
+            return {"text": decision["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+        identifier, arguments, purpose = _next_step(decision, tools)
+        if status == "needs_input":
+            _save_state(conversation, state)
+            return {"text": decision["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
+        if status == "final":
+            if not state["results"] and decision.get("basis") not in {"user_supplied", "unavailable"}:
+                raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
+            _finish_state(conversation)
+            return {"text": decision["reply"].strip(), "kind": "tool_result", "data": {"steps": state["results"]}}
+        if identifier == "compute":
+            result = _compute(arguments, state["results"])
+        else:
+            tool = next(item for item in tools if item["id"] == identifier)
+            missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
+            if missing:
+                _save_state(conversation, state)
+                return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
+            if tool["requires_confirmation"]:
+                state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
+                _save_state(conversation, state)
+                return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
+            try:
+                result = execute_tool(identifier, user, arguments)
+            except AssistantToolError as exc:
+                raise TenderAIError(str(exc)) from exc
+        state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
+        _save_state(conversation, state)
+        message, attachments, image_data_urls = "", [], None
+    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.")
+
+
+def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
+    """Run a bounded sequence of registered, backend-validated steps."""
+    tools = available_tools(user)
+    state = _run_state(conversation, message)
+    return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+
+
+def continue_after_confirmation(conversation, user, tool_id, result):
+    """Continue the same verified task after a confirmed UI action."""
+    state = conversation.context.get("agent_run")
+    if not isinstance(state, dict) or not isinstance(state.get("results"), list):
+        return None
+    waiting = state.pop("waiting_confirmation", {})
+    if waiting.get("tool_id") != tool_id:
+        return None
+    state["results"].append({
+        "number": len(state["results"]) + 1,
+        "tool_id": tool_id,
+        "purpose": waiting.get("purpose", ""),
+        "result": result,
+    })
+    _save_state(conversation, state)
+    return _execute_loop(conversation, user, "", state, available_tools(user), None, [], None)

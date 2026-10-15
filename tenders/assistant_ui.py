@@ -5,6 +5,7 @@ from django.db import transaction
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect
 
+from .assistant_agent import continue_after_confirmation
 from .assistant_tools import AssistantToolError, execute_tool
 from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_messages, upload_attachment
 from .services import TenderAIError
@@ -112,6 +113,11 @@ def conversation_action_confirm(request, conversation_id, event_id):
         # issue a second write even when the client repeats a click.
         conversation.save(update_fields=["context"])
         if request.POST.get("accept") != "yes":
+            run = conversation.context.get("agent_run", {})
+            waiting = run.get("waiting_confirmation", {}) if isinstance(run, dict) else {}
+            if waiting.get("tool_id") == data.get("tool_id"):
+                conversation.context.pop("agent_run", None)
+                conversation.save(update_fields=["context"])
             add_assistant_message(conversation, "Действие отменено.")
             return JsonResponse({"messages": serialize_messages(conversation)})
         try:
@@ -119,4 +125,11 @@ def conversation_action_confirm(request, conversation_id, event_id):
         except (KeyError, AssistantToolError) as exc:
             return JsonResponse({"detail": str(exc)}, status=400)
         add_assistant_message(conversation, "Действие выполнено.", "tool_result", {"tool_id": data["tool_id"], "result": result})
+    try:
+        continuation = continue_after_confirmation(conversation, request.user, data["tool_id"], result)
+    except TenderAIError as exc:
+        add_assistant_message(conversation, f"Действие выполнено, но продолжение задачи остановлено: {exc}")
+        continuation = None
+    if continuation:
+        add_assistant_message(conversation, continuation["text"], continuation["kind"], continuation["data"])
     return JsonResponse({"messages": serialize_messages(conversation)})

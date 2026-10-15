@@ -117,14 +117,22 @@ def _catalog_field(name, descriptor):
     return result
 
 
-def catalogue():
+def catalogue(*, compact=False):
     """The single metadata source used for both prompting and validation."""
     items = []
     for model in apps.get_models():
         if not _safe_model(model):
             continue
         fields = _base_fields(model)
-        items.append({"id": f"{model._meta.app_label}.{model.__name__}", "model": model._meta.label, "verbose_name": str(model._meta.verbose_name), "fields": [_catalog_field(name, descriptor) for name, descriptor in sorted(fields.items())]})
+        item_fields = [_catalog_field(name, descriptor) for name, descriptor in sorted(fields.items())]
+        if compact:
+            item_fields = [
+                field["name"] + (f"->{field['relation']}" if "relation" in field else f":{field['type']}")
+                for field in item_fields
+            ]
+            items.append({"id": f"{model._meta.app_label}.{model.__name__}", "fields": item_fields})
+        else:
+            items.append({"id": f"{model._meta.app_label}.{model.__name__}", "model": model._meta.label, "verbose_name": str(model._meta.verbose_name), "fields": item_fields})
     return sorted(items, key=lambda item: item["id"])
 
 
@@ -175,7 +183,12 @@ def _validated_items(value, label):
     return value
 
 
-def execute(user, plan):
+def validate_plan(user, plan):
+    """Validate a read plan from the same metadata used by ``execute``.
+
+    Keeping this separate lets the agent reject an impossible next step before
+    it reaches the ORM, without maintaining a second field catalogue.
+    """
     if not user.is_superuser:
         raise ReadPlanError("Доступ к бизнес-данным через ассистента разрешён только владельцу")
     allowed = {"entity", "fields", "search", "filters", "order_by", "limit", "aggregates", "group_by"}
@@ -189,30 +202,21 @@ def execute(user, plan):
     if "id" not in selected_names:
         selected_names = ["id", *selected_names]
         selected = [_path(model, fields, "id"), *selected]
-    qs = model.objects.all()
     search = plan.get("search")
     searchable = [name for name, item in fields.items() if isinstance(item["field"], (models.CharField, models.TextField))]
     if search not in (None, ""):
         if not isinstance(search, str) or not searchable:
             raise ReadPlanError("Некорректный поиск")
-        condition = Q()
-        for name in searchable:
-            condition |= Q(**{f"{fields[name]['lookup']}__icontains": search[:200]})
-        qs = qs.filter(condition)
-    for item in _validated_items(plan.get("filters"), "Некорректный фильтр"):
+    filters = _validated_items(plan.get("filters"), "Некорректный фильтр")
+    for item in filters:
         if not isinstance(item, dict) or set(item) != {"field", "op", "value"} or item.get("op") not in OPS:
             raise ReadPlanError("Некорректный фильтр")
         descriptor = _path(model, fields, item.get("field"))
         if descriptor["kind"] != "scalar":
             raise ReadPlanError("Некорректный фильтр")
-        lookup = descriptor["lookup"]
-        if item["op"] == "contains":
-            lookup += "__icontains"
-        elif item["op"] != "eq":
-            lookup += f"__{item['op']}"
-        qs = qs.filter(**{lookup: item["value"]})
     annotations = {}
-    for item in _validated_items(plan.get("aggregates"), "Некорректная агрегация"):
+    aggregates = _validated_items(plan.get("aggregates"), "Некорректная агрегация")
+    for item in aggregates:
         if not isinstance(item, dict) or set(item) != {"op", "field"} or item.get("op") not in AGGREGATES:
             raise ReadPlanError("Некорректная агрегация")
         descriptor = _path(model, fields, item.get("field"))
@@ -225,13 +229,6 @@ def execute(user, plan):
     groups = [_path(model, fields, name) for name in group_names]
     if any(item["kind"] != "scalar" for item in groups):
         raise ReadPlanError("Некорректная группировка")
-    total = qs.count()
-    if groups:
-        group_lookups = [item["lookup"] for item in groups]
-        rows = list(qs.values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
-        records = [{**{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(group_names, groups)}, **{key: _value(row[key]) for key in annotations}} for row in rows]
-        return {"entity": entity, "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
-    summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
     order = plan.get("order_by", "-id")
     descending = isinstance(order, str) and order.startswith("-")
     order_descriptor = _path(model, fields, order[1:] if descending else order)
@@ -240,6 +237,50 @@ def execute(user, plan):
     limit = plan.get("limit", 20)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_ROWS:
         raise ReadPlanError("Некорректный лимит")
+    return {
+        "model": model, "entity": entity, "fields": fields,
+        "selected_names": selected_names, "selected": selected,
+        "search": search, "searchable": searchable, "filters": filters,
+        "annotations": annotations, "group_names": group_names, "groups": groups,
+        "order_descriptor": order_descriptor, "descending": descending,
+        "limit": limit,
+    }
+
+
+def execute(user, plan):
+    validated = validate_plan(user, plan)
+    model = validated["model"]
+    entity = validated["entity"]
+    fields = validated["fields"]
+    selected_names = validated["selected_names"]
+    selected = validated["selected"]
+    qs = model.objects.all()
+    if validated["search"] not in (None, ""):
+        condition = Q()
+        for name in validated["searchable"]:
+            condition |= Q(**{f"{fields[name]['lookup']}__icontains": validated["search"][:200]})
+        qs = qs.filter(condition)
+    for item in validated["filters"]:
+        descriptor = _path(model, fields, item["field"])
+        lookup = descriptor["lookup"]
+        if item["op"] == "contains":
+            lookup += "__icontains"
+        elif item["op"] != "eq":
+            lookup += f"__{item['op']}"
+        qs = qs.filter(**{lookup: item["value"]})
+    annotations = validated["annotations"]
+    group_names = validated["group_names"]
+    groups = validated["groups"]
+    total = qs.count()
+    if groups:
+        group_lookups = [item["lookup"] for item in groups]
+        rows = list(qs.values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
+        records = [{**{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(group_names, groups)}, **{key: _value(row[key]) for key in annotations}} for row in rows]
+        return {"entity": entity, "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
+    summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
+    descending = validated["descending"]
+    order_descriptor = validated["order_descriptor"]
+    limit = validated["limit"]
     value_lookups = [item["lookup"] for item in selected]
     rows = list(qs.order_by(("-" if descending else "") + order_descriptor["lookup"]).values(*value_lookups)[:limit])
     records = [{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(selected_names, selected)} for row in rows]
