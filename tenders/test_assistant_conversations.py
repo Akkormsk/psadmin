@@ -91,8 +91,8 @@ class AssistantConversationTests(TestCase):
             "reply": "Сначала проверю данные, затем подготовлю расход для подтверждения.",
             "plan": {
                 "steps": [
-                    {"tool_id": "read", "purpose": "Проверить операции за период", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["id"]}}},
-                    {"tool_id": "cash.transaction_create", "purpose": "Подготовить расход", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}, "depends_on": [1]},
+                    {"tool_id": "read", "purpose": "Проверить операции за период", "expected_result": "Список операций", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["id"]}}},
+                    {"tool_id": "cash.transaction_create", "purpose": "Подготовить расход", "expected_result": "Черновик операции для подтверждения", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "15000", "reason": "Доставка"}, "depends_on": [1]},
                 ],
                 "gaps": [],
             },
@@ -111,6 +111,7 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(message["kind"], "plan")
         self.assertEqual([step["tool_id"] for step in message["data"]["steps"]], ["read", "cash.transaction_create"])
         self.assertEqual(message["data"]["steps"][1]["status"], "ready_after_previous_steps")
+        self.assertEqual(message["data"]["steps"][1]["expected_result"], "Черновик операции для подтверждения")
         self.assertFalse(CashTransaction.objects.filter(reason="Доставка").exists())
 
     @patch("tenders.assistant_agent.preflight")

@@ -69,13 +69,14 @@ def _validated_plan(raw_plan, tools):
         tool_id = raw_step.get("tool_id")
         arguments = raw_step.get("arguments", {})
         purpose = raw_step.get("purpose", "")
+        expected_result = raw_step.get("expected_result", "")
         dependencies = raw_step.get("depends_on", [])
         tool = known_tools.get(tool_id)
         if tool is None:
             raise TenderAIError("План ссылается на отсутствующую возможность PSADMIN.")
         if not tool["available"]:
             raise TenderAIError("План содержит действие, недоступное текущему пользователю.")
-        if not isinstance(arguments, dict) or not isinstance(purpose, str) or not isinstance(dependencies, list):
+        if not isinstance(arguments, dict) or not isinstance(purpose, str) or not isinstance(expected_result, str) or not isinstance(dependencies, list):
             raise TenderAIError("В плане указаны некорректные параметры шага.")
         if not all(isinstance(item, int) and 0 < item < number for item in dependencies):
             raise TenderAIError("Шаг плана может зависеть только от предыдущих шагов.")
@@ -91,6 +92,7 @@ def _validated_plan(raw_plan, tools):
             "tool_id": tool_id,
             "name": tool["name"],
             "purpose": purpose.strip()[:500],
+            "expected_result": expected_result.strip()[:500],
             "provided_inputs": sorted(arguments),
             "missing_inputs": missing,
             "depends_on": dependencies,
@@ -133,7 +135,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
                 "never claim that an attachment has already become a PSADMIN business record. "
                 "You may propose a plan and continue discussing it over several user messages. "
                 "For every request that needs PSADMIN data or a business operation, return a structured multi-step plan. "
-                "Each step must use exactly one registered tool_id and declare its arguments, purpose, and prior dependencies. "
+                "Each step must use exactly one registered tool_id and declare its arguments, purpose, expected_result, and prior dependencies. "
                 "Use read for verified data and registered actions for real site operations; never invent a tool. "
                 "List unavailable needed capabilities only in plan.gaps. "
                 "This is planning mode: no step is executed yet, even when it is ready. "
@@ -150,7 +152,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
             "attachments": attachments or [],
             "history": _history(conversation),
             "message": message,
-            "response_schema": {"reply": "Russian text", "plan": {"steps": [{"tool_id": "registered tool id", "purpose": "why this step is needed", "arguments": "object", "depends_on": "previous step numbers"}], "gaps": ["missing real capability"]}, "task_status": "continue|cancel"},
+            "response_schema": {"reply": "Russian text", "plan": {"steps": [{"tool_id": "registered tool id", "purpose": "why this step is needed", "expected_result": "verified output expected from this step", "arguments": "object", "depends_on": "previous step numbers"}], "gaps": ["missing real capability"]}, "task_status": "continue|cancel"},
         },
         ensure_ascii=False,
     )
@@ -172,6 +174,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
             "data": _validated_plan({"steps": [{
                 "tool_id": action.get("id"),
                 "purpose": "Действие предложено для выполнения после проверки плана.",
+                "expected_result": "Результат штатной операции будет проверен перед следующим шагом.",
                 "arguments": action.get("arguments", {}),
             }], "gaps": []}, tools),
         }
