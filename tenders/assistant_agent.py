@@ -48,6 +48,23 @@ def _request(prompt, image_data_urls=None):
     return result
 
 
+def _trace_block(direction, payload):
+    """Plain-text diagnostic record of an already performed exchange.
+
+    This is deliberately only a rendering helper: it neither changes a model
+    prompt nor adds data to the agent state.
+    """
+    if isinstance(payload, str):
+        text = payload
+    else:
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    return f"{direction}\n{text}"
+
+
+def _trace_response(trace, *, kind="text", data=None):
+    return {"text": "\n\n".join(trace), "kind": kind, "data": data or {}}
+
+
 def _tool_catalogue(tools):
     """Give the model only the contract it needs to choose a next action."""
     return [
@@ -127,7 +144,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
     result = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
     if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
-    return result
+    return result, prompt
 
 
 def _next_step(decision, tools):
@@ -234,38 +251,43 @@ def _compute(arguments, results):
     return {"operation": operation, "value": _decimal_text(value)}
 
 
-def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
+def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls, trace=None):
+    trace = list(trace or [])
     for _ in range(MAX_AGENT_STEPS):
-        decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+        decision, prompt = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+        trace.extend((_trace_block("BACKEND → LLM", prompt), _trace_block("LLM → BACKEND", decision)))
         status = decision.get("status")
         if status == "cancel":
             _finish_state(conversation)
-            return {"text": decision["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+            return _trace_response(trace)
         identifier, arguments, purpose = _next_step(decision, tools)
         if status == "needs_input":
             _save_state(conversation, state)
-            return {"text": decision["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
+            return _trace_response(trace, data={"task_pending": True})
         if status == "final":
             if not state["results"] and decision.get("basis") not in {"user_supplied", "unavailable"}:
                 raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
             _finish_state(conversation)
-            return {"text": decision["reply"].strip(), "kind": "tool_result", "data": {"steps": state["results"]}}
+            return _trace_response(trace, data={"steps": state["results"]})
         if identifier == "compute":
+            trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
             result = _compute(arguments, state["results"])
         else:
             tool = next(item for item in tools if item["id"] == identifier)
             missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
             if missing:
                 _save_state(conversation, state)
-                return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
+                return _trace_response(trace, data={"task_pending": True, "missing": missing})
             if tool["requires_confirmation"]:
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
                 _save_state(conversation, state)
-                return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
+                return _trace_response(trace, kind="confirmation_required", data={"tool_id": identifier, "arguments": arguments})
             try:
+                trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
                 result = execute_tool(identifier, user, arguments)
             except AssistantToolError as exc:
                 raise TenderAIError(str(exc)) from exc
+        trace.append(_trace_block("TOOL → BACKEND", result))
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
@@ -294,4 +316,7 @@ def continue_after_confirmation(conversation, user, tool_id, result):
         "result": result,
     })
     _save_state(conversation, state)
-    return _execute_loop(conversation, user, "", state, available_tools(user), None, [], None)
+    return _execute_loop(
+        conversation, user, "", state, available_tools(user), None, [], None,
+        trace=[_trace_block("TOOL → BACKEND", result)],
+    )

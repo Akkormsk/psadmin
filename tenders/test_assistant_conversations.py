@@ -55,8 +55,12 @@ class AssistantConversationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         message = response.json()["messages"][-1]
-        self.assertEqual(message["kind"], "tool_result")
-        self.assertIn("15%", message["text"])
+        self.assertEqual(message["kind"], "text")
+        self.assertIn("BACKEND → LLM", message["text"])
+        self.assertIn("LLM → BACKEND", message["text"])
+        self.assertIn('"tool_id": "read"', message["text"])
+        self.assertIn('"tool_id": "compute"', message["text"])
+        self.assertIn('"value": "15"', message["text"])
         self.assertEqual([step["tool_id"] for step in message["data"]["steps"]], ["read", "compute"])
 
     @patch("tenders.assistant_agent.preflight")
@@ -98,7 +102,8 @@ class AssistantConversationTests(TestCase):
         )
         self.assertEqual(confirmed.status_code, 200)
         self.assertTrue(CashTransaction.objects.filter(reason="Доставка").exists())
-        self.assertEqual(confirmed.json()["messages"][-1]["text"], "Расход внесён и задача завершена.")
+        self.assertIn("TOOL → BACKEND", confirmed.json()["messages"][-1]["text"])
+        self.assertIn("LLM → BACKEND", confirmed.json()["messages"][-1]["text"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
