@@ -97,7 +97,7 @@ def _finish_state(conversation):
     conversation.save(update_fields=["context"])
 
 
-def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
+def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejection=None):
     read_catalog = []
     if any(tool["id"] == "read" and tool["available"] for tool in tools):
         from .assistant_read import catalogue
@@ -113,6 +113,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "If required information is absent, return status needs_input and one concise Russian question. "
                 "If the result is complete, return status final and explain it using only completed_step_results. "
                 "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
+                "If previous_backend_rejection is present, correct that request before choosing another step. "
                 "Return valid JSON matching response_schema."
             ),
             "registered_tools": _tool_catalogue(tools),
@@ -131,6 +132,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "original_task": state["task"],
             "latest_user_message": message,
             "completed_step_results": state["results"],
+            "previous_backend_rejection": rejection,
             "response_schema": {
                 "reply": "concise Russian text",
                 "status": "next|needs_input|final|cancel",
@@ -253,8 +255,9 @@ def _compute(arguments, results):
 
 def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls, trace=None):
     trace = list(trace or [])
+    rejection = None
     for _ in range(MAX_AGENT_STEPS):
-        decision, prompt = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+        decision, prompt = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejection)
         trace.extend((_trace_block("BACKEND → LLM", prompt), _trace_block("LLM → BACKEND", decision)))
         status = decision.get("status")
         if status == "cancel":
@@ -271,7 +274,14 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             return _trace_response(trace, data={"steps": state["results"]})
         if identifier == "compute":
             trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
-            result = _compute(arguments, state["results"])
+            try:
+                result = _compute(arguments, state["results"])
+            except TenderAIError as exc:
+                error = str(exc)
+                trace.append(_trace_block("TOOL → BACKEND", {"error": error}))
+                rejection = {"tool_id": identifier, "arguments": arguments, "error": error}
+                message, attachments, image_data_urls = "", [], None
+                continue
         else:
             tool = next(item for item in tools if item["id"] == identifier)
             missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
@@ -286,12 +296,21 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                 trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
                 result = execute_tool(identifier, user, arguments)
             except AssistantToolError as exc:
-                raise TenderAIError(str(exc)) from exc
+                error = str(exc)
+                trace.append(_trace_block("TOOL → BACKEND", {"error": error}))
+                if identifier == "read":
+                    rejection = {"tool_id": identifier, "arguments": arguments, "error": error}
+                    message, attachments, image_data_urls = "", [], None
+                    continue
+                return _trace_response(trace)
         trace.append(_trace_block("TOOL → BACKEND", result))
+        rejection = None
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
-    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.")
+    trace.append(_trace_block("BACKEND", {"error": f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск."}))
+    _save_state(conversation, state)
+    return _trace_response(trace, data={"task_pending": True})
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):

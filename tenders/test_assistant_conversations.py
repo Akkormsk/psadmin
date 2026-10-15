@@ -65,18 +65,38 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
-    def test_read_plan_is_validated_before_orm_execution(self, request, _preflight):
-        request.return_value = {"reply": "Читаю.", "status": "next", "next_step": {
-            "tool_id": "read", "purpose": "проверка", "arguments": {"plan": {
-                "entity": "tender_selection.Tender", "fields": ["token"],
-            }},
-        }}
+    def test_invalid_read_plan_is_shown_then_repaired(self, request, _preflight):
+        from tender_selection.models import Tender
+
+        Tender.objects.create(purchase_number="READ-1", title="Проверка")
+
+        def fake_gateway(prompt):
+            payload = json.loads(prompt)
+            if not payload.get("previous_backend_rejection"):
+                return {"reply": "Читаю.", "status": "next", "next_step": {
+                    "tool_id": "read", "purpose": "проверка", "arguments": {"plan": {
+                        "entity": "tender_selection.Tender", "fields": ["purchase_number"], "unexpected": True,
+                    }},
+                }}
+            self.assertEqual(payload["previous_backend_rejection"]["error"], "Некорректный план чтения")
+            if not payload["completed_step_results"]:
+                return {"reply": "Исправляю.", "status": "next", "next_step": {
+                    "tool_id": "read", "purpose": "проверка", "arguments": {"plan": {
+                        "entity": "tender_selection.Tender", "fields": ["purchase_number"],
+                    }},
+                }}
+            return {"reply": "Готово.", "status": "final", "basis": "verified_steps"}
+
+        request.side_effect = fake_gateway
         response = self.client.post(
             reverse("assistant_conversation_message", args=[self._conversation()]),
-            data=json.dumps({"message": "Покажи секрет"}), content_type="application/json", secure=True,
+            data=json.dumps({"message": "Покажи тендеры"}), content_type="application/json", secure=True,
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("недоступные поля", response.json()["detail"])
+        self.assertEqual(response.status_code, 200)
+        text = response.json()["messages"][-1]["text"]
+        self.assertIn('"unexpected": true', text)
+        self.assertIn("Некорректный план чтения", text)
+        self.assertGreaterEqual(text.count("LLM → BACKEND"), 3)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
