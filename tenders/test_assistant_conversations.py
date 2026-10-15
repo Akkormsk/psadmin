@@ -55,7 +55,6 @@ class AssistantConversationTests(TestCase):
         self.assertIn("План действий (исполнение пока отключено)", message["text"])
         self.assertIn("Команда: read", message["text"])
         self.assertIn("Команда: compute", message["text"])
-        self.assertIn('Параметры: {"plan": {"entity": "tender_selection.Tender"', message["text"])
         self.assertIn("lost_tenders: значения фактического снижения", message["text"])
         self.assertEqual([step["id"] for step in message["data"]["plan"]], ["lost_tenders", "average_reduction", "top_three"])
         self.assertEqual(request.call_count, 1)
@@ -97,27 +96,6 @@ class AssistantConversationTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("входы", response.json()["detail"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_plan_requires_a_valid_universal_read_plan(self, request, _preflight):
-        request.return_value = self._plan([
-            {
-                "id": "lost_tenders", "tool_id": "read", "purpose": "Найти проигранные тендеры",
-                "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["does_not_exist"]}},
-                "inputs": [{"from": "user", "value": "сентябрь и статус проигран"}],
-                "outputs": ["тендеры"],
-            },
-        ])
-
-        response = self.client.post(
-            reverse("assistant_conversation_message", args=[self._conversation()]),
-            data=json.dumps({"message": "Найди проигранные тендеры за сентябрь"}),
-            content_type="application/json", secure=True,
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("недоступные поля", response.json()["detail"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")

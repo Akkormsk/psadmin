@@ -130,7 +130,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
     return result
 
 
-def _validate_plan_steps(plan, user, tools):
+def _validate_plan_steps(plan, tools):
     if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
         raise TenderAIError("Ассистент не сформировал корректный план.")
     status = plan.get("status")
@@ -159,15 +159,6 @@ def _validate_plan_steps(plan, user, tools):
             tool = next((item for item in tools if item["id"] == identifier), None)
             if tool is None or not tool["available"]:
                 raise TenderAIError("План ссылается на недоступную функцию.")
-        if identifier == "read":
-            from .assistant_read import ReadPlanError, validate_plan
-
-            if set(step["arguments"]) != {"plan"}:
-                raise TenderAIError("Команда чтения должна содержать только план чтения.")
-            try:
-                validate_plan(user, step["arguments"]["plan"])
-            except ReadPlanError as exc:
-                raise TenderAIError(str(exc)) from exc
         if not isinstance(step["inputs"], list) or not step["inputs"] or not isinstance(step["outputs"], list) or not all(isinstance(value, str) and value for value in step["outputs"]):
             raise TenderAIError("У шага плана должны быть указаны входы и выходы.")
         for value in step["inputs"]:
@@ -186,11 +177,9 @@ def _format_plan(reply, steps):
     for number, step in enumerate(steps, start=1):
         inputs = "; ".join(f"{value['from']}: {value['value']}" for value in step["inputs"]) or "нет"
         outputs = "; ".join(step["outputs"])
-        arguments = json.dumps(step["arguments"], ensure_ascii=False, separators=(",", ": "))
         lines.extend((
             f"{number}. {step['purpose']}",
             f"   Команда: {step['tool_id']}",
-            f"   Параметры: {arguments}",
             f"   Вход: {inputs}",
             f"   Выход: {outputs}",
         ))
@@ -237,7 +226,7 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
     )
     preflight()
     plan = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
-    steps = _validate_plan_steps(plan, user, tools)
+    steps = _validate_plan_steps(plan, tools)
     if plan["status"] == "needs_input":
         return {"text": plan["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
     _finish_state(conversation)
