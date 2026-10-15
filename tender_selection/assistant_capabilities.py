@@ -4,7 +4,7 @@ from tenders.assistant_tools import AssistantTool, AssistantToolError, register_
 from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     apply_filter_word_audit, decide_document_proposals, pull_tenders_now, run_filter_word_audit, run_profile_triage,
-    record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid, update_tender_review,
+    record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid,
 )
 
 
@@ -115,12 +115,6 @@ register_tool(AssistantTool(
     "tender.hide", "Скрыть неподходящий тендер", "Архивирует тендер тем же исполнителем, что кнопка интерфейса, и сохраняет причину для входящего тендера.",
     {"tender_id": "integer", "reason": "string?"}, False, True, True, _hide_tender,
     source="tender_selection.services.hide_tender",
-))
-register_tool(AssistantTool(
-    "tender.review", "Изменить статус проверки тендера", "Меняет отметку проверки и при необходимости запускает штатную оценку рисков.",
-    {"tender_id": "integer", "review": "string"}, False, True, True,
-    lambda user, payload: _tender_action(update_tender_review, user, payload, "tender_id", "review"),
-    source="tender_selection.services.update_tender_review",
 ))
 register_tool(AssistantTool(
     "tender.forecast_toggle", "Включить или исключить тендер из прогноза", "Переключает существующую запись статистики тем же правилом, что архив тендеров.",
