@@ -202,13 +202,17 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "For PSADMIN data or operations, use assistant.navigate to explore the capability graph. You may open "
                 "an intermediate node or a known leaf directly. Read a detailed contract before using its fields or arguments. "
                 "Never guess database field names, entity identifiers, action arguments or allowed values. Use only metadata "
-                "returned by assistant.navigate. Do not ask for optional filters when the request is already executable. "
+                "returned by assistant.navigate. Treat an entity description and its business views as facts about data origin "
+                "and pre-applied rules: never add a filter merely to restate them or invent a value for a field without choices. "
+                "Do not ask for optional filters when the request is already executable. "
                 "Ask only for a genuinely required parameter or an ambiguity of an opened read contract that cannot be obtained from the request, conversation, or available tools. "
                 "Never ask for storage formats, timezones, numeric notation, or bounds of a named calendar period; normalize them "
                 "using literal_context and the returned contract. Use read for application data, existing registered actions for "
                 "changes, and compute only for listed arithmetic over completed_step_results. A tool call is not a completed task. "
-                "Never invent successful execution or current facts. For changes, prepare the real registered action; backend requires "
-                "confirmation. When a tool is rejected, use its actual error and opened metadata to choose a correction; do not repeat "
+                "A zero-record READ proves only that its executed query returned zero records, not that the whole entity is empty. "
+                "Inspect the returned query and entity contract; if an optional filter was your unsupported assumption, you may safely "
+                "retry without it, but never remove a condition explicitly requested by the user. Never invent successful execution or current facts. For changes, prepare the real registered action; backend requires "
+                "confirmation. Treat a new user task as independent from completed or rejected query filters; use old results only when the user explicitly continues that task. When a tool is rejected, use its actual error and opened metadata to choose a correction; do not repeat "
                 "the same invalid call. Finish a data task only from verified results, or say it cannot be performed. Return valid JSON "
                 "matching response_schema."
             ),
@@ -462,7 +466,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             return {"text": decision["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
         if status == "needs_input":
             if not _needs_input_is_grounded(decision, state):
-                rejected_step = {"tool_id": "needs_input", "error": "Сначала откройте контракт нужной операции и укажите только обязательный недостающий параметр."}
+                rejected_step = {"tool_id": "needs_input", "error": "Уточнение допустимо только для обязательного параметра открытого ACTION; READ нужно выполнить по доступному контракту без необязательных фильтров."}
                 state["errors"].append(rejected_step)
                 _trace(state, "needs_input", "rejected", conversation=conversation, error=rejected_step["error"])
                 continue

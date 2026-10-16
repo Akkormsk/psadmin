@@ -46,6 +46,7 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("Tender", {item["id"] for item in models["children"]})
         tender = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection", "Tender"]})
         self.assertEqual(tender["entity"], "tender_selection.Tender")
+        self.assertIn("incoming", {item["id"] for item in tender["views"]})
         reduction = next(item for item in tender["children"] if item["id"] == "contract_reduction_percent")
         self.assertEqual(reduction["label"], "Фактическое снижение, %")
 
@@ -451,6 +452,24 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["total_count"], 3)
         self.assertEqual(result["returned_count"], 1)
         self.assertEqual(str(result["aggregates"]["sum_amount"]), "60")
+
+    def test_read_business_view_reuses_the_existing_incoming_tender_rules(self):
+        from tender_selection.models import FilterSettings, Tender
+
+        settings = FilterSettings.load()
+        settings.min_price = 100
+        settings.include_words = "подход"
+        settings.save(update_fields=["min_price", "include_words"])
+        visible = Tender.objects.create(purchase_number="read-visible", title="Подходящий", max_price="300000")
+        Tender.objects.create(purchase_number="read-hidden", title="Скрытый", max_price="1")
+
+        result = execute_tool("read", self.admin, {"plan": {
+            "entity": "tender_selection.Tender", "view": "incoming",
+            "fields": ["purchase_number"], "order_by": "-id", "limit": 10,
+        }})
+
+        self.assertEqual([record["purchase_number"] for record in result["records"]], [visible.purchase_number])
+        self.assertEqual(result["query"]["view"], "incoming")
 
     def test_read_rejects_sensitive_bank_account_and_non_owner(self):
         from cash.models import BankPayment

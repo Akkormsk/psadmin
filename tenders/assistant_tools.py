@@ -283,6 +283,8 @@ def navigation(user, payload):
         return {
             "path": path,
             "entity": model["id"],
+            "description": model.get("description", ""),
+            "views": model.get("views", []),
             "filter_contract": graph["filter_contract"],
             "children": [{"id": field["name"], **field} for field in model["fields"]],
         }

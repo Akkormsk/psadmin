@@ -56,6 +56,50 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_reads_bank_payment_without_inventing_a_direction_filter(self, request, _preflight):
+        from cash.models import BankPayment
+
+        payment = BankPayment.objects.create(external_id="incoming-payment", amount="100", operation_date=date(2026, 10, 16), direction="Debet")
+        request.side_effect = [
+            {"reply": "Открываю платежи банка.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть платежи", "arguments": {"path": ["read", "cash", "BankPayment"]}}},
+            {"reply": "Читаю последний платёж.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Получить последний платёж", "arguments": {"plan": {"entity": "cash.BankPayment", "fields": ["amount", "operation_date"], "order_by": "-operation_date", "limit": 1}}}},
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+
+        response = self._send(self._conversation(), "Покажи последнее поступление по банку")
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["messages"][-1]["data"]["steps"][-1]["result"]
+        self.assertEqual(result["records"][0]["id"], payment.pk)
+        self.assertEqual(result["query"]["filters"], [])
+        prompt = json.loads(request.call_args_list[1].args[0])
+        node = next(node for node in prompt["opened_capability_nodes"] if node.get("entity") == "cash.BankPayment")
+        self.assertIn("входящ", node["description"].lower())
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_empty_read_keeps_its_applied_filters_for_a_broader_retry(self, request, _preflight):
+        from cash.models import BankPayment
+
+        payment = BankPayment.objects.create(external_id="broader-payment", amount="100", operation_date=date(2026, 10, 16), direction="Debet")
+        request.side_effect = [
+            {"reply": "Открываю платежи банка.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть платежи", "arguments": {"path": ["read", "cash", "BankPayment"]}}},
+            {"reply": "Проверяю предположение.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Проверить направление", "arguments": {"plan": {"entity": "cash.BankPayment", "fields": ["amount"], "filters": [{"field": "direction", "op": "eq", "value": "in"}], "limit": 1}}}},
+            {"reply": "Проверяю без добавленного фильтра.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Получить последний платёж", "arguments": {"plan": {"entity": "cash.BankPayment", "fields": ["amount"], "filters": [], "order_by": "-operation_date", "limit": 1}}}},
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+
+        response = self._send(self._conversation(), "Покажи последнее поступление по банку")
+
+        self.assertEqual(response.status_code, 200)
+        retry_prompt = json.loads(request.call_args_list[2].args[0])
+        first_read = retry_prompt["completed_step_results"][-1]["result"]
+        self.assertEqual(first_read["total_count"], 0)
+        self.assertEqual(first_read["query"]["filters"], [{"field": "direction", "op": "eq", "value": "in"}])
+        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["records"][0]["id"], payment.pk)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_empty_read_is_a_verified_result(self, request, _preflight):
         request.side_effect = [
             {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},

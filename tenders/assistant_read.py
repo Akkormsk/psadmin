@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from inspect import cleandoc
 import re
 from uuid import UUID
 
@@ -41,6 +42,7 @@ def plan_contract():
         "additional_properties": False,
         "properties": {
             "entity": {"type": "string", "required": True, "description": "entity ID from the opened READ node"},
+            "view": {"type": "string", "required": False, "description": "optional business view ID from the opened entity node"},
             "fields": {"type": "string[]", "required": False, "description": "field names from the opened entity node; id is always returned"},
             "search": {"type": "string", "required": False},
             "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": "JSON value matching that field"}},
@@ -63,6 +65,38 @@ def _sensitive(name):
 
 def _safe_model(model):
     return not (model._meta.app_label in EXCLUDED_APPS or model.__name__ in EXCLUDED_MODELS or model._meta.auto_created)
+
+
+def _model_description(model):
+    return cleandoc(model.__doc__ or "").strip()[:1000]
+
+
+def _business_views(model):
+    provider = getattr(model, "assistant_read_views", None)
+    if not callable(provider):
+        return []
+    views = provider()
+    if not isinstance(views, (list, tuple)):
+        return []
+    return [
+        {key: item[key] for key in ("id", "label", "description") if key in item}
+        for item in views
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("label"), str)
+    ]
+
+
+def _business_queryset(model, view, user):
+    if not view:
+        return model.objects.all()
+    if view not in {item["id"] for item in _business_views(model)}:
+        raise ReadPlanError("Неизвестное бизнес-представление")
+    provider = getattr(model, "assistant_read_queryset", None)
+    if not callable(provider):
+        raise ReadPlanError("Бизнес-представление недоступно для чтения")
+    try:
+        return provider(view, user)
+    except (TypeError, ValueError) as exc:
+        raise ReadPlanError("Бизнес-представление недоступно для чтения") from exc
 
 
 def _field_kind(field):
@@ -182,7 +216,11 @@ def catalogue(*, compact=False):
             ]
             items.append({"id": f"{model._meta.app_label}.{model.__name__}", "fields": item_fields})
         else:
-            items.append({"id": f"{model._meta.app_label}.{model.__name__}", "model": model._meta.label, "verbose_name": str(model._meta.verbose_name), "fields": item_fields})
+            items.append({
+                "id": f"{model._meta.app_label}.{model.__name__}", "model": model._meta.label,
+                "verbose_name": str(model._meta.verbose_name), "description": _model_description(model),
+                "views": _business_views(model), "fields": item_fields,
+            })
     items = sorted(items, key=lambda item: item["id"])
     if compact:
         return {
@@ -300,6 +338,9 @@ def validate_plan(user, plan):
     if "entity" not in plan or plan["entity"] in (None, ""):
         raise ReadPlanError("В READ-плане обязателен параметр entity из открытого описания сущности")
     model, entity, fields = _entity(plan.get("entity"))
+    view = plan.get("view")
+    if view is not None and (not isinstance(view, str) or view not in {item["id"] for item in _business_views(model)}):
+        raise ReadPlanError("Неизвестное бизнес-представление")
     selected_names = plan.get("fields") or list(fields)
     if not isinstance(selected_names, list) or not selected_names:
         raise ReadPlanError("Запрошены недоступные поля")
@@ -344,7 +385,7 @@ def validate_plan(user, plan):
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_ROWS:
         raise ReadPlanError("Некорректный лимит")
     return {
-        "model": model, "entity": entity, "fields": fields,
+        "model": model, "entity": entity, "view": view, "fields": fields,
         "selected_names": selected_names, "selected": selected,
         "search": search, "searchable": searchable, "filters": filters,
         "annotations": annotations, "group_names": group_names, "groups": groups,
@@ -360,7 +401,7 @@ def execute(user, plan):
     fields = validated["fields"]
     selected_names = validated["selected_names"]
     selected = validated["selected"]
-    qs = model.objects.all()
+    qs = _business_queryset(model, validated["view"], user)
     if validated["search"] not in (None, ""):
         condition = Q()
         for name in validated["searchable"]:
@@ -382,7 +423,7 @@ def execute(user, plan):
         group_lookups = [item["lookup"] for item in groups]
         rows = list(qs.values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
         records = [{**{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(group_names, groups)}, **{key: _value(row[key]) for key in annotations}} for row in rows]
-        return {"entity": entity, "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
+        return {"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
     summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
     descending = validated["descending"]
     order_descriptor = validated["order_descriptor"]
@@ -391,4 +432,16 @@ def execute(user, plan):
     rows = list(qs.order_by(("-" if descending else "") + order_descriptor["lookup"]).values(*value_lookups)[:limit])
     records = [{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(selected_names, selected)} for row in rows]
     sources = [{"entity": entity, "id": row["id"]} for row in records if row.get("id") is not None]
-    return {"entity": entity, "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}
+    return {"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}
+
+
+def _query_summary(validated):
+    return {
+        "entity": validated["entity"], "view": validated["view"], "search": validated["search"],
+        "filters": [
+            {"field": item["field"], "op": item["op"], "value": _json_safe_value(item["value"])}
+            for item in validated["filters"]
+        ],
+        "order_by": ("-" if validated["descending"] else "") + validated["order_descriptor"]["name"],
+        "limit": validated["limit"],
+    }

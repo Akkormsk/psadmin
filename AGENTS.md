@@ -20,6 +20,7 @@
 - Production changes are deployed through GitHub. Do not deploy or mutate Timeweb configuration without explicit authorization.
 - Supplier integrations must not download images unless explicitly requested.
 - Every new user-facing Django model and field that can be exposed through assistant READ must define a meaningful human `verbose_name`; add `help_text` when the label alone cannot distinguish its business meaning. Do not create a second assistant-only naming catalogue: READ publishes these model metadata automatically, and the agent must use human labels in replies rather than technical field names.
+- If a site screen exposes a composite business selection that cannot be represented by ordinary ORM filters, publish it on the owning model through the existing generic READ view hook and reuse the same shared read-only service as the screen. Never copy its rules into the agent or add a phrase-specific tool; test that the screen and READ use the same selector.
 
 # Personal coding behavior
 

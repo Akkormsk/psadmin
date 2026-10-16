@@ -16,7 +16,6 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from .documents import DocumentError, extract_preview, extract_zip_entry
-from .filtering import match_title, parse_terms
 from .models import ContractStat, FilterSettings, Organization, PullRun, Tender, TenderDismissalFeedback
 from .notification import parse_clarifications, parse_complaints, parse_notification
 from .regions import REGION_NAMES, region_name
@@ -27,7 +26,7 @@ from .services import (
     _TENDER_SETTINGS_FIELDS, evaluation_settings_form, save_evaluation_settings,
     change_forecast_inclusion, create_tender_estimate, hide_tender, restore_hidden_tender, save_tender_bid,
     update_tender_review, apply_filter_word_audit, pull_tenders_now, record_tender_outcome, run_filter_word_audit, run_profile_triage,
-    decide_document_proposals, upload_tender_document_preview,
+    decide_document_proposals, upload_tender_document_preview, visible_found_tenders,
 )
 from .protocols import ProtocolError, find_ours
 from .stats import price_stats_for
@@ -329,7 +328,7 @@ def kanban(request):
 
     def _visible(base_qs, dir_key):
         qs = base_qs.order_by(*_deadline_order(dir_key, "collecting_finished_at", "first_seen_at"))
-        rows, _hidden, _expired = _visible_found_tenders(
+        rows, _hidden, _expired = visible_found_tenders(
             qs, min_price=settings.min_price,
             include_words=settings.include_words, exclude_words=settings.exclude_words,
         )
@@ -405,7 +404,7 @@ def _deadline_urgency(deadline, now) -> tuple[int | None, str]:
 
 
 def _incoming_count(settings) -> int:
-    rows, _hidden, _expired = _visible_found_tenders(
+    rows, _hidden, _expired = visible_found_tenders(
         Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED), min_price=settings.min_price,
         include_words=settings.include_words, exclude_words=settings.exclude_words,
     )
@@ -416,37 +415,12 @@ def _board_count(settings) -> int:
     """Столько же карточек, сколько на доске «Торги» (см. kanban)."""
     from tenders.models import TenderEstimate
 
-    review, _hidden, _expired = _visible_found_tenders(
+    review, _hidden, _expired = visible_found_tenders(
         Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), min_price=settings.min_price,
         include_words=settings.include_words, exclude_words=settings.exclude_words,
     )
     estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).count()
     return len(review) + estimates
-
-
-def _visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False):
-    """Общие правила «что скрыто» у найденных тендеров — минимальная цена,
-    истёкший срок подачи, плюс/минус-слова. Одна функция для канбана и
-    плоского списка, чтобы они не расходились в том, что показывают."""
-    now = timezone.now()
-    if min_price:
-        queryset = queryset.filter(Q(max_price__gte=min_price) | Q(max_price__isnull=True))
-    expired = 0
-    if not show_all:
-        expired = queryset.filter(collecting_finished_at__lt=now).count()
-        queryset = queryset.filter(Q(collecting_finished_at__gte=now) | Q(collecting_finished_at__isnull=True))
-    include = parse_terms(include_words)
-    exclude = parse_terms(exclude_words)
-    rows, hidden = [], 0
-    for tender in queryset:
-        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
-        if passes or show_all:
-            tender.match_hits = hits
-            tender.filtered_out = not passes
-            rows.append(tender)
-        else:
-            hidden += 1
-    return rows, hidden, expired
 
 
 @superuser_required
@@ -478,7 +452,7 @@ def tender_list(request):
         queryset = queryset.filter(law=law_filter)
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
 
-    rows, hidden, expired = _visible_found_tenders(
+    rows, hidden, expired = visible_found_tenders(
         queryset, min_price=settings.min_price, include_words=settings.include_words,
         exclude_words=settings.exclude_words, show_all=show_all,
     )

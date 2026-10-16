@@ -22,6 +22,7 @@ from . import gosplan
 from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
+from .filtering import match_title, parse_terms
 
 
 RISK_FACTOR_LABELS = (
@@ -52,6 +53,41 @@ logger = logging.getLogger(__name__)
 
 MSK = ZoneInfo("Europe/Moscow")
 UTC = ZoneInfo("UTC")
+
+
+def visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False):
+    """Existing shared rules for the site's incoming tender list and board."""
+    now = timezone.now()
+    if min_price:
+        queryset = queryset.filter(Q(max_price__gte=min_price) | Q(max_price__isnull=True))
+    expired = 0
+    if not show_all:
+        expired = queryset.filter(collecting_finished_at__lt=now).count()
+        queryset = queryset.filter(Q(collecting_finished_at__gte=now) | Q(collecting_finished_at__isnull=True))
+    include = parse_terms(include_words)
+    exclude = parse_terms(exclude_words)
+    rows, hidden = [], 0
+    for tender in queryset:
+        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
+        if passes or show_all:
+            tender.match_hits = hits
+            tender.filtered_out = not passes
+            rows.append(tender)
+        else:
+            hidden += 1
+    return rows, hidden, expired
+
+
+def visible_incoming_tender_queryset():
+    """The same current incoming-tender selection shown by the site's list."""
+    selection = FilterSettings.load()
+    rows, _hidden, _expired = visible_found_tenders(
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED),
+        min_price=selection.min_price,
+        include_words=selection.include_words,
+        exclude_words=selection.exclude_words,
+    )
+    return Tender.objects.filter(pk__in=[tender.pk for tender in rows])
 
 
 def clear_tender_document_previews(tender) -> None:

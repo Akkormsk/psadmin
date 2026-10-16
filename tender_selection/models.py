@@ -54,6 +54,22 @@ class FilterSettings(models.Model):
 class Tender(models.Model):
     """Единая карточка тендера от импорта до архива."""
 
+    @classmethod
+    def assistant_read_views(cls):
+        return [{
+            "id": "incoming",
+            "label": "Входящие тендеры, прошедшие отбор",
+            "description": "Тот же список «Входящие» сайта: новые непроверенные тендеры после действующих цены, срока и плюс/минус-слов.",
+        }]
+
+    @classmethod
+    def assistant_read_queryset(cls, view, _user):
+        if view != "incoming":
+            raise ValueError("Неизвестное бизнес-представление")
+        from .services import visible_incoming_tender_queryset
+
+        return visible_incoming_tender_queryset()
+
     LAW_CHOICES = (("fz44", "44-ФЗ"), ("fz223", "223-ФЗ"))
     EIS = "eis"
     MANUAL = "manual"
