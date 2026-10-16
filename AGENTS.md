@@ -19,6 +19,7 @@
 - Confirmed administrator feedback and superseded knowledge must remain versioned and recoverable.
 - Production changes are deployed through GitHub. Do not deploy or mutate Timeweb configuration without explicit authorization.
 - Supplier integrations must not download images unless explicitly requested.
+- Every new user-facing Django model and field that can be exposed through assistant READ must define a meaningful human `verbose_name`; add `help_text` when the label alone cannot distinguish its business meaning. Do not create a second assistant-only naming catalogue: READ publishes these model metadata automatically, and the agent must use human labels in replies rather than technical field names.
 
 # Personal coding behavior
 

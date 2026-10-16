@@ -110,7 +110,17 @@ def _catalog_field(name, descriptor):
         aggregate_ops = ["count", "min", "max"]
         if isinstance(field, NUMERIC_TYPES) and not isinstance(field, models.BooleanField):
             aggregate_ops.extend(["sum", "avg"])
-    result = {"name": name, "type": field.get_internal_type(), "kind": descriptor["kind"], "nullable": bool(getattr(field, "null", False)), "filter_ops": sorted(OPS) if descriptor["kind"] == "scalar" else [], "aggregate_ops": aggregate_ops}
+    result = {
+        "name": name,
+        "label": str(field.verbose_name),
+        "type": field.get_internal_type(),
+        "kind": descriptor["kind"],
+        "nullable": bool(getattr(field, "null", False)),
+        "filter_ops": sorted(OPS) if descriptor["kind"] == "scalar" else [],
+        "aggregate_ops": aggregate_ops,
+    }
+    if str(field.help_text).strip():
+        result["help_text"] = str(field.help_text).strip()
     if descriptor["kind"] == "relation":
         result.update({"relation": field.related_model._meta.label, "traversal": "forward_to_one"})
     if descriptor["kind"] == "json":
@@ -137,7 +147,7 @@ def catalogue(*, compact=False):
             item_fields = [
                 {
                     key: field[key]
-                    for key in ("name", "type", "kind", "relation", "filter_ops", "aggregate_ops", "choices")
+                    for key in ("name", "label", "help_text", "type", "kind", "relation", "filter_ops", "aggregate_ops", "choices")
                     if key in field
                 }
                 for field in item_fields

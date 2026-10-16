@@ -481,8 +481,13 @@ class AssistantToolRegistryTests(TestCase):
         from .assistant_read import catalogue, validate_plan
 
         models = {item["id"]: item for item in catalogue(compact=True)["entities"]}
+        self.assertTrue(models)
+        self.assertTrue(all(field.get("label") for model in models.values() for field in model["fields"]))
         tender = models["tender_selection.Tender"]
         outcome = next(field for field in tender["fields"] if field["name"] == "outcome_status")
+        published = next(field for field in tender["fields"] if field["name"] == "published_at")
+        self.assertEqual(outcome["label"], "Стадия сделки")
+        self.assertEqual(published["label"], "Опубликовано")
         self.assertIn({"value": "lost", "label": "Проигран"}, outcome["choices"])
 
         validated = validate_plan(self.admin, {"entity": "cash.CashTransaction", "filters": [

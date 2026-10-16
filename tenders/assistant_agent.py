@@ -91,6 +91,9 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "Change that route only when a verified result makes the planned step impossible or unnecessary. "
                 "Never invent tools, database values, calculations, or completed actions. "
                 "Use read for application data and registered actions only for real site operations. "
+                "For read, select fields by their human label and help_text in read_catalog; technical names are only request keys. "
+                "Never show technical model or field names to the user: explain choices with their Russian human labels. "
+                "Ask a question only when the user's wording genuinely fits multiple different human-labelled fields; if the user has already named the meaning, choose it and continue. "
                 "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
                 "If required information is absent, return status needs_input and one concise Russian question. "
                 "If the result is complete, return status final and explain it using only completed_step_results. "
@@ -203,6 +206,8 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
                 "For every step name the exact tool_id, known arguments, inputs and outputs. Every step must list at least one input: "
                 "use from=user for conditions from the user's request, or the earlier step id for a prior result; never use an empty inputs list. "
                 "For an initial read use arguments.plan with entity (never model), fields, filters, order_by and limit from read_catalog. "
+                "Choose read fields by their human label and help_text. Technical names are request keys only: never include them in reply text. "
+                "Ask the user only when several human-labelled fields genuinely match the requested meaning; use a meaning already supplied in the conversation without asking again. "
                 "Do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
                 "Return valid JSON matching response_schema."
             ),
