@@ -42,7 +42,7 @@
     <button type="button" class="assistant-launcher" id="assistant-launcher" aria-controls="assistant-drawer" aria-expanded="false"><span aria-hidden="true">✦</span><span>Ассистент</span></button>
     <aside class="assistant-drawer" id="assistant-drawer" aria-label="Ассистент" aria-hidden="true">
         <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Тема беседы</small><strong id="assistant-topic">Новая рабочая беседа</strong><details class="assistant-context" id="assistant-context"><summary id="assistant-context-summary">Контекст: текущий экран</summary><p id="assistant-context-meta">Ассистенту передаётся только открытый раздел.</p></details></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
-        <div class="assistant-drawer__history"><button type="button" class="assistant-history__new" id="assistant-new">+ Новая беседа</button><div class="assistant-history-picker"><button type="button" class="assistant-history__toggle" id="assistant-history-toggle" aria-expanded="false">История</button><div class="assistant-history__menu" id="assistant-history" hidden></div></div><button type="button" class="assistant-history__clear" id="assistant-history-clear">Очистить</button></div>
+        <div class="assistant-drawer__history"><button type="button" class="assistant-history__new" id="assistant-new">+ Новая беседа</button><div class="assistant-history-picker"><button type="button" class="assistant-history__toggle" id="assistant-history-toggle" aria-expanded="false">История</button><div class="assistant-history__menu" id="assistant-history" hidden></div></div><button type="button" class="assistant-history__export" id="assistant-export">Скачать</button><button type="button" class="assistant-history__clear" id="assistant-history-clear">Очистить</button></div>
         <main class="assistant-drawer__messages" id="assistant-messages" aria-live="polite"></main>
         <form class="assistant-drawer__composer" id="assistant-composer"><input id="assistant-file" type="file" hidden><button class="assistant-composer__attach" id="assistant-attach" type="button" aria-label="Прикрепить файл">📎</button><textarea id="assistant-input" rows="2" placeholder="Спросите о расчёте или прикрепите файл…"></textarea><button class="assistant-composer__send" type="submit" aria-label="Отправить">➜</button></form>
     </aside>
@@ -50,7 +50,7 @@
       (function () {
         const launcher = document.getElementById("assistant-launcher"), drawer = document.getElementById("assistant-drawer");
         const close = document.getElementById("assistant-close"), fresh = document.getElementById("assistant-new");
-        const history = document.getElementById("assistant-history"), historyToggle = document.getElementById("assistant-history-toggle"), historyClear = document.getElementById("assistant-history-clear"), messages = document.getElementById("assistant-messages"), topic = document.getElementById("assistant-topic"), context = document.getElementById("assistant-context"), contextSummary = document.getElementById("assistant-context-summary"), contextMeta = document.getElementById("assistant-context-meta");
+        const history = document.getElementById("assistant-history"), historyToggle = document.getElementById("assistant-history-toggle"), historyExport = document.getElementById("assistant-export"), historyClear = document.getElementById("assistant-history-clear"), messages = document.getElementById("assistant-messages"), topic = document.getElementById("assistant-topic"), context = document.getElementById("assistant-context"), contextSummary = document.getElementById("assistant-context-summary"), contextMeta = document.getElementById("assistant-context-meta");
         const composer = document.getElementById("assistant-composer"), input = document.getElementById("assistant-input"), attachmentInput = document.getElementById("assistant-file"), attachmentButton = document.getElementById("assistant-attach");
         const key = "psadmin-assistant-conversation";
         let active = null;
@@ -69,6 +69,16 @@
             return "<section><small>" + label + "</small><p>" + escape(typeof value === "object" ? JSON.stringify(value) : value) + "</p></section>";
           }).join("");
         }
+        function diagnosticJournal(entries) {
+          if (!Array.isArray(entries) || !entries.length) return "";
+          return "<details class=\"assistant-diagnostic\" open><summary>Журнал выполнения</summary><pre>" + escape(JSON.stringify(entries, null, 2)) + "</pre></details>";
+        }
+        function messageTime(value) {
+          if (!value) return "";
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) return "";
+          return "<time class=\"assistant-message__time\" datetime=\"" + escape(date.toISOString()) + "\">" + escape(new Intl.DateTimeFormat("ru-RU", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}).format(date)) + "</time>";
+        }
         function appendPending(text) {
           messages.insertAdjacentHTML("beforeend", "<article class=\"assistant-message assistant-message--user\"><p>" + escape(text) + "</p></article><article class=\"assistant-message assistant-message--assistant assistant-message--pending\" aria-live=\"polite\"><p>Ассистент думает<span class=\"assistant-typing-dots\" aria-hidden=\"true\"><i></i><i></i><i></i></span></p></article>");
           messages.scrollTop = messages.scrollHeight;
@@ -76,7 +86,7 @@
         }
         function render(items) {
           if (!items.length) {
-            messages.innerHTML = "<section class=\"assistant-empty\"><span class=\"assistant-empty__mark\">✦</span><h2>Начните рабочую беседу</h2><p>Контекст текущего экрана сохранится. Я помогу с расчётом, контрагентом и подтверждённым прайсом.</p><div class=\"assistant-suggestions\"><button type=\"button\" data-assistant-suggestion=\"Что ты умеешь?\">Что ты умеешь?</button><button type=\"button\" data-assistant-suggestion=\"Создать контрагента по пошиву\">Создать контрагента по пошиву</button></div></section>";
+            messages.innerHTML = "<section class=\"assistant-empty\"><span class=\"assistant-empty__mark\">✦</span><h2>Начните рабочую беседу</h2><p>Контекст текущего экрана сохранится.</p></section>";
             return;
           }
           messages.innerHTML = items.map(function (item) {
@@ -85,7 +95,8 @@
             if (item.kind === "tool_result") extra = "<div class=\"assistant-tool-result\">" + toolResult(item.data.result) + "</div>";
             if (item.kind === "plan") extra = "<section class=\"assistant-tool-result\"><ol>" + (item.data.steps || []).map(function (step) { const missing = step.missing_inputs && step.missing_inputs.length ? " · нужны: " + escape(step.missing_inputs.join(", ")) : ""; const after = step.depends_on && step.depends_on.length ? " · после шагов " + escape(step.depends_on.join(", ")) : ""; const confirm = step.requires_confirmation ? " · потребуется подтверждение" : ""; const result = step.expected_result ? "<br><small>Ожидаемый результат: " + escape(step.expected_result) + "</small>" : ""; return "<li><strong>" + escape(step.name) + "</strong><br><small>" + escape(step.purpose) + missing + after + confirm + "</small>" + result + "</li>"; }).join("") + "</ol>" + ((item.data.gaps || []).length ? "<p><small>Ограничения: " + escape(item.data.gaps.join("; ")) + "</small></p>" : "") + "</section>";
             if (item.kind === "confirmation_required") extra = "<form class=\"assistant-card\" data-action-confirm><p>Проверьте параметры: " + escape(JSON.stringify(item.data.arguments || {})) + "</p><button name=\"accept\" value=\"yes\" type=\"submit\">Подтвердить</button><button name=\"accept\" value=\"no\" type=\"submit\">Отменить</button></form>";
-            return "<article data-event-id=\"" + item.id + "\" class=\"assistant-message assistant-message--" + escape(item.role) + "\"><p>" + escape(item.text) + "</p>" + extra + "</article>";
+            extra += diagnosticJournal(item.data && item.data.debug);
+            return "<article data-event-id=\"" + item.id + "\" class=\"assistant-message assistant-message--" + escape(item.role) + "\"><p>" + escape(item.text) + "</p>" + extra + messageTime(item.created_at) + "</article>";
           }).join("");
           messages.scrollTop = messages.scrollHeight;
         }
@@ -132,6 +143,7 @@
         launcher.addEventListener("click", function () { if (drawer.classList.contains("is-open")) shut(false); else open(); }); close.addEventListener("click", function () { shut(true); }); fresh.addEventListener("click", function () { create(); hideHistory(); });
         historyToggle.addEventListener("click", function () { const hidden = history.hidden; history.hidden = !hidden; historyToggle.setAttribute("aria-expanded", String(hidden)); });
         historyClear.addEventListener("click", function () { if (!window.confirm("Очистить историю бесед? Прайсы, расчёты и навыки ассистента не будут затронуты.")) return; historyClear.disabled = true; fetch("/tenders/assistant/conversations/clear/", {method:"POST", headers:{"X-CSRFToken":csrf()}}).then(function (response) { if (!response.ok) throw new Error(); localStorage.removeItem(key); active = null; return create(); }).finally(function () { historyClear.disabled = false; }); });
+        historyExport.addEventListener("click", function () { if (!active) return; historyExport.disabled = true; fetch("/tenders/assistant/conversations/" + active + "/").then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.detail || "Не удалось скачать беседу"); return data; }); }).then(function (data) { const blob = new Blob([JSON.stringify({exported_at:new Date().toISOString(), ...data}, null, 2)], {type:"application/json"}); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "psadmin-conversation-" + active + ".json"; link.click(); URL.revokeObjectURL(link.href); }).catch(function (error) { window.alert(error.message); }).finally(function () { historyExport.disabled = false; }); });
         history.addEventListener("click", function (event) { const choice = event.target.closest("[data-conversation-id]"); if (!choice) return; active = Number(choice.dataset.conversationId); localStorage.setItem(key, String(active)); load(active); hideHistory(); });
         document.addEventListener("keydown", function (event) { if (event.key === "Escape" && drawer.classList.contains("is-open")) { event.preventDefault(); event.stopPropagation(); shut(true); } }, true);
         document.addEventListener("click", function (event) { if (!drawer.classList.contains("is-open") || event.target.closest("#assistant-drawer, #assistant-launcher, .tender-requirements-drawer, .tender-requirements-overlay, .custom-select")) return; event.preventDefault(); event.stopImmediatePropagation(); shut(false); }, true);
@@ -153,10 +165,9 @@
           const upload = file ? fetch("/tenders/assistant/conversations/" + active + "/attachments/", {method:"POST", headers:{"X-CSRFToken":csrf()}, body:(function(){const form = new FormData(); form.append("file", file); return form;})()}).then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.detail || "Не удалось прикрепить файл"); return data.attachment.id; }); }) : Promise.resolve(null);
           upload.then(function (attachmentId) {
             return fetch("/tenders/assistant/conversations/" + active + "/message/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/json"}, body:JSON.stringify({message:text, attachment_ids:attachmentId ? [attachmentId] : [], context:pageContext()})});
-          }).then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.detail || "Не удалось обработать сообщение"); return data; }); }).then(function (data) { attachmentInput.value = ""; attachmentButton.textContent = "📎"; render(data.messages); }).catch(function (error) { pending.remove(); messages.insertAdjacentHTML("beforeend", "<article class=\"assistant-message assistant-message--assistant\"><p>" + escape(error.message) + "</p></article>"); }).finally(function () { input.disabled = false; attachmentButton.disabled = false; send.disabled = false; input.focus(); });
+          }).then(function (response) { return response.json().then(function (data) { if (!response.ok) { const error = new Error(data.detail || "Не удалось обработать сообщение"); error.debug = data.debug; throw error; } return data; }); }).then(function (data) { attachmentInput.value = ""; attachmentButton.textContent = "📎"; render(data.messages); }).catch(function (error) { pending.remove(); messages.insertAdjacentHTML("beforeend", "<article class=\"assistant-message assistant-message--assistant\"><p>" + escape(error.message) + "</p>" + diagnosticJournal(error.debug) + "</article>"); }).finally(function () { input.disabled = false; attachmentButton.disabled = false; send.disabled = false; input.focus(); });
         });
         messages.addEventListener("submit", function (event) { const form = event.target; if (!form.matches("[data-action-confirm]")) return; event.preventDefault(); const button = event.submitter || form.querySelector("button"); button.disabled = true; const message = button.closest("article"); const eventId = message && message.dataset.eventId; fetch("/tenders/assistant/conversations/" + active + "/actions/" + eventId + "/confirm/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({accept: button.value})}).then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.detail || "Ошибка"); return data; }); }).then(function (data) { render(data.messages); }).catch(function (error) { form.insertAdjacentHTML("beforeend", "<p class=\"assistant-card__error\">" + escape(error.message) + "</p>"); button.disabled = false; }); });
-        messages.addEventListener("click", function (event) { const suggestion = event.target.closest("[data-assistant-suggestion]"); if (!suggestion) return; input.value = suggestion.dataset.assistantSuggestion; composer.requestSubmit(); });
       })();
     </script>
     {% endif %}

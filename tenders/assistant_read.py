@@ -7,6 +7,7 @@ import re
 from uuid import UUID
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Avg, Count, Max, Min, Sum, Q
 
@@ -19,7 +20,7 @@ MAX_ROWS = 50
 MAX_RELATION_DEPTH = 2
 MAX_JSON_DEPTH = 4
 MAX_JSON_ITEMS = 50
-EXCLUDED_APPS = {"admin", "auth", "contenttypes", "sessions"}
+EXCLUDED_APPS = {"admin", "auth", "contenttypes", "sessions", "core"}
 EXCLUDED_MODELS = {"CashAuditLog", "BankSyncState", "OwnerFeedbackEvent", "OwnerInteraction"}
 SENSITIVE_NAMES = {"raw", "notification_raw", "clarifications_raw", "complaints_raw", "protocol", "avatar_data", "token", "account_number", "counterparty_account", "own_identifiers"}
 SENSITIVE_FRAGMENTS = ("password", "secret", "token", "credential", "_raw")
@@ -109,11 +110,28 @@ def _catalog_field(name, descriptor):
         aggregate_ops = ["count", "min", "max"]
         if isinstance(field, NUMERIC_TYPES) and not isinstance(field, models.BooleanField):
             aggregate_ops.extend(["sum", "avg"])
-    result = {"name": name, "type": field.get_internal_type(), "kind": descriptor["kind"], "nullable": bool(getattr(field, "null", False)), "filter_ops": sorted(OPS) if descriptor["kind"] == "scalar" else [], "aggregate_ops": aggregate_ops}
+    result = {
+        "name": name,
+        "label": str(field.verbose_name),
+        "type": field.get_internal_type(),
+        "kind": descriptor["kind"],
+        "nullable": bool(getattr(field, "null", False)),
+        "filter_ops": sorted(OPS) if descriptor["kind"] == "scalar" else [],
+        "aggregate_ops": aggregate_ops,
+    }
+    if str(field.help_text).strip():
+        result["help_text"] = str(field.help_text).strip()
     if descriptor["kind"] == "relation":
         result.update({"relation": field.related_model._meta.label, "traversal": "forward_to_one"})
     if descriptor["kind"] == "json":
         result["json_policy"] = {"read": True, "max_depth": MAX_JSON_DEPTH, "max_items": MAX_JSON_ITEMS}
+    choices = [
+        {"value": _json_safe_value(value), "label": str(label)}
+        for value, label in field.flatchoices
+        if value not in (None, "")
+    ]
+    if choices:
+        result["choices"] = choices
     return result
 
 
@@ -127,13 +145,38 @@ def catalogue(*, compact=False):
         item_fields = [_catalog_field(name, descriptor) for name, descriptor in sorted(fields.items())]
         if compact:
             item_fields = [
-                field["name"] + (f"->{field['relation']}" if "relation" in field else f":{field['type']}")
+                {
+                    key: field[key]
+                    for key in ("name", "label", "help_text", "type", "kind", "relation", "filter_ops", "aggregate_ops", "choices")
+                    if key in field
+                }
                 for field in item_fields
             ]
             items.append({"id": f"{model._meta.app_label}.{model.__name__}", "fields": item_fields})
         else:
             items.append({"id": f"{model._meta.app_label}.{model.__name__}", "model": model._meta.label, "verbose_name": str(model._meta.verbose_name), "fields": item_fields})
-    return sorted(items, key=lambda item: item["id"])
+    items = sorted(items, key=lambda item: item["id"])
+    if compact:
+        return {
+            "filter_contract": {
+                "item": {"field": "catalogue field name", "op": sorted(OPS), "value": "JSON value compatible with that field type"},
+                "date_format": "YYYY-MM-DD",
+                "datetime_format": "ISO-8601",
+                "value_formats": {
+                    "DateField": "YYYY-MM-DD",
+                    "DateTimeField": "ISO-8601 with timezone offset",
+                    "IntegerField": "JSON integer",
+                    "DecimalField": "JSON number or decimal string with .",
+                    "FloatField": "JSON number",
+                    "BooleanField": "true or false",
+                    "CharField": "JSON string",
+                    "TextField": "JSON string",
+                },
+                "choice_rule": "use a choice value, never its human label",
+            },
+            "entities": items,
+        }
+    return items
 
 
 def _value(value):
@@ -183,6 +226,35 @@ def _validated_items(value, label):
     return value
 
 
+def _filter_value(descriptor, op, value):
+    field = descriptor["field"]
+    name = descriptor["name"]
+    if op == "isnull":
+        if not isinstance(value, bool):
+            raise ReadPlanError(f"Значение фильтра {name} для isnull должно быть true или false")
+        return value
+    if op == "in":
+        if not isinstance(value, list) or not value or len(value) > MAX_ROWS:
+            raise ReadPlanError(f"Значение фильтра {name} для in должно быть непустым списком")
+        return [_filter_value(descriptor, "eq", item) for item in value]
+    if op == "contains" and not isinstance(field, (models.CharField, models.TextField)):
+        raise ReadPlanError(f"Оператор contains недоступен для поля {name}")
+    if op in {"gte", "gt", "lte", "lt"} and not isinstance(field, (*NUMERIC_TYPES, models.DateField, models.DateTimeField)):
+        raise ReadPlanError(f"Оператор {op} недоступен для поля {name}")
+    if isinstance(field, models.BooleanField) and not isinstance(value, bool):
+        raise ReadPlanError(f"Значение фильтра {name} должно быть true или false")
+    if op == "contains" and not isinstance(value, str):
+        raise ReadPlanError(f"Значение фильтра {name} для contains должно быть строкой")
+    try:
+        normalized = field.to_python(value)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise ReadPlanError(f"Некорректное значение поля {name}") from exc
+    choices = {choice for choice, _ in field.flatchoices if choice not in (None, "")}
+    if choices and normalized not in choices:
+        raise ReadPlanError(f"Недопустимое значение поля {name}")
+    return normalized
+
+
 def validate_plan(user, plan):
     """Validate a read plan from the same metadata used by ``execute``.
 
@@ -214,6 +286,7 @@ def validate_plan(user, plan):
         descriptor = _path(model, fields, item.get("field"))
         if descriptor["kind"] != "scalar":
             raise ReadPlanError("Некорректный фильтр")
+        item["value"] = _filter_value(descriptor, item["op"], item["value"])
     annotations = {}
     aggregates = _validated_items(plan.get("aggregates"), "Некорректная агрегация")
     for item in aggregates:

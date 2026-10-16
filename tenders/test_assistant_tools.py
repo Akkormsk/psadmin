@@ -29,6 +29,33 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(catalog(self.admin)["workflows"], workflows)
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
+    def test_navigation_exposes_a_lazy_graph_from_existing_metadata(self):
+        from .assistant_tools import capability_tree
+
+        root = execute_tool("assistant.navigate", self.admin, {"path": []})
+        self.assertEqual({item["id"] for item in root["children"]}, {"read", "action", "compute"})
+
+        tree = capability_tree(self.admin)
+        read_tree = next(item for item in tree["children"] if item["id"] == "read")
+        self.assertIn("tender_selection", {item["id"] for item in read_tree["children"]})
+        self.assertNotIn("core", {item["id"] for item in read_tree["children"]})
+
+        read = execute_tool("assistant.navigate", self.admin, {"path": ["read"]})
+        self.assertIn("tender_selection", {item["id"] for item in read["children"]})
+        models = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection"]})
+        self.assertIn("Tender", {item["id"] for item in models["children"]})
+        tender = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection", "Tender"]})
+        reduction = next(item for item in tender["children"] if item["id"] == "contract_reduction_percent")
+        self.assertEqual(reduction["label"], "Фактическое снижение, %")
+
+        actions = execute_tool("assistant.navigate", self.admin, {"path": ["action"]})
+        self.assertIn("cash", {item["id"] for item in actions["children"]})
+        action_tree = next(item for item in capability_tree(self.admin)["children"] if item["id"] == "action")
+        cash = next(item for item in action_tree["children"] if item["id"] == "cash")
+        self.assertIn("cash.transaction_update", {item["id"] for item in cash["children"]})
+        action = execute_tool("assistant.navigate", self.admin, {"path": ["action", "cash", "cash.transaction_update"]})
+        self.assertEqual(action["tool"]["id"], "cash.transaction_update")
+
     def test_action_contract_rejects_false_strings_and_wrong_array_shapes(self):
         with self.assertRaisesRegex(Exception, "true или false"):
             execute_tool("finance.period_lock", self.admin, {
@@ -476,6 +503,39 @@ class AssistantToolRegistryTests(TestCase):
             execute_tool("read", self.admin, {"plan": {"entity": "tenders.TenderEstimate", "fields": ["owner.username"]}})
         with self.assertRaisesRegex(Exception, "JSON-поля"):
             execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "filters": [{"field": "risk_assessment", "op": "eq", "value": {}}]}})
+
+    def test_read_contract_exposes_choices_and_normalizes_orm_values(self):
+        from .assistant_read import catalogue, validate_plan
+
+        models = {item["id"]: item for item in catalogue(compact=True)["entities"]}
+        contract = catalogue(compact=True)["filter_contract"]
+        self.assertEqual(contract["value_formats"]["DateField"], "YYYY-MM-DD")
+        self.assertEqual(contract["value_formats"]["DecimalField"], "JSON number or decimal string with .")
+        self.assertTrue(models)
+        self.assertTrue(all(field.get("label") for model in models.values() for field in model["fields"]))
+        tender = models["tender_selection.Tender"]
+        outcome = next(field for field in tender["fields"] if field["name"] == "outcome_status")
+        published = next(field for field in tender["fields"] if field["name"] == "published_at")
+        self.assertEqual(outcome["label"], "Стадия сделки")
+        self.assertEqual(published["label"], "Опубликовано")
+        self.assertIn({"value": "lost", "label": "Проигран"}, outcome["choices"])
+
+        validated = validate_plan(self.admin, {"entity": "cash.CashTransaction", "filters": [
+            {"field": "operation_date", "op": "gte", "value": "2026-09-01"},
+            {"field": "amount", "op": "gt", "value": "12.50"},
+        ]})
+        self.assertEqual(validated["filters"][0]["value"], date(2026, 9, 1))
+        self.assertEqual(str(validated["filters"][1]["value"]), "12.50")
+
+    def test_read_contract_rejects_values_not_valid_for_the_discovered_field(self):
+        with self.assertRaisesRegex(Exception, "outcome_status"):
+            execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "filters": [
+                {"field": "outcome_status", "op": "eq", "value": "Проигран"},
+            ]}})
+        with self.assertRaisesRegex(Exception, "operation_date"):
+            execute_tool("read", self.admin, {"plan": {"entity": "cash.CashTransaction", "filters": [
+                {"field": "operation_date", "op": "gte", "value": "сентябрь"},
+            ]}})
 
     def test_cash_action_uses_existing_form_and_audit(self):
         from cash.models import CashAuditLog, CashTransaction

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import import_module
 from django.utils.module_loading import import_string
 from typing import Any, Callable
@@ -154,6 +155,144 @@ def _read_data(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+@lru_cache(maxsize=1)
+def _navigation_index():
+    """Build the capability graph once from the same model and action metadata."""
+    from .assistant_read import catalogue
+
+    _discover_app_actions()
+    compact_catalogue = catalogue(compact=True)
+    read = {}
+    for model in catalogue():
+        app_label, model_name = model["id"].split(".", 1)
+        config = apps.get_app_config(app_label)
+        section = read.setdefault(app_label, {
+            "id": app_label,
+            "label": str(config.verbose_name),
+            "models": {},
+        })
+        section["models"][model_name] = model
+
+    actions = {}
+    for tool in _TOOLS.values():
+        if tool.identifier in {"read", "assistant.capabilities", "assistant.catalog", "assistant.navigate"}:
+            continue
+        source = tool.source or f"{tool.executor.__module__}.{tool.executor.__qualname__}"
+        app_label = source.split(".", 1)[0]
+        try:
+            label = str(apps.get_app_config(app_label).verbose_name)
+        except LookupError:
+            label = app_label
+        actions.setdefault(app_label, {"id": app_label, "label": label, "tools": []})["tools"].append({
+            "id": tool.identifier,
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+            "read_only": tool.read_only,
+            "requires_confirmation": tool.requires_confirmation,
+            "requires_superuser": tool.requires_superuser,
+        })
+    for section in actions.values():
+        section["tools"].sort(key=lambda item: item["name"])
+    return {"read": read, "action": actions, "filter_contract": compact_catalogue["filter_contract"]}
+
+
+def _visible_tools(items, user):
+    return [item for item in items if not item["requires_superuser"] or user.is_superuser]
+
+
+def capability_tree(user):
+    """Return the compact, complete route map used for one LLM route choice.
+
+    Detailed field and argument contracts stay behind their leaf nodes.  The
+    tree itself is assembled from the same runtime metadata as ``navigation``;
+    it is not a second, hand-maintained catalogue.
+    """
+    graph = _navigation_index()
+    read_children = []
+    for section in graph["read"].values():
+        read_children.append({
+            "id": section["id"], "label": section["label"],
+            "children": [
+                {"id": model["id"].split(".", 1)[1], "label": model["verbose_name"]}
+                for model in section["models"].values()
+            ],
+        })
+    action_children = []
+    for section in graph["action"].values():
+        tools = _visible_tools(section["tools"], user)
+        if not tools:
+            continue
+        action_children.append({
+            "id": section["id"], "label": section["label"],
+            "children": [
+                {"id": tool["id"], "label": tool["name"], "description": tool["description"]}
+                for tool in tools
+            ],
+        })
+    return {"children": [
+        {"id": "read", "label": "Чтение и анализ данных", "children": read_children},
+        {"id": "action", "label": "Действия приложений", "children": action_children},
+        {"id": "compute", "label": "Вычисления", "operations": ["count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"]},
+    ]}
+
+
+def navigation(user, payload):
+    """Return only one graph node's children; never the whole catalogue."""
+    path = payload.get("path", [])
+    if not isinstance(path, list) or not all(isinstance(item, str) and item for item in path):
+        raise AssistantToolError("Путь навигации должен быть списком идентификаторов")
+    graph = _navigation_index()
+    if not path:
+        return {"path": [], "children": [
+            {"id": "read", "label": "Чтение и анализ данных", "description": "Разрешённые бизнес-данные, фильтры, связи и агрегаты"},
+            {"id": "action", "label": "Действия приложений", "description": "Существующие функции сайта через их штатные исполнители"},
+            {"id": "compute", "label": "Вычисления", "description": "Безопасная арифметика только по уже проверенным результатам"},
+        ]}
+    if path == ["compute"]:
+        return {"path": path, "children": [{"id": "compute", "label": "Вычисления", "operations": ["count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"]}]}
+    if path[0] == "read":
+        if len(path) == 1:
+            return {"path": path, "children": [
+                {"id": section["id"], "label": section["label"], "kind": "application"}
+                for section in graph["read"].values()
+            ]}
+        section = graph["read"].get(path[1])
+        if section is None:
+            raise AssistantToolError("Раздел чтения не найден")
+        if len(path) == 2:
+            return {"path": path, "children": [
+                {"id": model["id"].split(".", 1)[1], "label": model["verbose_name"], "kind": "model"}
+                for model in section["models"].values()
+            ]}
+        model = section["models"].get(path[2])
+        if model is None or len(path) != 3:
+            raise AssistantToolError("Сущность чтения не найдена")
+        return {
+            "path": path,
+            "filter_contract": graph["filter_contract"],
+            "children": [{"id": field["name"], **field} for field in model["fields"]],
+        }
+    if path[0] == "action":
+        if len(path) == 1:
+            return {"path": path, "children": [
+                {"id": section["id"], "label": section["label"], "kind": "application"}
+                for section in graph["action"].values()
+                if _visible_tools(section["tools"], user)
+            ]}
+        section = graph["action"].get(path[1])
+        if section is None or len(path) not in {2, 3}:
+            raise AssistantToolError("Раздел действий не найден")
+        tools = _visible_tools(section["tools"], user)
+        if len(path) == 2:
+            return {"path": path, "children": tools}
+        tool = next((item for item in tools if item["id"] == path[2]), None)
+        if tool is None:
+            raise AssistantToolError("Действие не найдено")
+        return {"path": path, "tool": tool}
+    raise AssistantToolError("Узел навигации не найден")
+
+
 def workflow_catalog(user, actions=None):
     """One runtime encyclopedia assembled solely from registered actions."""
     actions = available_tools(user) if actions is None else actions
@@ -185,4 +324,5 @@ def _catalog(user, _payload):
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
+register_tool(AssistantTool("assistant.navigate", "Навигация по возможностям PSADMIN", "Открывает один узел графа READ/ACTION; не выдаёт весь каталог сразу.", {"path": "string[]?"}, True, False, True, navigation))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", {"plan": "object"}, True, False, True, _read_data))

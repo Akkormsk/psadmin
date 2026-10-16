@@ -1,9 +1,4 @@
-"""Small, validated execution loop for the global PSADMIN assistant.
-
-The model chooses only the next step. The backend owns validation,
-permissions, execution, confirmations and the hand-off of verified results to
-the following step. There are no business-specific branches here.
-"""
+"""Validated next-step execution loop for the global PSADMIN assistant."""
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
@@ -12,19 +7,25 @@ import logging
 import os
 import re
 
+from django.conf import settings
+from django.utils import timezone
+
 from .assistant_tools import (
     AssistantToolError,
     available_tools,
+    capability_tree,
     execute_tool,
     required_input_names,
-    workflow_catalog,
 )
 from .gateway_budget import preflight, report_line, spend_rub
 from .services import TenderAIError, _ai_gateway_json
 
 
 logger = logging.getLogger(__name__)
-MAX_AGENT_STEPS = 8
+MAX_AGENT_DECISIONS = 12
+MAX_TOOL_CALLS = 8
+MAX_REPAIR_ATTEMPTS = 2
+MAX_DEBUG_EVENTS = 40
 _COMPUTE_OPERATIONS = {"count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"}
 _REFERENCE_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\])?)*$")
 
@@ -38,7 +39,7 @@ def _history(conversation):
 
 
 def _request(prompt, image_data_urls=None):
-    model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite"))
+    model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini")
     result, usage = _ai_gateway_json(
         prompt, model=model, max_tokens=1200, timeout=45, network_attempts=1,
         image_data_urls=image_data_urls,
@@ -48,25 +49,10 @@ def _request(prompt, image_data_urls=None):
     return result
 
 
-def _trace_block(direction, payload):
-    """Plain-text diagnostic record of an already performed exchange.
-
-    This is deliberately only a rendering helper: it neither changes a model
-    prompt nor adds data to the agent state.
-    """
-    if isinstance(payload, str):
-        text = payload
-    else:
-        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    return f"{direction}\n{text}"
-
-
-def _trace_response(trace, *, kind="text", data=None):
-    return {"text": "\n\n".join(trace), "kind": kind, "data": data or {}}
-
-
-def _tool_catalogue(tools):
+def _tool_catalogue(tools, *, identifiers=None):
     """Give the model only the contract it needs to choose a next action."""
+    if identifiers is not None:
+        tools = [tool for tool in tools if tool["id"] in identifiers]
     return [
         {
             key: tool[key]
@@ -76,6 +62,40 @@ def _tool_catalogue(tools):
     ]
 
 
+def _opened_contracts(state):
+    """Return only contracts actually disclosed through the capability graph."""
+    return [
+        item["result"]
+        for item in state["results"]
+        if item.get("tool_id") == "assistant.navigate" and isinstance(item.get("result"), dict)
+    ]
+
+
+def _opened_action_ids(state):
+    return {
+        node["tool"]["id"]
+        for node in _opened_contracts(state)
+        if isinstance(node.get("tool"), dict) and isinstance(node["tool"].get("id"), str)
+    }
+
+
+def _opened_read_entities(state):
+    return {
+        ".".join(node["path"][1:])
+        for node in _opened_contracts(state)
+        if isinstance(node.get("path"), list) and len(node["path"]) == 3 and node["path"][0] == "read"
+    }
+
+
+def _literal_context():
+    now = timezone.localtime()
+    return {
+        "current_date": now.date().isoformat(),
+        "current_datetime": now.isoformat(),
+        "timezone": settings.TIME_ZONE,
+    }
+
+
 def _run_state(conversation, message):
     state = conversation.context.get("agent_run")
     if not isinstance(state, dict) or not isinstance(state.get("task"), str):
@@ -83,6 +103,12 @@ def _run_state(conversation, message):
     state.setdefault("results", [])
     if not isinstance(state["results"], list):
         state["results"] = []
+    state.setdefault("errors", [])
+    if not isinstance(state["errors"], list):
+        state["errors"] = []
+    state.setdefault("trace", [])
+    if not isinstance(state["trace"], list):
+        state["trace"] = []
     return state
 
 
@@ -97,27 +123,84 @@ def _finish_state(conversation):
     conversation.save(update_fields=["context"])
 
 
-def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
-    read_catalog = []
-    if any(tool["id"] == "read" and tool["available"] for tool in tools):
-        from .assistant_read import catalogue
-        read_catalog = catalogue(compact=True)
+def _trace_value(value, depth=0):
+    """Keep an inspectable but bounded and secret-safe execution trace."""
+    from .assistant_read import _looks_like_secret, _sensitive
+
+    if depth >= 4:
+        return "[сокращено]"
+    if isinstance(value, dict):
+        return {
+            str(key): "[скрыто]" if _sensitive(str(key)) else _trace_value(item, depth + 1)
+            for key, item in list(value.items())[:20]
+        }
+    if isinstance(value, list):
+        return [_trace_value(item, depth + 1) for item in value[:20]] + (["[сокращено]"] if len(value) > 20 else [])
+    if isinstance(value, str):
+        return "[скрыто]" if _looks_like_secret(value) else value[:500] + ("…" if len(value) > 500 else "")
+    return value
+
+
+def _debug_event(conversation, stage, *, event_input=None, event_output=None, error=""):
+    """Persist the observable agent protocol, never hidden model reasoning."""
+    journal = conversation.context.get("agent_debug", [])
+    if not isinstance(journal, list):
+        journal = []
+    event = {"stage": stage}
+    if event_input is not None:
+        event["input"] = _trace_value(event_input)
+    if event_output is not None:
+        event["output"] = _trace_value(event_output)
+    if error:
+        event["error"] = error
+    journal.append(event)
+    conversation.context["agent_debug"] = journal[-MAX_DEBUG_EVENTS:]
+    conversation.save(update_fields=["context"])
+
+
+def _trace(state, tool_id, status, *, conversation=None, tool_input=None, tool_output=None, error=""):
+    entry = {"step": len(state["trace"]) + 1, "tool_id": tool_id, "status": status}
+    if tool_input is not None:
+        entry["input"] = _trace_value(tool_input)
+    if tool_output is not None:
+        entry["output"] = _trace_value(tool_output)
+    if error:
+        entry["error"] = error
+    state["trace"].append(entry)
+    if conversation is not None:
+        _debug_event(
+            conversation, f"backend.{tool_id}",
+            event_input={"status": status, "arguments": tool_input},
+            event_output=tool_output, error=error,
+        )
+    logger.info("assistant trace step=%s tool=%s status=%s%s", entry["step"], tool_id, status, f" error={error}" if error else "")
+
+
+def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step=None):
+    opened_actions = _opened_action_ids(state)
     prompt = json.dumps(
         {
             "task": (
-                "You are PSADMIN's Russian-speaking agent. Solve the user's task to a verified final result. "
-                "Choose exactly one next step at a time, see its real result, then choose the next step. "
-                "Never invent tools, database values, calculations, or completed actions. "
-                "Use read for application data and registered actions only for real site operations. "
-                "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
-                "If required information is absent, return status needs_input and one concise Russian question. "
-                "If the result is complete, return status final and explain it using only completed_step_results. "
-                "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
-                "Return valid JSON matching response_schema."
+                "You are PSADMIN's Russian-speaking business agent. Solve the user's actual request using verified "
+                "PSADMIN capabilities and results. Work incrementally: decide only the next necessary step, wait for "
+                "its real backend result, then decide again. Do not construct a complete technical plan first. "
+                "For ordinary conversation that needs neither business data nor an operation, answer directly. "
+                "For PSADMIN data or operations, use assistant.navigate to explore the capability graph. You may open "
+                "an intermediate node or a known leaf directly. Read a detailed contract before using its fields or arguments. "
+                "Never guess database field names, entity identifiers, action arguments or allowed values. Use only metadata "
+                "returned by assistant.navigate. Do not ask for optional filters when the request is already executable. "
+                "Ask only for a genuinely required parameter that cannot be obtained from the request, conversation, or available tools. "
+                "Never ask for storage formats, timezones, numeric notation, or bounds of a named calendar period; normalize them "
+                "using literal_context and the returned contract. Use read for application data, existing registered actions for "
+                "changes, and compute only for listed arithmetic over completed_step_results. A tool call is not a completed task. "
+                "Never invent successful execution or current facts. For changes, prepare the real registered action; backend requires "
+                "confirmation. When a tool is rejected, use its actual error and opened metadata to choose a correction; do not repeat "
+                "the same invalid call. Finish a data task only from verified results, or say it cannot be performed. Return valid JSON "
+                "matching response_schema."
             ),
-            "registered_tools": _tool_catalogue(tools),
-            "workflows": workflow_catalog(user, tools),
-            "read_catalog": read_catalog,
+            "registered_tools": _tool_catalogue(tools, identifiers=opened_actions | {"read", "assistant.navigate"}),
+            "capability_tree": capability_tree(user) if not state["results"] else None,
+            "literal_context": _literal_context(),
             "compute": {
                 "tool_id": "compute",
                 "operations": sorted(_COMPUTE_OPERATIONS),
@@ -129,22 +212,28 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "attachments": attachments or [],
             "history": _history(conversation),
             "original_task": state["task"],
+            "opened_capability_nodes": _opened_contracts(state),
             "latest_user_message": message,
             "completed_step_results": state["results"],
+            "execution_errors": state.get("errors", [])[-3:],
+            "rejected_step": rejected_step,
             "response_schema": {
                 "reply": "concise Russian text",
                 "status": "next|needs_input|final|cancel",
                 "basis": "verified_steps|user_supplied|unavailable",
                 "next_step": {"tool_id": "registered id or compute", "purpose": "why this next step is needed", "arguments": "object"},
+                "missing_inputs": ["required human-readable parameter, only for needs_input"],
             },
         },
         ensure_ascii=False,
     )
     preflight()
+    _debug_event(conversation, "decision.request", event_input=json.loads(prompt))
     result = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
+    _debug_event(conversation, "decision.response", event_output=result)
     if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
-    return result, prompt
+    return result
 
 
 def _next_step(decision, tools):
@@ -164,8 +253,36 @@ def _next_step(decision, tools):
                 raise TenderAIError("Ассистент запросил действие без прав доступа.")
         return identifier, step["arguments"], str(step.get("purpose", "")).strip()[:500]
     if step is not None:
-        raise TenderAIError("Шаг можно передавать только со статусом next.")
+        raise TenderAIError("Следующий шаг разрешён только со статусом next.")
     return None, None, ""
+
+
+def _validate_step_access(identifier, arguments, state):
+    """Require a graph contract before READ or an app action can run."""
+    if identifier == "read":
+        plan = arguments.get("plan") if isinstance(arguments, dict) else None
+        entity = plan.get("entity") if isinstance(plan, dict) else None
+        if entity not in _opened_read_entities(state):
+            raise TenderAIError("Перед чтением нужно открыть описание выбранной сущности через карту возможностей.")
+    elif identifier not in {"assistant.navigate", "compute"} and identifier not in _opened_action_ids(state):
+        raise TenderAIError("Перед действием нужно открыть его описание через карту возможностей.")
+
+
+def _needs_input_is_grounded(decision, state):
+    missing = decision.get("missing_inputs")
+    if not isinstance(missing, list) or not missing or not all(isinstance(item, str) and item.strip() for item in missing):
+        return False
+    for node in _opened_contracts(state):
+        tool = node.get("tool")
+        if not isinstance(tool, dict):
+            continue
+        required = {
+            name for name, kind in tool.get("input_schema", {}).items()
+            if isinstance(kind, str) and not kind.endswith("?") and not (name == "type" and kind == "object")
+        }
+        if required:
+            return True
+    return False
 
 
 def _reference_value(results, reference):
@@ -251,53 +368,91 @@ def _compute(arguments, results):
     return {"operation": operation, "value": _decimal_text(value)}
 
 
-def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls, trace=None):
-    trace = list(trace or [])
-    for _ in range(MAX_AGENT_STEPS):
-        decision, prompt = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
-        trace.extend((_trace_block("BACKEND → LLM", prompt), _trace_block("LLM → BACKEND", decision)))
+def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
+    if not isinstance(state.get("errors"), list):
+        state["errors"] = []
+    if not isinstance(state.get("trace"), list):
+        state["trace"] = []
+    rejected_step = None
+    tool_calls = 0
+    repairs = 0
+    for _ in range(MAX_AGENT_DECISIONS):
+        decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step)
         status = decision.get("status")
         if status == "cancel":
             _finish_state(conversation)
-            return _trace_response(trace)
-        identifier, arguments, purpose = _next_step(decision, tools)
+            return {"text": decision["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
         if status == "needs_input":
+            if not _needs_input_is_grounded(decision, state):
+                rejected_step = {"tool_id": "needs_input", "error": "Сначала откройте контракт нужной операции и укажите только обязательный недостающий параметр."}
+                state["errors"].append(rejected_step)
+                _trace(state, "needs_input", "rejected", conversation=conversation, error=rejected_step["error"])
+                continue
             _save_state(conversation, state)
-            return _trace_response(trace, data={"task_pending": True})
+            return {"text": decision["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
         if status == "final":
             if not state["results"] and decision.get("basis") not in {"user_supplied", "unavailable"}:
                 raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
             _finish_state(conversation)
-            return _trace_response(trace, data={"steps": state["results"]})
-        if identifier == "compute":
-            trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
-            result = _compute(arguments, state["results"])
-        else:
-            tool = next(item for item in tools if item["id"] == identifier)
-            missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
-            if missing:
-                _save_state(conversation, state)
-                return _trace_response(trace, data={"task_pending": True, "missing": missing})
-            if tool["requires_confirmation"]:
-                state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
-                _save_state(conversation, state)
-                return _trace_response(trace, kind="confirmation_required", data={"tool_id": identifier, "arguments": arguments})
-            try:
-                trace.append(_trace_block("BACKEND → TOOL", {"tool_id": identifier, "arguments": arguments}))
+            return {"text": decision["reply"].strip(), "kind": "tool_result", "data": {"steps": state["results"]}}
+        try:
+            identifier, arguments, purpose = _next_step(decision, tools)
+            _validate_step_access(identifier, arguments, state)
+        except TenderAIError as exc:
+            repairs += 1
+            rejected_step = {"tool_id": "decision", "error": str(exc)}
+            state["errors"].append(rejected_step)
+            _trace(state, "decision", "rejected", conversation=conversation, error=str(exc))
+            if repairs > MAX_REPAIR_ATTEMPTS:
+                raise
+            continue
+        try:
+            if identifier == "compute":
+                result = _compute(arguments, state["results"])
+            else:
+                tool = next(item for item in tools if item["id"] == identifier)
+                missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
+                if missing:
+                    _save_state(conversation, state)
+                    return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
+                if tool["requires_confirmation"]:
+                    state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
+                    _trace(state, identifier, "confirmation", conversation=conversation, tool_input=arguments)
+                    _save_state(conversation, state)
+                    return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
                 result = execute_tool(identifier, user, arguments)
-            except AssistantToolError as exc:
+        except (AssistantToolError, TenderAIError) as exc:
+            state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
+            _trace(state, identifier, "rejected", conversation=conversation, tool_input=arguments, error=str(exc))
+            _save_state(conversation, state)
+            rejected_step = {
+                "tool_id": identifier,
+                "arguments": arguments if identifier == "read" else {"argument_names": sorted(arguments)},
+                "error": str(exc),
+            }
+            message, attachments, image_data_urls = "", [], None
+            repairs += 1
+            if repairs > MAX_REPAIR_ATTEMPTS:
                 raise TenderAIError(str(exc)) from exc
-        trace.append(_trace_block("TOOL → BACKEND", result))
+            continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
+        state["errors"] = []
+        _trace(state, identifier, "completed", conversation=conversation, tool_input=arguments, tool_output=result)
+        rejected_step = None
+        repairs = 0
+        tool_calls += 1
         _save_state(conversation, state)
+        if tool_calls >= MAX_TOOL_CALLS:
+            break
         message, attachments, image_data_urls = "", [], None
-    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.")
+    raise TenderAIError("Превышен безопасный предел обработки за один запуск. Продолжите задачу следующим сообщением.")
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
-    """Run a bounded sequence of registered, backend-validated steps."""
+    """Run the existing validated loop from the first LLM decision."""
     tools = available_tools(user)
     state = _run_state(conversation, message)
+    _save_state(conversation, state)
     return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
 
 
@@ -316,7 +471,4 @@ def continue_after_confirmation(conversation, user, tool_id, result):
         "result": result,
     })
     _save_state(conversation, state)
-    return _execute_loop(
-        conversation, user, "", state, available_tools(user), None, [], None,
-        trace=[_trace_block("TOOL → BACKEND", result)],
-    )
+    return _execute_loop(conversation, user, "", state, available_tools(user), None, [], None)
