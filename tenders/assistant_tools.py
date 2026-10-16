@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from django.apps import apps
 
+from .assistant_read import input_schema as read_input_schema
+
 
 
 class AssistantToolError(Exception):
@@ -92,6 +94,9 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
         raise AssistantToolConfirmationRequired("Действие требует явного подтверждения")
     if not isinstance(payload, dict):
         raise AssistantToolError("Некорректные параметры действия")
+    unknown = set(payload) - set(tool.input_schema)
+    if unknown:
+        raise AssistantToolError("Недопустимые параметры действия: " + ", ".join(sorted(unknown)))
     missing = [
         name for name in required_input_names(identifier)
         if name not in payload or payload[name] is None
@@ -100,10 +105,16 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
     if missing:
         raise AssistantToolError("Не заполнены обязательные поля: " + ", ".join(missing))
     for name, declared in tool.input_schema.items():
-        if name not in payload or payload[name] is None or not isinstance(declared, str):
+        if name not in payload or payload[name] is None:
+            continue
+        value = payload[name]
+        if isinstance(declared, dict):
+            if declared.get("type") == "object" and not isinstance(value, dict):
+                raise AssistantToolError(f"Поле {name} должно быть объектом")
+            continue
+        if not isinstance(declared, str):
             continue
         kind = declared.rstrip("?")
-        value = payload[name]
         if kind == "boolean" and not isinstance(value, bool):
             raise AssistantToolError(f"Поле {name} должно иметь значение true или false")
         if kind.endswith("[]") and not isinstance(value, list):
@@ -142,7 +153,8 @@ def required_input_names(identifier: str) -> list[str]:
         return []
     return [
         name for name, field_type in tool.input_schema.items()
-        if isinstance(field_type, str) and not (name == "type" and field_type == "object") and not field_type.endswith("?")
+        if ((isinstance(field_type, str) and not (name == "type" and field_type == "object") and not field_type.endswith("?"))
+            or (isinstance(field_type, dict) and field_type.get("required") is True))
     ]
 
 
@@ -325,4 +337,4 @@ def _catalog(user, _payload):
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
 register_tool(AssistantTool("assistant.navigate", "Навигация по возможностям PSADMIN", "Открывает один узел графа READ/ACTION; не выдаёт весь каталог сразу.", {"path": "string[]?"}, True, False, True, navigation))
-register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", {"plan": "object"}, True, False, True, _read_data))
+register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", read_input_schema(), True, False, True, _read_data))

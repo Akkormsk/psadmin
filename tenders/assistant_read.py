@@ -33,6 +33,29 @@ _JWT_VALUE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_
 _OPAQUE_VALUE = re.compile(r"^[A-Za-z0-9_+/=-]{40,}$")
 
 
+def plan_contract():
+    """Public READ schema built from the same limits and operators as validation."""
+    return {
+        "type": "object",
+        "required": True,
+        "additional_properties": False,
+        "properties": {
+            "entity": {"type": "string", "required": True, "description": "entity ID from the opened READ node"},
+            "fields": {"type": "string[]", "required": False, "description": "field names from the opened entity node; id is always returned"},
+            "search": {"type": "string", "required": False},
+            "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": "JSON value matching that field"}},
+            "order_by": {"type": "string", "required": False, "description": "opened scalar field, optionally prefixed with -"},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": MAX_ROWS},
+            "aggregates": {"type": "object[]", "required": False, "item": {"op": sorted(AGGREGATES), "field": "opened scalar field"}},
+            "group_by": {"type": "string[]", "required": False, "description": "opened scalar field names"},
+        },
+    }
+
+
+def input_schema():
+    return {"plan": plan_contract()}
+
+
 def _sensitive(name):
     lowered = name.lower()
     return lowered in SENSITIVE_NAMES or any(fragment in lowered for fragment in SENSITIVE_FRAGMENTS)
@@ -263,9 +286,14 @@ def validate_plan(user, plan):
     """
     if not user.is_superuser:
         raise ReadPlanError("Доступ к бизнес-данным через ассистента разрешён только владельцу")
-    allowed = {"entity", "fields", "search", "filters", "order_by", "limit", "aggregates", "group_by"}
-    if not isinstance(plan, dict) or set(plan) - allowed:
+    contract = plan_contract()["properties"]
+    if not isinstance(plan, dict):
         raise ReadPlanError("Некорректный план чтения")
+    unknown = set(plan) - set(contract)
+    if unknown:
+        raise ReadPlanError("Недопустимые параметры READ: " + ", ".join(sorted(unknown)))
+    if "entity" not in plan or plan["entity"] in (None, ""):
+        raise ReadPlanError("В READ-плане обязателен параметр entity из открытого описания сущности")
     model, entity, fields = _entity(plan.get("entity"))
     selected_names = plan.get("fields") or list(fields)
     if not isinstance(selected_names, list) or not selected_names:

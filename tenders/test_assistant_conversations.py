@@ -51,6 +51,8 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(message["data"]["steps"][-1]["result"]["records"][0]["id"], latest.pk)
         prompt = json.loads(request.call_args_list[1].args[0])
         self.assertIn("cash.CashTransaction", {".".join(node["path"][1:]) for node in prompt["opened_capability_nodes"] if "path" in node})
+        read = next(tool for tool in prompt["registered_tools"] if tool["id"] == "read")
+        self.assertTrue(read["input_schema"]["plan"]["properties"]["entity"]["required"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -89,6 +91,46 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         repair = json.loads(request.call_args_list[2].args[0])
         self.assertEqual(repair["rejected_step"]["error"], "Запрошены недоступные поля")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_missing_read_entity_is_explained_then_corrected(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
+            {"reply": "Читаю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"model": "cash.CashTransaction", "fields": ["amount"]}}}},
+            {"reply": "Исправляю контракт.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 1}}}},
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+        response = self._send(self._conversation(), "Покажи операции кассы")
+        self.assertEqual(response.status_code, 200)
+        repair = json.loads(request.call_args_list[2].args[0])
+        self.assertEqual(repair["rejected_step"]["error"], "Недопустимые параметры READ-плана: model")
+        self.assertIn("entity", repair["registered_tools"][1]["input_schema"]["plan"]["properties"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_identical_rejected_read_is_not_repeated(self, request, _preflight):
+        invalid = {"reply": "Читаю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"model": "cash.CashTransaction", "fields": ["amount"]}}}}
+        request.side_effect = [
+            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
+            invalid, invalid, invalid,
+        ]
+        response = self._send(self._conversation(), "Покажи операции кассы")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("уже был отклонён", response.json()["messages"][-1]["text"])
+        self.assertEqual(request.call_count, 4)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_another_model_uses_the_same_read_contract(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Открываю сверки.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть сверки", "arguments": {"path": ["read", "cash", "CashReconciliation"]}}},
+            {"reply": "Читаю сверки.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать сверки", "arguments": {"plan": {"entity": "cash.CashReconciliation", "fields": ["effective_date", "cash_balance"], "filters": [], "order_by": "-id", "limit": 1}}}},
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+        response = self._send(self._conversation(), "Покажи последнюю сверку")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["entity"], "cash.CashReconciliation")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")

@@ -56,6 +56,20 @@ class AssistantToolRegistryTests(TestCase):
         action = execute_tool("assistant.navigate", self.admin, {"path": ["action", "cash", "cash.transaction_update"]})
         self.assertEqual(action["tool"]["id"], "cash.transaction_update")
 
+    def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
+        from .assistant_read import ReadPlanError, plan_contract, validate_plan
+
+        read = next(tool for tool in available_tools(self.admin) if tool["id"] == "read")
+        self.assertEqual(read["input_schema"], {"plan": plan_contract()})
+        self.assertTrue(read["input_schema"]["plan"]["properties"]["entity"]["required"])
+        self.assertNotIn("model", read["input_schema"]["plan"]["properties"])
+        with self.assertRaisesRegex(ReadPlanError, "Недопустимые параметры READ: model"):
+            validate_plan(self.admin, {"model": "cash.CashTransaction", "fields": ["amount"]})
+
+    def test_read_rejects_unknown_top_level_parameter(self):
+        with self.assertRaisesRegex(Exception, "Недопустимые параметры действия: unexpected"):
+            execute_tool("read", self.admin, {"plan": {"entity": "cash.CashTransaction"}, "unexpected": True})
+
     def test_action_contract_rejects_false_strings_and_wrong_array_shapes(self):
         with self.assertRaisesRegex(Exception, "true или false"):
             execute_tool("finance.period_lock", self.admin, {
