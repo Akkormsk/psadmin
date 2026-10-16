@@ -35,7 +35,7 @@ def _history(conversation):
 
 
 def _request(prompt, image_data_urls=None):
-    model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite"))
+    model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini")
     result, usage = _ai_gateway_json(
         prompt, model=model, max_tokens=1200, timeout=45, network_attempts=1,
         image_data_urls=image_data_urls,
