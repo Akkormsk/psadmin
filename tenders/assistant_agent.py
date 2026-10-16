@@ -87,6 +87,10 @@ def _opened_read_entities(state):
     }
 
 
+def _has_non_navigation_result(state):
+    return any(item.get("tool_id") not in {"assistant.navigate"} for item in state["results"])
+
+
 def _literal_context():
     now = timezone.localtime()
     return {
@@ -189,7 +193,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "an intermediate node or a known leaf directly. Read a detailed contract before using its fields or arguments. "
                 "Never guess database field names, entity identifiers, action arguments or allowed values. Use only metadata "
                 "returned by assistant.navigate. Do not ask for optional filters when the request is already executable. "
-                "Ask only for a genuinely required parameter that cannot be obtained from the request, conversation, or available tools. "
+                "Ask only for a genuinely required parameter or an ambiguity of an opened read contract that cannot be obtained from the request, conversation, or available tools. "
                 "Never ask for storage formats, timezones, numeric notation, or bounds of a named calendar period; normalize them "
                 "using literal_context and the returned contract. Use read for application data, existing registered actions for "
                 "changes, and compute only for listed arithmetic over completed_step_results. A tool call is not a completed task. "
@@ -223,6 +227,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "basis": "verified_steps|user_supplied|unavailable",
                 "next_step": {"tool_id": "registered id or compute", "purpose": "why this next step is needed", "arguments": "object"},
                 "missing_inputs": ["required human-readable parameter, only for needs_input"],
+                "missing_for": "opened action id or opened read entity, only for needs_input",
             },
         },
         ensure_ascii=False,
@@ -272,7 +277,10 @@ def _needs_input_is_grounded(decision, state):
     missing = decision.get("missing_inputs")
     if not isinstance(missing, list) or not missing or not all(isinstance(item, str) and item.strip() for item in missing):
         return False
+    target = decision.get("missing_for")
     for node in _opened_contracts(state):
+        if target == ".".join(node.get("path", [])[1:]) and node.get("path", [None])[0] == "read":
+            return True
         tool = node.get("tool")
         if not isinstance(tool, dict):
             continue
@@ -280,7 +288,7 @@ def _needs_input_is_grounded(decision, state):
             name for name, kind in tool.get("input_schema", {}).items()
             if isinstance(kind, str) and not kind.endswith("?") and not (name == "type" and kind == "object")
         }
-        if required:
+        if required and target == tool.get("id"):
             return True
     return False
 
@@ -391,6 +399,8 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             _save_state(conversation, state)
             return {"text": decision["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
         if status == "final":
+            if state["results"] and not _has_non_navigation_result(state) and decision.get("basis") == "verified_steps":
+                raise TenderAIError("Ассистент завершил задачу о данных до получения результата инструмента.")
             if not state["results"] and decision.get("basis") not in {"user_supplied", "unavailable"}:
                 raise TenderAIError("Ассистент завершил задачу без проверенного результата.")
             _finish_state(conversation)

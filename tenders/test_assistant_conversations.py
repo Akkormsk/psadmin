@@ -58,7 +58,7 @@ class AssistantConversationTests(TestCase):
         request.side_effect = [
             {"reply": "Читаю операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"]}}}},
             {"reply": "Сначала открываю описание.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции кассы", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+            {"reply": "Готово.", "status": "final", "basis": "unavailable"},
         ]
         response = self._send(self._conversation(), "Покажи операции кассы")
         self.assertEqual(response.status_code, 200)
@@ -70,7 +70,7 @@ class AssistantConversationTests(TestCase):
     def test_needs_input_requires_an_opened_action_contract(self, request, _preflight):
         request.side_effect = [
             {"reply": "Открываю создание операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть создание операции", "arguments": {"path": ["action", "cash", "cash.transaction_create"]}}},
-            {"reply": "Укажите сумму расхода.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["сумма"]},
+            {"reply": "Укажите сумму расхода.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["сумма"], "missing_for": "cash.transaction_create"},
         ]
         response = self._send(self._conversation(), "Добавь расход")
         self.assertEqual(response.status_code, 200)
@@ -97,7 +97,7 @@ class AssistantConversationTests(TestCase):
     def test_continues_pending_task_without_losing_opened_contract(self, request, _preflight):
         request.side_effect = [
             {"reply": "Открываю создание операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть создание операции", "arguments": {"path": ["action", "cash", "cash.transaction_create"]}}},
-            {"reply": "Укажите сумму.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["сумма"]},
+            {"reply": "Укажите сумму.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["сумма"], "missing_for": "cash.transaction_create"},
             {"reply": "Подготовил операцию.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "cash.transaction_create", "purpose": "Создать расход", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "100", "reason": "тест"}}},
         ]
         conversation_id = self._conversation()
