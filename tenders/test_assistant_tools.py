@@ -481,6 +481,9 @@ class AssistantToolRegistryTests(TestCase):
         from .assistant_read import catalogue, validate_plan
 
         models = {item["id"]: item for item in catalogue(compact=True)["entities"]}
+        contract = catalogue(compact=True)["filter_contract"]
+        self.assertEqual(contract["value_formats"]["DateField"], "YYYY-MM-DD")
+        self.assertEqual(contract["value_formats"]["DecimalField"], "JSON number or decimal string with .")
         self.assertTrue(models)
         self.assertTrue(all(field.get("label") for model in models.values() for field in model["fields"]))
         tender = models["tender_selection.Tender"]

@@ -7,6 +7,9 @@ import logging
 import os
 import re
 
+from django.conf import settings
+from django.utils import timezone
+
 from .assistant_tools import (
     AssistantToolError,
     available_tools,
@@ -54,6 +57,15 @@ def _tool_catalogue(tools):
     ]
 
 
+def _literal_context():
+    now = timezone.localtime()
+    return {
+        "current_date": now.date().isoformat(),
+        "current_datetime": now.isoformat(),
+        "timezone": settings.TIME_ZONE,
+    }
+
+
 def _run_state(conversation, message):
     state = conversation.context.get("agent_run")
     if not isinstance(state, dict) or not isinstance(state.get("task"), str):
@@ -94,6 +106,9 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "For read, select fields by their human label and help_text in read_catalog; technical names are only request keys. "
                 "Never show technical model or field names to the user: explain choices with their Russian human labels. "
                 "Ask a question only when the user's wording genuinely fits multiple different human-labelled fields; if the user has already named the meaning, choose it and continue. "
+                "Normalize dates, date-times, numbers, amounts, percentages and statuses yourself using literal_context and read_catalog.filter_contract. "
+                "Never ask the user for a storage format, timezone, numeric notation or bounds of a named calendar period. "
+                "Resolve a named month or other calendar period from literal_context; use its current calendar year unless the user supplied another year. "
                 "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
                 "If required information is absent, return status needs_input and one concise Russian question. "
                 "If the result is complete, return status final and explain it using only completed_step_results. "
@@ -107,6 +122,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "registered_tools": _tool_catalogue(tools),
             "workflows": workflow_catalog(user, tools),
             "read_catalog": read_catalog,
+            "literal_context": _literal_context(),
             "compute": {
                 "tool_id": "compute",
                 "operations": sorted(_COMPUTE_OPERATIONS),
@@ -208,12 +224,15 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
                 "For an initial read use arguments.plan with entity (never model), fields, filters, order_by and limit from read_catalog. "
                 "Choose read fields by their human label and help_text. Technical names are request keys only: never include them in reply text. "
                 "Ask the user only when several human-labelled fields genuinely match the requested meaning; use a meaning already supplied in the conversation without asking again. "
+                "Normalize dates, date-times, numbers, amounts, percentages and statuses yourself using literal_context and read_catalog.filter_contract. "
+                "Never ask for a storage format, timezone, numeric notation or bounds of a named calendar period; resolve it from literal_context, using its current calendar year unless the user supplied another. "
                 "Do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
                 "Return valid JSON matching response_schema."
             ),
             "registered_tools": _tool_catalogue(tools),
             "workflows": workflow_catalog(user, tools),
             "read_catalog": catalogue(compact=True),
+            "literal_context": _literal_context(),
             "compute": {"tool_id": "compute", "operations": sorted(_COMPUTE_OPERATIONS)},
             "business_context": conversation.context.get("business_context", {}),
             "page_context": page_context or {},

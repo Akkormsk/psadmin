@@ -83,6 +83,7 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(request.call_count, 5)
         execution_prompt = json.loads(request.call_args_list[1].args[0])
         self.assertEqual([step["id"] for step in execution_prompt["execution_plan"]], ["lost_tenders", "average_reduction", "top_three"])
+        self.assertEqual(execution_prompt["literal_context"]["timezone"], "Europe/Moscow")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -198,6 +199,21 @@ class AssistantConversationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["messages"][-1]["text"], "За какой месяц показать тендеры?")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_planning_prompt_supplies_generic_literal_context(self, request, _preflight):
+        request.return_value = self._plan([], reply="Уточните нужный показатель.", status="needs_input")
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Покажи операции за сентябрь"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        prompt = json.loads(request.call_args.args[0])
+        self.assertEqual(prompt["literal_context"]["timezone"], "Europe/Moscow")
+        self.assertRegex(prompt["literal_context"]["current_date"], r"^\d{4}-\d{2}-\d{2}$")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
