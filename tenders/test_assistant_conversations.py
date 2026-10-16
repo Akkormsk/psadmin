@@ -87,6 +87,35 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_agent_navigates_the_graph_before_a_read(self, request, _preflight):
+        request.side_effect = [
+            self._plan([{
+                "id": "root", "tool_id": "assistant.navigate", "purpose": "Открыть оглавление",
+                "arguments": {"path": []}, "inputs": [{"from": "user", "value": "тендеры"}], "outputs": ["разделы"],
+            }]),
+            {"reply": "Открываю оглавление.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть оглавление", "arguments": {"path": []}}},
+            {"reply": "Открываю данные.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть чтение", "arguments": {"path": ["read"]}}},
+            {"reply": "Открываю тендеры.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть тендеры", "arguments": {"path": ["read", "tender_selection"]}}},
+            {"reply": "Открываю поля тендера.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть тендер", "arguments": {"path": ["read", "tender_selection", "Tender"]}}},
+            {"reply": "Читаю тендеры.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать тендеры", "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"], "filters": [], "order_by": "-id", "limit": 3}}}},
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Покажи тендеры"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["text"], "Готово.")
+        first_prompt = json.loads(request.call_args_list[0].args[0])
+        self.assertNotIn("read_catalog", first_prompt)
+        self.assertEqual({tool["id"] for tool in first_prompt["registered_tools"]}, {"assistant.navigate", "read"})
+        entity_prompt = json.loads(request.call_args_list[5].args[0])
+        self.assertIn("contract_reduction_percent", {field["name"] for field in entity_prompt["completed_step_results"][-1]["result"]["children"]})
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_plan_cannot_invent_an_action(self, request, _preflight):
         request.return_value = self._plan([
             {

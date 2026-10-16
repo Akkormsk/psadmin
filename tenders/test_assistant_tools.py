@@ -29,6 +29,21 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(catalog(self.admin)["workflows"], workflows)
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
+    def test_navigation_exposes_a_lazy_graph_from_existing_metadata(self):
+        root = execute_tool("assistant.navigate", self.admin, {"path": []})
+        self.assertEqual({item["id"] for item in root["children"]}, {"read", "action", "compute"})
+
+        read = execute_tool("assistant.navigate", self.admin, {"path": ["read"]})
+        self.assertIn("tender_selection", {item["id"] for item in read["children"]})
+        models = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection"]})
+        self.assertIn("Tender", {item["id"] for item in models["children"]})
+        tender = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection", "Tender"]})
+        reduction = next(item for item in tender["children"] if item["id"] == "contract_reduction_percent")
+        self.assertEqual(reduction["label"], "Фактическое снижение, %")
+
+        actions = execute_tool("assistant.navigate", self.admin, {"path": ["action"]})
+        self.assertIn("cash", {item["id"] for item in actions["children"]})
+
     def test_action_contract_rejects_false_strings_and_wrong_array_shapes(self):
         with self.assertRaisesRegex(Exception, "true или false"):
             execute_tool("finance.period_lock", self.admin, {

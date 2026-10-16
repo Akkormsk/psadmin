@@ -15,7 +15,6 @@ from .assistant_tools import (
     available_tools,
     execute_tool,
     required_input_names,
-    workflow_catalog,
 )
 from .gateway_budget import preflight, report_line, spend_rub
 from .services import TenderAIError, _ai_gateway_json
@@ -46,8 +45,10 @@ def _request(prompt, image_data_urls=None):
     return result
 
 
-def _tool_catalogue(tools):
+def _tool_catalogue(tools, *, navigation_only=False):
     """Give the model only the contract it needs to choose a next action."""
+    if navigation_only:
+        tools = [tool for tool in tools if tool["id"] in {"assistant.navigate", "read"}]
     return [
         {
             key: tool[key]
@@ -91,10 +92,7 @@ def _finish_state(conversation):
 
 
 def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step=None):
-    read_catalog = []
-    if any(tool["id"] == "read" and tool["available"] for tool in tools):
-        from .assistant_read import catalogue
-        read_catalog = catalogue(compact=True)
+    from .assistant_tools import navigation
     prompt = json.dumps(
         {
             "task": (
@@ -102,11 +100,13 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "Use execution_plan as the intended route: start with its first unfinished step, see its real result, then choose the next step. "
                 "Change that route only when a verified result makes the planned step impossible or unnecessary. "
                 "Never invent tools, database values, calculations, or completed actions. "
+                "Use assistant.navigate to open the capability graph before selecting any read or action. "
+                "Start from path [] and continue only through returned children; never guess a field, model, action or its parameters. "
                 "Use read for application data and registered actions only for real site operations. "
-                "For read, select fields by their human label and help_text in read_catalog; technical names are only request keys. "
+                "For read, select fields by their human label and help_text returned by the selected entity node; technical names are only request keys. "
                 "Never show technical model or field names to the user: explain choices with their Russian human labels. "
                 "Ask a question only when the user's wording genuinely fits multiple different human-labelled fields; if the user has already named the meaning, choose it and continue. "
-                "Normalize dates, date-times, numbers, amounts, percentages and statuses yourself using literal_context and read_catalog.filter_contract. "
+                "Normalize dates, date-times, numbers, amounts, percentages and statuses yourself using literal_context and filter_contract returned by the selected entity node. "
                 "Never ask the user for a storage format, timezone, numeric notation or bounds of a named calendar period. "
                 "Resolve a named month or other calendar period from literal_context; use its current calendar year unless the user supplied another year. "
                 "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
@@ -114,14 +114,13 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "If the result is complete, return status final and explain it using only completed_step_results. "
                 "Include next_step only when status is next. "
                 "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
-                "If rejected_step is present, correct that step using read_catalog and its exact backend reason. "
+                "If rejected_step is present, correct that step using the selected graph node and its exact backend reason. "
                 "Do not ask the user for information already in original_task merely because backend validation rejected a step. "
                 "Do not use a failed result as input or finish successfully. "
                 "Return valid JSON matching response_schema."
             ),
-            "registered_tools": _tool_catalogue(tools),
-            "workflows": workflow_catalog(user, tools),
-            "read_catalog": read_catalog,
+            "registered_tools": _tool_catalogue(tools, navigation_only=True),
+            "navigation_root": navigation(user, {"path": []}),
             "literal_context": _literal_context(),
             "compute": {
                 "tool_id": "compute",
@@ -212,26 +211,27 @@ def _format_plan(reply, steps):
 
 
 def _plan_task(conversation, user, message, tools, page_context, attachments, image_data_urls):
-    from .assistant_read import catalogue
+    from .assistant_tools import navigation
 
     prompt = json.dumps(
         {
             "task": (
                 "You are PSADMIN's Russian-speaking agent. Before controlled execution, design a complete route to a verified final result. "
-                "Use only registered actions, read, and compute. Do not invent functions, records, or results. "
+                "Use only registered actions, read, compute, and assistant.navigate. Do not invent functions, records, or results. "
+                "The first step must open the capability graph with assistant.navigate and arguments {path: []}. "
+                "The graph is explored only through returned children; do not name a model, field or action before its node was returned. "
                 "For every step name the exact tool_id, known arguments, inputs and outputs. Every step must list at least one input: "
                 "use from=user for conditions from the user's request, or the earlier step id for a prior result; never use an empty inputs list. "
-                "For an initial read use arguments.plan with entity (never model), fields, filters, order_by and limit from read_catalog. "
-                "Choose read fields by their human label and help_text. Technical names are request keys only: never include them in reply text. "
+                "For a read, first navigate to its entity, then use arguments.plan with entity (never model), fields, filters, order_by and limit. "
+                "Choose read fields by their human label and help_text returned by the entity node. Technical names are request keys only: never include them in reply text. "
                 "Ask the user only when several human-labelled fields genuinely match the requested meaning; use a meaning already supplied in the conversation without asking again. "
-                "Normalize dates, date-times, numbers, amounts, percentages and statuses yourself using literal_context and read_catalog.filter_contract. "
+                "Normalize dates, date-times, numbers, amounts, percentages and statuses yourself using literal_context and filter_contract returned by the selected entity node. "
                 "Never ask for a storage format, timezone, numeric notation or bounds of a named calendar period; resolve it from literal_context, using its current calendar year unless the user supplied another. "
                 "Do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
                 "Return valid JSON matching response_schema."
             ),
-            "registered_tools": _tool_catalogue(tools),
-            "workflows": workflow_catalog(user, tools),
-            "read_catalog": catalogue(compact=True),
+            "registered_tools": _tool_catalogue(tools, navigation_only=True),
+            "navigation_root": navigation(user, {"path": []}),
             "literal_context": _literal_context(),
             "compute": {"tool_id": "compute", "operations": sorted(_COMPUTE_OPERATIONS)},
             "business_context": conversation.context.get("business_context", {}),
