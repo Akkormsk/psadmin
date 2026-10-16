@@ -342,6 +342,8 @@ def _compute(arguments, results):
 
 
 def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
+    if not isinstance(state.get("errors"), list):
+        state["errors"] = []
     for _ in range(MAX_AGENT_STEPS):
         decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
         status = decision.get("status")
