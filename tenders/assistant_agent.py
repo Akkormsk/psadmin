@@ -94,6 +94,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "For arithmetic over verified previous results, use compute with one of the supplied operations; it is not Python. "
                 "If required information is absent, return status needs_input and one concise Russian question. "
                 "If the result is complete, return status final and explain it using only completed_step_results. "
+                "Include next_step only when status is next. "
                 "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
                 "If execution_errors is non-empty, correct the rejected step using its exact backend reason; do not use a failed result as input or finish successfully. "
                 "Return valid JSON matching response_schema."
@@ -253,8 +254,6 @@ def _next_step(decision, tools):
             if not tool["available"]:
                 raise TenderAIError("Ассистент запросил действие без прав доступа.")
         return identifier, step["arguments"], str(step.get("purpose", "")).strip()[:500]
-    if step is not None:
-        raise TenderAIError("Шаг можно передавать только со статусом next.")
     return None, None, ""
 
 

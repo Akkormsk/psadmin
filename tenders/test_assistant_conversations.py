@@ -178,6 +178,29 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_ignores_a_draft_step_when_model_requests_clarification(self, request, _preflight):
+        request.side_effect = [
+            self._plan([{
+                "id": "read_tenders", "tool_id": "read", "purpose": "Прочитать тендеры",
+                "arguments": {"plan": {"entity": "tender_selection.Tender", "fields": ["purchase_number"]}},
+                "inputs": [{"from": "user", "value": "месяц"}], "outputs": ["тендеры"],
+            }]),
+            {
+                "reply": "За какой месяц показать тендеры?", "status": "needs_input", "basis": "unavailable",
+                "next_step": {"tool_id": "read", "purpose": "Черновик", "arguments": {}},
+            },
+        ]
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Покажи тендеры"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["text"], "За какой месяц показать тендеры?")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_corrects_a_rejected_read_before_returning_to_user(self, request, _preflight):
         request.side_effect = [
             self._plan([{
