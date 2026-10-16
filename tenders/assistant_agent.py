@@ -77,6 +77,9 @@ def _run_state(conversation, message):
     state.setdefault("errors", [])
     if not isinstance(state["errors"], list):
         state["errors"] = []
+    state.setdefault("trace", [])
+    if not isinstance(state["trace"], list):
+        state["trace"] = []
     return state
 
 
@@ -89,6 +92,25 @@ def _finish_state(conversation):
     conversation.context.pop("agent_run", None)
     conversation.context.pop("pending_action", None)
     conversation.save(update_fields=["context"])
+
+
+def _trace(state, tool_id, status, error=""):
+    entry = {"step": len(state["trace"]) + 1, "tool_id": tool_id, "status": status}
+    if error:
+        entry["error"] = error
+    state["trace"].append(entry)
+    logger.info("assistant trace step=%s tool=%s status=%s%s", entry["step"], tool_id, status, f" error={error}" if error else "")
+
+
+def _trace_text(entries):
+    labels = {"completed": "выполнен", "rejected": "отклонён", "confirmation": "ожидает подтверждения"}
+    lines = ["Диагностика шагов:"]
+    for entry in entries:
+        line = f"{entry['step']}. {entry['tool_id']} — {labels.get(entry['status'], entry['status'])}"
+        if entry.get("error"):
+            line += f": {entry['error']}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step=None):
@@ -370,6 +392,8 @@ def _compute(arguments, results):
 def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
     if not isinstance(state.get("errors"), list):
         state["errors"] = []
+    if not isinstance(state.get("trace"), list):
+        state["trace"] = []
     rejected_step = None
     for _ in range(MAX_AGENT_STEPS):
         decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step)
@@ -397,11 +421,13 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                     return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
                 if tool["requires_confirmation"]:
                     state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
+                    _trace(state, identifier, "confirmation")
                     _save_state(conversation, state)
                     return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
                 result = execute_tool(identifier, user, arguments)
         except (AssistantToolError, TenderAIError) as exc:
             state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
+            _trace(state, identifier, "rejected", str(exc))
             _save_state(conversation, state)
             rejected_step = {
                 "tool_id": identifier,
@@ -412,12 +438,14 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         state["errors"] = []
+        _trace(state, identifier, "completed")
         rejected_step = None
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
     errors = state.get("errors", [])
     suffix = f" Последняя причина: {errors[-1]['error']}" if errors else ""
-    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.{suffix}")
+    trace = _trace_text(state["trace"][-MAX_AGENT_STEPS:]) if state["trace"] else ""
+    raise TenderAIError(f"Превышен безопасный предел {MAX_AGENT_STEPS} шагов за один запуск. Продолжите задачу следующим сообщением.{suffix}\n\n{trace}")
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):

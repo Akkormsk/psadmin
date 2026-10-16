@@ -284,6 +284,29 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_step_limit_returns_safe_execution_trace(self, request, _preflight):
+        invalid = {
+            "reply": "Пробую чтение.", "status": "next", "basis": "user_supplied",
+            "next_step": {"tool_id": "read", "purpose": "Прочитать тендеры", "arguments": {
+                "plan": {"entity": "tender_selection.Tender", "fields": ["unknown_field"], "filters": [], "order_by": "-id", "limit": 20},
+            }},
+        }
+        request.side_effect = [self._plan([{
+            "id": "root", "tool_id": "assistant.navigate", "purpose": "Открыть оглавление",
+            "arguments": {"path": []}, "inputs": [{"from": "user", "value": "тендеры"}], "outputs": ["разделы"],
+        }]), *[invalid for _ in range(8)]]
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Покажи тендеры"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Диагностика шагов", response.json()["detail"])
+        self.assertIn("1. read — отклонён: Запрошены недоступные поля", response.json()["detail"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_old_conversation_without_error_history_can_retry_a_rejected_step(self, request, _preflight):
         request.side_effect = [
             {
