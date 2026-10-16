@@ -45,6 +45,7 @@ class AssistantToolRegistryTests(TestCase):
         models = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection"]})
         self.assertIn("Tender", {item["id"] for item in models["children"]})
         tender = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection", "Tender"]})
+        self.assertEqual(tender["entity"], "tender_selection.Tender")
         reduction = next(item for item in tender["children"] if item["id"] == "contract_reduction_percent")
         self.assertEqual(reduction["label"], "Фактическое снижение, %")
 

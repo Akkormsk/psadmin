@@ -282,6 +282,7 @@ def navigation(user, payload):
             raise AssistantToolError("Сущность чтения не найдена")
         return {
             "path": path,
+            "entity": model["id"],
             "filter_contract": graph["filter_contract"],
             "children": [{"id": field["name"], **field} for field in model["fields"]],
         }

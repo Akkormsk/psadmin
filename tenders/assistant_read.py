@@ -100,6 +100,11 @@ def _entity(identifier):
     return model, f"{model._meta.app_label}.{model.__name__}", _base_fields(model)
 
 
+def resolve_entity(identifier):
+    """Return the canonical public identifier without exposing model internals."""
+    return _entity(identifier)[1]
+
+
 def _path(model, fields, name, *, allow_json=False):
     """Resolve a public path using only safe forward to-one Django relations."""
     if not isinstance(name, str) or not name:

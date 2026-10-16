@@ -65,11 +65,17 @@ def _tool_catalogue(tools, *, identifiers=None):
 
 def _opened_contracts(state):
     """Return only contracts actually disclosed through the capability graph."""
-    return [
-        item["result"]
-        for item in state["results"]
-        if item.get("tool_id") == "assistant.navigate" and isinstance(item.get("result"), dict)
-    ]
+    nodes = {}
+    for item in state["results"]:
+        node = item.get("result")
+        if item.get("tool_id") != "assistant.navigate" or not isinstance(node, dict):
+            continue
+        key = node.get("entity")
+        if not isinstance(key, str):
+            tool = node.get("tool")
+            key = tool.get("id") if isinstance(tool, dict) else tuple(node.get("path", ()))
+        nodes[key] = node
+    return list(nodes.values())
 
 
 def _opened_action_ids(state):
@@ -82,9 +88,9 @@ def _opened_action_ids(state):
 
 def _opened_read_entities(state):
     return {
-        ".".join(node["path"][1:])
+        node["entity"]
         for node in _opened_contracts(state)
-        if isinstance(node.get("path"), list) and len(node["path"]) == 3 and node["path"][0] == "read"
+        if isinstance(node.get("entity"), str)
     }
 
 
@@ -269,7 +275,7 @@ def _next_step(decision, tools):
 def _validate_step_access(identifier, arguments, state, user):
     """Require a graph contract before READ or an app action can run."""
     if identifier == "read":
-        from .assistant_read import ReadPlanError, plan_contract, validate_plan
+        from .assistant_read import ReadPlanError, plan_contract, resolve_entity, validate_plan
 
         if not isinstance(arguments, dict):
             raise TenderAIError("Параметры инструмента read должны быть объектом.")
@@ -288,7 +294,21 @@ def _validate_step_access(identifier, arguments, state, user):
         if "entity" not in plan or plan["entity"] in (None, ""):
             raise TenderAIError("В READ-плане обязателен параметр entity из открытого описания сущности.")
         entity = plan["entity"]
-        if entity not in _opened_read_entities(state):
+        opened_entities = _opened_read_entities(state)
+        try:
+            canonical_entity = resolve_entity(entity)
+        except ReadPlanError as exc:
+            opened = ", ".join(sorted(opened_entities)) or "нет"
+            raise TenderAIError(
+                f"Недопустимый идентификатор сущности {entity!r}. "
+                f"Используйте идентификатор из открытого контракта: {opened}."
+            ) from exc
+        if entity != canonical_entity:
+            raise TenderAIError(
+                f"Недопустимый идентификатор сущности {entity!r}. "
+                f"Используйте канонический идентификатор {canonical_entity!r} из открытого контракта."
+            )
+        if canonical_entity not in opened_entities:
             raise TenderAIError("Перед чтением нужно открыть описание выбранной сущности через карту возможностей.")
         try:
             validate_plan(user, plan)
@@ -303,14 +323,33 @@ def _call_signature(identifier, arguments):
     return sha256(payload.encode()).hexdigest()
 
 
+def _rejected_call_error(state, signature):
+    for item in reversed(state["rejected_calls"]):
+        if isinstance(item, dict) and item.get("signature") == signature:
+            return item.get("error", "Вызов был отклонён")
+        if item == signature:
+            return "Вызов был отклонён"
+    return None
+
+
+def _remember_rejected_call(state, signature, error):
+    if signature and _rejected_call_error(state, signature) is None:
+        state["rejected_calls"].append({"signature": signature, "error": error})
+
+
+def _cached_navigation_result(state, arguments):
+    if not isinstance(arguments, dict) or not isinstance(arguments.get("path"), list):
+        return None
+    path = arguments["path"]
+    return next((node for node in _opened_contracts(state) if node.get("path") == path), None)
+
+
 def _needs_input_is_grounded(decision, state):
     missing = decision.get("missing_inputs")
     if not isinstance(missing, list) or not missing or not all(isinstance(item, str) and item.strip() for item in missing):
         return False
     target = decision.get("missing_for")
     for node in _opened_contracts(state):
-        if target == ".".join(node.get("path", [])[1:]) and node.get("path", [None])[0] == "read":
-            return True
         tool = node.get("tool")
         if not isinstance(tool, dict):
             continue
@@ -439,13 +478,13 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
         try:
             identifier, arguments, purpose = _next_step(decision, tools)
             signature = _call_signature(identifier, arguments)
-            if signature in state["rejected_calls"]:
-                raise TenderAIError("Этот вызов уже был отклонён. Исправьте параметры по указанной причине, не повторяйте его.")
+            previous_error = _rejected_call_error(state, signature)
+            if previous_error:
+                raise TenderAIError(f"Этот вызов уже был отклонён: {previous_error}")
             _validate_step_access(identifier, arguments, state, user)
         except TenderAIError as exc:
             repairs += 1
-            if signature and signature not in state["rejected_calls"]:
-                state["rejected_calls"].append(signature)
+            _remember_rejected_call(state, signature, str(exc))
             rejected_step = {
                 "tool_id": identifier or "decision",
                 "arguments": arguments if identifier == "read" and isinstance(arguments, dict) else {},
@@ -459,6 +498,12 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
         try:
             if identifier == "compute":
                 result = _compute(arguments, state["results"])
+            elif identifier == "assistant.navigate" and (cached_result := _cached_navigation_result(state, arguments)) is not None:
+                _trace(state, identifier, "cached", conversation=conversation, tool_input=arguments, tool_output=cached_result)
+                rejected_step = None
+                repairs = 0
+                message, attachments, image_data_urls = "", [], None
+                continue
             else:
                 tool = next(item for item in tools if item["id"] == identifier)
                 missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
@@ -472,8 +517,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                     return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
                 result = execute_tool(identifier, user, arguments)
         except (AssistantToolError, TenderAIError) as exc:
-            if signature not in state["rejected_calls"]:
-                state["rejected_calls"].append(signature)
+            _remember_rejected_call(state, signature, str(exc))
             state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
             _trace(state, identifier, "rejected", conversation=conversation, tool_input=arguments, error=str(exc))
             _save_state(conversation, state)
