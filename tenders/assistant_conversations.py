@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import timedelta
 from pathlib import Path
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -12,6 +13,8 @@ from .services import TenderAIError, extract_tender_source
 
 
 CONVERSATION_KIND = "assistant_conversation"
+ASSISTANT_DEBUG_SCOPE = "assistant_debug"
+DEBUG_RETENTION = timedelta(days=1)
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 12_000
 MAX_ATTACHMENTS_PER_MESSAGE = 5
@@ -144,7 +147,7 @@ def serialize_conversation(conversation):
 
 def serialize_messages(conversation):
     messages = []
-    for event in conversation.feedback_events.order_by("created_at", "pk"):
+    for event in conversation.feedback_events.filter(scope="assistant_conversation").order_by("created_at", "pk"):
         payload = event.payload or {}
         messages.append({
             "id": event.pk,
@@ -156,6 +159,31 @@ def serialize_messages(conversation):
             "created_at": event.created_at.isoformat(),
         })
     return messages
+
+
+def serialize_debug_journal(conversation):
+    return [
+        {"stage": (event.payload or {}).get("stage", ""), "input": (event.payload or {}).get("input"),
+         "output": (event.payload or {}).get("output"), "error": (event.payload or {}).get("error", ""),
+         "created_at": event.created_at.isoformat()}
+        for event in conversation.feedback_events.filter(scope=ASSISTANT_DEBUG_SCOPE).order_by("created_at", "pk")
+    ]
+
+
+def add_debug_event(conversation, stage, *, event_input=None, event_output=None, error=""):
+    OwnerFeedbackEvent.objects.filter(
+        scope=ASSISTANT_DEBUG_SCOPE, created_at__lt=timezone.now() - DEBUG_RETENTION,
+    ).delete()
+    payload = {"stage": stage}
+    if event_input is not None:
+        payload["input"] = event_input
+    if event_output is not None:
+        payload["output"] = event_output
+    if error:
+        payload["error"] = error
+    return OwnerFeedbackEvent.objects.create(
+        interaction=conversation, raw_text="", payload=payload, scope=ASSISTANT_DEBUG_SCOPE,
+    )
 
 
 def _add_message(conversation, user, role, text, kind="text", data=None, context=None):
@@ -182,17 +210,12 @@ def respond(conversation, user, text, context=None, attachments=None):
     if not text and attachments:
         text = "Прикреплён файл: " + ", ".join(item.name for item in attachments)
     _add_message(conversation, user, "user", text, data={"attachments": [serialize_attachment(item) for item in attachments]}, context=context)
-    debug_start = len(conversation.context.get("agent_debug", []))
     response = reply(
         conversation, user, text, context,
         attachments=[serialize_attachment(item, include_text=True) for item in attachments],
         image_data_urls=attachment_image_urls(attachments),
     )
-    data = dict(response["data"])
-    journal = conversation.context.get("agent_debug", [])
-    if isinstance(journal, list) and len(journal) > debug_start:
-        data["debug"] = journal[debug_start:]
-    _add_message(conversation, user, "assistant", response["text"], response["kind"], data)
+    _add_message(conversation, user, "assistant", response["text"], response["kind"], response["data"])
     return serialize_messages(conversation)
 
 

@@ -26,13 +26,12 @@ logger = logging.getLogger(__name__)
 MAX_AGENT_DECISIONS = 12
 MAX_TOOL_CALLS = 8
 MAX_REPAIR_ATTEMPTS = 2
-MAX_DEBUG_EVENTS = 40
 _COMPUTE_OPERATIONS = {"count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"}
 _REFERENCE_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\])?)*$")
 
 
 def _history(conversation):
-    events = list(conversation.feedback_events.order_by("-created_at", "-pk")[:20])
+    events = list(conversation.feedback_events.filter(scope="assistant_conversation").order_by("-created_at", "-pk")[:20])
     return [
         {"role": (event.payload or {}).get("role", "user"), "text": event.raw_text}
         for event in reversed(events)
@@ -155,21 +154,36 @@ def _trace_value(value, depth=0):
     return value
 
 
+def _journal_value(value, depth=0):
+    """Keep the full observable JSON protocol while redacting secrets."""
+    from .assistant_read import _looks_like_secret, _sensitive
+
+    if depth >= 20:
+        return "[ограничена глубина]"
+    if isinstance(value, dict):
+        return {
+            str(key): "[скрыто]" if _sensitive(str(key)) else _journal_value(item, depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_journal_value(item, depth + 1) for item in value]
+    if isinstance(value, str):
+        return "[скрыто]" if _looks_like_secret(value) else value
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return value
+
+
 def _debug_event(conversation, stage, *, event_input=None, event_output=None, error=""):
     """Persist the observable agent protocol, never hidden model reasoning."""
-    journal = conversation.context.get("agent_debug", [])
-    if not isinstance(journal, list):
-        journal = []
-    event = {"stage": stage}
-    if event_input is not None:
-        event["input"] = _trace_value(event_input)
-    if event_output is not None:
-        event["output"] = _trace_value(event_output)
-    if error:
-        event["error"] = error
-    journal.append(event)
-    conversation.context["agent_debug"] = journal[-MAX_DEBUG_EVENTS:]
-    conversation.save(update_fields=["context"])
+    from .assistant_conversations import add_debug_event
+
+    add_debug_event(
+        conversation, stage, event_input=_journal_value(event_input) if event_input is not None else None,
+        event_output=_journal_value(event_output) if event_output is not None else None, error=error,
+    )
 
 
 def _trace(state, tool_id, status, *, conversation=None, tool_input=None, tool_output=None, error=""):

@@ -7,7 +7,7 @@ from django.shortcuts import redirect
 
 from .assistant_agent import continue_after_confirmation
 from .assistant_tools import AssistantToolError, execute_tool
-from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_messages, upload_attachment
+from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_debug_journal, serialize_messages, upload_attachment
 from .services import TenderAIError
 
 
@@ -47,7 +47,7 @@ def conversation_detail(request, conversation_id):
     conversation = conversation_for_user(request.user, conversation_id)
     if not conversation:
         return JsonResponse({"detail": "Беседа не найдена"}, status=404)
-    return JsonResponse({"conversation": serialize_conversation(conversation), "messages": serialize_messages(conversation)})
+    return JsonResponse({"conversation": serialize_conversation(conversation), "messages": serialize_messages(conversation), "debug_journal": serialize_debug_journal(conversation)})
 
 
 @login_required
@@ -73,12 +73,7 @@ def conversation_message(request, conversation_id):
     try:
         messages = respond(conversation, request.user, message, context, attachments)
     except TenderAIError as exc:
-        journal = conversation.context.get("agent_debug", [])
-        add_assistant_message(
-            conversation,
-            str(exc),
-            data={"debug": journal[-40:] if isinstance(journal, list) else []},
-        )
+        add_assistant_message(conversation, str(exc))
         return JsonResponse({"messages": serialize_messages(conversation)})
     return JsonResponse({"messages": messages})
 

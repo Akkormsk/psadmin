@@ -1,10 +1,11 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 
 class AssistantConversationTests(TestCase):
@@ -22,12 +23,36 @@ class AssistantConversationTests(TestCase):
     @patch("tenders.assistant_agent._request")
     def test_ordinary_conversation_uses_no_business_tool(self, request, _preflight):
         request.return_value = {"reply": "Привет! Чем могу помочь?", "status": "final", "basis": "user_supplied"}
-        response = self._send(self._conversation(), "Привет")
+        conversation_id = self._conversation()
+        response = self._send(conversation_id, "Привет")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["messages"][-1]["text"], "Привет! Чем могу помочь?")
+        self.assertNotIn("debug", response.json()["messages"][-1]["data"])
         prompt = json.loads(request.call_args.args[0])
         self.assertNotIn("execution_plan", prompt)
-        self.assertEqual([event["stage"] for event in response.json()["messages"][-1]["data"]["debug"]], ["decision.request", "decision.response"])
+        detail = self.client.get(reverse("assistant_conversation_detail", args=[conversation_id]), secure=True).json()
+        self.assertEqual([event["stage"] for event in detail["debug_journal"]], ["decision.request", "decision.response"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_debug_journal_expires_after_one_day_without_entering_chat_messages(self, request, _preflight):
+        from .assistant_conversations import ASSISTANT_DEBUG_SCOPE
+        from .models import OwnerFeedbackEvent
+
+        request.return_value = {"reply": "Привет!", "status": "final", "basis": "user_supplied"}
+        conversation_id = self._conversation()
+        event = OwnerFeedbackEvent.objects.create(
+            interaction_id=conversation_id, raw_text="", payload={"stage": "old"}, scope=ASSISTANT_DEBUG_SCOPE,
+        )
+        OwnerFeedbackEvent.objects.filter(pk=event.pk).update(created_at=timezone.now() - timedelta(days=1, seconds=1))
+
+        response = self._send(conversation_id, "Привет")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("debug", response.json()["messages"][-1]["data"])
+        self.assertFalse(OwnerFeedbackEvent.objects.filter(pk=event.pk).exists())
+        detail = self.client.get(reverse("assistant_conversation_detail", args=[conversation_id]), secure=True).json()
+        self.assertEqual([event["stage"] for event in detail["debug_journal"]], ["decision.request", "decision.response"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
