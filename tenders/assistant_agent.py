@@ -13,6 +13,7 @@ from django.utils import timezone
 from .assistant_tools import (
     AssistantToolError,
     available_tools,
+    capability_tree,
     execute_tool,
     required_input_names,
 )
@@ -45,10 +46,10 @@ def _request(prompt, image_data_urls=None):
     return result
 
 
-def _tool_catalogue(tools, *, navigation_only=False):
+def _tool_catalogue(tools, *, identifiers=None):
     """Give the model only the contract it needs to choose a next action."""
-    if navigation_only:
-        tools = [tool for tool in tools if tool["id"] in {"assistant.navigate", "read"}]
+    if identifiers is not None:
+        tools = [tool for tool in tools if tool["id"] in identifiers]
     return [
         {
             key: tool[key]
@@ -94,8 +95,30 @@ def _finish_state(conversation):
     conversation.save(update_fields=["context"])
 
 
-def _trace(state, tool_id, status, error=""):
+def _trace_value(value, depth=0):
+    """Keep an inspectable but bounded and secret-safe execution trace."""
+    from .assistant_read import _looks_like_secret, _sensitive
+
+    if depth >= 4:
+        return "[сокращено]"
+    if isinstance(value, dict):
+        return {
+            str(key): "[скрыто]" if _sensitive(str(key)) else _trace_value(item, depth + 1)
+            for key, item in list(value.items())[:20]
+        }
+    if isinstance(value, list):
+        return [_trace_value(item, depth + 1) for item in value[:20]] + (["[сокращено]"] if len(value) > 20 else [])
+    if isinstance(value, str):
+        return "[скрыто]" if _looks_like_secret(value) else value[:500] + ("…" if len(value) > 500 else "")
+    return value
+
+
+def _trace(state, tool_id, status, *, tool_input=None, tool_output=None, error=""):
     entry = {"step": len(state["trace"]) + 1, "tool_id": tool_id, "status": status}
+    if tool_input is not None:
+        entry["input"] = _trace_value(tool_input)
+    if tool_output is not None:
+        entry["output"] = _trace_value(tool_output)
     if error:
         entry["error"] = error
     state["trace"].append(entry)
@@ -107,6 +130,10 @@ def _trace_text(entries):
     lines = ["Диагностика шагов:"]
     for entry in entries:
         line = f"{entry['step']}. {entry['tool_id']} — {labels.get(entry['status'], entry['status'])}"
+        if "input" in entry:
+            line += "\n   вход: " + json.dumps(entry["input"], ensure_ascii=False)
+        if "output" in entry:
+            line += "\n   выход: " + json.dumps(entry["output"], ensure_ascii=False)
         if entry.get("error"):
             line += f": {entry['error']}"
         lines.append(line)
@@ -114,7 +141,8 @@ def _trace_text(entries):
 
 
 def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step=None):
-    from .assistant_tools import navigation
+    planned_ids = {step.get("tool_id") for step in state.get("plan", []) if isinstance(step, dict)}
+    opened_nodes = [step["result"] for step in state["results"] if step.get("tool_id") == "assistant.navigate"]
     prompt = json.dumps(
         {
             "task": (
@@ -122,8 +150,9 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "Use execution_plan as the intended route: start with its first unfinished step, see its real result, then choose the next step. "
                 "Change that route only when a verified result makes the planned step impossible or unnecessary. "
                 "Never invent tools, database values, calculations, or completed actions. "
-                "Use assistant.navigate to open the capability graph before selecting any read or action. "
-                "Start from path [] and continue only through returned children; never guess a field, model, action or its parameters. "
+                "The execution plan already contains full capability paths selected from the complete capability tree. "
+                "Use assistant.navigate only for the exact full path in the next planned navigation step; never navigate a root or intermediate node. "
+                "After its verified result appears in opened_capability_nodes, use that detailed node for the planned read or action; never guess a field, model, action or its parameters. "
                 "Use read for application data and registered actions only for real site operations. "
                 "For read, select fields by their human label and help_text returned by the selected entity node; technical names are only request keys. "
                 "Never show technical model or field names to the user: explain choices with their Russian human labels. "
@@ -141,8 +170,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "Do not use a failed result as input or finish successfully. "
                 "Return valid JSON matching response_schema."
             ),
-            "registered_tools": _tool_catalogue(tools, navigation_only=True),
-            "navigation_root": navigation(user, {"path": []}),
+            "registered_tools": _tool_catalogue(tools, identifiers=planned_ids | {"read", "assistant.navigate"}),
             "literal_context": _literal_context(),
             "compute": {
                 "tool_id": "compute",
@@ -156,6 +184,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "history": _history(conversation),
             "original_task": state["task"],
             "execution_plan": state.get("plan", []),
+            "opened_capability_nodes": opened_nodes,
             "latest_user_message": message,
             "completed_step_results": state["results"],
             "execution_errors": state.get("errors", [])[-3:],
@@ -231,7 +260,6 @@ def _format_plan(reply, steps):
 
 
 def _plan_task(conversation, user, message, tools, page_context, attachments, image_data_urls):
-    from .assistant_tools import navigation
 
     prompt = json.dumps(
         {
@@ -240,8 +268,9 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
                 "a PSADMIN action, or a verified calculation. If it does not, answer naturally in Russian with status final and an empty steps list; "
                 "do not use tools or the capability graph. Do not invent current external facts: state their absence honestly. "
                 "If it does, design a complete route to a verified final result. Use only registered actions, read, compute, and assistant.navigate. "
-                "Do not invent functions, records, or results. The first tool step must open the capability graph with assistant.navigate and arguments {path: []}. "
-                "The graph is explored only through returned children; do not name a model, field or action before its node was returned. "
+                "Do not invent functions, records, or results. capability_tree is the complete compact route map. "
+                "Select a full path from it in one decision: never navigate the root or an intermediate node. "
+                "For every READ or ACTION, first add assistant.navigate with its complete leaf path, then the corresponding read or registered action. "
                 "For every step name the exact tool_id, known arguments, inputs and outputs. Every step must list at least one input: "
                 "use from=user for conditions from the user's request, or the earlier step id for a prior result; never use an empty inputs list. "
                 "For a read, first navigate to its entity, then use arguments.plan with entity (never model), fields, filters, order_by and limit. "
@@ -252,8 +281,8 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
                 "Do not claim that any step was executed. If user data is necessary before planning, return needs_input with no steps. "
                 "Return valid JSON matching response_schema."
             ),
-            "registered_tools": _tool_catalogue(tools, navigation_only=True),
-            "navigation_root": navigation(user, {"path": []}),
+            "registered_tools": _tool_catalogue(tools, identifiers={"assistant.navigate", "read"}),
+            "capability_tree": capability_tree(user),
             "literal_context": _literal_context(),
             "compute": {"tool_id": "compute", "operations": sorted(_COMPUTE_OPERATIONS)},
             "business_context": conversation.context.get("business_context", {}),
@@ -391,6 +420,33 @@ def _compute(arguments, results):
     return {"operation": operation, "value": _decimal_text(value)}
 
 
+def _is_capability_leaf(path):
+    return (
+        isinstance(path, list)
+        and ((len(path) == 3 and path[0] in {"read", "action"}) or path == ["compute"])
+    )
+
+
+def _open_first_selected_capability(state, user):
+    """Open the planner-selected leaf without another LLM navigation turn."""
+    plan = state.get("plan", [])
+    if not plan or not isinstance(plan[0], dict) or plan[0].get("tool_id") != "assistant.navigate":
+        return
+    arguments = plan[0].get("arguments", {})
+    path = arguments.get("path") if isinstance(arguments, dict) else None
+    if not _is_capability_leaf(path):
+        raise TenderAIError("План выбрал неполный путь в карте возможностей.")
+    result = execute_tool("assistant.navigate", user, arguments)
+    state["results"].append({
+        "number": len(state["results"]) + 1,
+        "plan_step_id": plan[0].get("id"),
+        "tool_id": "assistant.navigate",
+        "purpose": plan[0].get("purpose", "Открыть возможность"),
+        "result": result,
+    })
+    _trace(state, "assistant.navigate", "completed", tool_input=arguments, tool_output=result)
+
+
 def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
     if not isinstance(state.get("errors"), list):
         state["errors"] = []
@@ -423,13 +479,13 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                     return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
                 if tool["requires_confirmation"]:
                     state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
-                    _trace(state, identifier, "confirmation")
+                    _trace(state, identifier, "confirmation", tool_input=arguments)
                     _save_state(conversation, state)
                     return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
                 result = execute_tool(identifier, user, arguments)
         except (AssistantToolError, TenderAIError) as exc:
             state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
-            _trace(state, identifier, "rejected", str(exc))
+            _trace(state, identifier, "rejected", tool_input=arguments, error=str(exc))
             _save_state(conversation, state)
             rejected_step = {
                 "tool_id": identifier,
@@ -440,7 +496,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         state["errors"] = []
-        _trace(state, identifier, "completed")
+        _trace(state, identifier, "completed", tool_input=arguments, tool_output=result)
         rejected_step = None
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
@@ -462,6 +518,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
         return planned
     state = _run_state(conversation, message)
     state["plan"] = steps
+    _open_first_selected_capability(state, user)
     _save_state(conversation, state)
     return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
 

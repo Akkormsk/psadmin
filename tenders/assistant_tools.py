@@ -201,6 +201,42 @@ def _visible_tools(items, user):
     return [item for item in items if not item["requires_superuser"] or user.is_superuser]
 
 
+def capability_tree(user):
+    """Return the compact, complete route map used for one LLM route choice.
+
+    Detailed field and argument contracts stay behind their leaf nodes.  The
+    tree itself is assembled from the same runtime metadata as ``navigation``;
+    it is not a second, hand-maintained catalogue.
+    """
+    graph = _navigation_index()
+    read_children = []
+    for section in graph["read"].values():
+        read_children.append({
+            "id": section["id"], "label": section["label"],
+            "children": [
+                {"id": model["id"].split(".", 1)[1], "label": model["verbose_name"]}
+                for model in section["models"].values()
+            ],
+        })
+    action_children = []
+    for section in graph["action"].values():
+        tools = _visible_tools(section["tools"], user)
+        if not tools:
+            continue
+        action_children.append({
+            "id": section["id"], "label": section["label"],
+            "children": [
+                {"id": tool["id"], "label": tool["name"], "description": tool["description"]}
+                for tool in tools
+            ],
+        })
+    return {"children": [
+        {"id": "read", "label": "Чтение и анализ данных", "children": read_children},
+        {"id": "action", "label": "Действия приложений", "children": action_children},
+        {"id": "compute", "label": "Вычисления", "operations": ["count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"]},
+    ]}
+
+
 def navigation(user, payload):
     """Return only one graph node's children; never the whole catalogue."""
     path = payload.get("path", [])
@@ -245,9 +281,15 @@ def navigation(user, payload):
                 if _visible_tools(section["tools"], user)
             ]}
         section = graph["action"].get(path[1])
-        if section is None or len(path) != 2:
+        if section is None or len(path) not in {2, 3}:
             raise AssistantToolError("Раздел действий не найден")
-        return {"path": path, "children": _visible_tools(section["tools"], user)}
+        tools = _visible_tools(section["tools"], user)
+        if len(path) == 2:
+            return {"path": path, "children": tools}
+        tool = next((item for item in tools if item["id"] == path[2]), None)
+        if tool is None:
+            raise AssistantToolError("Действие не найдено")
+        return {"path": path, "tool": tool}
     raise AssistantToolError("Узел навигации не найден")
 
 

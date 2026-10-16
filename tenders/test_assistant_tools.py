@@ -30,8 +30,15 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
     def test_navigation_exposes_a_lazy_graph_from_existing_metadata(self):
+        from .assistant_tools import capability_tree
+
         root = execute_tool("assistant.navigate", self.admin, {"path": []})
         self.assertEqual({item["id"] for item in root["children"]}, {"read", "action", "compute"})
+
+        tree = capability_tree(self.admin)
+        read_tree = next(item for item in tree["children"] if item["id"] == "read")
+        self.assertIn("tender_selection", {item["id"] for item in read_tree["children"]})
+        self.assertNotIn("core", {item["id"] for item in read_tree["children"]})
 
         read = execute_tool("assistant.navigate", self.admin, {"path": ["read"]})
         self.assertIn("tender_selection", {item["id"] for item in read["children"]})
@@ -43,6 +50,11 @@ class AssistantToolRegistryTests(TestCase):
 
         actions = execute_tool("assistant.navigate", self.admin, {"path": ["action"]})
         self.assertIn("cash", {item["id"] for item in actions["children"]})
+        action_tree = next(item for item in capability_tree(self.admin)["children"] if item["id"] == "action")
+        cash = next(item for item in action_tree["children"] if item["id"] == "cash")
+        self.assertIn("cash.transaction_update", {item["id"] for item in cash["children"]})
+        action = execute_tool("assistant.navigate", self.admin, {"path": ["action", "cash", "cash.transaction_update"]})
+        self.assertEqual(action["tool"]["id"], "cash.transaction_update")
 
     def test_action_contract_rejects_false_strings_and_wrong_array_shapes(self):
         with self.assertRaisesRegex(Exception, "true или false"):
