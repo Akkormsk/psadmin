@@ -163,3 +163,18 @@ class AssistantConversationTests(TestCase):
         continuation = json.loads(request.call_args_list[2].args[0])
         self.assertTrue(continuation["opened_capability_nodes"])
         self.assertEqual(continuation["original_task"], "Добавь расход")
+
+    @patch("tenders.assistant_conversations.reply")
+    def test_agent_error_is_saved_for_conversation_export(self, reply):
+        from .services import TenderAIError
+
+        reply.side_effect = TenderAIError("Перед чтением нужно открыть описание сущности.")
+        conversation_id = self._conversation()
+        response = self._send(conversation_id, "Покажи операции")
+
+        self.assertEqual(response.status_code, 200)
+        messages = response.json()["messages"]
+        self.assertEqual(messages[-1]["role"], "assistant")
+        self.assertIn("открыть описание", messages[-1]["text"])
+        detail = self.client.get(reverse("assistant_conversation_detail", args=[conversation_id]), secure=True).json()
+        self.assertEqual(detail["messages"][-1]["text"], messages[-1]["text"])
