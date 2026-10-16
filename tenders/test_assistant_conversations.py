@@ -235,6 +235,7 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(request.call_count, 4)
         correction_prompt = json.loads(request.call_args_list[2].args[0])
         self.assertEqual(correction_prompt["execution_errors"][0]["error"], "Запрошены недоступные поля")
+        self.assertEqual(correction_prompt["rejected_step"]["arguments"]["plan"]["fields"], ["unknown_field"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")

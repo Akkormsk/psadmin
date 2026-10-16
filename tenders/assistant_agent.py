@@ -78,7 +78,7 @@ def _finish_state(conversation):
     conversation.save(update_fields=["context"])
 
 
-def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
+def _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step=None):
     read_catalog = []
     if any(tool["id"] == "read" and tool["available"] for tool in tools):
         from .assistant_read import catalogue
@@ -96,7 +96,9 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "If the result is complete, return status final and explain it using only completed_step_results. "
                 "Include next_step only when status is next. "
                 "For a write action, propose it with its real arguments; backend will require confirmation before executing it. "
-                "If execution_errors is non-empty, correct the rejected step using its exact backend reason; do not use a failed result as input or finish successfully. "
+                "If rejected_step is present, correct that step using read_catalog and its exact backend reason. "
+                "Do not ask the user for information already in original_task merely because backend validation rejected a step. "
+                "Do not use a failed result as input or finish successfully. "
                 "Return valid JSON matching response_schema."
             ),
             "registered_tools": _tool_catalogue(tools),
@@ -117,6 +119,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "latest_user_message": message,
             "completed_step_results": state["results"],
             "execution_errors": state.get("errors", [])[-3:],
+            "rejected_step": rejected_step,
             "response_schema": {
                 "reply": "concise Russian text",
                 "status": "next|needs_input|final|cancel",
@@ -343,8 +346,9 @@ def _compute(arguments, results):
 def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
     if not isinstance(state.get("errors"), list):
         state["errors"] = []
+    rejected_step = None
     for _ in range(MAX_AGENT_STEPS):
-        decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
+        decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step)
         status = decision.get("status")
         if status == "cancel":
             _finish_state(conversation)
@@ -375,10 +379,16 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
         except (AssistantToolError, TenderAIError) as exc:
             state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
             _save_state(conversation, state)
+            rejected_step = {
+                "tool_id": identifier,
+                "arguments": arguments if identifier == "read" else {"argument_names": sorted(arguments)},
+                "error": str(exc),
+            }
             message, attachments, image_data_urls = "", [], None
             continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         state["errors"] = []
+        rejected_step = None
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
     errors = state.get("errors", [])

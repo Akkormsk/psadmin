@@ -477,6 +477,31 @@ class AssistantToolRegistryTests(TestCase):
         with self.assertRaisesRegex(Exception, "JSON-поля"):
             execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "filters": [{"field": "risk_assessment", "op": "eq", "value": {}}]}})
 
+    def test_read_contract_exposes_choices_and_normalizes_orm_values(self):
+        from .assistant_read import catalogue, validate_plan
+
+        models = {item["id"]: item for item in catalogue(compact=True)["entities"]}
+        tender = models["tender_selection.Tender"]
+        outcome = next(field for field in tender["fields"] if field["name"] == "outcome_status")
+        self.assertIn({"value": "lost", "label": "Проигран"}, outcome["choices"])
+
+        validated = validate_plan(self.admin, {"entity": "cash.CashTransaction", "filters": [
+            {"field": "operation_date", "op": "gte", "value": "2026-09-01"},
+            {"field": "amount", "op": "gt", "value": "12.50"},
+        ]})
+        self.assertEqual(validated["filters"][0]["value"], date(2026, 9, 1))
+        self.assertEqual(str(validated["filters"][1]["value"]), "12.50")
+
+    def test_read_contract_rejects_values_not_valid_for_the_discovered_field(self):
+        with self.assertRaisesRegex(Exception, "outcome_status"):
+            execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "filters": [
+                {"field": "outcome_status", "op": "eq", "value": "Проигран"},
+            ]}})
+        with self.assertRaisesRegex(Exception, "operation_date"):
+            execute_tool("read", self.admin, {"plan": {"entity": "cash.CashTransaction", "filters": [
+                {"field": "operation_date", "op": "gte", "value": "сентябрь"},
+            ]}})
+
     def test_cash_action_uses_existing_form_and_audit(self):
         from cash.models import CashAuditLog, CashTransaction
 
