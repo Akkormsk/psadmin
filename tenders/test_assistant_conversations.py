@@ -102,6 +102,8 @@ class AssistantConversationTests(TestCase):
         self.assertEqual(message["text"], "Могу объяснить общие принципы, но не буду выдавать непроверенную текущую информацию.")
         self.assertEqual(message["kind"], "text")
         self.assertEqual(request.call_count, 1)
+        self.assertEqual([event["stage"] for event in message["data"]["debug"]], ["planner.request", "planner.response"])
+        self.assertEqual(message["data"]["debug"][1]["output"]["status"], "final")
         prompt = json.loads(request.call_args.args[0])
         self.assertIn("answer naturally in Russian", prompt["task"])
 
@@ -148,6 +150,7 @@ class AssistantConversationTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("недоступную функцию", response.json()["detail"])
+        self.assertEqual([event["stage"] for event in response.json()["debug"]], ["planner.request", "planner.response"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")

@@ -182,12 +182,17 @@ def respond(conversation, user, text, context=None, attachments=None):
     if not text and attachments:
         text = "Прикреплён файл: " + ", ".join(item.name for item in attachments)
     _add_message(conversation, user, "user", text, data={"attachments": [serialize_attachment(item) for item in attachments]}, context=context)
+    debug_start = len(conversation.context.get("agent_debug", []))
     response = reply(
         conversation, user, text, context,
         attachments=[serialize_attachment(item, include_text=True) for item in attachments],
         image_data_urls=attachment_image_urls(attachments),
     )
-    _add_message(conversation, user, "assistant", response["text"], response["kind"], response["data"])
+    data = dict(response["data"])
+    journal = conversation.context.get("agent_debug", [])
+    if isinstance(journal, list) and len(journal) > debug_start:
+        data["debug"] = journal[debug_start:]
+    _add_message(conversation, user, "assistant", response["text"], response["kind"], data)
     return serialize_messages(conversation)
 
 

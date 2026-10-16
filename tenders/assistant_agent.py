@@ -23,6 +23,7 @@ from .services import TenderAIError, _ai_gateway_json
 
 logger = logging.getLogger(__name__)
 MAX_AGENT_STEPS = 8
+MAX_DEBUG_EVENTS = 40
 _COMPUTE_OPERATIONS = {"count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"}
 _REFERENCE_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*(?:\[\]|\[\d+\])?)*$")
 
@@ -113,7 +114,24 @@ def _trace_value(value, depth=0):
     return value
 
 
-def _trace(state, tool_id, status, *, tool_input=None, tool_output=None, error=""):
+def _debug_event(conversation, stage, *, event_input=None, event_output=None, error=""):
+    """Persist the observable agent protocol, never hidden model reasoning."""
+    journal = conversation.context.get("agent_debug", [])
+    if not isinstance(journal, list):
+        journal = []
+    event = {"stage": stage}
+    if event_input is not None:
+        event["input"] = _trace_value(event_input)
+    if event_output is not None:
+        event["output"] = _trace_value(event_output)
+    if error:
+        event["error"] = error
+    journal.append(event)
+    conversation.context["agent_debug"] = journal[-MAX_DEBUG_EVENTS:]
+    conversation.save(update_fields=["context"])
+
+
+def _trace(state, tool_id, status, *, conversation=None, tool_input=None, tool_output=None, error=""):
     entry = {"step": len(state["trace"]) + 1, "tool_id": tool_id, "status": status}
     if tool_input is not None:
         entry["input"] = _trace_value(tool_input)
@@ -122,6 +140,12 @@ def _trace(state, tool_id, status, *, tool_input=None, tool_output=None, error="
     if error:
         entry["error"] = error
     state["trace"].append(entry)
+    if conversation is not None:
+        _debug_event(
+            conversation, f"backend.{tool_id}",
+            event_input={"status": status, "arguments": tool_input},
+            event_output=tool_output, error=error,
+        )
     logger.info("assistant trace step=%s tool=%s status=%s%s", entry["step"], tool_id, status, f" error={error}" if error else "")
 
 
@@ -199,7 +223,9 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
         ensure_ascii=False,
     )
     preflight()
+    _debug_event(conversation, "decision.request", event_input=json.loads(prompt))
     result = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
+    _debug_event(conversation, "decision.response", event_output=result)
     if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
         raise TenderAIError("Ассистент вернул неполный ответ. Попробуйте ещё раз.")
     return result
@@ -307,7 +333,9 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
         ensure_ascii=False,
     )
     preflight()
+    _debug_event(conversation, "planner.request", event_input=json.loads(prompt))
     plan = _request(prompt, **({"image_data_urls": image_data_urls} if image_data_urls else {}))
+    _debug_event(conversation, "planner.response", event_output=plan)
     steps = _validate_plan_steps(plan, tools)
     if plan["status"] == "needs_input":
         return {"text": plan["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
@@ -427,7 +455,7 @@ def _is_capability_leaf(path):
     )
 
 
-def _open_first_selected_capability(state, user):
+def _open_first_selected_capability(conversation, state, user):
     """Open the planner-selected leaf without another LLM navigation turn."""
     plan = state.get("plan", [])
     if not plan or not isinstance(plan[0], dict) or plan[0].get("tool_id") != "assistant.navigate":
@@ -444,7 +472,7 @@ def _open_first_selected_capability(state, user):
         "purpose": plan[0].get("purpose", "Открыть возможность"),
         "result": result,
     })
-    _trace(state, "assistant.navigate", "completed", tool_input=arguments, tool_output=result)
+    _trace(state, "assistant.navigate", "completed", conversation=conversation, tool_input=arguments, tool_output=result)
 
 
 def _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls):
@@ -479,13 +507,13 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                     return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
                 if tool["requires_confirmation"]:
                     state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "purpose": purpose}
-                    _trace(state, identifier, "confirmation", tool_input=arguments)
+                    _trace(state, identifier, "confirmation", conversation=conversation, tool_input=arguments)
                     _save_state(conversation, state)
                     return {"text": decision["reply"].strip(), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
                 result = execute_tool(identifier, user, arguments)
         except (AssistantToolError, TenderAIError) as exc:
             state["errors"].append({"tool_id": identifier, "purpose": purpose, "error": str(exc)})
-            _trace(state, identifier, "rejected", tool_input=arguments, error=str(exc))
+            _trace(state, identifier, "rejected", conversation=conversation, tool_input=arguments, error=str(exc))
             _save_state(conversation, state)
             rejected_step = {
                 "tool_id": identifier,
@@ -496,7 +524,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         state["errors"] = []
-        _trace(state, identifier, "completed", tool_input=arguments, tool_output=result)
+        _trace(state, identifier, "completed", conversation=conversation, tool_input=arguments, tool_output=result)
         rejected_step = None
         _save_state(conversation, state)
         message, attachments, image_data_urls = "", [], None
@@ -518,7 +546,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
         return planned
     state = _run_state(conversation, message)
     state["plan"] = steps
-    _open_first_selected_capability(state, user)
+    _open_first_selected_capability(conversation, state, user)
     _save_state(conversation, state)
     return _execute_loop(conversation, user, message, state, tools, page_context, attachments, image_data_urls)
 

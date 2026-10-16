@@ -73,7 +73,8 @@ def conversation_message(request, conversation_id):
     try:
         messages = respond(conversation, request.user, message, context, attachments)
     except TenderAIError as exc:
-        return JsonResponse({"detail": str(exc)}, status=400)
+        journal = conversation.context.get("agent_debug", [])
+        return JsonResponse({"detail": str(exc), "debug": journal[-40:] if isinstance(journal, list) else []}, status=400)
     return JsonResponse({"messages": messages})
 
 
