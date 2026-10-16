@@ -180,14 +180,12 @@ def _validate_plan_steps(plan, tools):
     if not isinstance(plan, dict) or not isinstance(plan.get("reply"), str):
         raise TenderAIError("Ассистент не сформировал корректный план.")
     status = plan.get("status")
-    if status not in {"ready", "needs_input", "cancel"}:
+    if status not in {"ready", "needs_input", "final", "cancel"}:
         raise TenderAIError("Ассистент не указал состояние плана.")
     steps = plan.get("steps", [])
-    if status == "needs_input":
+    if status in {"needs_input", "final", "cancel"}:
         if steps not in (None, []):
-            raise TenderAIError("План с уточняющим вопросом не должен содержать шаги.")
-        return []
-    if status == "cancel":
+            raise TenderAIError("Завершённый план или план с уточняющим вопросом не должен содержать шаги.")
         return []
     if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_AGENT_STEPS:
         raise TenderAIError("План должен содержать от одного до восьми шагов.")
@@ -238,9 +236,11 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
     prompt = json.dumps(
         {
             "task": (
-                "You are PSADMIN's Russian-speaking agent. Before controlled execution, design a complete route to a verified final result. "
-                "Use only registered actions, read, compute, and assistant.navigate. Do not invent functions, records, or results. "
-                "The first step must open the capability graph with assistant.navigate and arguments {path: []}. "
+                "You are PSADMIN's Russian-speaking agent. First decide whether the user's request needs current PSADMIN data, "
+                "a PSADMIN action, or a verified calculation. If it does not, answer naturally in Russian with status final and an empty steps list; "
+                "do not use tools or the capability graph. Do not invent current external facts: state their absence honestly. "
+                "If it does, design a complete route to a verified final result. Use only registered actions, read, compute, and assistant.navigate. "
+                "Do not invent functions, records, or results. The first tool step must open the capability graph with assistant.navigate and arguments {path: []}. "
                 "The graph is explored only through returned children; do not name a model, field or action before its node was returned. "
                 "For every step name the exact tool_id, known arguments, inputs and outputs. Every step must list at least one input: "
                 "use from=user for conditions from the user's request, or the earlier step id for a prior result; never use an empty inputs list. "
@@ -263,7 +263,8 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
             "user_message": message,
             "response_schema": {
                 "reply": "concise Russian text",
-                "status": "ready|needs_input|cancel",
+                "status": "ready|needs_input|final|cancel",
+                "rule": "ready requires one to eight tool steps; needs_input, final and cancel require an empty steps list",
                 "steps": [{
                     "id": "unique step id",
                     "tool_id": "registered id, read, or compute",
@@ -282,8 +283,9 @@ def _plan_task(conversation, user, message, tools, page_context, attachments, im
     if plan["status"] == "needs_input":
         return {"text": plan["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
     _finish_state(conversation)
-    if plan["status"] == "cancel":
-        return {"text": plan["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+    if plan["status"] in {"final", "cancel"}:
+        fallback = "Задача отменена." if plan["status"] == "cancel" else "Готово."
+        return {"text": plan["reply"].strip() or fallback, "kind": "text", "data": {}}
     return {"text": _format_plan(plan["reply"], steps), "kind": "text", "data": {"plan": steps}}
 
 

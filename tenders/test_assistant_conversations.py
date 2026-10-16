@@ -87,6 +87,26 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_normal_conversation_finishes_with_a_zero_step_plan(self, request, _preflight):
+        request.return_value = self._plan(
+            [], reply="Могу объяснить общие принципы, но не буду выдавать непроверенную текущую информацию.", status="final",
+        )
+
+        response = self.client.post(
+            reverse("assistant_conversation_message", args=[self._conversation()]),
+            data=json.dumps({"message": "Расскажи в общих чертах о погоде"}), content_type="application/json", secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        message = response.json()["messages"][-1]
+        self.assertEqual(message["text"], "Могу объяснить общие принципы, но не буду выдавать непроверенную текущую информацию.")
+        self.assertEqual(message["kind"], "text")
+        self.assertEqual(request.call_count, 1)
+        prompt = json.loads(request.call_args.args[0])
+        self.assertIn("answer naturally in Russian", prompt["task"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_agent_navigates_the_graph_before_a_read(self, request, _preflight):
         request.side_effect = [
             self._plan([{
