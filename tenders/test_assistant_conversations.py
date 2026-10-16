@@ -54,6 +54,61 @@ class AssistantConversationTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
+    def test_empty_read_is_a_verified_result(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
+            {"reply": "Проверяю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-created_at", "limit": 1}}}},
+            {"reply": "Операций пока нет.", "status": "final", "basis": "verified_steps"},
+        ]
+        response = self._send(self._conversation(), "Покажи последнюю операцию по кассе")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["total_count"], 0)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_agent_may_explore_intermediate_nodes(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Открываю чтение.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть раздел чтения", "arguments": {"path": ["read"]}}},
+            {"reply": "Открываю кассу.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть приложение кассы", "arguments": {"path": ["read", "cash"]}}},
+            {"reply": "Открыл доступные модели кассы.", "status": "final", "basis": "unavailable"},
+        ]
+        response = self._send(self._conversation(), "Какие данные кассы доступны?")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([step["tool_id"] for step in response.json()["messages"][-1]["data"]["steps"]], ["assistant.navigate", "assistant.navigate"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_rejected_unknown_field_is_corrected_from_opened_contract(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
+            {"reply": "Пробую чтение.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["unknown_field"], "filters": [], "order_by": "-id", "limit": 1}}}},
+            {"reply": "Исправляю поля.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 1}}}},
+            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+        ]
+        response = self._send(self._conversation(), "Покажи операции кассы")
+        self.assertEqual(response.status_code, 200)
+        repair = json.loads(request.call_args_list[2].args[0])
+        self.assertEqual(repair["rejected_step"]["error"], "Запрошены недоступные поля")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_compute_uses_only_verified_read_result(self, request, _preflight):
+        from cash.models import CashTransaction
+
+        CashTransaction.objects.create(created_by=self.user, operation_date=date(2026, 10, 1), account="cash", direction="income", amount="10", reason="A")
+        CashTransaction.objects.create(created_by=self.user, operation_date=date(2026, 10, 2), account="cash", direction="income", amount="20", reason="B")
+        request.side_effect = [
+            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
+            {"reply": "Читаю суммы.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать суммы", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 20}}}},
+            {"reply": "Считаю сумму.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "compute", "purpose": "Сложить суммы", "arguments": {"operation": "sum", "inputs": [{"step": 2, "path": "records[].amount"}]}}},
+            {"reply": "Итого 30.", "status": "final", "basis": "verified_steps"},
+        ]
+        response = self._send(self._conversation(), "Посчитай сумму операций кассы")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["value"], "30")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
     def test_rejects_read_before_contract_and_allows_generic_repair(self, request, _preflight):
         request.side_effect = [
             {"reply": "Читаю операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"]}}}},
