@@ -186,7 +186,7 @@ class AssistantConversationTests(TestCase):
         ]
         response = self._send(self._conversation(), "Покажи операции кассы")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Недопустимые параметры READ-плана: model", response.json()["messages"][-1]["text"])
+        self.assertIn("Не удалось выполнить запрос", response.json()["messages"][-1]["text"])
         self.assertEqual(request.call_count, 4)
 
     @patch("tenders.assistant_agent.preflight")
@@ -317,6 +317,94 @@ class AssistantConversationTests(TestCase):
         continuation = json.loads(request.call_args_list[2].args[0])
         self.assertTrue(continuation["opened_capability_nodes"])
         self.assertEqual(continuation["original_task"], "Добавь расход")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_semantic_clarification_keeps_the_original_task(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "За какой период показать данные?", "status": "clarify", "basis": "unavailable"},
+            {"reply": "Понял, продолжу с указанным периодом.", "status": "final", "basis": "user_supplied"},
+        ]
+        conversation_id = self._conversation()
+
+        first = self._send(conversation_id, "Покажи тендеры")
+        second = self._send(conversation_id, "За сентябрь")
+
+        self.assertTrue(first.json()["messages"][-1]["data"]["task_pending"])
+        self.assertEqual(second.status_code, 200)
+        continuation = json.loads(request.call_args_list[1].args[0])
+        self.assertEqual(continuation["original_task"], "Покажи тендеры")
+        self.assertEqual(continuation["conversation_state"]["kind"], "clarification")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_new_task_after_clarification_starts_with_clean_state(self, request, _preflight):
+        request.side_effect = [
+            {"reply": "Какой период вас интересует?", "status": "clarify", "basis": "unavailable"},
+            {"reply": "Это новая задача.", "status": "final", "basis": "user_supplied", "task_mode": "new"},
+            {"reply": "Привет!", "status": "final", "basis": "user_supplied"},
+        ]
+        conversation_id = self._conversation()
+        self._send(conversation_id, "Покажи тендеры")
+
+        response = self._send(conversation_id, "Привет")
+
+        self.assertEqual(response.json()["messages"][-1]["text"], "Привет!")
+        clean_prompt = json.loads(request.call_args_list[2].args[0])
+        self.assertEqual(clean_prompt["original_task"], "Привет")
+        self.assertEqual(clean_prompt["completed_step_results"], [])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_repeated_ungrounded_needs_input_stops_without_raw_limit_error(self, request, _preflight):
+        invalid = {"reply": "Уточните поле.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["поле"], "missing_for": "unknown"}
+        request.side_effect = [invalid, invalid, invalid]
+
+        response = self._send(self._conversation(), "Покажи данные")
+
+        text = response.json()["messages"][-1]["text"]
+        self.assertIn("Не удалось выполнить запрос", text)
+        self.assertNotIn("безопасный предел", text)
+        self.assertEqual(request.call_count, 3)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_new_task_after_failed_attempt_has_no_stale_state(self, request, _preflight):
+        invalid = {"reply": "Уточните поле.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["поле"], "missing_for": "unknown"}
+        request.side_effect = [invalid, invalid, invalid, {"reply": "Привет!", "status": "final", "basis": "user_supplied"}]
+        conversation_id = self._conversation()
+
+        self._send(conversation_id, "Покажи данные")
+        response = self._send(conversation_id, "Привет")
+
+        self.assertEqual(response.json()["messages"][-1]["text"], "Привет!")
+        prompt = json.loads(request.call_args_list[3].args[0])
+        self.assertEqual(prompt["original_task"], "Привет")
+        self.assertEqual(prompt["completed_step_results"], [])
+
+    def test_compute_empty_average_has_a_business_explanation(self):
+        from .assistant_agent import _compute
+        from .services import TenderAIError
+
+        with self.assertRaisesRegex(TenderAIError, "нужны числовые данные"):
+            _compute(
+                {"operation": "avg", "inputs": [{"step": 1, "path": "records[].amount"}]},
+                [{"result": {"records": []}}],
+            )
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_historical_ambiguity_can_use_a_semantic_clarification(self, request, _preflight):
+        request.return_value = {
+            "reply": "Вас интересуют тендеры, которые находятся во входящих сейчас, или история поступления за неделю?",
+            "status": "clarify",
+            "basis": "unavailable",
+        }
+
+        response = self._send(self._conversation(), "Сколько тендеров было во входящих на этой неделе?")
+
+        self.assertTrue(response.json()["messages"][-1]["data"]["task_pending"])
+        self.assertIn("сейчас", response.json()["messages"][-1]["text"])
 
     @patch("tenders.assistant_conversations.reply")
     def test_agent_error_is_saved_for_conversation_export(self, reply):

@@ -110,6 +110,10 @@ def _run_state(conversation, message):
     state = conversation.context.get("agent_run")
     if not isinstance(state, dict) or not isinstance(state.get("task"), str):
         state = {"task": message, "results": []}
+    elif not state.get("awaiting_user"):
+        # A finished attempt must never leak its filters, failures, or results
+        # into the next independent user request.
+        state = {"task": message, "results": []}
     state.setdefault("results", [])
     if not isinstance(state["results"], list):
         state["results"] = []
@@ -123,6 +127,10 @@ def _run_state(conversation, message):
     if not isinstance(state["rejected_calls"], list):
         state["rejected_calls"] = []
     return state
+
+
+def _new_run_state(message):
+    return {"task": message, "results": [], "errors": [], "trace": [], "rejected_calls": []}
 
 
 def _save_state(conversation, state):
@@ -218,8 +226,12 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
                 "Never guess database field names, entity identifiers, action arguments or allowed values. Use only metadata "
                 "returned by assistant.navigate. Treat an entity description and its business views as facts about data origin "
                 "and pre-applied rules: never add a filter merely to restate them or invent a value for a field without choices. "
+                "Do not treat a current business view as historical unless its metadata explicitly says that it contains history; ask when the user's time wording is materially ambiguous. "
                 "Do not ask for optional filters when the request is already executable. "
-                "Ask only for a genuinely required parameter or an ambiguity of an opened read contract that cannot be obtained from the request, conversation, or available tools. "
+                "Ask one concise Russian clarification when a required business fact, scope, or interpretation is genuinely ambiguous and cannot be obtained from the request, conversation, or available tools. "
+                "Use status clarify for that semantic question; it does not require an opened ACTION. Use needs_input only for a required parameter of an already opened ACTION. "
+                "When conversation_state says a clarification is pending, decide whether latest_user_message answers it or starts a new independent task. "
+                "Set task_mode to new only for the independent task; otherwise set it to continue. "
                 "Never ask for storage formats, timezones, numeric notation, or bounds of a named calendar period; normalize them "
                 "using literal_context and the returned contract. Use read for application data, existing registered actions for "
                 "changes, and compute only for listed arithmetic over completed_step_results. A tool call is not a completed task. "
@@ -244,6 +256,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "attachments": attachments or [],
             "history": _history(conversation),
             "original_task": state["task"],
+            "conversation_state": state.get("awaiting_user"),
             "opened_capability_nodes": _opened_contracts(state),
             "latest_user_message": message,
             "completed_step_results": state["results"],
@@ -251,7 +264,8 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
             "rejected_step": rejected_step,
             "response_schema": {
                 "reply": "concise Russian text",
-                "status": "next|needs_input|final|cancel",
+                "status": "next|clarify|needs_input|final|cancel",
+                "task_mode": "continue|new; required only while conversation_state is present",
                 "basis": "verified_steps|user_supplied|unavailable",
                 "next_step": {"tool_id": "registered id or compute", "purpose": "why this next step is needed", "arguments": "object"},
                 "missing_inputs": ["required human-readable parameter, only for needs_input"],
@@ -271,7 +285,7 @@ def _decision(conversation, user, message, state, tools, page_context, attachmen
 
 def _next_step(decision, tools):
     status = decision.get("status", "")
-    if status not in {"next", "needs_input", "final", "cancel"}:
+    if status not in {"next", "clarify", "needs_input", "final", "cancel"}:
         raise TenderAIError("Ассистент вернул некорректный статус шага.")
     step = decision.get("next_step")
     if status == "next":
@@ -438,6 +452,8 @@ def _compute(arguments, results):
         flattened.extend(value if isinstance(value, list) else [value])
     if operation == "count":
         return {"operation": operation, "value": len(flattened)}
+    if not flattened:
+        raise TenderAIError("Для среднего, минимума или максимума нужны числовые данные.")
     numbers = _numbers(flattened)
     if operation == "sum":
         value = sum(numbers)
@@ -474,16 +490,48 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
     for _ in range(MAX_AGENT_DECISIONS):
         identifier = arguments = signature = None
         decision = _decision(conversation, user, message, state, tools, page_context, attachments, image_data_urls, rejected_step)
+        if state.get("awaiting_user") and decision.get("task_mode") == "new":
+            state = _new_run_state(message)
+            _save_state(conversation, state)
+            rejected_step = None
+            continue
+        awaiting_user = state.get("awaiting_user")
+        if awaiting_user:
+            state.pop("awaiting_user", None)
         status = decision.get("status")
         if status == "cancel":
             _finish_state(conversation)
             return {"text": decision["reply"].strip() or "Задача отменена.", "kind": "text", "data": {}}
+        if status == "clarify":
+            try:
+                _next_step(decision, tools)
+            except TenderAIError as exc:
+                rejected_step = {"tool_id": "clarify", "error": str(exc)}
+                state["errors"].append(rejected_step)
+                _trace(state, "clarify", "rejected", conversation=conversation, error=str(exc))
+                continue
+            question = decision["reply"].strip()
+            if not question:
+                rejected_step = {"tool_id": "clarify", "error": "Уточняющий вопрос не указан."}
+                state["errors"].append(rejected_step)
+                continue
+            if isinstance(awaiting_user, dict) and awaiting_user.get("question") == question:
+                _finish_state(conversation)
+                return {"text": "Не удалось уточнить задачу. Сформулируйте, пожалуйста, запрос заново.", "kind": "text", "data": {}}
+            state["awaiting_user"] = {"kind": "clarification", "question": question}
+            _save_state(conversation, state)
+            return {"text": question, "kind": "text", "data": {"task_pending": True}}
         if status == "needs_input":
             if not _needs_input_is_grounded(decision, state):
                 rejected_step = {"tool_id": "needs_input", "error": "Уточнение допустимо только для обязательного параметра открытого ACTION; READ нужно выполнить по доступному контракту без необязательных фильтров."}
                 state["errors"].append(rejected_step)
                 _trace(state, "needs_input", "rejected", conversation=conversation, error=rejected_step["error"])
+                repairs += 1
+                if repairs > MAX_REPAIR_ATTEMPTS:
+                    _finish_state(conversation)
+                    return {"text": "Не удалось выполнить запрос по доступным данным. Уточните, пожалуйста, что именно нужно получить.", "kind": "text", "data": {}}
                 continue
+            state["awaiting_user"] = {"kind": "action_input", "missing": decision.get("missing_inputs", [])}
             _save_state(conversation, state)
             return {"text": decision["reply"].strip() or "Уточните недостающие данные.", "kind": "text", "data": {"task_pending": True}}
         if status == "final":
@@ -511,7 +559,8 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             state["errors"].append(rejected_step)
             _trace(state, rejected_step["tool_id"], "rejected", conversation=conversation, tool_input=rejected_step["arguments"], error=str(exc))
             if repairs > MAX_REPAIR_ATTEMPTS:
-                raise
+                _finish_state(conversation)
+                return {"text": "Не удалось выполнить запрос по доступным данным. Уточните, пожалуйста, что именно нужно получить.", "kind": "text", "data": {}}
             continue
         try:
             if identifier == "compute":
@@ -526,6 +575,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                 tool = next(item for item in tools if item["id"] == identifier)
                 missing = [name for name in required_input_names(identifier) if arguments.get(name) in (None, "", [])]
                 if missing:
+                    state["awaiting_user"] = {"kind": "action_input", "missing": missing}
                     _save_state(conversation, state)
                     return {"text": decision["reply"].strip() or "Уточните: " + ", ".join(missing), "kind": "text", "data": {"task_pending": True, "missing": missing}}
                 if tool["requires_confirmation"]:
@@ -547,7 +597,8 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             message, attachments, image_data_urls = "", [], None
             repairs += 1
             if repairs > MAX_REPAIR_ATTEMPTS:
-                raise TenderAIError(str(exc)) from exc
+                _finish_state(conversation)
+                return {"text": "Не удалось выполнить запрос по доступным данным. Уточните, пожалуйста, что именно нужно получить.", "kind": "text", "data": {}}
             continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         state["errors"] = []
@@ -559,7 +610,8 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
         if tool_calls >= MAX_TOOL_CALLS:
             break
         message, attachments, image_data_urls = "", [], None
-    raise TenderAIError("Превышен безопасный предел обработки за один запуск. Продолжите задачу следующим сообщением.")
+    _finish_state(conversation)
+    return {"text": "Не удалось завершить запрос за разумное число шагов. Сформулируйте его, пожалуйста, короче или уточните нужный результат.", "kind": "text", "data": {}}
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
