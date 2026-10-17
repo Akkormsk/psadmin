@@ -30,34 +30,13 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(catalog(self.admin)["workflows"], workflows)
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
-    def test_navigation_exposes_a_lazy_graph_from_existing_metadata(self):
-        from .assistant_tools import capability_tree
-
-        root = execute_tool("assistant.navigate", self.admin, {"path": []})
-        self.assertEqual({item["id"] for item in root["children"]}, {"read", "action", "compute"})
-
-        tree = capability_tree(self.admin)
-        read_tree = next(item for item in tree["children"] if item["id"] == "read")
-        self.assertIn("tender_selection", {item["id"] for item in read_tree["children"]})
-        self.assertNotIn("core", {item["id"] for item in read_tree["children"]})
-
-        read = execute_tool("assistant.navigate", self.admin, {"path": ["read"]})
-        self.assertIn("tender_selection", {item["id"] for item in read["children"]})
-        models = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection"]})
-        self.assertIn("Tender", {item["id"] for item in models["children"]})
-        tender = execute_tool("assistant.navigate", self.admin, {"path": ["read", "tender_selection", "Tender"]})
-        self.assertEqual(tender["entity"], "tender_selection.Tender")
-        self.assertIn("incoming", {item["id"] for item in tender["views"]})
-        reduction = next(item for item in tender["children"] if item["id"] == "contract_reduction_percent")
-        self.assertEqual(reduction["label"], "Фактическое снижение, %")
-
-        actions = execute_tool("assistant.navigate", self.admin, {"path": ["action"]})
-        self.assertIn("cash", {item["id"] for item in actions["children"]})
-        action_tree = next(item for item in capability_tree(self.admin)["children"] if item["id"] == "action")
-        cash = next(item for item in action_tree["children"] if item["id"] == "cash")
-        self.assertIn("cash.transaction_update", {item["id"] for item in cash["children"]})
-        action = execute_tool("assistant.navigate", self.admin, {"path": ["action", "cash", "cash.transaction_update"]})
-        self.assertEqual(action["tool"]["id"], "cash.transaction_update")
+    def test_openai_definitions_are_generated_from_the_registry(self):
+        from .assistant_tools import openai_functions
+        definitions, names = openai_functions(self.admin)
+        self.assertEqual(len(names), len(definitions))
+        self.assertNotIn("assistant.navigate", names.values())
+        self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
+        self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan

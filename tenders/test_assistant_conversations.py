@@ -1,439 +1,50 @@
 import json
-from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.urls import reverse
-from django.utils import timezone
+
+from .assistant_conversations import create_conversation
 
 
-class AssistantConversationTests(TestCase):
+class AssistantFunctionCallingTests(TestCase):
     def setUp(self):
-        self.user = get_user_model().objects.create_superuser("assistant-owner", "owner@example.test", "password")
-        self.client.force_login(self.user)
-
-    def _conversation(self):
-        return self.client.post(reverse("assistant_conversation_new"), {"title": "Тест"}, secure=True).json()["conversation"]["id"]
-
-    def _send(self, conversation_id, message):
-        return self.client.post(reverse("assistant_conversation_message", args=[conversation_id]), data=json.dumps({"message": message}), content_type="application/json", secure=True)
+        self.user = get_user_model().objects.create_superuser("agent", "agent@example.test", "password")
+        self.conversation = create_conversation(self.user)
 
     @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_ordinary_conversation_uses_no_business_tool(self, request, _preflight):
-        request.return_value = {"reply": "Привет! Чем могу помочь?", "status": "final", "basis": "user_supplied"}
-        conversation_id = self._conversation()
-        response = self._send(conversation_id, "Привет")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["messages"][-1]["text"], "Привет! Чем могу помочь?")
-        self.assertNotIn("debug", response.json()["messages"][-1]["data"])
-        prompt = json.loads(request.call_args.args[0])
-        self.assertNotIn("execution_plan", prompt)
-        detail = self.client.get(reverse("assistant_conversation_detail", args=[conversation_id]), secure=True).json()
-        self.assertEqual([event["stage"] for event in detail["debug_journal"]], ["decision.request", "decision.response"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_debug_journal_expires_after_one_day_without_entering_chat_messages(self, request, _preflight):
-        from .assistant_conversations import ASSISTANT_DEBUG_SCOPE
-        from .models import OwnerFeedbackEvent
-
-        request.return_value = {"reply": "Привет!", "status": "final", "basis": "user_supplied"}
-        conversation_id = self._conversation()
-        event = OwnerFeedbackEvent.objects.create(
-            interaction_id=conversation_id, raw_text="", payload={"stage": "old"}, scope=ASSISTANT_DEBUG_SCOPE,
-        )
-        OwnerFeedbackEvent.objects.filter(pk=event.pk).update(created_at=timezone.now() - timedelta(days=1, seconds=1))
-
-        response = self._send(conversation_id, "Привет")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn("debug", response.json()["messages"][-1]["data"])
-        self.assertFalse(OwnerFeedbackEvent.objects.filter(pk=event.pk).exists())
-        detail = self.client.get(reverse("assistant_conversation_detail", args=[conversation_id]), secure=True).json()
-        self.assertEqual([event["stage"] for event in detail["debug_journal"]], ["decision.request", "decision.response"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_reads_last_cash_transaction_after_opening_contract(self, request, _preflight):
-        from cash.models import CashTransaction
-
-        CashTransaction.objects.create(created_by=self.user, operation_date=date(2026, 10, 1), account="cash", direction="income", amount="100", reason="Первая")
-        latest = CashTransaction.objects.create(created_by=self.user, operation_date=date(2026, 10, 2), account="card", direction="expense", amount="250", reason="Последняя")
-        request.side_effect = [
-            {"reply": "Открываю описание операций кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Получить поля операции кассы", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Читаю последнюю операцию.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Получить последнюю операцию", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["operation_date", "account", "direction", "amount", "reason"], "filters": [], "order_by": "-created_at", "limit": 1}}}},
-            {"reply": "Последняя операция: расход 250 — Последняя.", "status": "final", "basis": "verified_steps"},
+    @patch("tenders.assistant_agent._gateway")
+    def test_read_result_returns_through_matching_tool_call(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read", "arguments": json.dumps({"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "limit": 1}})}}]},
+            {"role": "assistant", "content": "Последняя операция найдена."},
         ]
-
-        response = self._send(self._conversation(), "Покажи последнюю операцию по кассе")
-
-        self.assertEqual(response.status_code, 200)
-        message = response.json()["messages"][-1]
-        self.assertIn("Последняя операция", message["text"])
-        self.assertEqual([step["tool_id"] for step in message["data"]["steps"]], ["assistant.navigate", "read"])
-        self.assertEqual(message["data"]["steps"][-1]["result"]["records"][0]["id"], latest.pk)
-        prompt = json.loads(request.call_args_list[1].args[0])
-        self.assertIn("cash.CashTransaction", {node.get("entity") for node in prompt["opened_capability_nodes"]})
-        read = next(tool for tool in prompt["registered_tools"] if tool["id"] == "read")
-        self.assertTrue(read["input_schema"]["plan"]["properties"]["entity"]["required"])
+        with patch("tenders.assistant_agent.execute_tool", return_value={"rows": [{"id": 1, "amount": "10"}]}) as execute:
+            from .assistant_agent import reply
+            response = reply(self.conversation, self.user, "Покажи последнюю операцию")
+        self.assertEqual(response["text"], "Последняя операция найдена.")
+        self.assertEqual(execute.call_args.args[0], "read")
+        messages = gateway.call_args_list[1].args[0]
+        self.assertEqual(messages[-2]["role"], "tool")
+        self.assertEqual(messages[-2]["tool_call_id"], "call_read")
 
     @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_reads_bank_payment_without_inventing_a_direction_filter(self, request, _preflight):
-        from cash.models import BankPayment
-
-        payment = BankPayment.objects.create(external_id="incoming-payment", amount="100", operation_date=date(2026, 10, 16), direction="Debet")
-        request.side_effect = [
-            {"reply": "Открываю платежи банка.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть платежи", "arguments": {"path": ["read", "cash", "BankPayment"]}}},
-            {"reply": "Читаю последний платёж.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Получить последний платёж", "arguments": {"plan": {"entity": "cash.BankPayment", "fields": ["amount", "operation_date"], "order_by": "-operation_date", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
+    @patch("tenders.assistant_agent._gateway")
+    def test_invalid_arguments_are_returned_to_model_as_tool_error(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "read", "arguments": "[]"}}]},
+            {"role": "assistant", "content": "Уточните, пожалуйста, нужный показатель."},
         ]
-
-        response = self._send(self._conversation(), "Покажи последнее поступление по банку")
-
-        self.assertEqual(response.status_code, 200)
-        result = response.json()["messages"][-1]["data"]["steps"][-1]["result"]
-        self.assertEqual(result["records"][0]["id"], payment.pk)
-        self.assertEqual(result["query"]["filters"], [])
-        prompt = json.loads(request.call_args_list[1].args[0])
-        node = next(node for node in prompt["opened_capability_nodes"] if node.get("entity") == "cash.BankPayment")
-        self.assertIn("входящ", node["description"].lower())
+        from .assistant_agent import reply
+        response = reply(self.conversation, self.user, "Покажи данные")
+        self.assertIn("Уточните", response["text"])
+        self.assertIn('"ok": false', gateway.call_args_list[1].args[0][-2]["content"])
 
     @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_empty_read_keeps_its_applied_filters_for_a_broader_retry(self, request, _preflight):
-        from cash.models import BankPayment
-
-        payment = BankPayment.objects.create(external_id="broader-payment", amount="100", operation_date=date(2026, 10, 16), direction="Debet")
-        request.side_effect = [
-            {"reply": "Открываю платежи банка.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть платежи", "arguments": {"path": ["read", "cash", "BankPayment"]}}},
-            {"reply": "Проверяю предположение.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Проверить направление", "arguments": {"plan": {"entity": "cash.BankPayment", "fields": ["amount"], "filters": [{"field": "direction", "op": "eq", "value": "in"}], "limit": 1}}}},
-            {"reply": "Проверяю без добавленного фильтра.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Получить последний платёж", "arguments": {"plan": {"entity": "cash.BankPayment", "fields": ["amount"], "filters": [], "order_by": "-operation_date", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
-        ]
-
-        response = self._send(self._conversation(), "Покажи последнее поступление по банку")
-
-        self.assertEqual(response.status_code, 200)
-        retry_prompt = json.loads(request.call_args_list[2].args[0])
-        first_read = retry_prompt["completed_step_results"][-1]["result"]
-        self.assertEqual(first_read["total_count"], 0)
-        self.assertEqual(first_read["query"]["filters"], [{"field": "direction", "op": "eq", "value": "in"}])
-        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["records"][0]["id"], payment.pk)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_empty_read_is_a_verified_result(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Проверяю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-created_at", "limit": 1}}}},
-            {"reply": "Операций пока нет.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Покажи последнюю операцию по кассе")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["total_count"], 0)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_agent_may_explore_intermediate_nodes(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю чтение.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть раздел чтения", "arguments": {"path": ["read"]}}},
-            {"reply": "Открываю кассу.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть приложение кассы", "arguments": {"path": ["read", "cash"]}}},
-            {"reply": "Открыл доступные модели кассы.", "status": "final", "basis": "unavailable"},
-        ]
-        response = self._send(self._conversation(), "Какие данные кассы доступны?")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual([step["tool_id"] for step in response.json()["messages"][-1]["data"]["steps"]], ["assistant.navigate", "assistant.navigate"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_rejected_unknown_field_is_corrected_from_opened_contract(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Пробую чтение.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["unknown_field"], "filters": [], "order_by": "-id", "limit": 1}}}},
-            {"reply": "Исправляю поля.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Покажи операции кассы")
-        self.assertEqual(response.status_code, 200)
-        repair = json.loads(request.call_args_list[2].args[0])
-        self.assertEqual(repair["rejected_step"]["error"], "Запрошены недоступные поля")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_missing_read_entity_is_explained_then_corrected(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Читаю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"model": "cash.CashTransaction", "fields": ["amount"]}}}},
-            {"reply": "Исправляю контракт.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Покажи операции кассы")
-        self.assertEqual(response.status_code, 200)
-        repair = json.loads(request.call_args_list[2].args[0])
-        self.assertEqual(repair["rejected_step"]["error"], "Недопустимые параметры READ-плана: model")
-        self.assertIn("entity", repair["registered_tools"][1]["input_schema"]["plan"]["properties"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_identical_rejected_read_is_not_repeated(self, request, _preflight):
-        invalid = {"reply": "Читаю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"model": "cash.CashTransaction", "fields": ["amount"]}}}}
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            invalid, invalid, invalid,
-        ]
-        response = self._send(self._conversation(), "Покажи операции кассы")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Не удалось прочитать данные", response.json()["messages"][-1]["text"])
-        self.assertNotIn("model", response.json()["messages"][-1]["text"])
-        self.assertEqual(request.call_count, 4)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_repeated_invalid_navigation_has_a_human_explanation(self, request, _preflight):
-        invalid = {
-            "reply": "Открываю данные.", "status": "next", "basis": "user_supplied",
-            "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть раздел", "arguments": {"path": ["read", "missing"]}},
-        }
-        request.side_effect = [invalid, invalid, invalid]
-
-        response = self._send(self._conversation(), "Покажи данные")
-
-        text = response.json()["messages"][-1]["text"]
-        self.assertIn("Не удалось открыть нужный раздел", text)
-        self.assertNotIn("assistant.navigate", text)
-        self.assertEqual(request.call_count, 3)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_unqualified_read_entity_explains_the_opened_canonical_identifier(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Читаю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "CashTransaction", "fields": ["amount"]}}}},
-            {"reply": "Исправляю идентификатор.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Покажи операции кассы")
-        self.assertEqual(response.status_code, 200)
-        repair = json.loads(request.call_args_list[2].args[0])
-        self.assertIn("cash.CashTransaction", repair["rejected_step"]["error"])
-        self.assertIn("недопустимый идентификатор", repair["rejected_step"]["error"].lower())
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_repeated_navigation_is_cached_without_duplicate_opened_contract(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Открываю их повторно.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Операции открыты.", "status": "final", "basis": "unavailable"},
-        ]
-        response = self._send(self._conversation(), "Какие поля операций кассы доступны?")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual([step["tool_id"] for step in response.json()["messages"][-1]["data"]["steps"]], ["assistant.navigate"])
-        self.assertEqual(request.call_count, 3)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_optional_read_filter_never_becomes_a_user_question(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Какой счёт выбрать?", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["счёт"], "missing_for": "cash.CashTransaction"},
-            {"reply": "Читаю операции.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Покажи последнюю операцию")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["messages"][-1]["text"], "Готово.")
-        rejected = json.loads(request.call_args_list[2].args[0])["rejected_step"]
-        self.assertEqual(rejected["tool_id"], "needs_input")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_model_from_another_app_uses_the_same_read_contract(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю периоды.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть периоды", "arguments": {"path": ["read", "finance", "FinancialPeriod"]}}},
-            {"reply": "Читаю периоды.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать периоды", "arguments": {"plan": {"entity": "finance.FinancialPeriod", "fields": ["code", "is_closed"], "filters": [], "order_by": "-id", "limit": 1}}}},
-            {"reply": "Готово.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Покажи последний учётный период")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["entity"], "finance.FinancialPeriod")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_compute_uses_only_verified_read_result(self, request, _preflight):
-        from cash.models import CashTransaction
-
-        CashTransaction.objects.create(created_by=self.user, operation_date=date(2026, 10, 1), account="cash", direction="income", amount="10", reason="A")
-        CashTransaction.objects.create(created_by=self.user, operation_date=date(2026, 10, 2), account="cash", direction="income", amount="20", reason="B")
-        request.side_effect = [
-            {"reply": "Открываю операции кассы.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Читаю суммы.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "read", "purpose": "Прочитать суммы", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "filters": [], "order_by": "-id", "limit": 20}}}},
-            {"reply": "Считаю сумму.", "status": "next", "basis": "verified_steps", "next_step": {"tool_id": "compute", "purpose": "Сложить суммы", "arguments": {"operation": "sum", "inputs": [{"step": 2, "path": "records[].amount"}]}}},
-            {"reply": "Итого 30.", "status": "final", "basis": "verified_steps"},
-        ]
-        response = self._send(self._conversation(), "Посчитай сумму операций кассы")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["messages"][-1]["data"]["steps"][-1]["result"]["value"], "30")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_rejects_read_before_contract_and_allows_generic_repair(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Читаю операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "read", "purpose": "Прочитать операции", "arguments": {"plan": {"entity": "cash.CashTransaction", "fields": ["amount"]}}}},
-            {"reply": "Сначала открываю описание.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть операции кассы", "arguments": {"path": ["read", "cash", "CashTransaction"]}}},
-            {"reply": "Готово.", "status": "final", "basis": "unavailable"},
-        ]
-        response = self._send(self._conversation(), "Покажи операции кассы")
-        self.assertEqual(response.status_code, 200)
-        correction = json.loads(request.call_args_list[1].args[0])
-        self.assertIn("открыть описание", correction["rejected_step"]["error"])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_needs_input_requires_an_opened_action_contract(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю создание операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть создание операции", "arguments": {"path": ["action", "cash", "cash.transaction_create"]}}},
-            {"reply": "Укажите сумму расхода.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["сумма"], "missing_for": "cash.transaction_create"},
-        ]
-        response = self._send(self._conversation(), "Добавь расход")
-        self.assertEqual(response.status_code, 200)
-        message = response.json()["messages"][-1]
-        self.assertTrue(message["data"]["task_pending"])
-        self.assertEqual(message["text"], "Укажите сумму расхода.")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_action_stops_for_confirmation_after_contract(self, request, _preflight):
-        from cash.models import CashTransaction
-
-        request.side_effect = [
-            {"reply": "Открываю создание операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть создание операции", "arguments": {"path": ["action", "cash", "cash.transaction_create"]}}},
-            {"reply": "Подготовил расход для подтверждения.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "cash.transaction_create", "purpose": "Создать расход", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "1", "reason": "тест"}}},
-        ]
-        response = self._send(self._conversation(), "Добавь расход 1 рубль")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["messages"][-1]["kind"], "confirmation_required")
-        self.assertFalse(CashTransaction.objects.filter(reason="тест").exists())
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_continues_pending_task_without_losing_opened_contract(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Открываю создание операции.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть создание операции", "arguments": {"path": ["action", "cash", "cash.transaction_create"]}}},
-            {"reply": "Укажите сумму.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["сумма"], "missing_for": "cash.transaction_create"},
-            {"reply": "Подготовил операцию.", "status": "next", "basis": "user_supplied", "next_step": {"tool_id": "cash.transaction_create", "purpose": "Создать расход", "arguments": {"operation_date": "2026-10-15", "account": "cash", "direction": "expense", "amount": "100", "reason": "тест"}}},
-        ]
-        conversation_id = self._conversation()
-        self.assertEqual(self._send(conversation_id, "Добавь расход").status_code, 200)
-        second = self._send(conversation_id, "100 рублей")
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.json()["messages"][-1]["kind"], "confirmation_required")
-        continuation = json.loads(request.call_args_list[2].args[0])
-        self.assertTrue(continuation["opened_capability_nodes"])
-        self.assertEqual(continuation["original_task"], "Добавь расход")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_semantic_clarification_keeps_the_original_task(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "За какой период показать данные?", "status": "clarify", "basis": "unavailable"},
-            {"reply": "Понял, продолжу с указанным периодом.", "status": "final", "basis": "user_supplied"},
-        ]
-        conversation_id = self._conversation()
-
-        first = self._send(conversation_id, "Покажи тендеры")
-        second = self._send(conversation_id, "За сентябрь")
-
-        self.assertTrue(first.json()["messages"][-1]["data"]["task_pending"])
-        self.assertEqual(second.status_code, 200)
-        continuation = json.loads(request.call_args_list[1].args[0])
-        self.assertEqual(continuation["original_task"], "Покажи тендеры")
-        self.assertEqual(continuation["conversation_state"]["kind"], "clarification")
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_new_task_after_clarification_starts_with_clean_state(self, request, _preflight):
-        request.side_effect = [
-            {"reply": "Какой период вас интересует?", "status": "clarify", "basis": "unavailable"},
-            {"reply": "Это новая задача.", "status": "final", "basis": "user_supplied", "task_mode": "new"},
-            {"reply": "Привет!", "status": "final", "basis": "user_supplied"},
-        ]
-        conversation_id = self._conversation()
-        self._send(conversation_id, "Покажи тендеры")
-
-        response = self._send(conversation_id, "Привет")
-
-        self.assertEqual(response.json()["messages"][-1]["text"], "Привет!")
-        clean_prompt = json.loads(request.call_args_list[2].args[0])
-        self.assertEqual(clean_prompt["original_task"], "Привет")
-        self.assertEqual(clean_prompt["completed_step_results"], [])
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_repeated_ungrounded_needs_input_stops_without_raw_limit_error(self, request, _preflight):
-        invalid = {"reply": "Уточните поле.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["поле"], "missing_for": "unknown"}
-        request.side_effect = [invalid, invalid, invalid]
-
-        response = self._send(self._conversation(), "Покажи данные")
-
-        text = response.json()["messages"][-1]["text"]
-        self.assertIn("Ассистент не смог корректно подготовить", text)
-        self.assertNotIn("безопасный предел", text)
-        self.assertEqual(request.call_count, 3)
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_new_task_after_failed_attempt_has_no_stale_state(self, request, _preflight):
-        invalid = {"reply": "Уточните поле.", "status": "needs_input", "basis": "unavailable", "missing_inputs": ["поле"], "missing_for": "unknown"}
-        request.side_effect = [invalid, invalid, invalid, {"reply": "Привет!", "status": "final", "basis": "user_supplied"}]
-        conversation_id = self._conversation()
-
-        self._send(conversation_id, "Покажи данные")
-        response = self._send(conversation_id, "Привет")
-
-        self.assertEqual(response.json()["messages"][-1]["text"], "Привет!")
-        prompt = json.loads(request.call_args_list[3].args[0])
-        self.assertEqual(prompt["original_task"], "Привет")
-        self.assertEqual(prompt["completed_step_results"], [])
-
-    def test_compute_empty_average_has_a_business_explanation(self):
-        from .assistant_agent import _compute
-        from .services import TenderAIError
-
-        with self.assertRaisesRegex(TenderAIError, "нужны числовые данные"):
-            _compute(
-                {"operation": "avg", "inputs": [{"step": 1, "path": "records[].amount"}]},
-                [{"result": {"records": []}}],
-            )
-
-    @patch("tenders.assistant_agent.preflight")
-    @patch("tenders.assistant_agent._request")
-    def test_historical_ambiguity_can_use_a_semantic_clarification(self, request, _preflight):
-        request.return_value = {
-            "reply": "Вас интересуют тендеры, которые находятся во входящих сейчас, или история поступления за неделю?",
-            "status": "clarify",
-            "basis": "unavailable",
-        }
-
-        response = self._send(self._conversation(), "Сколько тендеров было во входящих на этой неделе?")
-
-        self.assertTrue(response.json()["messages"][-1]["data"]["task_pending"])
-        self.assertIn("сейчас", response.json()["messages"][-1]["text"])
-
-    @patch("tenders.assistant_conversations.reply")
-    def test_agent_error_is_saved_for_conversation_export(self, reply):
-        from .services import TenderAIError
-
-        reply.side_effect = TenderAIError("Перед чтением нужно открыть описание сущности.")
-        conversation_id = self._conversation()
-        response = self._send(conversation_id, "Покажи операции")
-
-        self.assertEqual(response.status_code, 200)
-        messages = response.json()["messages"]
-        self.assertEqual(messages[-1]["role"], "assistant")
-        self.assertIn("открыть описание", messages[-1]["text"])
-        detail = self.client.get(reverse("assistant_conversation_detail", args=[conversation_id]), secure=True).json()
-        self.assertEqual(detail["messages"][-1]["text"], messages[-1]["text"])
+    @patch("tenders.assistant_agent._gateway")
+    def test_action_waits_for_confirmation_and_continues_once(self, gateway, _preflight):
+        gateway.return_value = {"role": "assistant", "content": "Операция подготовлена.", "tool_calls": [{"id": "confirm", "type": "function", "function": {"name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Тест"})}}]}
+        from .assistant_agent import reply
+        response = reply(self.conversation, self.user, "Добавь операцию")
+        self.assertEqual(response["kind"], "confirmation_required")
+        self.assertEqual(gateway.call_count, 1)
