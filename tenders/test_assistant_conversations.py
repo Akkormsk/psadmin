@@ -43,8 +43,14 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_action_waits_for_confirmation_and_continues_once(self, gateway, _preflight):
-        gateway.return_value = {"role": "assistant", "content": "Операция подготовлена.", "tool_calls": [{"id": "confirm", "type": "function", "function": {"name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Тест"})}}]}
-        from .assistant_agent import reply
+        gateway.side_effect = [
+            {"role": "assistant", "content": "Операция подготовлена.", "tool_calls": [{"id": "confirm", "type": "function", "function": {"name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Тест"})}}]},
+            {"role": "assistant", "content": "Операция выполнена."},
+        ]
+        from .assistant_agent import continue_after_confirmation, reply
         response = reply(self.conversation, self.user, "Добавь операцию")
         self.assertEqual(response["kind"], "confirmation_required")
         self.assertEqual(gateway.call_count, 1)
+        response = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 1})
+        self.assertEqual(response["text"], "Операция выполнена.")
+        self.assertEqual(gateway.call_args_list[1].args[0][-2]["tool_call_id"], "confirm")
