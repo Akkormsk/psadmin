@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import re
 from importlib import import_module
 from django.utils.module_loading import import_string
 from typing import Any, Callable
@@ -122,6 +123,52 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
         if kind in {"object"} and not isinstance(value, dict):
             raise AssistantToolError(f"Поле {name} должно быть объектом")
     return tool.executor(user, payload)
+
+
+def _openai_type(declared):
+    """Translate the registry contract; the registry remains the sole source."""
+    optional = isinstance(declared, str) and declared.endswith("?")
+    value = declared[:-1] if optional else declared
+    if isinstance(value, dict):
+        schema = {"type": value.get("type", "object")}
+        if schema["type"] == "object":
+            schema["additionalProperties"] = False
+        return schema, optional, False
+    if not isinstance(value, str):
+        return {"type": "string"}, optional, False
+    if value.endswith("[]"):
+        item = value[:-2]
+        item_type = {"integer": "integer", "number": "number", "boolean": "boolean"}.get(item, "string")
+        return {"type": "array", "items": {"type": item_type}}, optional, True
+    if "|" in value:
+        return {"type": "string", "enum": value.split("|")}, optional, True
+    return {"type": {"integer": "integer", "number": "number", "boolean": "boolean", "object": "object", "array": "array"}.get(value, "string")}, optional, value not in {"object", "array"}
+
+
+def openai_functions(user):
+    """Function definitions and reversible names generated from registered tools."""
+    definitions, names = [], {}
+    for tool in available_tools(user):
+        if not tool["available"] or tool["id"] == "assistant.navigate":
+            continue
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
+        if not name or name in names:
+            raise RuntimeError("OpenAI function name collision")
+        properties, required, strict = {}, [], True
+        for key, declared in tool["input_schema"].items():
+            schema, optional, compatible = _openai_type(declared)
+            if optional:
+                schema["type"] = [schema["type"], "null"]
+            properties[key] = schema
+            required.append(key)
+            strict = strict and compatible
+        parameters = {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+        function = {"name": name, "description": tool["description"], "parameters": parameters}
+        if strict:
+            function["strict"] = True
+        definitions.append({"type": "function", "function": function})
+        names[name] = tool["id"]
+    return definitions, names
 
 
 def capability_issues(user) -> list[dict[str, str]]:
@@ -339,5 +386,4 @@ def _catalog(user, _payload):
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
-register_tool(AssistantTool("assistant.navigate", "Навигация по возможностям PSADMIN", "Открывает один узел графа READ/ACTION; не выдаёт весь каталог сразу.", {"path": "string[]?"}, True, False, True, navigation))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", read_input_schema(), True, False, True, _read_data))
