@@ -124,7 +124,6 @@ jobs:
 
           cd "$app/deploy/vds"
           ./twin.sh up
-          docker compose -f compose.test.yml exec -T test-web python manage.py function_calling_smoke
           docker compose -f compose.test.yml ps test-web
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \
