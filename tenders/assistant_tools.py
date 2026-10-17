@@ -130,10 +130,28 @@ def _openai_type(declared):
     optional = isinstance(declared, str) and declared.endswith("?")
     value = declared[:-1] if optional else declared
     if isinstance(value, dict):
-        schema = {"type": value.get("type", "object")}
-        if schema["type"] == "object":
-            schema["additionalProperties"] = False
-        return schema, optional, False
+        kind = value.get("type")
+        if kind is None:
+            kind = "object"
+            value = {"type": kind, "properties": value, "required": True}
+        if kind == "object":
+            properties, required, compatible = {}, [], True
+            for key, nested in value.get("properties", {}).items():
+                child, child_optional, child_compatible = _openai_type(nested)
+                properties[key] = child if not child_optional else {"anyOf": [child, {"type": "null"}]}
+                required.append(key)
+                compatible = compatible and child_compatible
+            schema = {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+        elif kind and kind.endswith("[]"):
+            item = value.get("item", {})
+            child, _ignored, compatible = _openai_type(item)
+            schema = {"type": "array", "items": child}
+        else:
+            schema, _ignored, compatible = _openai_type(kind or "object")
+        for key in ("description", "minimum", "maximum", "enum"):
+            if key in value:
+                schema[key] = value[key]
+        return schema, bool(value.get("required") is False), compatible
     if not isinstance(value, str):
         return {"type": "string"}, optional, False
     if value.endswith("[]"):
@@ -141,7 +159,10 @@ def _openai_type(declared):
         item_type = {"integer": "integer", "number": "number", "boolean": "boolean"}.get(item, "string")
         return {"type": "array", "items": {"type": item_type}}, optional, True
     if "|" in value:
-        return {"type": "string", "enum": value.split("|")}, optional, True
+        variants = value.split("|")
+        if all(part in {"string", "string[]"} for part in variants):
+            return {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}, optional, True
+        return {"type": "string", "enum": variants}, optional, True
     return {"type": {"integer": "integer", "number": "number", "boolean": "boolean", "object": "object", "array": "array"}.get(value, "string")}, optional, value not in {"object", "array"}
 
 
