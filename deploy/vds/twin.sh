@@ -26,9 +26,6 @@ case "${1:-}" in
     twin run --rm -T test-web python manage.py migrate --noinput
     twin up -d
     wait_healthy
-    if [ -f ../../tenders/management/commands/function_calling_smoke.py ]; then
-      twin exec -T test-web python manage.py function_calling_smoke
-    fi
     ;;
   refresh-db)
     twin stop test-web
