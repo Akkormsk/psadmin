@@ -25,7 +25,8 @@ def _gateway(messages, tools):
         raise TenderAIError("Не удалось обратиться к AI Gateway.") from exc
 
 def _history(conversation):
-    return [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in conversation.feedback_events.filter(scope="assistant_conversation").order_by("created_at", "pk")[:20]]
+    events = list(conversation.feedback_events.filter(scope="assistant_conversation").order_by("-created_at", "-pk")[:20])
+    return [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in reversed(events)]
 
 def _new_state(conversation, message, attachments):
     return {"messages": [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}, *_history(conversation), {"role": "user", "content": message}], "steps": [], "attachments": attachments or []}
