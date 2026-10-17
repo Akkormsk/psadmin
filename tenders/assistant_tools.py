@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+import re
 from importlib import import_module
 from django.utils.module_loading import import_string
 from typing import Any, Callable
 
 from django.apps import apps
+
 
 from .assistant_read import input_schema as read_input_schema
 
@@ -124,6 +125,52 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
     return tool.executor(user, payload)
 
 
+def _openai_type(declared):
+    """Translate the registry contract; the registry remains the sole source."""
+    optional = isinstance(declared, str) and declared.endswith("?")
+    value = declared[:-1] if optional else declared
+    if isinstance(value, dict):
+        schema = {"type": value.get("type", "object")}
+        if schema["type"] == "object":
+            schema["additionalProperties"] = False
+        return schema, optional, False
+    if not isinstance(value, str):
+        return {"type": "string"}, optional, False
+    if value.endswith("[]"):
+        item = value[:-2]
+        item_type = {"integer": "integer", "number": "number", "boolean": "boolean"}.get(item, "string")
+        return {"type": "array", "items": {"type": item_type}}, optional, True
+    if "|" in value:
+        return {"type": "string", "enum": value.split("|")}, optional, True
+    return {"type": {"integer": "integer", "number": "number", "boolean": "boolean", "object": "object", "array": "array"}.get(value, "string")}, optional, value not in {"object", "array"}
+
+
+def openai_functions(user):
+    """Function definitions and reversible names generated from registered tools."""
+    definitions, names = [], {}
+    for tool in available_tools(user):
+        if not tool["available"] or tool["id"] == "assistant.navigate":
+            continue
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
+        if not name or name in names:
+            raise RuntimeError("OpenAI function name collision")
+        properties, required, strict = {}, [], True
+        for key, declared in tool["input_schema"].items():
+            schema, optional, compatible = _openai_type(declared)
+            if optional:
+                schema["type"] = [schema["type"], "null"]
+            properties[key] = schema
+            required.append(key)
+            strict = strict and compatible
+        parameters = {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+        function = {"name": name, "description": tool["description"], "parameters": parameters}
+        if strict:
+            function["strict"] = True
+        definitions.append({"type": "function", "function": function})
+        names[name] = tool["id"]
+    return definitions, names
+
+
 def capability_issues(user) -> list[dict[str, str]]:
     """Check declarations against importable shared executors, without running them."""
     _discover_app_actions()
@@ -165,48 +212,6 @@ def _read_data(user, payload):
         return execute(user, payload.get("plan"))
     except ReadPlanError as exc:
         raise AssistantToolError(str(exc)) from exc
-
-
-@lru_cache(maxsize=1)
-def _navigation_index():
-    """Build the capability graph once from the same model and action metadata."""
-    from .assistant_read import catalogue
-
-    _discover_app_actions()
-    compact_catalogue = catalogue(compact=True)
-    read = {}
-    for model in catalogue():
-        app_label, model_name = model["id"].split(".", 1)
-        config = apps.get_app_config(app_label)
-        section = read.setdefault(app_label, {
-            "id": app_label,
-            "label": str(config.verbose_name),
-            "models": {},
-        })
-        section["models"][model_name] = model
-
-    actions = {}
-    for tool in _TOOLS.values():
-        if tool.identifier in {"read", "assistant.capabilities", "assistant.catalog", "assistant.navigate"}:
-            continue
-        source = tool.source or f"{tool.executor.__module__}.{tool.executor.__qualname__}"
-        app_label = source.split(".", 1)[0]
-        try:
-            label = str(apps.get_app_config(app_label).verbose_name)
-        except LookupError:
-            label = app_label
-        actions.setdefault(app_label, {"id": app_label, "label": label, "tools": []})["tools"].append({
-            "id": tool.identifier,
-            "name": tool.name,
-            "description": tool.description,
-            "input_schema": tool.input_schema,
-            "read_only": tool.read_only,
-            "requires_confirmation": tool.requires_confirmation,
-            "requires_superuser": tool.requires_superuser,
-        })
-    for section in actions.values():
-        section["tools"].sort(key=lambda item: item["name"])
-    return {"read": read, "action": actions, "filter_contract": compact_catalogue["filter_contract"]}
 
 
 def _visible_tools(items, user):
@@ -339,5 +344,4 @@ def _catalog(user, _payload):
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
-register_tool(AssistantTool("assistant.navigate", "Навигация по возможностям PSADMIN", "Открывает один узел графа READ/ACTION; не выдаёт весь каталог сразу.", {"path": "string[]?"}, True, False, True, navigation))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", read_input_schema(), True, False, True, _read_data))
