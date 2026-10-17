@@ -186,8 +186,25 @@ class AssistantConversationTests(TestCase):
         ]
         response = self._send(self._conversation(), "Покажи операции кассы")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Не удалось выполнить запрос", response.json()["messages"][-1]["text"])
+        self.assertIn("Не удалось прочитать данные", response.json()["messages"][-1]["text"])
+        self.assertNotIn("model", response.json()["messages"][-1]["text"])
         self.assertEqual(request.call_count, 4)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._request")
+    def test_repeated_invalid_navigation_has_a_human_explanation(self, request, _preflight):
+        invalid = {
+            "reply": "Открываю данные.", "status": "next", "basis": "user_supplied",
+            "next_step": {"tool_id": "assistant.navigate", "purpose": "Открыть раздел", "arguments": {"path": ["read", "missing"]}},
+        }
+        request.side_effect = [invalid, invalid, invalid]
+
+        response = self._send(self._conversation(), "Покажи данные")
+
+        text = response.json()["messages"][-1]["text"]
+        self.assertIn("Не удалось открыть нужный раздел", text)
+        self.assertNotIn("assistant.navigate", text)
+        self.assertEqual(request.call_count, 3)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._request")
@@ -363,7 +380,7 @@ class AssistantConversationTests(TestCase):
         response = self._send(self._conversation(), "Покажи данные")
 
         text = response.json()["messages"][-1]["text"]
-        self.assertIn("Не удалось выполнить запрос", text)
+        self.assertIn("Ассистент не смог корректно подготовить", text)
         self.assertNotIn("безопасный предел", text)
         self.assertEqual(request.call_count, 3)
 

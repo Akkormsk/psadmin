@@ -369,6 +369,28 @@ def _remember_rejected_call(state, signature, error):
         state["rejected_calls"].append({"signature": signature, "error": error})
 
 
+def _failed_task_response(conversation, rejected_step, *, limit=False):
+    """End a failed run without exposing its internal tool contract to the user."""
+    _finish_state(conversation)
+    tool_id = (rejected_step or {}).get("tool_id")
+    error = str((rejected_step or {}).get("error", "")).lower()
+    if tool_id == "assistant.navigate":
+        text = "Не удалось открыть нужный раздел системы. Ваш запрос понятен; попробуйте повторить его позже."
+    elif tool_id == "read":
+        text = "Не удалось прочитать данные: ассистент сформировал некорректный запрос к системе. Переформулировать ваш запрос не нужно."
+    elif tool_id == "compute":
+        text = "Не удалось завершить вычисление по полученным данным."
+    elif "вне энциклопедии" in error or "без прав доступа" in error:
+        text = "Эта операция сейчас недоступна ассистенту."
+    elif tool_id in {"needs_input", "clarify", "decision"}:
+        text = "Ассистент не смог корректно подготовить следующий шаг. Ваш запрос понятен; попробуйте повторить его позже."
+    elif limit:
+        text = "Не удалось завершить запрос за разумное число шагов. Попробуйте повторить его позже."
+    else:
+        text = "Не удалось выполнить операцию из-за технической ошибки. Ваш запрос сформулирован корректно."
+    return {"text": text, "kind": "text", "data": {}}
+
+
 def _cached_navigation_result(state, arguments):
     if not isinstance(arguments, dict) or not isinstance(arguments.get("path"), list):
         return None
@@ -509,6 +531,9 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                 rejected_step = {"tool_id": "clarify", "error": str(exc)}
                 state["errors"].append(rejected_step)
                 _trace(state, "clarify", "rejected", conversation=conversation, error=str(exc))
+                repairs += 1
+                if repairs > MAX_REPAIR_ATTEMPTS:
+                    return _failed_task_response(conversation, rejected_step)
                 continue
             question = decision["reply"].strip()
             if not question:
@@ -528,8 +553,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
                 _trace(state, "needs_input", "rejected", conversation=conversation, error=rejected_step["error"])
                 repairs += 1
                 if repairs > MAX_REPAIR_ATTEMPTS:
-                    _finish_state(conversation)
-                    return {"text": "Не удалось выполнить запрос по доступным данным. Уточните, пожалуйста, что именно нужно получить.", "kind": "text", "data": {}}
+                    return _failed_task_response(conversation, rejected_step)
                 continue
             state["awaiting_user"] = {"kind": "action_input", "missing": decision.get("missing_inputs", [])}
             _save_state(conversation, state)
@@ -559,8 +583,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             state["errors"].append(rejected_step)
             _trace(state, rejected_step["tool_id"], "rejected", conversation=conversation, tool_input=rejected_step["arguments"], error=str(exc))
             if repairs > MAX_REPAIR_ATTEMPTS:
-                _finish_state(conversation)
-                return {"text": "Не удалось выполнить запрос по доступным данным. Уточните, пожалуйста, что именно нужно получить.", "kind": "text", "data": {}}
+                return _failed_task_response(conversation, rejected_step)
             continue
         try:
             if identifier == "compute":
@@ -597,8 +620,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
             message, attachments, image_data_urls = "", [], None
             repairs += 1
             if repairs > MAX_REPAIR_ATTEMPTS:
-                _finish_state(conversation)
-                return {"text": "Не удалось выполнить запрос по доступным данным. Уточните, пожалуйста, что именно нужно получить.", "kind": "text", "data": {}}
+                return _failed_task_response(conversation, rejected_step)
             continue
         state["results"].append({"number": len(state["results"]) + 1, "tool_id": identifier, "purpose": purpose, "result": result})
         state["errors"] = []
@@ -610,8 +632,7 @@ def _execute_loop(conversation, user, message, state, tools, page_context, attac
         if tool_calls >= MAX_TOOL_CALLS:
             break
         message, attachments, image_data_urls = "", [], None
-    _finish_state(conversation)
-    return {"text": "Не удалось завершить запрос за разумное число шагов. Сформулируйте его, пожалуйста, короче или уточните нужный результат.", "kind": "text", "data": {}}
+    return _failed_task_response(conversation, rejected_step, limit=True)
 
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):

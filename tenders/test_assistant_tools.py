@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from importlib import import_module
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -452,6 +453,44 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["total_count"], 3)
         self.assertEqual(result["returned_count"], 1)
         self.assertEqual(str(result["aggregates"]["sum_amount"]), "60")
+
+    def test_read_uses_multiple_order_fields_and_a_primary_key_tiebreaker(self):
+        from cash.models import CashTransaction
+        from django.utils import timezone
+
+        first = CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="income", amount="10", reason="Первая", created_by=self.admin)
+        second = CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="income", amount="20", reason="Вторая", created_by=self.admin)
+        same_time = timezone.make_aware(datetime(2026, 9, 2, 10, 0))
+        CashTransaction.objects.filter(pk__in=[first.pk, second.pk]).update(created_at=same_time)
+
+        result = execute_tool("read", self.admin, {"plan": {
+            "entity": "cash.CashTransaction", "fields": ["reason", "operation_date", "created_at"],
+            "order_by": ["-operation_date", "-created_at"], "limit": 2,
+        }})
+
+        self.assertEqual([row["id"] for row in result["records"]], [second.pk, first.pk])
+        self.assertEqual(result["query"]["order_by"], ["-operation_date", "-created_at", "-id"])
+
+    def test_read_keeps_string_order_by_compatible_and_reports_tiebreaker(self):
+        from cash.models import CashTransaction
+
+        first = CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="income", amount="10", reason="Первая", created_by=self.admin)
+        second = CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="income", amount="20", reason="Вторая", created_by=self.admin)
+
+        result = execute_tool("read", self.admin, {"plan": {
+            "entity": "cash.CashTransaction", "fields": ["reason"], "order_by": "-operation_date", "limit": 1,
+        }})
+
+        self.assertEqual(result["records"][0]["id"], second.pk)
+        self.assertEqual(result["query"]["order_by"], ["-operation_date", "-id"])
+
+    def test_read_rejects_hidden_order_field(self):
+        from .assistant_tools import AssistantToolError
+
+        with self.assertRaisesRegex(AssistantToolError, "недоступные поля"):
+            execute_tool("read", self.admin, {"plan": {
+                "entity": "cash.BankPayment", "order_by": ["-raw", "-id"],
+            }})
 
     def test_read_business_view_reuses_the_existing_incoming_tender_rules(self):
         from tender_selection.models import FilterSettings, Tender

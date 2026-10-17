@@ -46,7 +46,7 @@ def plan_contract():
             "fields": {"type": "string[]", "required": False, "description": "field names from the opened entity node; id is always returned"},
             "search": {"type": "string", "required": False},
             "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": "JSON value matching that field"}},
-            "order_by": {"type": "string", "required": False, "description": "opened scalar field, optionally prefixed with -"},
+            "order_by": {"type": "string|string[]", "required": False, "description": "one or more opened scalar fields, each optionally prefixed with -; id is added as a stable final tiebreaker"},
             "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": MAX_ROWS},
             "aggregates": {"type": "object[]", "required": False, "item": {"op": sorted(AGGREGATES), "field": "opened scalar field"}},
             "group_by": {"type": "string[]", "required": False, "description": "opened scalar field names"},
@@ -377,10 +377,23 @@ def validate_plan(user, plan):
     if any(item["kind"] != "scalar" for item in groups):
         raise ReadPlanError("Некорректная группировка")
     order = plan.get("order_by", "-id")
-    descending = isinstance(order, str) and order.startswith("-")
-    order_descriptor = _path(model, fields, order[1:] if descending else order)
-    if order_descriptor["kind"] != "scalar":
-        raise ReadPlanError("Недоступная сортировка")
+    if isinstance(order, str):
+        order_names = [order]
+    elif isinstance(order, list) and order and all(isinstance(item, str) and item for item in order):
+        order_names = order[:]
+    else:
+        raise ReadPlanError("Некорректная сортировка")
+    if len({item.lstrip("-") for item in order_names}) != len(order_names):
+        raise ReadPlanError("Поле сортировки указано повторно")
+    order_descriptors = []
+    for name in order_names:
+        descending = name.startswith("-")
+        descriptor = _path(model, fields, name[1:] if descending else name)
+        if descriptor["kind"] != "scalar":
+            raise ReadPlanError("Недоступная сортировка")
+        order_descriptors.append((descriptor, descending))
+    if "id" not in {item.lstrip("-") for item in order_names}:
+        order_descriptors.append((_path(model, fields, "id"), order_descriptors[-1][1]))
     limit = plan.get("limit", 20)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_ROWS:
         raise ReadPlanError("Некорректный лимит")
@@ -389,7 +402,7 @@ def validate_plan(user, plan):
         "selected_names": selected_names, "selected": selected,
         "search": search, "searchable": searchable, "filters": filters,
         "annotations": annotations, "group_names": group_names, "groups": groups,
-        "order_descriptor": order_descriptor, "descending": descending,
+        "order_descriptors": order_descriptors,
         "limit": limit,
     }
 
@@ -423,25 +436,30 @@ def execute(user, plan):
         group_lookups = [item["lookup"] for item in groups]
         rows = list(qs.values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
         records = [{**{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(group_names, groups)}, **{key: _value(row[key]) for key in annotations}} for row in rows]
-        return {"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
+        return {"entity": entity, "query": _query_summary(validated, order_by=group_names), "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
     summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
-    descending = validated["descending"]
-    order_descriptor = validated["order_descriptor"]
     limit = validated["limit"]
     value_lookups = [item["lookup"] for item in selected]
-    rows = list(qs.order_by(("-" if descending else "") + order_descriptor["lookup"]).values(*value_lookups)[:limit])
+    order_lookups = [
+        ("-" if descending else "") + descriptor["lookup"]
+        for descriptor, descending in validated["order_descriptors"]
+    ]
+    rows = list(qs.order_by(*order_lookups).values(*value_lookups)[:limit])
     records = [{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(selected_names, selected)} for row in rows]
     sources = [{"entity": entity, "id": row["id"]} for row in records if row.get("id") is not None]
     return {"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}
 
 
-def _query_summary(validated):
+def _query_summary(validated, *, order_by=None):
     return {
         "entity": validated["entity"], "view": validated["view"], "search": validated["search"],
         "filters": [
             {"field": item["field"], "op": item["op"], "value": _json_safe_value(item["value"])}
             for item in validated["filters"]
         ],
-        "order_by": ("-" if validated["descending"] else "") + validated["order_descriptor"]["name"],
+        "order_by": order_by if order_by is not None else [
+            ("-" if descending else "") + descriptor["name"]
+            for descriptor, descending in validated["order_descriptors"]
+        ],
         "limit": validated["limit"],
     }
