@@ -1,0 +1,105 @@
+name: Function calling smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_USER: deploy
+    steps:
+      - name: Configure strict SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify one OpenAI function-call round trip on TEST
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" \
+            'docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml exec -T test-web python -' <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          api_key = os.environ.get("TIMEWEB_AI_API_KEY", "").strip()
+          if not api_key:
+              raise SystemExit("TIMEWEB_AI_API_KEY is not configured in TEST")
+          base_url = os.environ.get("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
+          model = os.environ.get("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini")
+          tool = {
+              "type": "function",
+              "function": {
+                  "name": "smoke_echo",
+                  "description": "Returns the provided test value without side effects.",
+                  "strict": True,
+                  "parameters": {
+                      "type": "object",
+                      "properties": {"value": {"type": "string"}},
+                      "required": ["value"],
+                      "additionalProperties": False,
+                  },
+              },
+          }
+
+          def call(payload):
+              started = time.monotonic()
+              request = Request(
+                  f"{base_url}/chat/completions",
+                  data=json.dumps(payload).encode(),
+                  headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urlopen(request, timeout=45) as response:
+                  return json.loads(response.read().decode()), round((time.monotonic() - started) * 1000)
+
+          messages = [
+              {"role": "system", "content": "Use a function when the user explicitly asks for it."},
+              {"role": "user", "content": "Call smoke_echo with value 'ok'."},
+          ]
+          first, first_ms = call({
+              "model": model, "messages": messages, "tools": [tool],
+              "tool_choice": "auto", "parallel_tool_calls": False, "max_tokens": 120,
+          })
+          assistant = first["choices"][0]["message"]
+          calls = assistant.get("tool_calls") or []
+          if len(calls) != 1 or calls[0].get("type") != "function":
+              raise SystemExit("Gateway returned no single function tool_call")
+          tool_call = calls[0]
+          arguments = json.loads(tool_call["function"]["arguments"])
+          if tool_call["function"].get("name") != "smoke_echo" or arguments != {"value": "ok"}:
+              raise SystemExit("Gateway returned an invalid function tool_call")
+          messages.extend([
+              {"role": "assistant", "content": assistant.get("content"), "tool_calls": calls},
+              {"role": "tool", "tool_call_id": tool_call["id"], "content": json.dumps({"value": "ok"})},
+          ])
+          second, second_ms = call({
+              "model": model, "messages": messages, "tools": [tool],
+              "tool_choice": "auto", "parallel_tool_calls": False, "max_tokens": 120,
+          })
+          final = second["choices"][0]["message"]
+          print(json.dumps({
+              "model": model,
+              "strict": True,
+              "tool_call": {"id": tool_call["id"], "name": tool_call["function"]["name"], "arguments": arguments},
+              "tool_result_accepted": isinstance(final.get("content"), str),
+              "calls": 2,
+              "latency_ms": [first_ms, second_ms],
+              "usage": [first.get("usage", {}), second.get("usage", {})],
+          }, ensure_ascii=False))
+          PY
