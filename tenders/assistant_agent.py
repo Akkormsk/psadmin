@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json, os
 from urllib.request import Request, urlopen
-from .assistant_tools import AssistantToolError, available_tools, execute_tool, openai_functions
+from .assistant_tools import AssistantToolError, available_tools, execute_tool, openai_functions, validate_tool_call
 from .gateway_budget import preflight
 from .services import TenderAIError
 
@@ -55,6 +55,7 @@ def _run(conversation, user, state):
             arguments = json.loads(function.get("arguments", "{}"))
             if not identifier or not isinstance(arguments, dict): raise AssistantToolError("Некорректный вызов функции")
             if registry[identifier]["requires_confirmation"]:
+                validate_tool_call(identifier, user, arguments)
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"]}; _save(conversation, state)
                 return {"text": str(answer.get("content") or "Подтвердите выполнение действия."), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
             result = execute_tool(identifier, user, arguments); state["steps"].append({"tool_id": identifier, "result": result}); content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)

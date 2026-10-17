@@ -91,8 +91,20 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
         raise AssistantToolError("Неизвестное действие ассистента")
     if tool.requires_superuser and not user.is_superuser:
         raise AssistantToolError("Недостаточно прав для этого действия")
+    validate_tool_call(identifier, user, payload)
     if tool.requires_confirmation and not confirmed:
         raise AssistantToolConfirmationRequired("Действие требует явного подтверждения")
+    return tool.executor(user, payload)
+
+
+def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
+    """Validate a registered call without performing its side effect."""
+    _discover_app_actions()
+    tool = _TOOLS.get(identifier)
+    if not tool:
+        raise AssistantToolError("Неизвестное действие ассистента")
+    if tool.requires_superuser and not user.is_superuser:
+        raise AssistantToolError("Недостаточно прав для этого действия")
     if not isinstance(payload, dict):
         raise AssistantToolError("Некорректные параметры действия")
     unknown = set(payload) - set(tool.input_schema)
@@ -122,7 +134,6 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
             raise AssistantToolError(f"Поле {name} должно быть списком")
         if kind in {"object"} and not isinstance(value, dict):
             raise AssistantToolError(f"Поле {name} должно быть объектом")
-    return tool.executor(user, payload)
 
 
 def _openai_type(declared):
