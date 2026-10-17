@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 import re
 from importlib import import_module
 from django.utils.module_loading import import_string
 from typing import Any, Callable
 
 from django.apps import apps
+
 
 from .assistant_read import input_schema as read_input_schema
 
@@ -212,48 +212,6 @@ def _read_data(user, payload):
         return execute(user, payload.get("plan"))
     except ReadPlanError as exc:
         raise AssistantToolError(str(exc)) from exc
-
-
-@lru_cache(maxsize=1)
-def _navigation_index():
-    """Build the capability graph once from the same model and action metadata."""
-    from .assistant_read import catalogue
-
-    _discover_app_actions()
-    compact_catalogue = catalogue(compact=True)
-    read = {}
-    for model in catalogue():
-        app_label, model_name = model["id"].split(".", 1)
-        config = apps.get_app_config(app_label)
-        section = read.setdefault(app_label, {
-            "id": app_label,
-            "label": str(config.verbose_name),
-            "models": {},
-        })
-        section["models"][model_name] = model
-
-    actions = {}
-    for tool in _TOOLS.values():
-        if tool.identifier in {"read", "assistant.capabilities", "assistant.catalog", "assistant.navigate"}:
-            continue
-        source = tool.source or f"{tool.executor.__module__}.{tool.executor.__qualname__}"
-        app_label = source.split(".", 1)[0]
-        try:
-            label = str(apps.get_app_config(app_label).verbose_name)
-        except LookupError:
-            label = app_label
-        actions.setdefault(app_label, {"id": app_label, "label": label, "tools": []})["tools"].append({
-            "id": tool.identifier,
-            "name": tool.name,
-            "description": tool.description,
-            "input_schema": tool.input_schema,
-            "read_only": tool.read_only,
-            "requires_confirmation": tool.requires_confirmation,
-            "requires_superuser": tool.requires_superuser,
-        })
-    for section in actions.values():
-        section["tools"].sort(key=lambda item: item["name"])
-    return {"read": read, "action": actions, "filter_contract": compact_catalogue["filter_contract"]}
 
 
 def _visible_tools(items, user):
