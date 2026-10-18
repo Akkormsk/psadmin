@@ -26,9 +26,6 @@ case "${1:-}" in
     twin run --rm -T test-web python manage.py migrate --noinput
     twin up -d
     wait_healthy
-    if [ -f ../../tenders/management/commands/check_gateway_env.py ]; then
-      twin exec -T test-web python manage.py check_gateway_env
-    fi
     ;;
   refresh-db)
     twin stop test-web

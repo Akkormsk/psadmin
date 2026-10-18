@@ -45,7 +45,7 @@ def plan_contract():
             "view": {"type": "string", "required": False, "description": "optional business view ID from the opened entity node"},
             "fields": {"type": "string[]", "required": False, "description": "field names from the opened entity node; id is always returned"},
             "search": {"type": "string", "required": False},
-            "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": "JSON value matching that field"}},
+            "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": {"any_of": ["string", "number", "boolean", "null", "string[]", "number[]", "boolean[]"], "description": "JSON value compatible with the selected field"}}},
             "order_by": {"type": "string|string[]", "required": False, "description": "one or more opened scalar fields, each optionally prefixed with -; id is added as a stable final tiebreaker"},
             "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": MAX_ROWS},
             "aggregates": {"type": "object[]", "required": False, "item": {"op": sorted(AGGREGATES), "field": "opened scalar field"}},
