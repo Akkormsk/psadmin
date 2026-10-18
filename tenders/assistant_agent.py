@@ -51,7 +51,7 @@ def _new_state(conversation, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. For PSADMIN data or operations, first choose the relevant business section; if the user named it, follow that direction, otherwise infer it from meaning. Never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian, such as a period, account, amount, person or the intended operation. Never ask the user for a technical field name, entity ID, code, JSON format or database value. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Actions require explicit user confirmation."}]
+    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. For PSADMIN data or operations, first choose the relevant business section; if the user named it, follow that direction, otherwise infer it from meaning. Never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian, such as a period, account, amount, person or the intended operation. Never ask the user for a technical field name, entity ID, code, JSON format or database value. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Actions require explicit user confirmation. Use assistant.finish for a final answer or a clarifying question, never for an intermediate tool result."}]
     memory = conversation.context.get("agent_memory")
     if isinstance(memory, dict):
         messages.append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
@@ -162,6 +162,13 @@ def _run(conversation, user, state):
         try:
             arguments = json.loads(function.get("arguments", "{}"))
             if not identifier or not isinstance(arguments, dict): raise AssistantToolError("Некорректный вызов функции")
+            if identifier == "assistant.finish":
+                text = arguments.get("answer")
+                if not isinstance(text, str) or not text.strip():
+                    raise AssistantToolError("Финальный ответ должен быть непустым текстом")
+                _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
+                _finish_turn(conversation, state)
+                return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
             if identifier == "assistant.select_area":
                 area_id = arguments.get("area")
                 area = next((item for item in available_areas(user) if item["id"] == area_id), None)

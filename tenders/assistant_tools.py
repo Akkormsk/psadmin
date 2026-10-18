@@ -289,7 +289,7 @@ def _openai_type(declared):
                 schema = {"type": "array", "items": child}
             else:
                 schema, _ignored, compatible = _openai_type(kind or "object")
-        for key in ("description", "minimum", "maximum", "enum"):
+        for key in ("description", "minimum", "maximum", "minLength", "maxLength", "enum"):
             if key in value:
                 schema[key] = value[key]
         return schema, bool(value.get("required") is False), compatible
@@ -350,6 +350,14 @@ def openai_functions(user, *, area_id=None, resource_id=None):
     executor.  It carries no duplicate business implementation.
     """
     definitions, names = [], {}
+
+    name, definition = _function_definition(
+        "assistant.finish",
+        "Передаёт окончательный ответ или уточняющий вопрос пользователю после завершения работы. Не используй для промежуточных результатов инструментов.",
+        {"answer": {"type": "string", "minLength": 1}},
+    )
+    definitions.append(definition)
+    names[name] = "assistant.finish"
 
     areas = available_areas(user)
     area_schema = {"area": {"type": "string", "enum": [item["id"] for item in areas],

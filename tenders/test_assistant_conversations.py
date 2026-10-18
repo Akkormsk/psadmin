@@ -20,7 +20,9 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "content": None, "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": json.dumps({"area": "cash"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": json.dumps({"resource": "cash.transactions"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
-            {"role": "assistant", "content": "Последняя операция: 10. Сумма: 10."},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "Последняя операция: 10. Сумма: 10."}),
+            }}]},
         ]
         with patch("tenders.assistant_agent.execute_tool", side_effect=[
             {"entity": "cash.CashTransaction", "query": {}, "total_count": 1,
@@ -29,6 +31,7 @@ class AssistantFunctionCallingTests(TestCase):
             from .assistant_agent import reply
             response = reply(self.conversation, self.user, "Покажи последнюю операцию")
         self.assertEqual(response["text"], "Последняя операция: 10. Сумма: 10.")
+        self.assertEqual(gateway.call_count, 4)
         self.assertEqual(execute.call_args.args[0], "read")
         messages = gateway.call_args_list[3].args[0]
         self.assertEqual(messages[-2]["role"], "tool")
@@ -83,6 +86,19 @@ class AssistantFunctionCallingTests(TestCase):
         response = reply(self.conversation, self.user, "Покажи данные")
 
         self.assertEqual(response, {"text": "За какой период показать данные?", "kind": "tool_result", "data": {"steps": []}})
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_finish_returns_a_clarifying_question_without_another_gateway_call(self, gateway, _preflight):
+        gateway.return_value = {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+            "name": "assistant_finish", "arguments": json.dumps({"answer": "За какой период показать операции?"}),
+        }}]}
+
+        from .assistant_agent import reply
+        response = reply(self.conversation, self.user, "Покажи операции")
+
+        self.assertEqual(response, {"text": "За какой период показать операции?", "kind": "tool_result", "data": {"steps": []}})
+        self.assertEqual(gateway.call_count, 1)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")

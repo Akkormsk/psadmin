@@ -219,9 +219,17 @@ class AssistantToolRegistryTests(TestCase):
     def test_openai_tools_start_with_business_areas_not_django_entities(self):
         definitions, names = openai_functions(self.admin)
 
-        self.assertEqual(set(names.values()), {"assistant.select_area"})
-        parameters = definitions[0]["function"]["parameters"]
+        self.assertEqual(set(names.values()), {"assistant.finish", "assistant.select_area"})
+        area = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.select_area")
+        parameters = area["parameters"]
         self.assertIn("cash", parameters["properties"]["area"]["enum"])
+
+        finish = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.finish")
+        self.assertTrue(finish["strict"])
+        self.assertEqual(finish["parameters"], {
+            "type": "object", "properties": {"answer": {"type": "string", "minLength": 1}},
+            "required": ["answer"], "additionalProperties": False,
+        })
 
     def test_opened_resource_publishes_a_specialized_universal_read(self):
         definitions, names = openai_functions(
@@ -428,8 +436,8 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertNotIn("read", names)
         self.assertNotIn("cash_transaction_create", names)
-        self.assertEqual(len(definitions), 1)
-        self.assertEqual(names[definitions[0]["function"]["name"]], "assistant.select_area")
+        self.assertEqual(len(definitions), 2)
+        self.assertEqual(set(names.values()), {"assistant.finish", "assistant.select_area"})
 
     def test_opened_area_publishes_its_action_contracts(self):
         _definitions, names = openai_functions(self.admin, area_id="cash")
