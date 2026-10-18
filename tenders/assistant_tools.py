@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import re
 from importlib import import_module
 from django.utils.module_loading import import_string
@@ -207,8 +208,15 @@ def openai_functions(user):
         name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
         if not name or name in names:
             raise RuntimeError("OpenAI function name collision")
+        input_schema = deepcopy(tool["input_schema"])
+        if tool["id"] == "read":
+            from .assistant_read import catalogue
+
+            entity = input_schema["plan"]["properties"]["entity"]
+            entity["enum"] = [item["id"] for item in catalogue(compact=True)["entities"]]
+            entity["description"] = "Choose one entity ID from this enum. Omit optional fields, filters and sorting unless the request needs them."
         properties, required, strict = {}, [], True
-        for key, declared in tool["input_schema"].items():
+        for key, declared in input_schema.items():
             schema, optional, compatible = _openai_type(declared)
             if optional:
                 schema = _nullable(schema)
