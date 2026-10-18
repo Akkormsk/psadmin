@@ -27,12 +27,17 @@ class Command(BaseCommand):
                 item["output"].get("usage")
                 for item in journal if item["stage"] == "function_call.response" and isinstance(item.get("output"), dict)
             ]
+            tool_events = [
+                item["output"] for item in journal
+                if item["stage"] == "function_call.tool" and isinstance(item.get("output"), dict)
+            ]
             self.stdout.write(json.dumps({
                 "tool_ids": [step.get("tool_id") for step in steps],
                 "tool_call_names": [
                     call.get("function", {}).get("name") for item in calls for call in item
                 ],
                 "tool_call_count": sum(len(item) for item in calls),
+                "tool_events": tool_events,
                 "usage": usage,
             }, ensure_ascii=False, default=str))
             if not any(step.get("tool_id") == "read" for step in steps):
