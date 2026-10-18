@@ -46,6 +46,7 @@ class AssistantResource:
     description: str
     entity: str
     areas: tuple[str, ...]
+    requires_superuser: bool = True
 
 
 _TOOLS: dict[str, AssistantTool] = {}
@@ -182,7 +183,8 @@ def available_resources(user, area_id: str | None = None) -> list[dict[str, Any]
             "areas": list(resource.areas),
         }
         for resource in _RESOURCES.values()
-        if area_id is None or area_id in resource.areas
+        if (not resource.requires_superuser or user.is_superuser)
+        and (area_id is None or area_id in resource.areas)
     ]
 
 

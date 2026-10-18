@@ -52,6 +52,11 @@ class AssistantToolRegistryTests(TestCase):
         for resource in available_resources(self.admin):
             self.assertEqual(resolve_entity(resource["entity"]), resource["entity"])
 
+    def test_read_resources_are_hidden_when_universal_read_is_not_permitted(self):
+        from .assistant_tools import available_resources
+
+        self.assertEqual(available_resources(self.user), [])
+
     def test_each_resource_opens_a_read_contract_without_a_model_identifier(self):
         from .assistant_tools import available_resources
 
