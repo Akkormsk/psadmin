@@ -18,8 +18,6 @@ class Command(BaseCommand):
             messages = respond(conversation, user, "Покажи три последние операции по кассе")
             final = messages[-1] if messages else {}
             steps = (final.get("data") or {}).get("steps") or []
-            if not any(step.get("tool_id") == "read" for step in steps):
-                raise CommandError("The model did not complete a READ call.")
             journal = serialize_debug_journal(conversation)
             calls = [
                 item["output"].get("message", {}).get("tool_calls", [])
@@ -31,9 +29,14 @@ class Command(BaseCommand):
             ]
             self.stdout.write(json.dumps({
                 "tool_ids": [step.get("tool_id") for step in steps],
+                "tool_call_names": [
+                    call.get("function", {}).get("name") for item in calls for call in item
+                ],
                 "tool_call_count": sum(len(item) for item in calls),
                 "usage": usage,
             }, ensure_ascii=False, default=str))
+            if not any(step.get("tool_id") == "read" for step in steps):
+                raise CommandError("The model did not complete a READ call.")
         finally:
             conversation.status = "archived"
             conversation.save(update_fields=["status"])
