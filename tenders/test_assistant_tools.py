@@ -45,6 +45,9 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(set(plan["properties"]), set(plan["required"]))
         filter_item = plan["properties"]["filters"]["anyOf"][0]["items"]
         self.assertEqual(filter_item["properties"]["op"]["enum"], sorted(__import__("tenders.assistant_read", fromlist=["OPS"]).OPS))
+        schema = next(item["function"] for item in definitions if item["function"]["name"] == "schema_describe")
+        self.assertIn("cash.CashTransaction", schema["parameters"]["properties"]["entity"]["enum"])
+        self.assertNotIn("assistant_catalog", names)
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan
@@ -55,6 +58,40 @@ class AssistantToolRegistryTests(TestCase):
         self.assertNotIn("model", read["input_schema"]["plan"]["properties"])
         with self.assertRaisesRegex(ReadPlanError, "Недопустимые параметры READ: model"):
             validate_plan(self.admin, {"model": "cash.CashTransaction", "fields": ["amount"]})
+
+    def test_schema_description_uses_the_same_metadata_as_read(self):
+        description = execute_tool("schema.describe", self.admin, {"entity": "tenders.TenderEstimate"})
+
+        self.assertEqual(description["entity"], "tenders.TenderEstimate")
+        owner = next(field for field in description["fields"] if field["name"] == "owner")
+        self.assertEqual(owner["relation"], get_user_model()._meta.label)
+        self.assertIn("username", {field["name"] for field in owner["fields"]})
+
+    def test_read_optional_nulls_use_the_documented_defaults(self):
+        from .assistant_read import validate_plan
+
+        validated = validate_plan(self.admin, {
+            "entity": "cash.CashTransaction", "fields": None, "order_by": None,
+            "limit": None, "filters": None, "aggregates": None, "group_by": None,
+        })
+
+        self.assertEqual(validated["limit"], 20)
+        self.assertEqual(validated["order_descriptors"][0][0]["name"], "id")
+
+    def test_optional_function_argument_null_is_normalized_before_an_action_executor(self):
+        from cash.models import CashReconciliation
+
+        execute_tool("cash.reconciliation_save", self.admin, {
+            "effective_date": "2026-10-18", "cash_balance": 1, "card_balance": 2, "note": None,
+        }, confirmed=True)
+
+        self.assertEqual(CashReconciliation.objects.get(effective_date=date(2026, 10, 18)).note, "")
+
+    def test_read_unknown_field_explains_the_allowed_fields(self):
+        with self.assertRaisesRegex(Exception, "Допустимые поля:.*amount"):
+            execute_tool("read", self.admin, {"plan": {
+                "entity": "cash.CashTransaction", "fields": ["not_a_field"],
+            }})
 
     def test_read_rejects_unknown_top_level_parameter(self):
         with self.assertRaisesRegex(Exception, "Недопустимые параметры действия: unexpected"):
@@ -471,10 +508,28 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["records"][0]["id"], second.pk)
         self.assertEqual(result["query"]["order_by"], ["-operation_date", "-id"])
 
+    def test_read_aggregate_does_not_depend_on_row_sorting(self):
+        from cash.models import CashTransaction
+
+        for amount in ("10", "20", "30"):
+            CashTransaction.objects.create(
+                operation_date=date(2026, 9, 1), account="cash", direction="income",
+                amount=amount, reason="Агрегация", created_by=self.admin,
+            )
+        base = {
+            "entity": "cash.CashTransaction", "fields": ["amount"],
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }
+        ascending = execute_tool("read", self.admin, {"plan": {**base, "order_by": "amount"}})
+        descending = execute_tool("read", self.admin, {"plan": {**base, "order_by": "-id"}})
+
+        self.assertEqual(ascending["aggregates"], descending["aggregates"])
+        self.assertEqual(str(ascending["aggregates"]["sum_amount"]), "60")
+
     def test_read_rejects_hidden_order_field(self):
         from .assistant_tools import AssistantToolError
 
-        with self.assertRaisesRegex(AssistantToolError, "недоступные поля"):
+        with self.assertRaisesRegex(AssistantToolError, "Недоступное поле raw"):
             execute_tool("read", self.admin, {"plan": {
                 "entity": "cash.BankPayment", "order_by": ["-raw", "-id"],
             }})
@@ -501,7 +556,7 @@ class AssistantToolRegistryTests(TestCase):
         from cash.models import BankPayment
 
         BankPayment.objects.create(external_id="test-payment", amount="10", operation_date=date(2026, 9, 1), account_number="secret")
-        with self.assertRaisesRegex(Exception, "недоступные поля"):
+        with self.assertRaisesRegex(Exception, "Недоступное поле account_number"):
             execute_tool("read", self.admin, {"plan": {"entity": "cash.BankPayment", "fields": ["account_number"]}})
         with self.assertRaisesRegex(Exception, "Недостаточно прав"):
             execute_tool("read", self.user, {"plan": {"entity": "cash.BankPayment", "fields": ["id"]}})
@@ -559,8 +614,11 @@ class AssistantToolRegistryTests(TestCase):
         self.assertNotIn("account_number", {field["name"] for field in bank["fields"]})
         estimate = next(item for item in catalog if item["id"] == "tenders.TenderEstimate")
         self.assertEqual(next(field for field in estimate["fields"] if field["name"] == "tender")["traversal"], "forward_to_one")
-        with self.assertRaisesRegex(Exception, "недоступные поля"):
-            execute_tool("read", self.admin, {"plan": {"entity": "tenders.TenderEstimate", "fields": ["owner.username"]}})
+        from .assistant_read import validate_plan
+        validated = validate_plan(self.admin, {"entity": "tenders.TenderEstimate", "fields": ["owner.username"]})
+        self.assertIn("owner.username", validated["selected_names"])
+        with self.assertRaisesRegex(Exception, "Недоступное поле password"):
+            execute_tool("read", self.admin, {"plan": {"entity": "tenders.TenderEstimate", "fields": ["owner.password"]}})
         with self.assertRaisesRegex(Exception, "JSON-поля"):
             execute_tool("read", self.admin, {"plan": {"entity": "tender_selection.Tender", "filters": [{"field": "risk_assessment", "op": "eq", "value": {}}]}})
 

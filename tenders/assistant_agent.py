@@ -7,7 +7,9 @@ from .gateway_budget import preflight
 from .services import TenderAIError
 
 MAX_TOOL_CALLS = 8
-MAX_CONTEXT_MESSAGES = 40
+MAX_HISTORY_TOKENS = 1_200
+MAX_MEMORY_STRING_CHARS = 240
+MAX_MEMORY_ITEMS = 20
 
 def _debug(conversation, stage, **payload):
     from .assistant_conversations import add_debug_event
@@ -31,13 +33,25 @@ def _gateway(messages, tools):
 
 def _history(conversation):
     events = list(conversation.feedback_events.filter(scope="assistant_conversation").order_by("-created_at", "-pk")[:20])
-    return [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in reversed(events)]
+    items = [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in reversed(events)]
+    selected, size = [], 0
+    for item in reversed(items):
+        item_size = max(1, len(str(item.get("content", ""))) // 4)
+        if selected and size + item_size > MAX_HISTORY_TOKENS:
+            break
+        selected.append(item)
+        size += item_size
+    return list(reversed(selected))
 
 def _new_state(conversation, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    return {"messages": [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}, *history], "steps": [], "attachments": attachments or []}
+    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. For an unfamiliar entity, call schema.describe before reading its fields, filters, relations, sorting or aggregates. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}]
+    memory = conversation.context.get("agent_memory")
+    if isinstance(memory, dict):
+        messages.append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
+    return {"messages": [*messages, *history], "steps": [], "attachments": attachments or []}
 
 def _save(conversation, state):
     conversation.context["agent_run"] = state
@@ -47,10 +61,57 @@ def _remember_user_message(state, message):
     if not state["messages"] or state["messages"][-1] != {"role": "user", "content": message}:
         state["messages"].append({"role": "user", "content": message})
 
-def _trim_messages(state):
-    if state.get("waiting_confirmation") or len(state["messages"]) <= MAX_CONTEXT_MESSAGES + 1:
-        return
-    state["messages"] = [state["messages"][0], *state["messages"][-MAX_CONTEXT_MESSAGES:]]
+
+def _compact_memory(value, depth=0):
+    if isinstance(value, str):
+        return value[:MAX_MEMORY_STRING_CHARS]
+    if isinstance(value, list):
+        return [_compact_memory(item, depth + 1) for item in value[:MAX_MEMORY_ITEMS]]
+    if isinstance(value, dict):
+        if depth >= 3:
+            return {}
+        return {
+            str(key)[:80]: _compact_memory(item, depth + 1)
+            for key, item in list(value.items())[:MAX_MEMORY_ITEMS]
+        }
+    return value
+
+
+def _remember_read_state(state):
+    for step in reversed(state["steps"]):
+        if step["tool_id"] != "read" or not isinstance(step["result"], dict):
+            continue
+        result = step["result"]
+        return {
+            "entity": result.get("entity"), "query": _compact_memory(result.get("query", {})),
+            "aggregates": _compact_memory(result.get("aggregates", {})), "total_count": result.get("total_count"),
+            "returned_count": result.get("returned_count"), "sources": (result.get("sources") or [])[:20],
+        }
+    return None
+
+
+def _remember_schema_state(state):
+    for step in reversed(state["steps"]):
+        if step["tool_id"] != "schema.describe" or not isinstance(step["result"], dict):
+            continue
+        return {"entity": step["result"].get("entity")}
+    return None
+
+
+def _finish_turn(conversation, state):
+    memory = {}
+    last_read = _remember_read_state(state)
+    last_schema = _remember_schema_state(state)
+    if last_read is not None:
+        memory["last_read"] = last_read
+    if last_schema is not None:
+        memory["last_schema"] = last_schema
+    if memory:
+        conversation.context["agent_memory"] = memory
+    else:
+        conversation.context.pop("agent_memory", None)
+    conversation.context.pop("agent_run", None)
+    conversation.save(update_fields=["context"])
 
 def _finish(conversation):
     conversation.context.pop("agent_run", None)
@@ -66,7 +127,7 @@ def _run(conversation, user, state):
         _debug(conversation, "function_call.response", output={"message": answer, "usage": usage})
         state["messages"].append(answer); calls = answer.get("tool_calls") or []
         if not calls:
-            _trim_messages(state); _save(conversation, state)
+            _finish_turn(conversation, state)
             return {"text": str(answer.get("content") or "Готово."), "kind": "tool_result", "data": {"steps": state["steps"]}}
         if len(calls) != 1:
             raise TenderAIError("Одновременные действия сейчас не поддерживаются.")
@@ -91,7 +152,6 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
     if isinstance(previous, dict) and not previous.get("waiting_confirmation"):
         state = previous
         _remember_user_message(state, message)
-        _trim_messages(state)
     else:
         state = _new_state(conversation, message, attachments)
     return _run(conversation, user, state)

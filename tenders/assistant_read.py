@@ -8,6 +8,7 @@ import re
 from uuid import UUID
 
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Avg, Count, Max, Min, Sum, Q
@@ -25,6 +26,7 @@ EXCLUDED_APPS = {"admin", "auth", "contenttypes", "sessions", "core"}
 EXCLUDED_MODELS = {"CashAuditLog", "BankSyncState", "OwnerFeedbackEvent", "OwnerInteraction"}
 SENSITIVE_NAMES = {"raw", "notification_raw", "clarifications_raw", "complaints_raw", "protocol", "avatar_data", "token", "account_number", "counterparty_account", "own_identifiers"}
 SENSITIVE_FRAGMENTS = ("password", "secret", "token", "credential", "_raw")
+IDENTITY_FIELDS = {"id", "username", "first_name", "last_name"}
 SCALAR_TYPES = (models.CharField, models.TextField, models.IntegerField, models.DecimalField, models.FloatField, models.DateField, models.DateTimeField, models.BooleanField)
 NUMERIC_TYPES = (models.IntegerField, models.DecimalField, models.FloatField)
 AGGREGATES = {"count": Count, "sum": Sum, "min": Min, "max": Max, "avg": Avg}
@@ -41,9 +43,9 @@ def plan_contract():
         "required": True,
         "additional_properties": False,
         "properties": {
-            "entity": {"type": "string", "required": True, "description": "entity ID from the opened READ node"},
-            "view": {"type": "string", "required": False, "description": "optional business view ID from the opened entity node"},
-            "fields": {"type": "string[]", "required": False, "description": "field names from the opened entity node; id is always returned"},
+            "entity": {"type": "string", "required": True, "description": "entity ID returned by schema.describe"},
+            "view": {"type": "string", "required": False, "description": "optional business view ID from schema.describe"},
+            "fields": {"type": "string[]", "required": False, "description": "field names from schema.describe; id is always returned"},
             "search": {"type": "string", "required": False},
             "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": {"any_of": ["string", "number", "boolean", "null", "string[]", "number[]", "boolean[]"], "description": "JSON value compatible with the selected field"}}},
             "order_by": {"type": "string|string[]", "required": False, "description": "one or more opened scalar fields, each optionally prefixed with -; id is added as a stable final tiebreaker"},
@@ -109,13 +111,23 @@ def _field_kind(field):
     return None
 
 
+def _identity_model(model):
+    return model is get_user_model()
+
+
+def _safe_related_model(model):
+    return _safe_model(model) or _identity_model(model)
+
+
 def _base_fields(model):
     fields = {"id": {"lookup": model._meta.pk.attname, "field": model._meta.pk, "kind": "scalar"}}
     for field in model._meta.fields:
         kind = _field_kind(field)
         if field.primary_key or _sensitive(field.name) or kind is None:
             continue
-        if kind == "relation" and not _safe_model(field.related_model):
+        if _identity_model(model) and field.name not in IDENTITY_FIELDS:
+            continue
+        if kind == "relation" and not _safe_related_model(field.related_model):
             continue
         fields[field.name] = {"lookup": field.attname if kind == "relation" else field.name, "field": field, "kind": kind}
     return fields
@@ -150,7 +162,8 @@ def _path(model, fields, name, *, allow_json=False):
     for position, part in enumerate(parts):
         descriptor = current_fields.get(part)
         if descriptor is None:
-            raise ReadPlanError("Запрошены недоступные поля")
+            allowed = ", ".join(sorted(current_fields)[:30])
+            raise ReadPlanError(f"Недоступное поле {part}. Допустимые поля: {allowed}")
         if position == len(parts) - 1:
             if descriptor["kind"] == "json" and not allow_json:
                 raise ReadPlanError("JSON-поля нельзя использовать в этом выражении")
@@ -158,14 +171,14 @@ def _path(model, fields, name, *, allow_json=False):
         if descriptor["kind"] != "relation":
             raise ReadPlanError("Переход разрешён только по связи ForeignKey")
         related = descriptor["field"].related_model
-        if not _safe_model(related):
+        if not _safe_related_model(related):
             raise ReadPlanError("Переход к служебным данным запрещён")
         lookups.append(descriptor["field"].name)
         current_fields = _base_fields(related)
     raise ReadPlanError("Запрошены недоступные поля")
 
 
-def _catalog_field(name, descriptor):
+def _catalog_field(name, descriptor, *, include_related=True):
     field = descriptor["field"]
     aggregate_ops = []
     if descriptor["kind"] == "scalar":
@@ -185,6 +198,12 @@ def _catalog_field(name, descriptor):
         result["help_text"] = str(field.help_text).strip()
     if descriptor["kind"] == "relation":
         result.update({"relation": field.related_model._meta.label, "traversal": "forward_to_one"})
+        if include_related:
+            related_fields = _base_fields(field.related_model)
+            result["fields"] = [
+                _catalog_field(item_name, item, include_related=False)
+                for item_name, item in sorted(related_fields.items())
+            ]
     if descriptor["kind"] == "json":
         result["json_policy"] = {"read": True, "max_depth": MAX_JSON_DEPTH, "max_items": MAX_JSON_ITEMS}
     choices = [
@@ -243,6 +262,19 @@ def catalogue(*, compact=False):
             "entities": items,
         }
     return items
+
+
+def describe_entity(identifier):
+    """Return one entity's current public metadata without a global catalogue."""
+    model, entity, fields = _entity(identifier)
+    return {
+        "entity": entity,
+        "label": str(model._meta.verbose_name),
+        "description": _model_description(model),
+        "views": _business_views(model),
+        "fields": [_catalog_field(name, descriptor) for name, descriptor in sorted(fields.items())],
+        "filter_contract": catalogue(compact=True)["filter_contract"],
+    }
 
 
 def _value(value):
@@ -343,7 +375,7 @@ def validate_plan(user, plan):
         raise ReadPlanError("Неизвестное бизнес-представление")
     selected_names = plan.get("fields") or list(fields)
     if not isinstance(selected_names, list) or not selected_names:
-        raise ReadPlanError("Запрошены недоступные поля")
+        raise ReadPlanError("Некорректный список полей")
     selected = [_path(model, fields, name, allow_json=True) for name in selected_names]
     if "id" not in selected_names:
         selected_names = ["id", *selected_names]
@@ -376,7 +408,9 @@ def validate_plan(user, plan):
     groups = [_path(model, fields, name) for name in group_names]
     if any(item["kind"] != "scalar" for item in groups):
         raise ReadPlanError("Некорректная группировка")
-    order = plan.get("order_by", "-id")
+    order = plan.get("order_by")
+    if order is None:
+        order = "-id"
     if isinstance(order, str):
         order_names = [order]
     elif isinstance(order, list) and order and all(isinstance(item, str) and item for item in order):
@@ -394,7 +428,7 @@ def validate_plan(user, plan):
         order_descriptors.append((descriptor, descending))
     if "id" not in {item.lstrip("-") for item in order_names}:
         order_descriptors.append((_path(model, fields, "id"), order_descriptors[-1][1]))
-    limit = plan.get("limit", 20)
+    limit = 20 if plan.get("limit") is None else plan["limit"]
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_ROWS:
         raise ReadPlanError("Некорректный лимит")
     return {

@@ -38,6 +38,7 @@ class AssistantTool:
 
 _TOOLS: dict[str, AssistantTool] = {}
 _DISCOVERED = False
+_MODEL_HIDDEN_TOOLS = {"assistant.capabilities", "assistant.catalog"}
 
 
 def _discover_app_actions():
@@ -95,6 +96,14 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
     validate_tool_call(identifier, user, payload)
     if tool.requires_confirmation and not confirmed:
         raise AssistantToolConfirmationRequired("Действие требует явного подтверждения")
+    # OpenAI strict schemas encode optional values as nullable.  The business
+    # executor must see the same shape as it would when an optional argument
+    # was simply omitted, rather than every executor having to special-case
+    # JSON null.
+    payload = {
+        key: value for key, value in payload.items()
+        if value is not None or key in required_input_names(identifier)
+    }
     return tool.executor(user, payload)
 
 
@@ -203,18 +212,18 @@ def openai_functions(user):
     """Function definitions and reversible names generated from registered tools."""
     definitions, names = [], {}
     for tool in available_tools(user):
-        if not tool["available"]:
+        if not tool["available"] or tool["id"] in _MODEL_HIDDEN_TOOLS:
             continue
         name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
         if not name or name in names:
             raise RuntimeError("OpenAI function name collision")
         input_schema = deepcopy(tool["input_schema"])
-        if tool["id"] == "read":
+        if tool["id"] in {"read", "schema.describe"}:
             from .assistant_read import catalogue
 
-            entity = input_schema["plan"]["properties"]["entity"]
+            entity = input_schema["plan"]["properties"]["entity"] if tool["id"] == "read" else input_schema["entity"]
             entity["enum"] = [item["id"] for item in catalogue(compact=True)["entities"]]
-            entity["description"] = "Choose one entity ID from this enum. Omit optional fields, filters and sorting unless the request needs them."
+            entity["description"] = "Choose one entity ID from this enum. Use schema.describe before filters, fields, relations, aggregation or sorting for an unfamiliar entity."
         properties, required, strict = {}, [], True
         for key, declared in input_schema.items():
             schema, optional, compatible = _openai_type(declared)
@@ -275,6 +284,15 @@ def _read_data(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def _describe_entity(user, payload):
+    from .assistant_read import ReadPlanError, describe_entity
+
+    try:
+        return describe_entity(payload.get("entity"))
+    except ReadPlanError as exc:
+        raise AssistantToolError(str(exc)) from exc
+
+
 def workflow_catalog(user, actions=None):
     """One runtime encyclopedia assembled solely from registered actions."""
     actions = available_tools(user) if actions is None else actions
@@ -306,4 +324,5 @@ def _catalog(user, _payload):
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
+register_tool(AssistantTool("schema.describe", "Описание сущности", "Возвращает компактные актуальные поля, связи и ограничения одной выбранной сущности перед чтением.", {"entity": {"type": "string", "required": True}}, True, False, True, _describe_entity))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", read_input_schema(), True, False, True, _read_data))

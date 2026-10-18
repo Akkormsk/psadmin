@@ -62,13 +62,11 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "content": "За какой период?"},
             {"role": "assistant", "content": "За сентябрь найдено 3 заказа."},
         ]
-        from .assistant_agent import reply
+        first = respond(self.conversation, self.user, "Покажи заказы Иванова")
+        second = respond(self.conversation, self.user, "За сентябрь")
 
-        first = reply(self.conversation, self.user, "Покажи заказы Иванова")
-        second = reply(self.conversation, self.user, "За сентябрь")
-
-        self.assertEqual(first["text"], "За какой период?")
-        self.assertEqual(second["text"], "За сентябрь найдено 3 заказа.")
+        self.assertEqual(first[-1]["text"], "За какой период?")
+        self.assertEqual(second[-1]["text"], "За сентябрь найдено 3 заказа.")
         messages = gateway.call_args_list[1].args[0]
         self.assertEqual([item for item in messages if item.get("role") == "user"], [
             {"role": "user", "content": "Покажи заказы Иванова"},
@@ -86,3 +84,27 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual([item for item in messages if item.get("role") == "user"], [
             {"role": "user", "content": "Привет"},
         ])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_completed_read_is_replaced_with_compact_memory_before_the_next_turn(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "read-1", "type": "function", "function": {
+                "name": "read", "arguments": json.dumps({"plan": {"entity": "cash.CashTransaction", "limit": 1}}),
+            }}]},
+            {"role": "assistant", "content": "Одна операция найдена."},
+            {"role": "assistant", "content": "Это была расходная операция."},
+        ]
+        result = {"entity": "cash.CashTransaction", "query": {"filters": []}, "total_count": 1,
+                  "returned_count": 1, "aggregates": {}, "records": [{"id": 1, "reason": "x"}],
+                  "sources": [{"entity": "cash.CashTransaction", "id": 1}]}
+        with patch("tenders.assistant_agent.execute_tool", return_value=result):
+            from .assistant_agent import reply
+            reply(self.conversation, self.user, "Покажи операцию")
+            self.assertNotIn("agent_run", self.conversation.context)
+            self.assertNotIn("records", self.conversation.context["agent_memory"]["last_read"])
+            self.assertLessEqual(len(json.dumps(self.conversation.context["agent_memory"])), 2_000)
+            reply(self.conversation, self.user, "А какая это операция?")
+
+        messages = gateway.call_args_list[2].args[0]
+        self.assertFalse(any(item.get("role") == "tool" for item in messages))
