@@ -1,6 +1,18 @@
 """Published calculator capabilities backed by existing calculator services."""
-from tenders.assistant_tools import AssistantTool, AssistantToolError, register_tool
+from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
 from .actions import CalculatorActionError, bulk_estimates, calculate_estimate, delete_estimate, duplicate_estimate, save_estimate
+
+
+register_resource(AssistantResource(
+    "calculator.estimates", "Сохранённые расчёты",
+    "Расчёты листовой печати и плоттера, сохранённые в калькуляторе.",
+    "calculator.Estimate", ("calculator",),
+))
+register_resource(AssistantResource(
+    "calculator.price_items", "Цены и материалы калькулятора",
+    "Справочник материалов, работ и цен, используемый калькулятором.",
+    "calculator.PriceItem", ("calculator",),
+))
 
 
 def calculate(user, payload):

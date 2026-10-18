@@ -1,11 +1,33 @@
 """Published production knowledge capabilities using existing UI services."""
-from .assistant_tools import AssistantTool, AssistantToolError, register_tool
+from .assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
 from .models import CounterpartyKnowledgeVersion, Proposal
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
 from .production_actions import add_route_calculation_sources, confirm_proposed_stage, confirm_route_training, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_counterparty, draft_production_feedback, reopen_confirmed_route, restore_requirement_to_route, revise_route_build, save_manual_training_example, select_route_catalog_product, start_route_build
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
+
+
+register_resource(AssistantResource(
+    "tenders.orders", "Заказы",
+    "Заказы вне тендерного пайплайна и их текущие стадии.",
+    "tenders.Order", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.order_estimates", "Расчёты заказов",
+    "Сохранённые расчёты цен и экономики по заказам.",
+    "tenders.OrderEstimate", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.counterparties", "Контрагенты",
+    "Контрагенты производственной базы и их активность.",
+    "tenders.Counterparty", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.production_stages", "Этапы производства",
+    "Настроенные этапы производственного маршрута.",
+    "tenders.ProcessDefinition", ("tenders",),
+))
 
 
 def confirm_provider_knowledge(user, payload):

@@ -1,5 +1,5 @@
 """Published references to tender-selection executors shared with the site."""
-from tenders.assistant_tools import AssistantTool, AssistantToolError, register_tool
+from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
 
 from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
@@ -7,6 +7,23 @@ from .services import (
     preview_tender_document, record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid,
     update_tender_review,
 )
+
+
+register_resource(AssistantResource(
+    "tender_selection.tenders", "Тендеры",
+    "Тендеры из ЕИС; для текущего списка «Входящие» используй доступное бизнес-представление «incoming».",
+    "tender_selection.Tender", ("tender_selection",),
+))
+register_resource(AssistantResource(
+    "tender_selection.customers", "Заказчики",
+    "Карточки заказчиков, связанные с тендерами.",
+    "tender_selection.Organization", ("tender_selection",),
+))
+register_resource(AssistantResource(
+    "tender_selection.contract_statistics", "Статистика контрактов",
+    "Исторические завершённые закупки и их фактические цены для анализа рынка.",
+    "tender_selection.ContractStat", ("tender_selection",),
+))
 
 
 def _save_discovery_settings(_user, payload):

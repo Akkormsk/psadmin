@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -29,9 +29,42 @@ class AssistantToolRegistryTests(TestCase):
         )
         self.assertNotIn("schema", areas)
         self.assertNotIn("action", areas)
-        self.assertEqual(available_resources(self.admin, "payroll"), [])
-        resources = {item["id"]: item for item in available_resources(self.admin, "cash")}
-        self.assertEqual(resources["cash.transactions"]["entity"], "cash.CashTransaction")
+        expected_resources = {
+            "calculator": {"calculator.estimates", "calculator.price_items"},
+            "cash": {"cash.transactions"},
+            "finance": {"finance.operating_expenses", "finance.payroll_lines", "finance.periods"},
+            "payroll": {"finance.payroll_lines", "payroll.order_records"},
+            "tenders": {"tenders.counterparties", "tenders.order_estimates", "tenders.orders", "tenders.production_stages"},
+            "tender_selection": {"tender_selection.contract_statistics", "tender_selection.customers", "tender_selection.tenders"},
+        }
+        for area_id, identifiers in expected_resources.items():
+            resources = {item["id"]: item for item in available_resources(self.admin, area_id)}
+            self.assertEqual(set(resources), identifiers)
+        self.assertEqual(
+            next(item for item in available_resources(self.admin, "cash") if item["id"] == "cash.transactions")["entity"],
+            "cash.CashTransaction",
+        )
+
+    def test_each_registered_resource_resolves_through_universal_read_metadata(self):
+        from .assistant_read import resolve_entity
+        from .assistant_tools import available_resources
+
+        for resource in available_resources(self.admin):
+            self.assertEqual(resolve_entity(resource["entity"]), resource["entity"])
+
+    def test_each_resource_opens_a_read_contract_without_a_model_identifier(self):
+        from .assistant_tools import available_resources
+
+        for area in available_areas(self.admin):
+            for resource in available_resources(self.admin, area["id"]):
+                definitions, names = openai_functions(
+                    self.admin, area_id=area["id"], resource_id=resource["id"],
+                )
+                read = next(
+                    item["function"] for item in definitions
+                    if names[item["function"]["name"]] == f"read:{resource['id']}"
+                )
+                self.assertNotIn("entity", read["parameters"]["properties"]["plan"]["properties"])
 
     def test_openai_tools_start_with_business_areas_not_django_entities(self):
         definitions, names = openai_functions(self.admin)
