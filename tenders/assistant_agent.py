@@ -21,7 +21,11 @@ def _gateway(messages, tools):
     request = Request(f"{os.getenv('TIMEWEB_AI_BASE_URL', 'https://api.timeweb.ai/v1').rstrip('/')}/chat/completions", data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, method="POST")
     try:
         with urlopen(request, timeout=45) as response:
-            return json.loads(response.read().decode())["choices"][0]["message"]
+            payload = json.loads(response.read().decode())
+            message = payload["choices"][0]["message"]
+            if isinstance(payload.get("usage"), dict):
+                message = {**message, "_gateway_usage": payload["usage"]}
+            return message
     except Exception as exc:
         raise TenderAIError("Не удалось обратиться к AI Gateway.") from exc
 
@@ -57,7 +61,9 @@ def _run(conversation, user, state):
     registry = {item["id"]: item for item in available_tools(user)}
     for _ in range(MAX_TOOL_CALLS + 1):
         preflight(); _debug(conversation, "function_call.request", input={"messages": state["messages"], "tools": definitions})
-        answer = _gateway(state["messages"], definitions); _debug(conversation, "function_call.response", output=answer)
+        answer = _gateway(state["messages"], definitions)
+        usage = answer.pop("_gateway_usage", None)
+        _debug(conversation, "function_call.response", output={"message": answer, "usage": usage})
         state["messages"].append(answer); calls = answer.get("tool_calls") or []
         if not calls:
             _trim_messages(state); _save(conversation, state)
