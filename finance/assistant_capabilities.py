@@ -18,6 +18,26 @@ register_resource(AssistantResource(
     "Строки начислений сотрудникам по финансовым периодам.",
     "finance.PayrollLine", ("finance", "payroll"),
 ))
+register_resource(AssistantResource(
+    "finance.manager_settings", "Настройки менеджеров",
+    "Ставки смен, порядок и доля дизайнерских начислений менеджеров.",
+    "finance.ManagerSettings", ("finance", "payroll"),
+))
+register_resource(AssistantResource(
+    "finance.kpi_tiers", "Уровни KPI",
+    "Пороги прибыли, используемые для расчёта KPI.",
+    "finance.KpiTier", ("finance", "payroll"),
+))
+register_resource(AssistantResource(
+    "finance.kpi_rates", "Ставки KPI менеджеров",
+    "Проценты KPI менеджеров для каждого уровня прибыли.",
+    "finance.ManagerKpiRate", ("finance", "payroll"),
+))
+register_resource(AssistantResource(
+    "finance.period_expenses", "Расходы по периодам",
+    "Фактические постоянные расходы, включённые в конкретные финансовые периоды.",
+    "finance.PeriodExpense", ("finance",),
+))
 
 
 def create(user, payload):

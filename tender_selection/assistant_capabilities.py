@@ -24,6 +24,11 @@ register_resource(AssistantResource(
     "Исторические завершённые закупки и их фактические цены для анализа рынка.",
     "tender_selection.ContractStat", ("tender_selection",),
 ))
+register_resource(AssistantResource(
+    "tender_selection.filter_settings", "Настройки отбора тендеров",
+    "Действующие плюс- и минус-слова, ценовые и временные ограничения отбора.",
+    "tender_selection.FilterSettings", ("tender_selection",),
+))
 
 
 def _save_discovery_settings(_user, payload):

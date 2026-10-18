@@ -3,7 +3,7 @@ from django.db import models
 
 
 class ManagerSettings(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, verbose_name="Менеджер", on_delete=models.CASCADE)
     shift_rate = models.DecimalField("Ставка смены", max_digits=10, decimal_places=2, default=0)
     leave_shift_rate = models.DecimalField("Ставка отпускной смены", max_digits=10, decimal_places=2, default=0)
     design_percent = models.DecimalField("Отчисление за макеты, %", max_digits=5, decimal_places=2, default=90)
@@ -24,8 +24,8 @@ class KpiTier(models.Model):
 
 
 class ManagerKpiRate(models.Model):
-    manager = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    tier = models.ForeignKey(KpiTier, on_delete=models.CASCADE)
+    manager = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Менеджер", on_delete=models.CASCADE)
+    tier = models.ForeignKey(KpiTier, verbose_name="Уровень KPI", on_delete=models.CASCADE)
     percent = models.DecimalField("KPI, %", max_digits=5, decimal_places=2, default=0)
 
     class Meta:
@@ -58,8 +58,8 @@ class OperatingExpense(models.Model):
 
 
 class PeriodExpense(models.Model):
-    period = models.ForeignKey(FinancialPeriod, on_delete=models.CASCADE, related_name="expenses")
-    template = models.ForeignKey(OperatingExpense, null=True, blank=True, on_delete=models.SET_NULL)
+    period = models.ForeignKey(FinancialPeriod, verbose_name="Учётный период", on_delete=models.CASCADE, related_name="expenses")
+    template = models.ForeignKey(OperatingExpense, verbose_name="Постоянный расход", null=True, blank=True, on_delete=models.SET_NULL)
     name = models.CharField("Название расхода", max_length=120)
     amount = models.DecimalField("Сумма", max_digits=12, decimal_places=2)
 

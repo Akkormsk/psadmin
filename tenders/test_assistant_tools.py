@@ -30,12 +30,12 @@ class AssistantToolRegistryTests(TestCase):
         self.assertNotIn("schema", areas)
         self.assertNotIn("action", areas)
         expected_resources = {
-            "calculator": {"calculator.estimates", "calculator.price_items"},
-            "cash": {"cash.transactions"},
-            "finance": {"finance.operating_expenses", "finance.payroll_lines", "finance.periods"},
-            "payroll": {"finance.payroll_lines", "payroll.order_records"},
-            "tenders": {"tenders.counterparties", "tenders.order_estimates", "tenders.orders", "tenders.production_stages"},
-            "tender_selection": {"tender_selection.contract_statistics", "tender_selection.customers", "tender_selection.tenders"},
+            "calculator": {"calculator.estimate_groups", "calculator.estimates", "calculator.price_items", "calculator.production_rules", "calculator.settings"},
+            "cash": {"cash.bank_payments", "cash.reconciliations", "cash.transactions"},
+            "finance": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.operating_expenses", "finance.payroll_lines", "finance.period_expenses", "finance.periods"},
+            "payroll": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.payroll_lines", "payroll.order_records"},
+            "tenders": {"tenders.catalog_categories", "tenders.catalog_products", "tenders.catalog_suppliers", "tenders.counterparties", "tenders.lessons", "tenders.order_estimates", "tenders.order_lines", "tenders.orders", "tenders.production_stages", "tenders.production_types", "tenders.settings", "tenders.stage_counterparties", "tenders.tender_estimates", "tenders.tender_lines"},
+            "tender_selection": {"tender_selection.contract_statistics", "tender_selection.customers", "tender_selection.filter_settings", "tender_selection.tenders"},
         }
         for area_id, identifiers in expected_resources.items():
             resources = {item["id"]: item for item in available_resources(self.admin, area_id)}
@@ -46,11 +46,18 @@ class AssistantToolRegistryTests(TestCase):
         )
 
     def test_each_registered_resource_resolves_through_universal_read_metadata(self):
+        from django.apps import apps
         from .assistant_read import resolve_entity
         from .assistant_tools import available_resources
 
         for resource in available_resources(self.admin):
             self.assertEqual(resolve_entity(resource["entity"]), resource["entity"])
+            model = apps.get_model(resource["entity"])
+            technical_labels = [
+                field.name for field in model._meta.fields
+                if str(field.verbose_name) == field.name.replace("_", " ")
+            ]
+            self.assertEqual(technical_labels, [], resource["entity"])
 
     def test_read_resources_are_hidden_when_universal_read_is_not_permitted(self):
         from .assistant_tools import available_resources

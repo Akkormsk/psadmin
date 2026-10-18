@@ -13,6 +13,21 @@ register_resource(AssistantResource(
     "Справочник материалов, работ и цен, используемый калькулятором.",
     "calculator.PriceItem", ("calculator",),
 ))
+register_resource(AssistantResource(
+    "calculator.production_rules", "Правила производственного расчёта",
+    "Правила расхода материалов и технологических коэффициентов калькулятора.",
+    "calculator.ProductionRule", ("calculator",),
+))
+register_resource(AssistantResource(
+    "calculator.settings", "Настройки калькулятора",
+    "Ставки, коэффициенты, скидки и НДС листового калькулятора.",
+    "calculator.CalculatorSettings", ("calculator",),
+))
+register_resource(AssistantResource(
+    "calculator.estimate_groups", "Группы расчётов",
+    "Группы, в которые организованы сохранённые расчёты.",
+    "calculator.EstimateGroup", ("calculator",),
+))
 
 
 def calculate(user, payload):

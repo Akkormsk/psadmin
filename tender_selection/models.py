@@ -33,7 +33,7 @@ class FilterSettings(models.Model):
     # Позиция в списке плюс-слов для run_keyword_pull — обход по кругу растянут
     # на несколько циклов сбора, курсор просто запоминает, с какого слова
     # продолжить в следующий раз.
-    keyword_pull_cursor = models.PositiveIntegerField(default=0)
+    keyword_pull_cursor = models.PositiveIntegerField("Позиция следующего ключевого слова", default=0)
     profile_triage_enabled = models.BooleanField(
         "Jev: помечать сомнительные входящие", default=False,
         help_text="Проверяет только новые тендеры, уже прошедшие плюс/минус-слова.",

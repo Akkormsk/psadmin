@@ -18,6 +18,16 @@ register_resource(AssistantResource(
     "Поступления, расходы и движения по наличным и карте.",
     "cash.CashTransaction", ("cash",),
 ))
+register_resource(AssistantResource(
+    "cash.bank_payments", "Банковские платежи",
+    "Платежи, полученные из банка, и их видимость в кассе.",
+    "cash.BankPayment", ("cash",),
+))
+register_resource(AssistantResource(
+    "cash.reconciliations", "Сверки остатков",
+    "Сохранённые сверки наличных и банковских остатков.",
+    "cash.CashReconciliation", ("cash",),
+))
 
 _TRANSACTION_FIELDS = {
     "operation_date": {"type": "string", "required": True, "description": "Дата операции в формате ГГГГ-ММ-ДД"},

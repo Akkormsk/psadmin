@@ -133,10 +133,10 @@ class Estimate(models.Model):
 
 
 class EstimateGroup(models.Model):
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimate_groups")
-    calculator_type = models.CharField(max_length=20, choices=Estimate.TYPE_CHOICES, default=Estimate.TYPE_SHEET)
-    name = models.CharField(max_length=200)
-    created_at = models.DateTimeField(auto_now_add=True)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Ответственный", on_delete=models.CASCADE, related_name="calculator_estimate_groups")
+    calculator_type = models.CharField("Калькулятор", max_length=20, choices=Estimate.TYPE_CHOICES, default=Estimate.TYPE_SHEET)
+    name = models.CharField("Название", max_length=200)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
 
     class Meta:
         ordering = ["name", "pk"]

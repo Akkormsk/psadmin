@@ -28,6 +28,56 @@ register_resource(AssistantResource(
     "Настроенные этапы производственного маршрута.",
     "tenders.ProcessDefinition", ("tenders",),
 ))
+register_resource(AssistantResource(
+    "tenders.tender_estimates", "Расчёты тендеров",
+    "Сохранённые расчёты цены и экономики по тендерам.",
+    "tenders.TenderEstimate", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.tender_lines", "Позиции расчётов тендеров",
+    "Товары и работы внутри расчётов тендеров.",
+    "tenders.TenderLine", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.order_lines", "Позиции расчётов заказов",
+    "Товары и работы внутри расчётов заказов.",
+    "tenders.OrderLine", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.settings", "Настройки тендерных расчётов",
+    "Общие настройки расчётов тендеров.",
+    "tenders.TenderSettings", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.production_types", "Типы производства",
+    "Настроенные типы производственных маршрутов.",
+    "tenders.ProductionType", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.lessons", "Правила производства",
+    "Подтверждённые правила и знания для производственных расчётов.",
+    "tenders.Lesson", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.catalog_suppliers", "Поставщики каталогов",
+    "Поставщики, из чьих каталогов доступны товары и цены.",
+    "tenders.CatalogSupplier", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.catalog_categories", "Категории каталогов",
+    "Категории товаров поставщиков.",
+    "tenders.CatalogCategory", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.catalog_products", "Товары каталогов",
+    "Товары, цены и доступность из подключённых каталогов поставщиков.",
+    "tenders.CatalogProduct", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.stage_counterparties", "Связи этапов и контрагентов",
+    "Доступные контрагенты, приоритет и способ получения цены для этапов производства.",
+    "tenders.StageCounterpartyLink", ("tenders",),
+))
 
 
 def confirm_provider_knowledge(user, payload):
