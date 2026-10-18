@@ -1,12 +1,85 @@
 import json
 from datetime import datetime
 from importlib import import_module
+from django.db import models
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
 from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
+
+
+def _legacy_filter_contracts(paths):
+    """The pre-compression READ variants, kept only as a contract-test oracle."""
+    from .assistant_read import MAX_ROWS, NUMERIC_TYPES, _field_value_contract
+
+    result = []
+    for name, descriptor in sorted(paths.items()):
+        if descriptor["kind"] != "scalar":
+            continue
+        field = descriptor["field"]
+        operations = {"eq", "in", "isnull"}
+        if isinstance(field, (models.CharField, models.TextField)):
+            operations.add("contains")
+        if isinstance(field, (*NUMERIC_TYPES, models.DateField, models.DateTimeField)):
+            operations.update({"gte", "gt", "lte", "lt"})
+        value = _field_value_contract(descriptor)
+        in_value = {"type": "array", "item": value, "minimum": 1, "maximum": MAX_ROWS}
+        for operation in sorted(operations):
+            result.append({
+                "type": "object", "required": True, "additional_properties": False,
+                "properties": {
+                    "field": {"type": "string", "enum": [name], "description": str(field.verbose_name)},
+                    "op": {"type": "string", "enum": [operation]},
+                    "value": "boolean" if operation == "isnull" else (in_value if operation == "in" else value),
+                },
+            })
+    return result
+
+
+def _expanded_filter_contracts(contracts):
+    """Expand an operator enum to compare contracts, not their representation."""
+    return {
+        (
+            item["properties"]["field"]["enum"][0],
+            operation,
+            json.dumps(item["properties"]["value"], ensure_ascii=False, sort_keys=True),
+        )
+        for item in contracts
+        for operation in item["properties"]["op"]["enum"]
+    }
+
+
+def _schema_accepts(value, schema):
+    if "anyOf" in schema:
+        return any(_schema_accepts(value, item) for item in schema["anyOf"])
+    if "enum" in schema and value not in schema["enum"]:
+        return False
+    kind = schema.get("type")
+    if kind == "string":
+        return isinstance(value, str)
+    if kind == "boolean":
+        return isinstance(value, bool)
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "null":
+        return value is None
+    if kind == "array":
+        return (
+            isinstance(value, list)
+            and schema.get("minimum", 0) <= len(value) <= schema.get("maximum", float("inf"))
+            and all(_schema_accepts(item, schema.get("items", {})) for item in value)
+        )
+    if kind == "object":
+        if not isinstance(value, dict) or any(name not in value for name in schema.get("required", [])):
+            return False
+        if not schema.get("additionalProperties", True) and set(value) - set(schema.get("properties", {})):
+            return False
+        return all(_schema_accepts(item, schema["properties"][name]) for name, item in value.items())
+    return True
 
 
 class AssistantToolRegistryTests(TestCase):
@@ -129,6 +202,80 @@ class AssistantToolRegistryTests(TestCase):
         self.assertNotEqual(direction["properties"]["value"], account["properties"]["value"])
         self.assertNotIn("schema_describe", names)
         self.assertNotIn("action_describe", names)
+
+    def test_read_filter_schema_compresses_equivalent_operator_variants(self):
+        from .assistant_read import _entity, _filter_contracts, _paths
+        from .assistant_tools import available_resources
+
+        resources = available_resources(self.admin)
+        for entity in {resource["entity"] for resource in resources}:
+            model, _canonical, fields = _entity(entity)
+            paths = _paths(model, fields)
+            legacy = _legacy_filter_contracts(paths)
+            compressed = _filter_contracts(paths)
+
+            self.assertEqual(_expanded_filter_contracts(compressed), _expanded_filter_contracts(legacy))
+
+        for resource in resources:
+            definitions, names = openai_functions(
+                self.admin, area_id=resource["areas"][0], resource_id=resource["id"],
+            )
+            read = next(
+                item["function"] for item in definitions
+                if names[item["function"]["name"]] == f"read:{resource['id']}"
+            )
+            self.assertTrue(read.get("strict"), resource["id"])
+
+        model, _canonical, fields = _entity("cash.CashTransaction")
+        filters = _filter_contracts(_paths(model, fields))
+        self.assertLess(len(filters), len(_legacy_filter_contracts(_paths(model, fields))))
+        direction = next(item for item in filters if item["properties"]["field"]["enum"] == ["direction"])
+        amount = next(item for item in filters if item["properties"]["field"]["enum"] == ["amount"])
+        self.assertEqual(direction["properties"]["op"]["enum"], ["contains", "eq"])
+        self.assertEqual(amount["properties"]["op"]["enum"], ["eq", "gt", "gte", "lt", "lte"])
+
+    def test_specialized_read_schema_keeps_values_and_rejects_invalid_filter_shapes(self):
+        from .assistant_read import ReadPlanError, validate_plan
+
+        definitions, names = openai_functions(self.admin, area_id="cash", resource_id="cash.transactions")
+        read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
+        self.assertTrue(read["strict"])
+        filter_schema = read["parameters"]["properties"]["plan"]["properties"]["filters"]
+        self.assertTrue(_schema_accepts(None, filter_schema))
+        filters = filter_schema["anyOf"][0]["items"]["anyOf"]
+
+        def accepts(value):
+            return any(_schema_accepts(value, item) for item in filters)
+
+        self.assertTrue(accepts({"field": "direction", "op": "eq", "value": "income"}))
+        self.assertTrue(accepts({"field": "direction", "op": "contains", "value": "income"}))
+        self.assertTrue(accepts({"field": "amount", "op": "in", "value": [1, "2.50"]}))
+        self.assertTrue(accepts({"field": "operation_date", "op": "isnull", "value": True}))
+        self.assertFalse(accepts({"field": "direction", "op": "gte", "value": "income"}))
+        self.assertFalse(accepts({"field": "direction", "op": "eq", "value": "other"}))
+        self.assertFalse(accepts({"field": "amount", "op": "in", "value": 1}))
+        self.assertFalse(accepts({"field": "operation_date", "op": "isnull", "value": "true"}))
+
+        for filter_item in (
+            {"field": "direction", "op": "eq", "value": "income"},
+            {"field": "amount", "op": "in", "value": [1, "2.50"]},
+            {"field": "operation_date", "op": "isnull", "value": True},
+        ):
+            validate_plan(self.admin, {"entity": "cash.CashTransaction", "filters": [filter_item]})
+        with self.assertRaises(ReadPlanError):
+            validate_plan(self.admin, {"entity": "cash.CashTransaction", "filters": [{"field": "direction", "op": "gte", "value": "income"}]})
+
+        definitions, names = openai_functions(self.admin, area_id="tenders", resource_id="tenders.tender_estimates")
+        read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:tenders.tender_estimates")
+        nested_filters = read["parameters"]["properties"]["plan"]["properties"]["filters"]["anyOf"][0]["items"]["anyOf"]
+        self.assertTrue(any(
+            _schema_accepts({"field": "tender.outcome_status", "op": "in", "value": ["lost", "won"]}, item)
+            for item in nested_filters
+        ))
+        self.assertFalse(any(
+            _schema_accepts({"field": "tender.outcome_status", "op": "eq", "value": "Проигран"}, item)
+            for item in nested_filters
+        ))
 
     def test_only_area_selection_is_published_before_context_is_known(self):
         definitions, names = openai_functions(self.admin)

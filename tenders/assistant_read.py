@@ -83,13 +83,18 @@ def _filter_contracts(paths):
             operations.update({"gte", "gt", "lte", "lt"})
         value = _field_value_contract(descriptor)
         in_value = {"type": "array", "item": value, "minimum": 1, "maximum": MAX_ROWS}
+        grouped = {}
         for operation in sorted(operations):
+            value_contract = "boolean" if operation == "isnull" else (in_value if operation == "in" else value)
+            key = json.dumps(value_contract, ensure_ascii=False, sort_keys=True)
+            grouped.setdefault(key, {"value": value_contract, "operations": []})["operations"].append(operation)
+        for group in grouped.values():
             result.append({
                 "type": "object", "required": True, "additional_properties": False,
                 "properties": {
                     "field": {"type": "string", "enum": [name], "description": str(field.verbose_name)},
-                    "op": {"type": "string", "enum": [operation]},
-                    "value": "boolean" if operation == "isnull" else (in_value if operation == "in" else value),
+                    "op": {"type": "string", "enum": group["operations"]},
+                    "value": group["value"],
                 },
             })
     return result

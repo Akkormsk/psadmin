@@ -281,6 +281,9 @@ def _openai_type(declared):
                 schema = {"type": "object", "properties": properties, "required": required,
                           "additionalProperties": bool(value.get("additional_properties", False))}
                 compatible = compatible and not schema["additionalProperties"]
+            elif kind == "array" and "item" in value:
+                child, _ignored, compatible = _openai_type(value["item"])
+                schema = {"type": "array", "items": child}
             elif isinstance(kind, str) and kind.endswith("[]"):
                 child, _ignored, compatible = _openai_type(value.get("item", "string"))
                 schema = {"type": "array", "items": child}
