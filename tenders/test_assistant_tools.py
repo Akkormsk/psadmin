@@ -32,7 +32,7 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_openai_definitions_are_generated_from_the_registry(self):
         from .assistant_tools import openai_functions
-        definitions, names = openai_functions(self.admin, read_entity="cash.CashTransaction")
+        definitions, names = openai_functions(self.admin, read_entity="cash.CashTransaction", action_id="cash.transaction_update")
         self.assertEqual(len(names), len(definitions))
         self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
@@ -56,10 +56,21 @@ class AssistantToolRegistryTests(TestCase):
     def test_read_is_not_published_until_an_entity_schema_is_selected(self):
         from .assistant_tools import openai_functions
 
-        _definitions, names = openai_functions(self.admin)
+        definitions, names = openai_functions(self.admin)
 
         self.assertNotIn("read", names)
         self.assertEqual(names["schema_describe"], "schema.describe")
+        self.assertEqual(names["action_describe"], "action.describe")
+        self.assertNotIn("cash_transaction_create", names)
+        self.assertEqual(len(definitions), 2)
+
+    def test_selected_action_is_the_only_published_action_contract(self):
+        from .assistant_tools import openai_functions
+
+        _definitions, names = openai_functions(self.admin, action_id="cash.transaction_create")
+
+        self.assertEqual(names["cash_transaction_create"], "cash.transaction_create")
+        self.assertNotIn("cash_transaction_delete", names)
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan

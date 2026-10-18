@@ -39,6 +39,7 @@ class AssistantTool:
 _TOOLS: dict[str, AssistantTool] = {}
 _DISCOVERED = False
 _MODEL_HIDDEN_TOOLS = {"assistant.capabilities", "assistant.catalog"}
+_MODEL_DISCOVERY_TOOLS = {"schema.describe", "action.describe"}
 
 
 def _discover_app_actions():
@@ -208,18 +209,24 @@ def _openai_type(declared):
     return {"type": "string"}, optional, True
 
 
-def openai_functions(user, *, read_entity=None):
+def openai_functions(user, *, read_entity=None, action_id=None):
     """Function definitions and reversible names generated from registered tools."""
     definitions, names = [], {}
-    for tool in available_tools(user):
+    available = available_tools(user)
+    action_ids = [tool["id"] for tool in available if tool["available"] and tool["id"] not in _MODEL_HIDDEN_TOOLS | _MODEL_DISCOVERY_TOOLS | {"read"}]
+    for tool in available:
         if not tool["available"] or tool["id"] in _MODEL_HIDDEN_TOOLS:
             continue
         if tool["id"] == "read" and read_entity is None:
+            continue
+        if tool["id"] not in _MODEL_DISCOVERY_TOOLS | {"read"} and tool["id"] != action_id:
             continue
         name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
         if not name or name in names:
             raise RuntimeError("OpenAI function name collision")
         input_schema = read_input_schema(read_entity) if tool["id"] == "read" else deepcopy(tool["input_schema"])
+        if tool["id"] == "action.describe":
+            input_schema["action"]["enum"] = action_ids
         if tool["id"] in {"read", "schema.describe"}:
             from .assistant_read import catalogue
 
@@ -295,6 +302,13 @@ def _describe_entity(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
+def _describe_action(user, payload):
+    action = next((item for item in available_tools(user) if item["id"] == payload.get("action") and item["available"]), None)
+    if action is None or action["id"] in _MODEL_HIDDEN_TOOLS | _MODEL_DISCOVERY_TOOLS | {"read"}:
+        raise AssistantToolError("Недоступное действие ассистента")
+    return {key: action[key] for key in ("id", "name", "description", "input_schema", "read_only", "requires_confirmation")}
+
+
 def workflow_catalog(user, actions=None):
     """One runtime encyclopedia assembled solely from registered actions."""
     actions = available_tools(user) if actions is None else actions
@@ -327,4 +341,5 @@ def _catalog(user, _payload):
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
 register_tool(AssistantTool("schema.describe", "Описание сущности", "Возвращает компактные актуальные поля, связи и ограничения одной выбранной сущности перед чтением.", {"entity": {"type": "string", "required": True}}, True, False, True, _describe_entity))
+register_tool(AssistantTool("action.describe", "Описание действия", "Возвращает актуальный контракт одной зарегистрированной операции перед её подготовкой.", {"action": {"type": "string", "required": True}}, True, False, True, _describe_action))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", read_input_schema(), True, False, True, _read_data))

@@ -48,7 +48,7 @@ def _new_state(conversation, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. For an unfamiliar entity, call schema.describe before reading its fields, filters, relations, sorting or aggregates. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}]
+    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. Call schema.describe before reading an entity and action.describe before preparing an action. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}]
     memory = conversation.context.get("agent_memory")
     if isinstance(memory, dict):
         messages.append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
@@ -68,6 +68,17 @@ def _save(conversation, state):
 def _remember_user_message(state, message):
     if not state["messages"] or state["messages"][-1] != {"role": "user", "content": message}:
         state["messages"].append({"role": "user", "content": message})
+
+
+def _validate_action_text_sources(tool, arguments, state):
+    """A free text write value must be copied from a user message, not invented."""
+    user_texts = [item.get("content", "") for item in state["messages"] if item.get("role") == "user"]
+    for name, declaration in tool["input_schema"].items():
+        if not isinstance(declaration, str) or declaration.rstrip("?") != "string":
+            continue
+        value = arguments.get(name)
+        if value not in (None, "") and not any(value in text for text in user_texts):
+            raise AssistantToolError("Текст для действия нужно получить из сообщения пользователя")
 
 
 def _compact_memory(value, depth=0):
@@ -130,7 +141,7 @@ def _finish(conversation):
 def _run(conversation, user, state):
     registry = {item["id"]: item for item in available_tools(user)}
     for _ in range(MAX_TOOL_CALLS + 1):
-        definitions, names = openai_functions(user, read_entity=state.get("read_entity"))
+        definitions, names = openai_functions(user, read_entity=state.get("read_entity"), action_id=state.get("action_id"))
         preflight(); _debug(conversation, "function_call.request", input={"messages": state["messages"], "tools": definitions})
         answer = _gateway(state["messages"], definitions)
         usage = answer.pop("_gateway_usage", None)
@@ -149,6 +160,7 @@ def _run(conversation, user, state):
             if not identifier or not isinstance(arguments, dict): raise AssistantToolError("Некорректный вызов функции")
             if registry[identifier]["requires_confirmation"]:
                 validate_tool_call(identifier, user, arguments)
+                _validate_action_text_sources(registry[identifier], arguments, state)
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"]}; _save(conversation, state)
                 return {"text": str(answer.get("content") or "Подтвердите выполнение действия."), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
             cached = state.get("read_cache") if identifier == "read" else None
@@ -157,6 +169,8 @@ def _run(conversation, user, state):
             state["steps"].append({"tool_id": identifier, "result": result})
             if identifier == "schema.describe":
                 state["read_entity"] = result.get("entity")
+            elif identifier == "action.describe":
+                state["action_id"] = result.get("id")
             elif identifier == "read":
                 state["last_read_result"] = result
                 state["read_cache"] = {**result, "owner_id": conversation.context.get("owner_id")}

@@ -49,16 +49,40 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_action_waits_for_confirmation_and_continues_once(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "action-schema", "type": "function", "function": {
+                "name": "action_describe", "arguments": json.dumps({"action": "cash.transaction_create"}),
+            }}]},
             {"role": "assistant", "content": "Операция подготовлена.", "tool_calls": [{"id": "confirm", "type": "function", "function": {"name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Тест"})}}]},
             {"role": "assistant", "content": "Операция выполнена."},
         ]
         from .assistant_agent import continue_after_confirmation, reply
-        response = reply(self.conversation, self.user, "Добавь операцию")
+        with patch("tenders.assistant_agent.execute_tool", side_effect=[{"id": "cash.transaction_create", "input_schema": {} }]):
+            response = reply(self.conversation, self.user, "Добавь операцию с основанием Тест")
         self.assertEqual(response["kind"], "confirmation_required")
-        self.assertEqual(gateway.call_count, 1)
+        self.assertEqual(gateway.call_count, 2)
         response = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 1})
         self.assertEqual(response["text"], "Операция выполнена.")
-        self.assertEqual(gateway.call_args_list[1].args[0][-2]["tool_call_id"], "confirm")
+        self.assertEqual(gateway.call_args_list[2].args[0][-2]["tool_call_id"], "confirm")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_action_rejects_free_text_not_present_in_a_user_message(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "action-schema", "type": "function", "function": {
+                "name": "action_describe", "arguments": json.dumps({"action": "cash.transaction_create"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "write", "type": "function", "function": {
+                "name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Придуманное основание"}),
+            }}]},
+            {"role": "assistant", "content": "Уточните основание операции."},
+        ]
+        with patch("tenders.assistant_agent.execute_tool", return_value={"id": "cash.transaction_create", "input_schema": {}}):
+            from .assistant_agent import reply
+            response = reply(self.conversation, self.user, "Добавь операцию")
+
+        self.assertEqual(response["kind"], "tool_result")
+        self.assertIn("Уточните", response["text"])
+        self.assertIn("сообщения пользователя", gateway.call_args_list[2].args[0][-2]["content"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
