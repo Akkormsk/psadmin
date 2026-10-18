@@ -7,6 +7,7 @@ from .gateway_budget import preflight
 from .services import TenderAIError
 
 MAX_TOOL_CALLS = 8
+MAX_CONTEXT_MESSAGES = 40
 
 def _debug(conversation, stage, **payload):
     from .assistant_conversations import add_debug_event
@@ -29,11 +30,23 @@ def _history(conversation):
     return [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in reversed(events)]
 
 def _new_state(conversation, message, attachments):
-    return {"messages": [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}, *_history(conversation), {"role": "user", "content": message}], "steps": [], "attachments": attachments or []}
+    history = _history(conversation)
+    if not history or history[-1] != {"role": "user", "content": message}:
+        history.append({"role": "user", "content": message})
+    return {"messages": [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}, *history], "steps": [], "attachments": attachments or []}
 
 def _save(conversation, state):
     conversation.context["agent_run"] = state
     conversation.save(update_fields=["context"])
+
+def _remember_user_message(state, message):
+    if not state["messages"] or state["messages"][-1] != {"role": "user", "content": message}:
+        state["messages"].append({"role": "user", "content": message})
+
+def _trim_messages(state):
+    if state.get("waiting_confirmation") or len(state["messages"]) <= MAX_CONTEXT_MESSAGES + 1:
+        return
+    state["messages"] = [state["messages"][0], *state["messages"][-MAX_CONTEXT_MESSAGES:]]
 
 def _finish(conversation):
     conversation.context.pop("agent_run", None)
@@ -47,7 +60,8 @@ def _run(conversation, user, state):
         answer = _gateway(state["messages"], definitions); _debug(conversation, "function_call.response", output=answer)
         state["messages"].append(answer); calls = answer.get("tool_calls") or []
         if not calls:
-            _finish(conversation); return {"text": str(answer.get("content") or "Готово."), "kind": "tool_result", "data": {"steps": state["steps"]}}
+            _trim_messages(state); _save(conversation, state)
+            return {"text": str(answer.get("content") or "Готово."), "kind": "tool_result", "data": {"steps": state["steps"]}}
         if len(calls) != 1:
             raise TenderAIError("Одновременные действия сейчас не поддерживаются.")
         call = calls[0]; function = call.get("function", {}); identifier = names.get(function.get("name"))
@@ -66,7 +80,12 @@ def _run(conversation, user, state):
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
     previous = conversation.context.get("agent_run")
-    state = previous if isinstance(previous, dict) and previous.get("waiting_confirmation") else _new_state(conversation, message, attachments)
+    if isinstance(previous, dict) and not previous.get("waiting_confirmation"):
+        state = previous
+        _remember_user_message(state, message)
+        _trim_messages(state)
+    else:
+        state = _new_state(conversation, message, attachments)
     return _run(conversation, user, state)
 
 def continue_after_confirmation(conversation, user, tool_id, result):

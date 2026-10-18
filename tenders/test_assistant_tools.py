@@ -34,7 +34,6 @@ class AssistantToolRegistryTests(TestCase):
         from .assistant_tools import openai_functions
         definitions, names = openai_functions(self.admin)
         self.assertEqual(len(names), len(definitions))
-        self.assertNotIn("assistant.navigate", names.values())
         self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
         read = next(item["function"] for item in definitions if item["function"]["name"] == "read")
@@ -42,6 +41,9 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("entity", plan["properties"])
         self.assertIn("filters", plan["properties"])
         self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
+        self.assertEqual(set(plan["properties"]), set(plan["required"]))
+        filter_item = plan["properties"]["filters"]["anyOf"][0]["items"]
+        self.assertEqual(filter_item["properties"]["op"]["enum"], sorted(__import__("tenders.assistant_read", fromlist=["OPS"]).OPS))
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan

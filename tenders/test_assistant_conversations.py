@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from .assistant_conversations import create_conversation
+from .assistant_conversations import create_conversation, respond
 
 
 class AssistantFunctionCallingTests(TestCase):
@@ -54,3 +54,35 @@ class AssistantFunctionCallingTests(TestCase):
         response = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 1})
         self.assertEqual(response["text"], "Операция выполнена.")
         self.assertEqual(gateway.call_args_list[1].args[0][-2]["tool_call_id"], "confirm")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_follow_up_uses_the_existing_conversation_state_once(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "content": "За какой период?"},
+            {"role": "assistant", "content": "За сентябрь найдено 3 заказа."},
+        ]
+        from .assistant_agent import reply
+
+        first = reply(self.conversation, self.user, "Покажи заказы Иванова")
+        second = reply(self.conversation, self.user, "За сентябрь")
+
+        self.assertEqual(first["text"], "За какой период?")
+        self.assertEqual(second["text"], "За сентябрь найдено 3 заказа.")
+        messages = gateway.call_args_list[1].args[0]
+        self.assertEqual([item for item in messages if item.get("role") == "user"], [
+            {"role": "user", "content": "Покажи заказы Иванова"},
+            {"role": "user", "content": "За сентябрь"},
+        ])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_persisted_user_message_is_not_added_to_a_new_state_twice(self, gateway, _preflight):
+        gateway.return_value = {"role": "assistant", "content": "Здравствуйте."}
+
+        respond(self.conversation, self.user, "Привет")
+
+        messages = gateway.call_args.args[0]
+        self.assertEqual([item for item in messages if item.get("role") == "user"], [
+            {"role": "user", "content": "Привет"},
+        ])

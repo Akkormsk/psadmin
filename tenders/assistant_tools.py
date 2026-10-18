@@ -136,29 +136,44 @@ def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
             raise AssistantToolError(f"Поле {name} должно быть объектом")
 
 
+def _nullable(schema):
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
 def _openai_type(declared):
-    """Translate the registry contract; the registry remains the sole source."""
+    """Translate the registry contract recursively without inventing a second one."""
     optional = isinstance(declared, str) and declared.endswith("?")
     value = declared[:-1] if optional else declared
+    if isinstance(value, list):
+        return {"type": "string", "enum": value}, optional, True
     if isinstance(value, dict):
-        kind = value.get("type")
-        if kind is None:
-            kind = "object"
-            value = {"type": kind, "properties": value, "required": True}
-        if kind == "object":
-            properties, required, compatible = {}, [], True
-            for key, nested in value.get("properties", {}).items():
-                child, child_optional, child_compatible = _openai_type(nested)
-                properties[key] = child if not child_optional else {"anyOf": [child, {"type": "null"}]}
-                required.append(key)
+        if "any_of" in value:
+            variants, compatible = [], True
+            for nested in value["any_of"]:
+                child, _optional, child_compatible = _openai_type(nested)
+                variants.append(child)
                 compatible = compatible and child_compatible
-            schema = {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
-        elif kind and kind.endswith("[]"):
-            item = value.get("item", {})
-            child, _ignored, compatible = _openai_type(item)
-            schema = {"type": "array", "items": child}
+            schema = {"anyOf": variants}
         else:
-            schema, _ignored, compatible = _openai_type(kind or "object")
+            kind = value.get("type")
+            if kind is None:
+                kind = "object"
+                value = {"type": kind, "properties": value, "required": True}
+            if kind == "object":
+                properties, required, compatible = {}, [], True
+                for key, nested in value.get("properties", {}).items():
+                    child, child_optional, child_compatible = _openai_type(nested)
+                    properties[key] = _nullable(child) if child_optional else child
+                    required.append(key)
+                    compatible = compatible and child_compatible
+                schema = {"type": "object", "properties": properties, "required": required,
+                          "additionalProperties": bool(value.get("additional_properties", False))}
+                compatible = compatible and not schema["additionalProperties"]
+            elif isinstance(kind, str) and kind.endswith("[]"):
+                child, _ignored, compatible = _openai_type(value.get("item", "string"))
+                schema = {"type": "array", "items": child}
+            else:
+                schema, _ignored, compatible = _openai_type(kind or "object")
         for key in ("description", "minimum", "maximum", "enum"):
             if key in value:
                 schema[key] = value[key]
@@ -166,22 +181,28 @@ def _openai_type(declared):
     if not isinstance(value, str):
         return {"type": "string"}, optional, False
     if value.endswith("[]"):
-        item = value[:-2]
-        item_type = {"integer": "integer", "number": "number", "boolean": "boolean"}.get(item, "string")
-        return {"type": "array", "items": {"type": item_type}}, optional, True
+        child, _ignored, compatible = _openai_type(value[:-2])
+        return {"type": "array", "items": child}, optional, compatible
     if "|" in value:
-        variants = value.split("|")
-        if all(part in {"string", "string[]"} for part in variants):
-            return {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}, optional, True
-        return {"type": "string", "enum": variants}, optional, True
-    return {"type": {"integer": "integer", "number": "number", "boolean": "boolean", "object": "object", "array": "array"}.get(value, "string")}, optional, value not in {"object", "array"}
+        variants, compatible = [], True
+        for part in value.split("|"):
+            child, _ignored, child_compatible = _openai_type(part)
+            variants.append(child)
+            compatible = compatible and child_compatible
+        return {"anyOf": variants}, optional, compatible
+    primitive = {"integer", "number", "boolean", "string", "null"}
+    if value in primitive:
+        return {"type": value}, optional, True
+    if value in {"object", "array"}:
+        return {"type": value, "additionalProperties": False} if value == "object" else {"type": value, "items": {}}, optional, False
+    return {"type": "string"}, optional, True
 
 
 def openai_functions(user):
     """Function definitions and reversible names generated from registered tools."""
     definitions, names = [], {}
     for tool in available_tools(user):
-        if not tool["available"] or tool["id"] == "assistant.navigate":
+        if not tool["available"]:
             continue
         name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
         if not name or name in names:
@@ -190,7 +211,7 @@ def openai_functions(user):
         for key, declared in tool["input_schema"].items():
             schema, optional, compatible = _openai_type(declared)
             if optional:
-                schema["type"] = [schema["type"], "null"]
+                schema = _nullable(schema)
             properties[key] = schema
             required.append(key)
             strict = strict and compatible
