@@ -71,7 +71,7 @@ def _paths(model, fields, *, depth=0, prefix=""):
 
 
 def _filter_contracts(paths):
-    result = []
+    grouped = {}
     for name, descriptor in sorted(paths.items()):
         if descriptor["kind"] != "scalar":
             continue
@@ -83,21 +83,46 @@ def _filter_contracts(paths):
             operations.update({"gte", "gt", "lte", "lt"})
         value = _field_value_contract(descriptor)
         in_value = {"type": "array", "item": value, "minimum": 1, "maximum": MAX_ROWS}
-        grouped = {}
+        field_groups = {}
         for operation in sorted(operations):
             value_contract = "boolean" if operation == "isnull" else (in_value if operation == "in" else value)
             key = json.dumps(value_contract, ensure_ascii=False, sort_keys=True)
-            grouped.setdefault(key, {"value": value_contract, "operations": []})["operations"].append(operation)
-        for group in grouped.values():
-            result.append({
+            field_groups.setdefault(key, {"value": value_contract, "operations": []})["operations"].append(operation)
+        for group in field_groups.values():
+            key = json.dumps({"operations": group["operations"], "value": group["value"]}, ensure_ascii=False, sort_keys=True)
+            grouped.setdefault(key, {"fields": [], "operations": group["operations"], "value": group["value"]})["fields"].append((name, field))
+    return [
+        {
                 "type": "object", "required": True, "additional_properties": False,
                 "properties": {
-                    "field": {"type": "string", "enum": [name], "description": str(field.verbose_name)},
+                    "field": {
+                        "type": "string",
+                        "enum": [name for name, _field in group["fields"]],
+                        "description": "Поля: " + "; ".join(f"{name} — {field.verbose_name}" for name, field in group["fields"]),
+                    },
                     "op": {"type": "string", "enum": group["operations"]},
                     "value": group["value"],
                 },
-            })
-    return result
+        }
+        for group in grouped.values()
+    ]
+
+
+def _aggregate_contracts(paths):
+    grouped = {}
+    for name, descriptor in sorted(paths.items()):
+        operations = _catalog_field(name, descriptor)["aggregate_ops"]
+        if not operations:
+            continue
+        key = json.dumps(operations, ensure_ascii=False)
+        grouped.setdefault(key, {"fields": [], "operations": operations})["fields"].append(name)
+    return [
+        {"type": "object", "required": True, "additional_properties": False, "properties": {
+            "op": {"type": "string", "enum": group["operations"]},
+            "field": {"type": "string", "enum": group["fields"]},
+        }}
+        for group in grouped.values()
+    ]
 
 
 def plan_contract(entity=None):
@@ -129,12 +154,7 @@ def plan_contract(entity=None):
                 {"type": "string", "description": f"Поля сортировки: {scalar_labels}", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])},
                 {"type": "string[]", "description": f"Поля сортировки: {scalar_labels}", "item": {"type": "string", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])}},
             ], "required": False},
-            "aggregates": {"type": "object[]", "required": False, "item": {"any_of": [
-                {"type": "object", "required": True, "additional_properties": False, "properties": {
-                    "op": {"type": "string", "enum": _catalog_field(name, descriptor)["aggregate_ops"]},
-                    "field": {"type": "string", "enum": [name]},
-                }} for name, descriptor in scalar_paths.items() if _catalog_field(name, descriptor)["aggregate_ops"]
-            ]}},
+            "aggregates": {"type": "object[]", "required": False, "item": {"any_of": _aggregate_contracts(scalar_paths)}},
             "group_by": {"type": "string[]", "required": False, "description": f"Поля группировки: {scalar_labels}", "item": {"type": "string", "enum": sorted(scalar_paths)}},
         })
     return {

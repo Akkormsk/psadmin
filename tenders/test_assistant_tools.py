@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from datetime import datetime
 from importlib import import_module
 from django.db import models
@@ -42,13 +43,77 @@ def _expanded_filter_contracts(contracts):
     """Expand an operator enum to compare contracts, not their representation."""
     return {
         (
-            item["properties"]["field"]["enum"][0],
+            field,
             operation,
             json.dumps(item["properties"]["value"], ensure_ascii=False, sort_keys=True),
         )
         for item in contracts
+        for field in item["properties"]["field"]["enum"]
         for operation in item["properties"]["op"]["enum"]
     }
+
+
+def _m3_filter_contracts(paths):
+    grouped = {}
+    for item in _legacy_filter_contracts(paths):
+        field = item["properties"]["field"]["enum"][0]
+        key = (field, json.dumps(item["properties"]["value"], ensure_ascii=False, sort_keys=True))
+        if key not in grouped:
+            grouped[key] = deepcopy(item)
+        else:
+            grouped[key]["properties"]["op"]["enum"].append(item["properties"]["op"]["enum"][0])
+    return list(grouped.values())
+
+
+def _m3_aggregate_contracts(paths):
+    from .assistant_read import _catalog_field
+
+    return [
+        {"type": "object", "required": True, "additional_properties": False, "properties": {
+            "op": {"type": "string", "enum": _catalog_field(name, descriptor)["aggregate_ops"]},
+            "field": {"type": "string", "enum": [name]},
+        }}
+        for name, descriptor in paths.items()
+        if _catalog_field(name, descriptor)["aggregate_ops"]
+    ]
+
+
+def _m3_read_parameters(entity):
+    from .assistant_read import _entity, _paths, input_schema
+    from .assistant_tools import _function_definition
+
+    schema = deepcopy(input_schema(entity))
+    model, _canonical, fields = _entity(entity)
+    paths = _paths(model, fields)
+    schema["plan"]["properties"].pop("entity", None)
+    schema["plan"]["properties"]["filters"]["item"] = {"any_of": _m3_filter_contracts(paths)}
+    scalar_paths = {name: descriptor for name, descriptor in paths.items() if descriptor["kind"] == "scalar"}
+    schema["plan"]["properties"]["aggregates"]["item"] = {"any_of": _m3_aggregate_contracts(scalar_paths)}
+    _name, definition = _function_definition("read:baseline", "", schema)
+    return definition["function"]["parameters"]
+
+
+def _schema_sample(schema):
+    if "anyOf" in schema:
+        return _schema_sample(schema["anyOf"][0])
+    if "enum" in schema:
+        return schema["enum"][0]
+    kind = schema.get("type")
+    if kind == "string":
+        return "value"
+    if kind == "boolean":
+        return False
+    if kind == "integer":
+        return 1
+    if kind == "number":
+        return 1.5
+    if kind == "null":
+        return None
+    if kind == "array":
+        return [_schema_sample(schema.get("items", {})) for _index in range(schema.get("minimum", 0))]
+    if kind == "object":
+        return {name: _schema_sample(item) for name, item in schema.get("properties", {}).items()}
+    return "value"
 
 
 def _schema_accepts(value, schema):
@@ -193,8 +258,14 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
         self.assertEqual(set(plan["properties"]), set(plan["required"]))
         filters = plan["properties"]["filters"]["anyOf"][0]["items"]["anyOf"]
-        direction = next(item for item in filters if item["properties"]["field"].get("enum") == ["direction"])
-        account = next(item for item in filters if item["properties"]["field"].get("enum") == ["account"])
+        direction = next(item for item in filters if (
+            "direction" in item["properties"]["field"].get("enum", [])
+            and item["properties"]["op"]["enum"] == ["contains", "eq"]
+        ))
+        account = next(item for item in filters if (
+            "account" in item["properties"]["field"].get("enum", [])
+            and item["properties"]["op"]["enum"] == ["contains", "eq"]
+        ))
         self.assertEqual(direction["properties"]["value"]["enum"], ["income", "expense"])
         self.assertEqual(account["properties"]["value"]["enum"], ["cash", "card"])
         self.assertIn("Приход", direction["properties"]["value"]["description"])
@@ -229,8 +300,14 @@ class AssistantToolRegistryTests(TestCase):
         model, _canonical, fields = _entity("cash.CashTransaction")
         filters = _filter_contracts(_paths(model, fields))
         self.assertLess(len(filters), len(_legacy_filter_contracts(_paths(model, fields))))
-        direction = next(item for item in filters if item["properties"]["field"]["enum"] == ["direction"])
-        amount = next(item for item in filters if item["properties"]["field"]["enum"] == ["amount"])
+        direction = next(item for item in filters if (
+            "direction" in item["properties"]["field"]["enum"]
+            and item["properties"]["op"]["enum"] == ["contains", "eq"]
+        ))
+        amount = next(item for item in filters if (
+            "amount" in item["properties"]["field"]["enum"]
+            and item["properties"]["op"]["enum"] == ["eq", "gt", "gte", "lt", "lte"]
+        ))
         self.assertEqual(direction["properties"]["op"]["enum"], ["contains", "eq"])
         self.assertEqual(amount["properties"]["op"]["enum"], ["eq", "gt", "gte", "lt", "lte"])
 
@@ -276,6 +353,75 @@ class AssistantToolRegistryTests(TestCase):
             _schema_accepts({"field": "tender.outcome_status", "op": "eq", "value": "Проигран"}, item)
             for item in nested_filters
         ))
+
+    def test_read_schema_groups_fields_without_changing_request_acceptance(self):
+        from .assistant_tools import available_resources
+
+        def samples(variants, *, with_value):
+            for variant in variants:
+                properties = variant["properties"]
+                for field in properties["field"]["enum"]:
+                    for operation in properties["op"]["enum"]:
+                        item = {
+                            "field": field,
+                            "op": operation,
+                        }
+                        if with_value:
+                            item["value"] = _schema_sample(properties["value"])
+                        yield item
+
+        def accepts(parameters, property_name, item):
+            plan_schema = parameters["properties"]["plan"]
+            plan = {name: None for name in plan_schema["properties"]}
+            plan[property_name] = [item]
+            return _schema_accepts({"plan": plan}, parameters)
+
+        total_old_filters = total_new_filters = 0
+        total_old_aggregates = total_new_aggregates = 0
+        for resource in available_resources(self.admin):
+            baseline = _m3_read_parameters(resource["entity"])
+            definitions, names = openai_functions(
+                self.admin, area_id=resource["areas"][0], resource_id=resource["id"],
+            )
+            current = next(
+                item["function"]["parameters"] for item in definitions
+                if names[item["function"]["name"]] == f"read:{resource['id']}"
+            )
+            self.assertTrue(next(
+                item["function"] for item in definitions
+                if names[item["function"]["name"]] == f"read:{resource['id']}"
+            ).get("strict"), resource["id"])
+
+            baseline_plan = baseline["properties"]["plan"]
+            current_plan = current["properties"]["plan"]
+            old_filters = baseline_plan["properties"]["filters"]["anyOf"][0]["items"]["anyOf"]
+            new_filters = current_plan["properties"]["filters"]["anyOf"][0]["items"]["anyOf"]
+            old_aggregates = baseline_plan["properties"]["aggregates"]["anyOf"][0]["items"]["anyOf"]
+            new_aggregates = current_plan["properties"]["aggregates"]["anyOf"][0]["items"]["anyOf"]
+            total_old_filters += len(old_filters)
+            total_new_filters += len(new_filters)
+            total_old_aggregates += len(old_aggregates)
+            total_new_aggregates += len(new_aggregates)
+
+            for item in [*samples(old_filters, with_value=True), *samples(new_filters, with_value=True)]:
+                self.assertTrue(accepts(baseline, "filters", item), (resource["id"], item, "baseline"))
+                self.assertTrue(accepts(current, "filters", item), (resource["id"], item, "current"))
+            for item in [*samples(old_aggregates, with_value=False), *samples(new_aggregates, with_value=False)]:
+                self.assertTrue(accepts(baseline, "aggregates", item), (resource["id"], item, "baseline"))
+                self.assertTrue(accepts(current, "aggregates", item), (resource["id"], item, "current"))
+
+            first_filter = next(samples(old_filters, with_value=True))
+            for item in (
+                {**first_filter, "field": "not_a_field"},
+                {**first_filter, "op": "not_an_operation"},
+                {**first_filter, "value": None},
+                {"field": first_filter["field"], "op": first_filter["op"]},
+            ):
+                self.assertFalse(accepts(baseline, "filters", item), (resource["id"], item, "baseline"))
+                self.assertFalse(accepts(current, "filters", item), (resource["id"], item, "current"))
+
+        self.assertLess(total_new_filters, total_old_filters)
+        self.assertLess(total_new_aggregates, total_old_aggregates)
 
     def test_only_area_selection_is_published_before_context_is_known(self):
         definitions, names = openai_functions(self.admin)
