@@ -30,7 +30,6 @@ class Command(BaseCommand):
                 for item in journal if item["stage"] == "function_call.response" and isinstance(item.get("output"), dict)
             ]
             self.stdout.write(json.dumps({
-                "answer": str(final.get("text", ""))[:500],
                 "tool_ids": [step.get("tool_id") for step in steps],
                 "tool_call_count": sum(len(item) for item in calls),
                 "usage": usage,
