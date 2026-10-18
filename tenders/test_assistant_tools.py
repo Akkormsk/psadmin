@@ -39,6 +39,7 @@ class AssistantToolRegistryTests(TestCase):
         read = next(item["function"] for item in definitions if item["function"]["name"] == "read")
         plan = read["parameters"]["properties"]["plan"]
         self.assertIn("entity", plan["properties"])
+        self.assertIn("cash.CashTransaction", plan["properties"]["entity"]["enum"])
         self.assertIn("filters", plan["properties"])
         self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
         self.assertEqual(set(plan["properties"]), set(plan["required"]))
