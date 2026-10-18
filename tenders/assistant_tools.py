@@ -110,6 +110,23 @@ def _area_name(identifier: str) -> str:
         return identifier.replace("_", " ").capitalize()
 
 
+def _declared_business_areas() -> set[str]:
+    """Return the site's own user-facing Django applications.
+
+    A business application already declares its human name through
+    ``AppConfig.verbose_name``. That declaration is the right place to make
+    a new application visible to the assistant: it avoids a second central
+    list, while framework apps and the internal ``core`` app (which have no
+    explicit business name) stay out of the user-facing library.
+    """
+    return {
+        config.label
+        for config in apps.get_app_configs()
+        if "verbose_name" in config.__class__.__dict__
+        and not config.name.startswith("django.")
+    }
+
+
 def available_tools(user) -> list[dict[str, Any]]:
     _discover_app_actions()
     return [
@@ -130,9 +147,15 @@ def available_tools(user) -> list[dict[str, Any]]:
 
 
 def available_areas(user) -> list[dict[str, Any]]:
-    """Business sections are derived from registered tools and resources."""
+    """Return every user-facing business application, even if it is empty.
+
+    Capabilities enrich a section; they do not create it. This makes the
+    first model choice meaningful during a vertical-slice rollout: an empty
+    section is still a real alternative, rather than making the only populated
+    section a guaranteed choice.
+    """
     _discover_app_actions()
-    identifiers = {
+    identifiers = _declared_business_areas() | {
         area for tool in _TOOLS.values() for area in _tool_areas(tool)
     } | {
         area for resource in _RESOURCES.values() for area in resource.areas

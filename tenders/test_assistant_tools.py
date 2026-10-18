@@ -23,9 +23,13 @@ class AssistantToolRegistryTests(TestCase):
 
         areas = {item["id"]: item for item in available_areas(self.admin)}
         self.assertEqual(areas["cash"]["name"], "Касса")
-        self.assertIn("tenders", areas)
+        self.assertEqual(
+            set(areas),
+            {"calculator", "cash", "payroll", "finance", "tenders", "tender_selection"},
+        )
         self.assertNotIn("schema", areas)
         self.assertNotIn("action", areas)
+        self.assertEqual(available_resources(self.admin, "payroll"), [])
         resources = {item["id"]: item for item in available_resources(self.admin, "cash")}
         self.assertEqual(resources["cash.transactions"]["entity"], "cash.CashTransaction")
 
