@@ -22,12 +22,13 @@ class CashReconciliation(models.Model):
     note = models.CharField("Комментарий", max_length=255, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        verbose_name="Создал",
         on_delete=models.PROTECT,
         related_name="cash_reconciliations",
         null=True,
         blank=True,
     )
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
 
     class Meta:
         ordering = ("-effective_date",)
@@ -65,11 +66,12 @@ class CashTransaction(models.Model):
     reason = models.CharField("Основание / № заказа", max_length=255)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        verbose_name="Создал",
         on_delete=models.PROTECT,
         related_name="cash_transactions",
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлена", auto_now=True)
 
     class Meta:
         ordering = ("created_at", "pk")
@@ -105,7 +107,7 @@ class BankPayment(models.Model):
     hidden_from_managers = models.BooleanField("Скрыт от менеджеров", default=False)
     raw = models.JSONField("Ответ банка", default=dict, blank=True)
     created_at = models.DateTimeField("Загружен", auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ("-operation_date", "-executed_at", "-pk")

@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -29,9 +29,54 @@ class AssistantToolRegistryTests(TestCase):
         )
         self.assertNotIn("schema", areas)
         self.assertNotIn("action", areas)
-        self.assertEqual(available_resources(self.admin, "payroll"), [])
-        resources = {item["id"]: item for item in available_resources(self.admin, "cash")}
-        self.assertEqual(resources["cash.transactions"]["entity"], "cash.CashTransaction")
+        expected_resources = {
+            "calculator": {"calculator.estimate_groups", "calculator.estimates", "calculator.price_items", "calculator.production_rules", "calculator.settings"},
+            "cash": {"cash.bank_payments", "cash.reconciliations", "cash.transactions"},
+            "finance": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.operating_expenses", "finance.payroll_lines", "finance.period_expenses", "finance.periods"},
+            "payroll": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.payroll_lines", "payroll.order_records"},
+            "tenders": {"tenders.catalog_categories", "tenders.catalog_products", "tenders.catalog_suppliers", "tenders.counterparties", "tenders.lessons", "tenders.order_estimates", "tenders.order_lines", "tenders.orders", "tenders.production_stages", "tenders.production_types", "tenders.settings", "tenders.stage_counterparties", "tenders.tender_estimates", "tenders.tender_lines"},
+            "tender_selection": {"tender_selection.contract_statistics", "tender_selection.customers", "tender_selection.filter_settings", "tender_selection.tenders"},
+        }
+        for area_id, identifiers in expected_resources.items():
+            resources = {item["id"]: item for item in available_resources(self.admin, area_id)}
+            self.assertEqual(set(resources), identifiers)
+        self.assertEqual(
+            next(item for item in available_resources(self.admin, "cash") if item["id"] == "cash.transactions")["entity"],
+            "cash.CashTransaction",
+        )
+
+    def test_each_registered_resource_resolves_through_universal_read_metadata(self):
+        from django.apps import apps
+        from .assistant_read import resolve_entity
+        from .assistant_tools import available_resources
+
+        for resource in available_resources(self.admin):
+            self.assertEqual(resolve_entity(resource["entity"]), resource["entity"])
+            model = apps.get_model(resource["entity"])
+            technical_labels = [
+                field.name for field in model._meta.fields
+                if str(field.verbose_name) == field.name.replace("_", " ")
+            ]
+            self.assertEqual(technical_labels, [], resource["entity"])
+
+    def test_read_resources_are_hidden_when_universal_read_is_not_permitted(self):
+        from .assistant_tools import available_resources
+
+        self.assertEqual(available_resources(self.user), [])
+
+    def test_each_resource_opens_a_read_contract_without_a_model_identifier(self):
+        from .assistant_tools import available_resources
+
+        for area in available_areas(self.admin):
+            for resource in available_resources(self.admin, area["id"]):
+                definitions, names = openai_functions(
+                    self.admin, area_id=area["id"], resource_id=resource["id"],
+                )
+                read = next(
+                    item["function"] for item in definitions
+                    if names[item["function"]["name"]] == f"read:{resource['id']}"
+                )
+                self.assertNotIn("entity", read["parameters"]["properties"]["plan"]["properties"])
 
     def test_openai_tools_start_with_business_areas_not_django_entities(self):
         definitions, names = openai_functions(self.admin)
@@ -301,6 +346,24 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(result["name"], "Контракт.docx")
         self.assertEqual(result["html"], "<p>контракт</p>")
+
+    def test_tender_document_list_precedes_the_existing_preview_executor(self):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(
+            purchase_number="assistant-document-list",
+            notification_raw={"source": {"attachmentsInfo": {"attachmentInfo": [{
+                "url": "https://zakupki.gov.ru/contract", "fileName": "Контракт.docx",
+                "docKindInfo": {"name": "Проект контракта"}, "fileSize": 2048,
+            }]}}},
+        )
+        result = execute_tool("tender.documents_list", self.admin, {"tender_id": tender.pk})
+
+        self.assertEqual(result["tender_id"], tender.pk)
+        self.assertEqual(result["documents"], [{
+            "index": 0, "name": "Контракт.docx", "kind": "Проект контракта",
+            "size_kb": 2, "url": "https://zakupki.gov.ru/contract",
+        }])
 
     def test_stage_proposal_confirmation_uses_the_shared_route_executor(self):
         from .models import ProductionTrainingSession
@@ -765,6 +828,13 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("cash.transaction_update", actions)
         self.assertIn("tender.discovery_settings", actions)
         self.assertTrue(actions["cash.transaction_update"]["source"])
+
+    def test_mass_and_background_operations_are_not_published_to_the_assistant(self):
+        actions = {item["id"] for item in available_tools(self.admin)}
+        self.assertTrue({
+            "cash.bank_sync", "tender.word_audit_run", "tender.word_audit_apply",
+            "tender.profile_triage_run", "tender.pull",
+        }.isdisjoint(actions))
 
     def test_published_action_sources_resolve_to_real_callables(self):
         for tool in available_tools(self.admin):

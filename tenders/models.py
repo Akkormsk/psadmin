@@ -202,10 +202,10 @@ class Lesson(models.Model):
     outcome = models.JSONField("Что вышло в прошлый раз", default=dict, blank=True)
     source = models.CharField("Источник знания", max_length=16, choices=SOURCE_CHOICES, default=SOURCE_FEEDBACK)
     is_active = models.BooleanField("Активно", default=True)
-    session = models.ForeignKey(ProductionTrainingSession, on_delete=models.SET_NULL, null=True, blank=True, related_name="lessons")
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="assistant_lessons")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    session = models.ForeignKey(ProductionTrainingSession, verbose_name="Сессия обучения", on_delete=models.SET_NULL, null=True, blank=True, related_name="lessons")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.SET_NULL, null=True, blank=True, related_name="assistant_lessons")
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -340,7 +340,7 @@ class CatalogSupplier(models.Model):
 
 
 class CatalogCategory(models.Model):
-    supplier = models.ForeignKey(CatalogSupplier, on_delete=models.CASCADE, related_name="categories")
+    supplier = models.ForeignKey(CatalogSupplier, verbose_name="Поставщик", on_delete=models.CASCADE, related_name="categories")
     external_id = models.CharField("ID поставщика", max_length=100)
     parent_external_id = models.CharField("Родительский ID", max_length=100, blank=True)
     name = models.CharField("Категория", max_length=300)
@@ -363,7 +363,7 @@ class CatalogCategory(models.Model):
 
 
 class CatalogProduct(models.Model):
-    supplier = models.ForeignKey(CatalogSupplier, on_delete=models.CASCADE, related_name="products")
+    supplier = models.ForeignKey(CatalogSupplier, verbose_name="Поставщик", on_delete=models.CASCADE, related_name="products")
     external_id = models.CharField("ID поставщика", max_length=100)
     article = models.CharField("Артикул", max_length=120, blank=True)
     article_base = models.CharField("Базовый артикул", max_length=120, blank=True)
@@ -398,7 +398,7 @@ class CatalogProduct(models.Model):
     search_text = models.TextField("Поисковый индекс", blank=True)
     source_updated_at = models.DateTimeField("Обновлено поставщиком", null=True, blank=True)
     synced_at = models.DateTimeField("Получено", auto_now=True)
-    sync_marker = models.CharField(max_length=36, blank=True, db_index=True, editable=False)
+    sync_marker = models.CharField("Метка синхронизации", max_length=36, blank=True, db_index=True, editable=False)
     is_active = models.BooleanField("Активен", default=True)
     raw_data = models.JSONField("Служебные данные", default=dict, blank=True)
 
@@ -521,10 +521,10 @@ class TenderEstimate(models.Model):
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
-    summary_snapshot = models.JSONField(default=dict, blank=True)
+    summary_snapshot = models.JSONField("Итоги расчёта", default=dict, blank=True)
     document_analysis = models.JSONField("Анализ документов", default=dict, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -555,7 +555,7 @@ class TenderEstimate(models.Model):
 
 
 class TenderLine(models.Model):
-    estimate = models.ForeignKey(TenderEstimate, on_delete=models.CASCADE, related_name="lines")
+    estimate = models.ForeignKey(TenderEstimate, verbose_name="Расчёт тендера", on_delete=models.CASCADE, related_name="lines")
     name = models.CharField("Наименование", max_length=500)
     quantity = models.DecimalField("Количество", max_digits=14, decimal_places=2)
     nmck_unit = models.DecimalField("НМЦК за единицу", max_digits=14, decimal_places=2)
@@ -565,7 +565,7 @@ class TenderLine(models.Model):
     product_url = models.URLField("Ссылка", max_length=1000, blank=True)
     comment = models.CharField("Комментарий", max_length=500, blank=True)
     requirements = models.JSONField("Требования из ООЗ/ТЗ", default=dict, blank=True)
-    sort_order = models.PositiveIntegerField(default=0)
+    sort_order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
         ordering = ["sort_order", "pk"]
@@ -600,8 +600,8 @@ class Order(models.Model):
     name = models.CharField("Название", max_length=300)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -630,11 +630,11 @@ class OrderEstimate(models.Model):
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
-    summary_snapshot = models.JSONField(default=dict, blank=True)
+    summary_snapshot = models.JSONField("Итоги расчёта", default=dict, blank=True)
     document_analysis = models.JSONField("Анализ документов", default=dict, blank=True)
     notes = models.TextField("Комментарий", blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -680,7 +680,7 @@ class OrderEstimate(models.Model):
 
 
 class OrderLine(models.Model):
-    estimate = models.ForeignKey(OrderEstimate, on_delete=models.CASCADE, related_name="lines")
+    estimate = models.ForeignKey(OrderEstimate, verbose_name="Расчёт заказа", on_delete=models.CASCADE, related_name="lines")
     name = models.CharField("Наименование", max_length=500)
     quantity = models.DecimalField("Количество", max_digits=14, decimal_places=2)
     nmck_unit = models.DecimalField("Цена за единицу", max_digits=14, decimal_places=2)
@@ -690,7 +690,7 @@ class OrderLine(models.Model):
     product_url = models.URLField("Ссылка", max_length=1000, blank=True)
     comment = models.CharField("Комментарий", max_length=500, blank=True)
     requirements = models.JSONField("Требования", default=dict, blank=True)
-    sort_order = models.PositiveIntegerField(default=0)
+    sort_order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
         ordering = ["sort_order", "pk"]
@@ -747,12 +747,12 @@ class Counterparty(models.Model):
     а не скриншотом."""
 
     name = models.CharField("Название", max_length=200)
-    catalog_supplier = models.ForeignKey(CatalogSupplier, on_delete=models.SET_NULL, null=True, blank=True, related_name="counterparties")
+    catalog_supplier = models.ForeignKey(CatalogSupplier, verbose_name="Поставщик каталога", on_delete=models.SET_NULL, null=True, blank=True, related_name="counterparties")
     notes = models.TextField("Комментарий", blank=True)
     is_active = models.BooleanField("Активен", default=True)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="counterparties")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.PROTECT, related_name="counterparties")
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["name"]
@@ -786,8 +786,8 @@ class StageCounterpartyLink(models.Model):
         (SOURCE_HISTORICAL, "История цен"),
     ]
 
-    stage = models.ForeignKey(ProcessDefinition, on_delete=models.CASCADE, related_name="counterparty_links")
-    counterparty = models.ForeignKey(Counterparty, on_delete=models.CASCADE, related_name="stage_links")
+    stage = models.ForeignKey(ProcessDefinition, verbose_name="Этап производства", on_delete=models.CASCADE, related_name="counterparty_links")
+    counterparty = models.ForeignKey(Counterparty, verbose_name="Контрагент", on_delete=models.CASCADE, related_name="stage_links")
     is_active = models.BooleanField("Активна", default=True)
     priority = models.PositiveIntegerField("Приоритет (меньше — важнее)", default=0)
     price_source_type = models.CharField("Способ получения цены", max_length=24, choices=PRICE_SOURCE_CHOICES, default=SOURCE_MANUAL_QUOTE)
@@ -795,8 +795,8 @@ class StageCounterpartyLink(models.Model):
         "Настройки (ограничения, параметры, сроки, минимальный заказ, ссылка на калькулятор…)",
         default=dict, blank=True,
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлена", auto_now=True)
 
     class Meta:
         ordering = ["priority", "counterparty__name"]

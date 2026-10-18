@@ -485,17 +485,35 @@ def _store_preview(url, name, data: bytes) -> str:
     return store_document_preview(url, name, data).get("html", "")
 
 
-def _tender_document(user, tender_id, document_index):
-    """Resolve one visible tender attachment under the same access rule as its screen."""
+def _tender_documents(user, tender_id):
+    """Resolve tender attachments under the same access rule as its screen."""
     _require_tender_admin(user)
-    if not isinstance(document_index, int) or isinstance(document_index, bool):
-        raise ValueError("Неверный номер документа")
     tender = Tender.objects.filter(pk=tender_id).first()
     if tender is None:
         raise ValueError("Тендер не найден")
     from .notification import parse_notification
 
     documents = parse_notification(tender.notification_raw).get("documents", []) if tender.notification_raw else []
+    return tender, documents
+
+
+def list_tender_documents(user, tender_id):
+    """Return the visible attachment list without fetching or parsing file contents."""
+    tender, documents = _tender_documents(user, tender_id)
+    return {
+        "tender_id": tender.pk,
+        "documents": [{
+            "index": document["index"], "name": document["name"], "kind": document["kind"],
+            "size_kb": document["size_kb"], "url": document["url"],
+        } for document in documents],
+    }
+
+
+def _tender_document(user, tender_id, document_index):
+    """Resolve one visible tender attachment under the same access rule as its screen."""
+    if not isinstance(document_index, int) or isinstance(document_index, bool):
+        raise ValueError("Неверный номер документа")
+    tender, documents = _tender_documents(user, tender_id)
     if not 0 <= document_index < len(documents):
         raise ValueError("Документ не найден")
     document = documents[document_index]

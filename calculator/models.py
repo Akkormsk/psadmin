@@ -24,15 +24,15 @@ class PriceItem(models.Model):
         (CATEGORY_WIDE_POSTPRESS, "Плоттер Canon · Постпечатка"),
     ]
 
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
-    name = models.CharField(max_length=200)
+    category = models.CharField("Раздел", max_length=20, choices=CATEGORY_CHOICES)
+    name = models.CharField("Название", max_length=200)
     aliases = models.TextField("Синонимы для ИИ", blank=True, help_text="Через запятую: горячее тиснение, тиснение фольгой")
-    unit_name = models.CharField(max_length=40, default="ед.")
-    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
-    base_item = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="dependent_items")
-    price_multiplier = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal("1.0000"))
+    unit_name = models.CharField("Единица измерения", max_length=40, default="ед.")
+    unit_price = models.DecimalField("Цена за единицу", max_digits=12, decimal_places=4)
+    base_item = models.ForeignKey("self", verbose_name="Базовая позиция", null=True, blank=True, on_delete=models.SET_NULL, related_name="dependent_items")
+    price_multiplier = models.DecimalField("Коэффициент цены", max_digits=8, decimal_places=4, default=Decimal("1.0000"))
     sort_order = models.PositiveIntegerField("Порядок", default=0)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField("Используется", default=True)
 
     class Meta:
         ordering = ["category", "sort_order", "pk"]
@@ -111,17 +111,17 @@ class Estimate(models.Model):
     TYPE_WIDE = "wide"
     TYPE_CHOICES = [(TYPE_SHEET, "Листовая печать"), (TYPE_WIDE, "Плоттер Canon")]
 
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimates")
-    group = models.ForeignKey("EstimateGroup", null=True, blank=True, on_delete=models.SET_NULL, related_name="estimates")
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Ответственный", on_delete=models.CASCADE, related_name="calculator_estimates")
+    group = models.ForeignKey("EstimateGroup", verbose_name="Группа", null=True, blank=True, on_delete=models.SET_NULL, related_name="estimates")
     calculator_type = models.CharField("Калькулятор", max_length=20, choices=TYPE_CHOICES, default=TYPE_SHEET)
-    name = models.CharField(max_length=200, default="Новый расчёт")
+    name = models.CharField("Название", max_length=200, default="Новый расчёт")
     comment = models.CharField("Комментарий", max_length=300, blank=True)
     product_quantity = models.PositiveIntegerField("Тираж конечного изделия", default=1)
     work_hours = models.DecimalField("Рабочие часы", max_digits=8, decimal_places=1, default=Decimal("0.0"))
-    settings_snapshot = models.JSONField(default=dict, blank=True)
-    summary_snapshot = models.JSONField(default=dict, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    settings_snapshot = models.JSONField("Настройки на момент расчёта", default=dict, blank=True)
+    summary_snapshot = models.JSONField("Итоги расчёта", default=dict, blank=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -133,10 +133,10 @@ class Estimate(models.Model):
 
 
 class EstimateGroup(models.Model):
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="calculator_estimate_groups")
-    calculator_type = models.CharField(max_length=20, choices=Estimate.TYPE_CHOICES, default=Estimate.TYPE_SHEET)
-    name = models.CharField(max_length=200)
-    created_at = models.DateTimeField(auto_now_add=True)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Ответственный", on_delete=models.CASCADE, related_name="calculator_estimate_groups")
+    calculator_type = models.CharField("Калькулятор", max_length=20, choices=Estimate.TYPE_CHOICES, default=Estimate.TYPE_SHEET)
+    name = models.CharField("Название", max_length=200)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
 
     class Meta:
         ordering = ["name", "pk"]
