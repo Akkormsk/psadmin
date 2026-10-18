@@ -153,7 +153,8 @@ def _run(conversation, user, state):
         if not calls:
             _finish_turn(conversation, state)
             factual = state.get("last_read_result")
-            text = present_result(factual) if factual is not None else str(answer.get("content") or "Готово.")
+            content = answer.get("content")
+            text = content if isinstance(content, str) and content.strip() else (present_result(factual) if factual is not None else "Готово.")
             return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
         if len(calls) != 1:
             raise TenderAIError("Одновременные действия сейчас не поддерживаются.")

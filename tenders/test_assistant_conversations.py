@@ -20,7 +20,7 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "content": None, "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": json.dumps({"area": "cash"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": json.dumps({"resource": "cash.transactions"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
-            {"role": "assistant", "content": "Последняя операция найдена."},
+            {"role": "assistant", "content": "Последняя операция: 10. Сумма: 10."},
         ]
         with patch("tenders.assistant_agent.execute_tool", side_effect=[
             {"entity": "cash.CashTransaction", "query": {}, "total_count": 1,
@@ -28,7 +28,7 @@ class AssistantFunctionCallingTests(TestCase):
         ]) as execute:
             from .assistant_agent import reply
             response = reply(self.conversation, self.user, "Покажи последнюю операцию")
-        self.assertIn("10", response["text"])
+        self.assertEqual(response["text"], "Последняя операция: 10. Сумма: 10.")
         self.assertEqual(execute.call_args.args[0], "read")
         messages = gateway.call_args_list[3].args[0]
         self.assertEqual(messages[-2]["role"], "tool")
@@ -47,14 +47,42 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": '{"resource":"cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount", "reason"], "order_by": "-operation_date", "limit": 3}})}}]},
-            {"role": "assistant", "content": "Готово."},
+            {"role": "assistant", "content": "Найдена операция: 100, Оплата."},
         ]
 
         messages = respond(self.conversation, self.user, "В приложении Касса покажи три последние операции")
         response = messages[-1]
 
-        self.assertIn("100", response["text"])
+        self.assertEqual(response["text"], "Найдена операция: 100, Оплата.")
         self.assertEqual(response["data"]["steps"][-1]["result"]["entity"], "cash.CashTransaction")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_empty_final_read_text_falls_back_to_backend_presentation(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": '{"resource":"cash.transactions"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
+            {"role": "assistant", "content": ""},
+        ]
+        result = {"entity": "cash.CashTransaction", "query": {}, "total_count": 1,
+                  "returned_count": 1, "aggregates": {}, "records": [{"id": 1, "amount": "10"}], "sources": []}
+        with patch("tenders.assistant_agent.execute_tool", return_value=result):
+            from .assistant_agent import reply
+            response = reply(self.conversation, self.user, "Покажи операцию")
+
+        self.assertIn("10", response["text"])
+        self.assertNotEqual(response["text"], "")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_final_text_without_read_is_unchanged(self, gateway, _preflight):
+        gateway.return_value = {"role": "assistant", "content": "За какой период показать данные?"}
+
+        from .assistant_agent import reply
+        response = reply(self.conversation, self.user, "Покажи данные")
+
+        self.assertEqual(response, {"text": "За какой период показать данные?", "kind": "tool_result", "data": {"steps": []}})
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
