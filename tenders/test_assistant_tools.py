@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -17,6 +17,35 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_published_capability_sources_resolve_to_shared_callables(self):
         self.assertEqual(capability_issues(self.admin), [])
+
+    def test_area_catalogue_is_assembled_from_registered_capabilities(self):
+        from .assistant_tools import available_areas, available_resources
+
+        areas = {item["id"]: item for item in available_areas(self.admin)}
+        self.assertEqual(areas["cash"]["name"], "Касса")
+        self.assertIn("tenders", areas)
+        self.assertNotIn("schema", areas)
+        self.assertNotIn("action", areas)
+        resources = {item["id"]: item for item in available_resources(self.admin, "cash")}
+        self.assertEqual(resources["cash.transactions"]["entity"], "cash.CashTransaction")
+
+    def test_openai_tools_start_with_business_areas_not_django_entities(self):
+        definitions, names = openai_functions(self.admin)
+
+        self.assertEqual(set(names.values()), {"assistant.select_area"})
+        parameters = definitions[0]["function"]["parameters"]
+        self.assertIn("cash", parameters["properties"]["area"]["enum"])
+
+    def test_opened_resource_publishes_a_specialized_universal_read(self):
+        definitions, names = openai_functions(
+            self.admin, area_id="cash", resource_id="cash.transactions",
+        )
+
+        self.assertIn("read:cash.transactions", names.values())
+        read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
+        plan = read["parameters"]["properties"]["plan"]
+        self.assertNotIn("entity", plan["properties"])
+        self.assertIn("direction", str(plan))
 
     def test_workflow_encyclopedia_reuses_only_registered_capabilities(self):
         from .assistant_tools import catalog, workflow_catalog
@@ -31,15 +60,13 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
     def test_openai_definitions_are_generated_from_the_registry(self):
-        from .assistant_tools import openai_functions
-        definitions, names = openai_functions(self.admin, read_entity="cash.CashTransaction", action_id="cash.transaction_update")
+        definitions, names = openai_functions(self.admin, area_id="cash", resource_id="cash.transactions")
         self.assertEqual(len(names), len(definitions))
         self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
-        read = next(item["function"] for item in definitions if item["function"]["name"] == "read")
+        read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
         plan = read["parameters"]["properties"]["plan"]
-        self.assertIn("entity", plan["properties"])
-        self.assertIn("cash.CashTransaction", plan["properties"]["entity"]["enum"])
+        self.assertNotIn("entity", plan["properties"])
         self.assertIn("filters", plan["properties"])
         self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
         self.assertEqual(set(plan["properties"]), set(plan["required"]))
@@ -48,29 +75,25 @@ class AssistantToolRegistryTests(TestCase):
         account = next(item for item in filters if item["properties"]["field"].get("enum") == ["account"])
         self.assertEqual(direction["properties"]["value"]["enum"], ["income", "expense"])
         self.assertEqual(account["properties"]["value"]["enum"], ["cash", "card"])
+        self.assertIn("Приход", direction["properties"]["value"]["description"])
+        self.assertIn("Карта", account["properties"]["value"]["description"])
         self.assertNotEqual(direction["properties"]["value"], account["properties"]["value"])
-        schema = next(item["function"] for item in definitions if item["function"]["name"] == "schema_describe")
-        self.assertIn("cash.CashTransaction", schema["parameters"]["properties"]["entity"]["enum"])
-        self.assertNotIn("assistant_catalog", names)
+        self.assertNotIn("schema_describe", names)
+        self.assertNotIn("action_describe", names)
 
-    def test_read_is_not_published_until_an_entity_schema_is_selected(self):
-        from .assistant_tools import openai_functions
-
+    def test_only_area_selection_is_published_before_context_is_known(self):
         definitions, names = openai_functions(self.admin)
 
         self.assertNotIn("read", names)
-        self.assertEqual(names["schema_describe"], "schema.describe")
-        self.assertEqual(names["action_describe"], "action.describe")
         self.assertNotIn("cash_transaction_create", names)
-        self.assertEqual(len(definitions), 2)
+        self.assertEqual(len(definitions), 1)
+        self.assertEqual(names[definitions[0]["function"]["name"]], "assistant.select_area")
 
-    def test_selected_action_is_the_only_published_action_contract(self):
-        from .assistant_tools import openai_functions
-
-        _definitions, names = openai_functions(self.admin, action_id="cash.transaction_create")
+    def test_opened_area_publishes_its_action_contracts(self):
+        _definitions, names = openai_functions(self.admin, area_id="cash")
 
         self.assertEqual(names["cash_transaction_create"], "cash.transaction_create")
-        self.assertNotIn("cash_transaction_delete", names)
+        self.assertEqual(names["cash_transaction_delete"], "cash.transaction_delete")
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan
@@ -83,7 +106,9 @@ class AssistantToolRegistryTests(TestCase):
             validate_plan(self.admin, {"model": "cash.CashTransaction", "fields": ["amount"]})
 
     def test_schema_description_uses_the_same_metadata_as_read(self):
-        description = execute_tool("schema.describe", self.admin, {"entity": "tenders.TenderEstimate"})
+        from .assistant_read import describe_entity
+
+        description = describe_entity("tenders.TenderEstimate")
 
         self.assertEqual(description["entity"], "tenders.TenderEstimate")
         owner = next(field for field in description["fields"] if field["name"] == "owner")

@@ -41,7 +41,12 @@ def _field_value_contract(descriptor):
     field = descriptor["field"]
     choices = [_json_safe_value(value) for value, _label in field.flatchoices if value not in (None, "")]
     if choices:
-        return {"type": "string" if isinstance(choices[0], str) else "number", "enum": choices}
+        labels = "; ".join(f"{value} — {label}" for value, label in field.flatchoices if value not in (None, ""))
+        return {
+            "type": "string" if isinstance(choices[0], str) else "number",
+            "enum": choices,
+            "description": f"Допустимые значения: {labels}",
+        }
     if isinstance(field, models.BooleanField):
         return "boolean"
     if isinstance(field, models.IntegerField):
@@ -82,7 +87,7 @@ def _filter_contracts(paths):
             result.append({
                 "type": "object", "required": True, "additional_properties": False,
                 "properties": {
-                    "field": {"type": "string", "enum": [name]},
+                    "field": {"type": "string", "enum": [name], "description": str(field.verbose_name)},
                     "op": {"type": "string", "enum": [operation]},
                     "value": "boolean" if operation == "isnull" else (in_value if operation == "in" else value),
                 },
@@ -107,15 +112,17 @@ def plan_contract(entity=None):
         model, canonical, fields = _entity(entity)
         paths = _paths(model, fields)
         scalar_paths = {name: item for name, item in paths.items() if item["kind"] == "scalar"}
+        path_labels = "; ".join(f"{name} — {item['field'].verbose_name}" for name, item in sorted(paths.items()))
+        scalar_labels = "; ".join(f"{name} — {item['field'].verbose_name}" for name, item in sorted(scalar_paths.items()))
         views = [item["id"] for item in _business_views(model)]
         properties.update({
             "entity": {"type": "string", "required": True, "enum": [canonical]},
             "view": {"type": "string", "required": False, **({"enum": views} if views else {})},
-            "fields": {"type": "string[]", "required": False, "item": {"type": "string", "enum": sorted(paths)}},
+            "fields": {"type": "string[]", "required": False, "description": f"Поля: {path_labels}", "item": {"type": "string", "enum": sorted(paths)}},
             "filters": {"type": "object[]", "required": False, "item": {"any_of": _filter_contracts(paths)}},
             "order_by": {"any_of": [
-                {"type": "string", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])},
-                {"type": "string[]", "item": {"type": "string", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])}},
+                {"type": "string", "description": f"Поля сортировки: {scalar_labels}", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])},
+                {"type": "string[]", "description": f"Поля сортировки: {scalar_labels}", "item": {"type": "string", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])}},
             ], "required": False},
             "aggregates": {"type": "object[]", "required": False, "item": {"any_of": [
                 {"type": "object", "required": True, "additional_properties": False, "properties": {
@@ -123,7 +130,7 @@ def plan_contract(entity=None):
                     "field": {"type": "string", "enum": [name]},
                 }} for name, descriptor in scalar_paths.items() if _catalog_field(name, descriptor)["aggregate_ops"]
             ]}},
-            "group_by": {"type": "string[]", "required": False, "item": {"type": "string", "enum": sorted(scalar_paths)}},
+            "group_by": {"type": "string[]", "required": False, "description": f"Поля группировки: {scalar_labels}", "item": {"type": "string", "enum": sorted(scalar_paths)}},
         })
     return {
         "type": "object",

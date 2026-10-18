@@ -34,12 +34,24 @@ class AssistantTool:
     executor: Callable[[Any, dict[str, Any]], dict[str, Any]]
     ui: dict[str, Any] | None = None
     source: str = ""
+    areas: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AssistantResource:
+    """A user-facing read resource backed by the universal READ executor."""
+
+    identifier: str
+    name: str
+    description: str
+    entity: str
+    areas: tuple[str, ...]
 
 
 _TOOLS: dict[str, AssistantTool] = {}
+_RESOURCES: dict[str, AssistantResource] = {}
 _DISCOVERED = False
 _MODEL_HIDDEN_TOOLS = {"assistant.capabilities", "assistant.catalog"}
-_MODEL_DISCOVERY_TOOLS = {"schema.describe", "action.describe"}
 
 
 def _discover_app_actions():
@@ -69,6 +81,35 @@ def register_tool(tool: AssistantTool) -> AssistantTool:
     return tool
 
 
+def register_resource(resource: AssistantResource) -> AssistantResource:
+    if resource.identifier in _RESOURCES:
+        raise RuntimeError(f"Duplicate assistant resource: {resource.identifier}")
+    if not resource.areas:
+        raise RuntimeError("Assistant resource must belong to a business area")
+    _RESOURCES[resource.identifier] = resource
+    return resource
+
+
+def _tool_areas(tool: AssistantTool) -> tuple[str, ...]:
+    if tool.areas:
+        return tool.areas
+    if tool.source:
+        app_label = tool.source.split(".", 1)[0]
+        try:
+            apps.get_app_config(app_label)
+            return (app_label,)
+        except LookupError:
+            pass
+    return (tool.identifier.split(".", 1)[0],) if "." in tool.identifier else ()
+
+
+def _area_name(identifier: str) -> str:
+    try:
+        return str(apps.get_app_config(identifier).verbose_name)
+    except LookupError:
+        return identifier.replace("_", " ").capitalize()
+
+
 def available_tools(user) -> list[dict[str, Any]]:
     _discover_app_actions()
     return [
@@ -82,8 +123,43 @@ def available_tools(user) -> list[dict[str, Any]]:
             "available": not tool.requires_superuser or user.is_superuser,
             "ui": tool.ui,
             "source": tool.source or f"{tool.executor.__module__}.{tool.executor.__qualname__}",
+            "areas": list(_tool_areas(tool)),
         }
         for tool in _TOOLS.values()
+    ]
+
+
+def available_areas(user) -> list[dict[str, Any]]:
+    """Business sections are derived from registered tools and resources."""
+    _discover_app_actions()
+    identifiers = {
+        area for tool in _TOOLS.values() for area in _tool_areas(tool)
+    } | {
+        area for resource in _RESOURCES.values() for area in resource.areas
+    }
+    return [
+        {
+            "id": identifier,
+            "name": _area_name(identifier),
+            "description": f"Данные и операции раздела «{_area_name(identifier)}».",
+        }
+        for identifier in sorted(identifiers)
+        if identifier not in {"assistant"}
+    ]
+
+
+def available_resources(user, area_id: str | None = None) -> list[dict[str, Any]]:
+    _discover_app_actions()
+    return [
+        {
+            "id": resource.identifier,
+            "name": resource.name,
+            "description": resource.description,
+            "entity": resource.entity,
+            "areas": list(resource.areas),
+        }
+        for resource in _RESOURCES.values()
+        if area_id is None or area_id in resource.areas
     ]
 
 
@@ -209,44 +285,96 @@ def _openai_type(declared):
     return {"type": "string"}, optional, True
 
 
-def openai_functions(user, *, read_entity=None, action_id=None):
-    """Function definitions and reversible names generated from registered tools."""
-    definitions, names = [], {}
-    available = available_tools(user)
-    action_ids = [tool["id"] for tool in available if tool["available"] and tool["id"] not in _MODEL_HIDDEN_TOOLS | _MODEL_DISCOVERY_TOOLS | {"read"}]
-    for tool in available:
-        if not tool["available"] or tool["id"] in _MODEL_HIDDEN_TOOLS:
-            continue
-        if tool["id"] == "read" and read_entity is None:
-            continue
-        if tool["id"] not in _MODEL_DISCOVERY_TOOLS | {"read"} and tool["id"] != action_id:
-            continue
-        name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
-        if not name or name in names:
-            raise RuntimeError("OpenAI function name collision")
-        input_schema = read_input_schema(read_entity) if tool["id"] == "read" else deepcopy(tool["input_schema"])
-        if tool["id"] == "action.describe":
-            input_schema["action"]["enum"] = action_ids
-        if tool["id"] in {"read", "schema.describe"}:
-            from .assistant_read import catalogue
+def _function_definition(identifier, description, input_schema):
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", identifier)
+    properties, required, strict = {}, [], True
+    for key, declared in input_schema.items():
+        schema, optional, compatible = _openai_type(declared)
+        if optional:
+            schema = _nullable(schema)
+        properties[key] = schema
+        required.append(key)
+        strict = strict and compatible
+    function = {
+        "name": name,
+        "description": description,
+        "parameters": {
+            "type": "object", "properties": properties,
+            "required": required, "additionalProperties": False,
+        },
+    }
+    if strict:
+        function["strict"] = True
+    return name, {"type": "function", "function": function}
 
-            entity = input_schema["plan"]["properties"]["entity"] if tool["id"] == "read" else input_schema["entity"]
-            entity["enum"] = [item["id"] for item in catalogue(compact=True)["entities"]]
-            entity["description"] = "Choose one entity ID from this enum. Use schema.describe before filters, fields, relations, aggregation or sorting for an unfamiliar entity."
-        properties, required, strict = {}, [], True
-        for key, declared in input_schema.items():
-            schema, optional, compatible = _openai_type(declared)
-            if optional:
-                schema = _nullable(schema)
-            properties[key] = schema
-            required.append(key)
-            strict = strict and compatible
-        parameters = {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
-        function = {"name": name, "description": tool["description"], "parameters": parameters}
-        if strict:
-            function["strict"] = True
-        definitions.append({"type": "function", "function": function})
+
+def _resource_read_schema(resource):
+    schema = deepcopy(read_input_schema(resource["entity"]))
+    plan = schema["plan"]
+    plan["properties"].pop("entity", None)
+    return schema
+
+
+def openai_functions(user, *, area_id=None, resource_id=None):
+    """Expose only the current business section and its public capabilities.
+
+    ``read:<resource>`` is a generated public view of the single universal READ
+    executor.  It carries no duplicate business implementation.
+    """
+    definitions, names = [], {}
+
+    areas = available_areas(user)
+    area_schema = {"area": {"type": "string", "enum": [item["id"] for item in areas],
+                            "description": "; ".join(f'{item["id"]}: {item["name"]}' for item in areas)}}
+    name, definition = _function_definition(
+        "assistant.select_area",
+        "Выбирает раздел PSADMIN для запроса к данным или операции. Используй, если пользователь прямо назвал раздел или его нужно определить по смыслу запроса.",
+        area_schema,
+    )
+    definitions.append(definition)
+    names[name] = "assistant.select_area"
+
+    if area_id is None:
+        return definitions, names
+    if area_id not in {item["id"] for item in areas}:
+        raise AssistantToolError("Недоступный раздел PSADMIN")
+
+    resources = available_resources(user, area_id)
+    if resources:
+        resource_schema = {"resource": {"type": "string", "enum": [item["id"] for item in resources],
+                                         "description": "; ".join(f'{item["id"]}: {item["name"]} — {item["description"]}' for item in resources)}}
+        name, definition = _function_definition(
+            "assistant.select_resource",
+            "Выбирает данные, с которыми нужно работать внутри текущего раздела. Используй перед чтением данных.",
+            resource_schema,
+        )
+        definitions.append(definition)
+        names[name] = "assistant.select_resource"
+
+    for tool in available_tools(user):
+        if (not tool["available"] or tool["id"] in _MODEL_HIDDEN_TOOLS | {"read"}
+                or area_id not in tool["areas"]):
+            continue
+        name, definition = _function_definition(tool["id"], tool["description"], deepcopy(tool["input_schema"]))
+        if name in names:
+            raise RuntimeError("OpenAI function name collision")
+        definitions.append(definition)
         names[name] = tool["id"]
+
+    if resource_id is not None:
+        resource = next((item for item in resources if item["id"] == resource_id), None)
+        if resource is None:
+            raise AssistantToolError("Недоступные данные раздела")
+        identifier = f"read:{resource_id}"
+        name, definition = _function_definition(
+            identifier,
+            f"Читает «{resource['name']}». {resource['description']} Используй только разрешённые поля и значения из схемы.",
+            _resource_read_schema(resource),
+        )
+        if name in names:
+            raise RuntimeError("OpenAI function name collision")
+        definitions.append(definition)
+        names[name] = identifier
     return definitions, names
 
 
@@ -293,22 +421,6 @@ def _read_data(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
-def _describe_entity(user, payload):
-    from .assistant_read import ReadPlanError, describe_entity
-
-    try:
-        return describe_entity(payload.get("entity"))
-    except ReadPlanError as exc:
-        raise AssistantToolError(str(exc)) from exc
-
-
-def _describe_action(user, payload):
-    action = next((item for item in available_tools(user) if item["id"] == payload.get("action") and item["available"]), None)
-    if action is None or action["id"] in _MODEL_HIDDEN_TOOLS | _MODEL_DISCOVERY_TOOLS | {"read"}:
-        raise AssistantToolError("Недоступное действие ассистента")
-    return {key: action[key] for key in ("id", "name", "description", "input_schema", "read_only", "requires_confirmation")}
-
-
 def workflow_catalog(user, actions=None):
     """One runtime encyclopedia assembled solely from registered actions."""
     actions = available_tools(user) if actions is None else actions
@@ -340,6 +452,4 @@ def _catalog(user, _payload):
 
 register_tool(AssistantTool("assistant.capabilities", "Доступные возможности", "Показывает фактически зарегистрированные действия.", {"type": "object"}, True, False, False, lambda user, payload: {"tools": available_tools(user)}))
 register_tool(AssistantTool("assistant.catalog", "Энциклопедия возможностей PSADMIN", "Показывает автоматически собранные бизнес-модели и зарегистрированные реальные действия.", {"type": "object"}, True, False, True, _catalog))
-register_tool(AssistantTool("schema.describe", "Описание сущности", "Возвращает компактные актуальные поля, связи и ограничения одной выбранной сущности перед чтением.", {"entity": {"type": "string", "required": True}}, True, False, True, _describe_entity))
-register_tool(AssistantTool("action.describe", "Описание действия", "Возвращает актуальный контракт одной зарегистрированной операции перед её подготовкой.", {"action": {"type": "string", "required": True}}, True, False, True, _describe_action))
 register_tool(AssistantTool("read", "Прочитать бизнес-данные", "Выполняет проверенный read-only ORM план по разрешённым моделям, полям, фильтрам, группировкам и агрегатам. Не принимает SQL.", read_input_schema(), True, False, True, _read_data))
