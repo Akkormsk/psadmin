@@ -4,7 +4,7 @@ from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantT
 from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     apply_filter_word_audit, decide_document_proposals, pull_tenders_now, run_filter_word_audit, run_profile_triage,
-    preview_tender_document, record_tender_outcome, save_evaluation_settings, save_selection_settings, save_tender_bid,
+    preview_tender_document, record_tender_outcome, restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
     update_tender_review,
 )
 
@@ -156,6 +156,14 @@ register_tool(AssistantTool(
     "tender.hide", "Скрыть неподходящий тендер", "Архивирует тендер тем же исполнителем, что кнопка интерфейса, и сохраняет причину для входящего тендера.",
     {"tender_id": "integer", "reason": "string?"}, False, True, True, _hide_tender,
     source="tender_selection.services.hide_tender",
+))
+register_tool(AssistantTool(
+    "tender.restore", "Вернуть скрытый тендер",
+    "Возвращает скрытый тендер в работу тем же сервисом, что кнопка восстановления в архиве.",
+    {"tender_id": {"type": "integer", "description": "Идентификатор выбранного скрытого тендера"}},
+    False, True, True,
+    lambda user, payload: restore_hidden_tender(user, payload["tender_id"]),
+    source="tender_selection.services.restore_hidden_tender",
 ))
 register_tool(AssistantTool(
     "tender.start_evaluation", "Взять тендер в работу",
