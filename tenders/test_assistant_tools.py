@@ -32,7 +32,7 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_openai_definitions_are_generated_from_the_registry(self):
         from .assistant_tools import openai_functions
-        definitions, names = openai_functions(self.admin)
+        definitions, names = openai_functions(self.admin, read_entity="cash.CashTransaction")
         self.assertEqual(len(names), len(definitions))
         self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
@@ -43,11 +43,23 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("filters", plan["properties"])
         self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
         self.assertEqual(set(plan["properties"]), set(plan["required"]))
-        filter_item = plan["properties"]["filters"]["anyOf"][0]["items"]
-        self.assertEqual(filter_item["properties"]["op"]["enum"], sorted(__import__("tenders.assistant_read", fromlist=["OPS"]).OPS))
+        filters = plan["properties"]["filters"]["anyOf"][0]["items"]["anyOf"]
+        direction = next(item for item in filters if item["properties"]["field"].get("enum") == ["direction"])
+        account = next(item for item in filters if item["properties"]["field"].get("enum") == ["account"])
+        self.assertEqual(direction["properties"]["value"]["enum"], ["income", "expense"])
+        self.assertEqual(account["properties"]["value"]["enum"], ["cash", "card"])
+        self.assertNotEqual(direction["properties"]["value"], account["properties"]["value"])
         schema = next(item["function"] for item in definitions if item["function"]["name"] == "schema_describe")
         self.assertIn("cash.CashTransaction", schema["parameters"]["properties"]["entity"]["enum"])
         self.assertNotIn("assistant_catalog", names)
+
+    def test_read_is_not_published_until_an_entity_schema_is_selected(self):
+        from .assistant_tools import openai_functions
+
+        _definitions, names = openai_functions(self.admin)
+
+        self.assertNotIn("read", names)
+        self.assertEqual(names["schema_describe"], "schema.describe")
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan
@@ -525,6 +537,39 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(ascending["aggregates"], descending["aggregates"])
         self.assertEqual(str(ascending["aggregates"]["sum_amount"]), "60")
+
+    def test_complete_read_result_can_be_reused_for_a_narrower_aggregate(self):
+        from cash.models import CashTransaction
+        from .assistant_read import execute, reuse_result
+
+        for direction, amount in (("income", "10"), ("expense", "20"), ("expense", "30")):
+            CashTransaction.objects.create(
+                operation_date=date(2026, 9, 1), account="cash", direction=direction,
+                amount=amount, reason="Кэш", created_by=self.admin,
+            )
+        cached = execute(self.admin, {"entity": "cash.CashTransaction", "fields": ["direction", "amount"], "limit": 3})
+        reused = reuse_result(self.admin, {
+            "entity": "cash.CashTransaction", "fields": ["direction", "amount"], "limit": 3,
+            "filters": [{"field": "direction", "op": "eq", "value": "expense"}],
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }, cached)
+
+        self.assertIsNotNone(reused)
+        self.assertEqual(reused["source_scope"], "cached complete result")
+        self.assertEqual(str(reused["aggregates"]["sum_amount"]), "50.00")
+
+    def test_limited_read_result_is_not_reused_as_a_complete_aggregate(self):
+        from cash.models import CashTransaction
+        from .assistant_read import execute, reuse_result
+
+        for amount in ("10", "20", "30"):
+            CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="expense", amount=amount, reason="Лимит", created_by=self.admin)
+        cached = execute(self.admin, {"entity": "cash.CashTransaction", "fields": ["amount"], "limit": 2})
+
+        self.assertIsNone(reuse_result(self.admin, {
+            "entity": "cash.CashTransaction", "fields": ["amount"], "limit": 2,
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }, cached))
 
     def test_read_rejects_hidden_order_field(self):
         from .assistant_tools import AssistantToolError

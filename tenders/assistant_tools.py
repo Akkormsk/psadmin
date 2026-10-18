@@ -208,16 +208,18 @@ def _openai_type(declared):
     return {"type": "string"}, optional, True
 
 
-def openai_functions(user):
+def openai_functions(user, *, read_entity=None):
     """Function definitions and reversible names generated from registered tools."""
     definitions, names = [], {}
     for tool in available_tools(user):
         if not tool["available"] or tool["id"] in _MODEL_HIDDEN_TOOLS:
             continue
+        if tool["id"] == "read" and read_entity is None:
+            continue
         name = re.sub(r"[^A-Za-z0-9_-]", "_", tool["id"])
         if not name or name in names:
             raise RuntimeError("OpenAI function name collision")
-        input_schema = deepcopy(tool["input_schema"])
+        input_schema = read_input_schema(read_entity) if tool["id"] == "read" else deepcopy(tool["input_schema"])
         if tool["id"] in {"read", "schema.describe"}:
             from .assistant_read import catalogue
 

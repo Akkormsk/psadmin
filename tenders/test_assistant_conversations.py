@@ -16,15 +16,20 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_read_result_returns_through_matching_tool_call(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "describe", "type": "function", "function": {"name": "schema_describe", "arguments": json.dumps({"entity": "cash.CashTransaction"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read", "arguments": json.dumps({"plan": {"entity": "cash.CashTransaction", "fields": ["amount"], "limit": 1}})}}]},
             {"role": "assistant", "content": "Последняя операция найдена."},
         ]
-        with patch("tenders.assistant_agent.execute_tool", return_value={"rows": [{"id": 1, "amount": "10"}]}) as execute:
+        with patch("tenders.assistant_agent.execute_tool", side_effect=[
+            {"entity": "cash.CashTransaction", "fields": []},
+            {"entity": "cash.CashTransaction", "query": {}, "total_count": 1,
+             "returned_count": 1, "aggregates": {}, "records": [{"id": 1, "amount": "10"}], "sources": []},
+        ]) as execute:
             from .assistant_agent import reply
             response = reply(self.conversation, self.user, "Покажи последнюю операцию")
-        self.assertEqual(response["text"], "Последняя операция найдена.")
-        self.assertEqual(execute.call_args.args[0], "read")
-        messages = gateway.call_args_list[1].args[0]
+        self.assertIn("10", response["text"])
+        self.assertEqual(execute.call_args_list[1].args[0], "read")
+        messages = gateway.call_args_list[2].args[0]
         self.assertEqual(messages[-2]["role"], "tool")
         self.assertEqual(messages[-2]["tool_call_id"], "call_read")
 
@@ -89,22 +94,30 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_completed_read_is_replaced_with_compact_memory_before_the_next_turn(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "schema-1", "type": "function", "function": {
+                "name": "schema_describe", "arguments": json.dumps({"entity": "cash.CashTransaction"}),
+            }}]},
             {"role": "assistant", "tool_calls": [{"id": "read-1", "type": "function", "function": {
-                "name": "read", "arguments": json.dumps({"plan": {"entity": "cash.CashTransaction", "limit": 1}}),
+                "name": "read", "arguments": json.dumps({"plan": {"entity": "cash.CashTransaction", "fields": ["reason"], "limit": 1}}),
             }}]},
             {"role": "assistant", "content": "Одна операция найдена."},
+            {"role": "assistant", "tool_calls": [{"id": "read-2", "type": "function", "function": {
+                "name": "read", "arguments": json.dumps({"plan": {"entity": "cash.CashTransaction", "fields": ["reason"], "limit": 1}}),
+            }}]},
             {"role": "assistant", "content": "Это была расходная операция."},
         ]
-        result = {"entity": "cash.CashTransaction", "query": {"filters": []}, "total_count": 1,
+        result = {"entity": "cash.CashTransaction", "query": {"filters": [], "view": None, "search": None, "order_by": ["-id"]}, "total_count": 1,
                   "returned_count": 1, "aggregates": {}, "records": [{"id": 1, "reason": "x"}],
-                  "sources": [{"entity": "cash.CashTransaction", "id": 1}]}
-        with patch("tenders.assistant_agent.execute_tool", return_value=result):
+                  "sources": [{"entity": "cash.CashTransaction", "id": 1}], "source_scope": "all matching records"}
+        with patch("tenders.assistant_agent.execute_tool", side_effect=[{"entity": "cash.CashTransaction", "fields": []}, result]) as execute:
             from .assistant_agent import reply
             reply(self.conversation, self.user, "Покажи операцию")
             self.assertNotIn("agent_run", self.conversation.context)
-            self.assertNotIn("records", self.conversation.context["agent_memory"]["last_read"])
+            self.assertEqual(self.conversation.context["agent_memory"]["last_read"]["records"], [{"id": 1, "reason": "x"}])
             self.assertLessEqual(len(json.dumps(self.conversation.context["agent_memory"])), 2_000)
             reply(self.conversation, self.user, "А какая это операция?")
+            self.assertEqual(execute.call_count, 2)
 
-        messages = gateway.call_args_list[2].args[0]
-        self.assertFalse(any(item.get("role") == "tool" for item in messages))
+        messages = gateway.call_args_list[3].args[0]
+        tools = [item for item in messages if item.get("role") == "tool"]
+        self.assertEqual([item["tool_call_id"] for item in tools], ["read-2"])
