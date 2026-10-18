@@ -2,7 +2,11 @@
 from __future__ import annotations
 import json, os
 from urllib.request import Request, urlopen
-from .assistant_tools import AssistantToolError, available_tools, execute_tool, openai_functions, validate_tool_call
+from .assistant_tools import (
+    AssistantToolError, available_areas, available_resources, available_tools,
+    execute_tool, openai_functions, validate_tool_call,
+)
+from .assistant_read import present_result, reuse_result
 from .gateway_budget import preflight
 from .services import TenderAIError
 
@@ -47,11 +51,19 @@ def _new_state(conversation, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. For an unfamiliar entity, call schema.describe before reading its fields, filters, relations, sorting or aggregates. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}]
+    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. For PSADMIN data or operations, first choose the relevant business section; if the user named it, follow that direction, otherwise infer it from meaning. Never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian, such as a period, account, amount, person or the intended operation. Never ask the user for a technical field name, entity ID, code, JSON format or database value. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Actions require explicit user confirmation."}]
     memory = conversation.context.get("agent_memory")
     if isinstance(memory, dict):
         messages.append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
-    return {"messages": [*messages, *history], "steps": [], "attachments": attachments or []}
+    state = {"messages": [*messages, *history], "steps": [], "attachments": attachments or []}
+    if isinstance(memory, dict):
+        read = memory.get("last_read") if isinstance(memory.get("last_read"), dict) else {}
+        location = memory.get("location") if isinstance(memory.get("location"), dict) else {}
+        state["active_area"] = location.get("area")
+        state["active_resource"] = location.get("resource")
+        if read.get("owner_id") == conversation.context.get("owner_id") and read.get("records"):
+            state["read_cache"] = read
+    return state
 
 def _save(conversation, state):
     conversation.context["agent_run"] = state
@@ -60,6 +72,20 @@ def _save(conversation, state):
 def _remember_user_message(state, message):
     if not state["messages"] or state["messages"][-1] != {"role": "user", "content": message}:
         state["messages"].append({"role": "user", "content": message})
+
+
+def _validate_action_text_sources(tool, arguments, state):
+    """A free text write value must be copied from a user message, not invented."""
+    user_texts = [item.get("content", "") for item in state["messages"] if item.get("role") == "user"]
+    for name, declaration in tool["input_schema"].items():
+        requires_source = (isinstance(declaration, str) and declaration.rstrip("?") == "string") or (
+            isinstance(declaration, dict) and declaration.get("source_from_user") is True
+        )
+        if not requires_source:
+            continue
+        value = arguments.get(name)
+        if value not in (None, "") and not any(value in text for text in user_texts):
+            raise AssistantToolError("Текст для действия нужно получить из сообщения пользователя")
 
 
 def _compact_memory(value, depth=0):
@@ -79,33 +105,29 @@ def _compact_memory(value, depth=0):
 
 def _remember_read_state(state):
     for step in reversed(state["steps"]):
-        if step["tool_id"] != "read" or not isinstance(step["result"], dict):
+        if not str(step["tool_id"]).startswith("read:") or not isinstance(step["result"], dict):
             continue
         result = step["result"]
         return {
             "entity": result.get("entity"), "query": _compact_memory(result.get("query", {})),
             "aggregates": _compact_memory(result.get("aggregates", {})), "total_count": result.get("total_count"),
-            "returned_count": result.get("returned_count"), "sources": (result.get("sources") or [])[:20],
+            "returned_count": result.get("returned_count"), "sources": (result.get("sources") or [])[:MAX_MEMORY_ITEMS],
+            "source_scope": result.get("source_scope"), "records": _compact_memory(result.get("records") or []),
+            "owner_id": (state.get("read_cache") or {}).get("owner_id"),
         }
-    return None
-
-
-def _remember_schema_state(state):
-    for step in reversed(state["steps"]):
-        if step["tool_id"] != "schema.describe" or not isinstance(step["result"], dict):
-            continue
-        return {"entity": step["result"].get("entity")}
     return None
 
 
 def _finish_turn(conversation, state):
     memory = {}
     last_read = _remember_read_state(state)
-    last_schema = _remember_schema_state(state)
     if last_read is not None:
         memory["last_read"] = last_read
-    if last_schema is not None:
-        memory["last_schema"] = last_schema
+    if state.get("active_area"):
+        memory["location"] = {
+            "area": state.get("active_area"),
+            "resource": state.get("active_resource"),
+        }
     if memory:
         conversation.context["agent_memory"] = memory
     else:
@@ -118,9 +140,11 @@ def _finish(conversation):
     conversation.save(update_fields=["context"])
 
 def _run(conversation, user, state):
-    definitions, names = openai_functions(user)
     registry = {item["id"]: item for item in available_tools(user)}
     for _ in range(MAX_TOOL_CALLS + 1):
+        definitions, names = openai_functions(
+            user, area_id=state.get("active_area"), resource_id=state.get("active_resource"),
+        )
         preflight(); _debug(conversation, "function_call.request", input={"messages": state["messages"], "tools": definitions})
         answer = _gateway(state["messages"], definitions)
         usage = answer.pop("_gateway_usage", None)
@@ -128,18 +152,50 @@ def _run(conversation, user, state):
         state["messages"].append(answer); calls = answer.get("tool_calls") or []
         if not calls:
             _finish_turn(conversation, state)
-            return {"text": str(answer.get("content") or "Готово."), "kind": "tool_result", "data": {"steps": state["steps"]}}
+            factual = state.get("last_read_result")
+            text = present_result(factual) if factual is not None else str(answer.get("content") or "Готово.")
+            return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
         if len(calls) != 1:
             raise TenderAIError("Одновременные действия сейчас не поддерживаются.")
         call = calls[0]; function = call.get("function", {}); identifier = names.get(function.get("name"))
         try:
             arguments = json.loads(function.get("arguments", "{}"))
             if not identifier or not isinstance(arguments, dict): raise AssistantToolError("Некорректный вызов функции")
-            if registry[identifier]["requires_confirmation"]:
+            if identifier == "assistant.select_area":
+                area_id = arguments.get("area")
+                area = next((item for item in available_areas(user) if item["id"] == area_id), None)
+                if area is None:
+                    raise AssistantToolError("Недоступный раздел PSADMIN")
+                state["active_area"] = area_id
+                state.pop("active_resource", None)
+                result = {"area": area}
+            elif identifier == "assistant.select_resource":
+                resource_id = arguments.get("resource")
+                resource = next((item for item in available_resources(user, state.get("active_area")) if item["id"] == resource_id), None)
+                if resource is None:
+                    raise AssistantToolError("Недоступные данные раздела")
+                state["active_resource"] = resource_id
+                result = {"resource": {key: resource[key] for key in ("id", "name", "description")}}
+            elif identifier.startswith("read:"):
+                resource_id = identifier.split(":", 1)[1]
+                resource = next((item for item in available_resources(user, state.get("active_area")) if item["id"] == resource_id), None)
+                if resource is None or state.get("active_resource") != resource_id:
+                    raise AssistantToolError("Сначала выберите данные нужного раздела")
+                plan = {"entity": resource["entity"], **arguments.get("plan", {})}
+                cached = state.get("read_cache")
+                result = reuse_result(user, plan, cached) if cached else None
+                result = result if result is not None else execute_tool("read", user, {"plan": plan})
+                state["last_read_result"] = result
+                state["read_cache"] = {**result, "owner_id": conversation.context.get("owner_id")}
+            elif registry[identifier]["requires_confirmation"]:
                 validate_tool_call(identifier, user, arguments)
+                _validate_action_text_sources(registry[identifier], arguments, state)
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"]}; _save(conversation, state)
                 return {"text": str(answer.get("content") or "Подтвердите выполнение действия."), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
-            result = execute_tool(identifier, user, arguments); state["steps"].append({"tool_id": identifier, "result": result}); content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
+            else:
+                result = execute_tool(identifier, user, arguments)
+            state["steps"].append({"tool_id": identifier, "result": result})
+            content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
         except (AssistantToolError, ValueError, TypeError, json.JSONDecodeError) as exc:
             content = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)

@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_tools, capability_issues, execute_tool, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -17,6 +17,84 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_published_capability_sources_resolve_to_shared_callables(self):
         self.assertEqual(capability_issues(self.admin), [])
+
+    def test_area_catalogue_is_assembled_from_registered_capabilities(self):
+        from .assistant_tools import available_areas, available_resources
+
+        areas = {item["id"]: item for item in available_areas(self.admin)}
+        self.assertEqual(areas["cash"]["name"], "Касса")
+        self.assertEqual(
+            set(areas),
+            {"calculator", "cash", "payroll", "finance", "tenders", "tender_selection"},
+        )
+        self.assertNotIn("schema", areas)
+        self.assertNotIn("action", areas)
+        expected_resources = {
+            "calculator": {"calculator.estimate_groups", "calculator.estimates", "calculator.price_items", "calculator.production_rules", "calculator.settings"},
+            "cash": {"cash.bank_payments", "cash.reconciliations", "cash.transactions"},
+            "finance": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.operating_expenses", "finance.payroll_lines", "finance.period_expenses", "finance.periods"},
+            "payroll": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.payroll_lines", "payroll.order_records"},
+            "tenders": {"tenders.catalog_categories", "tenders.catalog_products", "tenders.catalog_suppliers", "tenders.counterparties", "tenders.lessons", "tenders.order_estimates", "tenders.order_lines", "tenders.orders", "tenders.production_stages", "tenders.production_types", "tenders.settings", "tenders.stage_counterparties", "tenders.tender_estimates", "tenders.tender_lines"},
+            "tender_selection": {"tender_selection.contract_statistics", "tender_selection.customers", "tender_selection.filter_settings", "tender_selection.tenders"},
+        }
+        for area_id, identifiers in expected_resources.items():
+            resources = {item["id"]: item for item in available_resources(self.admin, area_id)}
+            self.assertEqual(set(resources), identifiers)
+        self.assertEqual(
+            next(item for item in available_resources(self.admin, "cash") if item["id"] == "cash.transactions")["entity"],
+            "cash.CashTransaction",
+        )
+
+    def test_each_registered_resource_resolves_through_universal_read_metadata(self):
+        from django.apps import apps
+        from .assistant_read import resolve_entity
+        from .assistant_tools import available_resources
+
+        for resource in available_resources(self.admin):
+            self.assertEqual(resolve_entity(resource["entity"]), resource["entity"])
+            model = apps.get_model(resource["entity"])
+            technical_labels = [
+                field.name for field in model._meta.fields
+                if str(field.verbose_name) == field.name.replace("_", " ")
+            ]
+            self.assertEqual(technical_labels, [], resource["entity"])
+
+    def test_read_resources_are_hidden_when_universal_read_is_not_permitted(self):
+        from .assistant_tools import available_resources
+
+        self.assertEqual(available_resources(self.user), [])
+
+    def test_each_resource_opens_a_read_contract_without_a_model_identifier(self):
+        from .assistant_tools import available_resources
+
+        for area in available_areas(self.admin):
+            for resource in available_resources(self.admin, area["id"]):
+                definitions, names = openai_functions(
+                    self.admin, area_id=area["id"], resource_id=resource["id"],
+                )
+                read = next(
+                    item["function"] for item in definitions
+                    if names[item["function"]["name"]] == f"read:{resource['id']}"
+                )
+                self.assertNotIn("entity", read["parameters"]["properties"]["plan"]["properties"])
+
+    def test_openai_tools_start_with_business_areas_not_django_entities(self):
+        definitions, names = openai_functions(self.admin)
+
+        self.assertEqual(set(names.values()), {"assistant.select_area"})
+        parameters = definitions[0]["function"]["parameters"]
+        self.assertIn("cash", parameters["properties"]["area"]["enum"])
+
+    def test_opened_resource_publishes_a_specialized_universal_read(self):
+        definitions, names = openai_functions(
+            self.admin, area_id="cash", resource_id="cash.transactions",
+        )
+
+        self.assertIn("read:cash.transactions", names.values())
+        read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
+        plan = read["parameters"]["properties"]["plan"]
+        self.assertNotIn("entity", plan["properties"])
+        self.assertIn("direction", str(plan))
 
     def test_workflow_encyclopedia_reuses_only_registered_capabilities(self):
         from .assistant_tools import catalog, workflow_catalog
@@ -31,23 +109,40 @@ class AssistantToolRegistryTests(TestCase):
         self.assertTrue(next(goal for goal in workflows if goal["id"] == "cash")["requires_confirmation"])
 
     def test_openai_definitions_are_generated_from_the_registry(self):
-        from .assistant_tools import openai_functions
-        definitions, names = openai_functions(self.admin)
+        definitions, names = openai_functions(self.admin, area_id="cash", resource_id="cash.transactions")
         self.assertEqual(len(names), len(definitions))
         self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
-        read = next(item["function"] for item in definitions if item["function"]["name"] == "read")
+        read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
         plan = read["parameters"]["properties"]["plan"]
-        self.assertIn("entity", plan["properties"])
-        self.assertIn("cash.CashTransaction", plan["properties"]["entity"]["enum"])
+        self.assertNotIn("entity", plan["properties"])
         self.assertIn("filters", plan["properties"])
         self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
         self.assertEqual(set(plan["properties"]), set(plan["required"]))
-        filter_item = plan["properties"]["filters"]["anyOf"][0]["items"]
-        self.assertEqual(filter_item["properties"]["op"]["enum"], sorted(__import__("tenders.assistant_read", fromlist=["OPS"]).OPS))
-        schema = next(item["function"] for item in definitions if item["function"]["name"] == "schema_describe")
-        self.assertIn("cash.CashTransaction", schema["parameters"]["properties"]["entity"]["enum"])
-        self.assertNotIn("assistant_catalog", names)
+        filters = plan["properties"]["filters"]["anyOf"][0]["items"]["anyOf"]
+        direction = next(item for item in filters if item["properties"]["field"].get("enum") == ["direction"])
+        account = next(item for item in filters if item["properties"]["field"].get("enum") == ["account"])
+        self.assertEqual(direction["properties"]["value"]["enum"], ["income", "expense"])
+        self.assertEqual(account["properties"]["value"]["enum"], ["cash", "card"])
+        self.assertIn("Приход", direction["properties"]["value"]["description"])
+        self.assertIn("Карта", account["properties"]["value"]["description"])
+        self.assertNotEqual(direction["properties"]["value"], account["properties"]["value"])
+        self.assertNotIn("schema_describe", names)
+        self.assertNotIn("action_describe", names)
+
+    def test_only_area_selection_is_published_before_context_is_known(self):
+        definitions, names = openai_functions(self.admin)
+
+        self.assertNotIn("read", names)
+        self.assertNotIn("cash_transaction_create", names)
+        self.assertEqual(len(definitions), 1)
+        self.assertEqual(names[definitions[0]["function"]["name"]], "assistant.select_area")
+
+    def test_opened_area_publishes_its_action_contracts(self):
+        _definitions, names = openai_functions(self.admin, area_id="cash")
+
+        self.assertEqual(names["cash_transaction_create"], "cash.transaction_create")
+        self.assertEqual(names["cash_transaction_delete"], "cash.transaction_delete")
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan
@@ -60,7 +155,9 @@ class AssistantToolRegistryTests(TestCase):
             validate_plan(self.admin, {"model": "cash.CashTransaction", "fields": ["amount"]})
 
     def test_schema_description_uses_the_same_metadata_as_read(self):
-        description = execute_tool("schema.describe", self.admin, {"entity": "tenders.TenderEstimate"})
+        from .assistant_read import describe_entity
+
+        description = describe_entity("tenders.TenderEstimate")
 
         self.assertEqual(description["entity"], "tenders.TenderEstimate")
         owner = next(field for field in description["fields"] if field["name"] == "owner")
@@ -249,6 +346,24 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(result["name"], "Контракт.docx")
         self.assertEqual(result["html"], "<p>контракт</p>")
+
+    def test_tender_document_list_precedes_the_existing_preview_executor(self):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(
+            purchase_number="assistant-document-list",
+            notification_raw={"source": {"attachmentsInfo": {"attachmentInfo": [{
+                "url": "https://zakupki.gov.ru/contract", "fileName": "Контракт.docx",
+                "docKindInfo": {"name": "Проект контракта"}, "fileSize": 2048,
+            }]}}},
+        )
+        result = execute_tool("tender.documents_list", self.admin, {"tender_id": tender.pk})
+
+        self.assertEqual(result["tender_id"], tender.pk)
+        self.assertEqual(result["documents"], [{
+            "index": 0, "name": "Контракт.docx", "kind": "Проект контракта",
+            "size_kb": 2, "url": "https://zakupki.gov.ru/contract",
+        }])
 
     def test_stage_proposal_confirmation_uses_the_shared_route_executor(self):
         from .models import ProductionTrainingSession
@@ -526,6 +641,39 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(ascending["aggregates"], descending["aggregates"])
         self.assertEqual(str(ascending["aggregates"]["sum_amount"]), "60")
 
+    def test_complete_read_result_can_be_reused_for_a_narrower_aggregate(self):
+        from cash.models import CashTransaction
+        from .assistant_read import execute, reuse_result
+
+        for direction, amount in (("income", "10"), ("expense", "20"), ("expense", "30")):
+            CashTransaction.objects.create(
+                operation_date=date(2026, 9, 1), account="cash", direction=direction,
+                amount=amount, reason="Кэш", created_by=self.admin,
+            )
+        cached = execute(self.admin, {"entity": "cash.CashTransaction", "fields": ["direction", "amount"], "limit": 3})
+        reused = reuse_result(self.admin, {
+            "entity": "cash.CashTransaction", "fields": ["direction", "amount"], "limit": 3,
+            "filters": [{"field": "direction", "op": "eq", "value": "expense"}],
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }, cached)
+
+        self.assertIsNotNone(reused)
+        self.assertEqual(reused["source_scope"], "cached complete result")
+        self.assertEqual(str(reused["aggregates"]["sum_amount"]), "50.00")
+
+    def test_limited_read_result_is_not_reused_as_a_complete_aggregate(self):
+        from cash.models import CashTransaction
+        from .assistant_read import execute, reuse_result
+
+        for amount in ("10", "20", "30"):
+            CashTransaction.objects.create(operation_date=date(2026, 9, 1), account="cash", direction="expense", amount=amount, reason="Лимит", created_by=self.admin)
+        cached = execute(self.admin, {"entity": "cash.CashTransaction", "fields": ["amount"], "limit": 2})
+
+        self.assertIsNone(reuse_result(self.admin, {
+            "entity": "cash.CashTransaction", "fields": ["amount"], "limit": 2,
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }, cached))
+
     def test_read_rejects_hidden_order_field(self):
         from .assistant_tools import AssistantToolError
 
@@ -680,6 +828,13 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("cash.transaction_update", actions)
         self.assertIn("tender.discovery_settings", actions)
         self.assertTrue(actions["cash.transaction_update"]["source"])
+
+    def test_mass_and_background_operations_are_not_published_to_the_assistant(self):
+        actions = {item["id"] for item in available_tools(self.admin)}
+        self.assertTrue({
+            "cash.bank_sync", "tender.word_audit_run", "tender.word_audit_apply",
+            "tender.profile_triage_run", "tender.pull",
+        }.isdisjoint(actions))
 
     def test_published_action_sources_resolve_to_real_callables(self):
         for tool in available_tools(self.admin):

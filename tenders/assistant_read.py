@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from decimal import Decimal
 from inspect import cleandoc
+import json
 import re
 from uuid import UUID
 
@@ -36,28 +37,111 @@ _JWT_VALUE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_
 _OPAQUE_VALUE = re.compile(r"^[A-Za-z0-9_+/=-]{40,}$")
 
 
-def plan_contract():
+def _field_value_contract(descriptor):
+    field = descriptor["field"]
+    choices = [_json_safe_value(value) for value, _label in field.flatchoices if value not in (None, "")]
+    if choices:
+        labels = "; ".join(f"{value} — {label}" for value, label in field.flatchoices if value not in (None, ""))
+        return {
+            "type": "string" if isinstance(choices[0], str) else "number",
+            "enum": choices,
+            "description": f"Допустимые значения: {labels}",
+        }
+    if isinstance(field, models.BooleanField):
+        return "boolean"
+    if isinstance(field, models.IntegerField):
+        return "integer"
+    if isinstance(field, (models.DecimalField, models.FloatField)):
+        return {"any_of": ["number", "string"]}
+    if isinstance(field, models.DateTimeField):
+        return {"type": "string", "description": "ISO-8601 with timezone offset"}
+    if isinstance(field, models.DateField):
+        return {"type": "string", "description": "YYYY-MM-DD"}
+    return "string"
+
+
+def _paths(model, fields, *, depth=0, prefix=""):
+    result = {}
+    for name, descriptor in fields.items():
+        path = f"{prefix}.{name}" if prefix else name
+        result[path] = descriptor
+        if descriptor["kind"] == "relation" and depth < MAX_RELATION_DEPTH:
+            result.update(_paths(descriptor["field"].related_model, _base_fields(descriptor["field"].related_model), depth=depth + 1, prefix=path))
+    return result
+
+
+def _filter_contracts(paths):
+    result = []
+    for name, descriptor in sorted(paths.items()):
+        if descriptor["kind"] != "scalar":
+            continue
+        field = descriptor["field"]
+        operations = {"eq", "in", "isnull"}
+        if isinstance(field, (models.CharField, models.TextField)):
+            operations.add("contains")
+        if isinstance(field, (*NUMERIC_TYPES, models.DateField, models.DateTimeField)):
+            operations.update({"gte", "gt", "lte", "lt"})
+        value = _field_value_contract(descriptor)
+        in_value = {"type": "array", "item": value, "minimum": 1, "maximum": MAX_ROWS}
+        for operation in sorted(operations):
+            result.append({
+                "type": "object", "required": True, "additional_properties": False,
+                "properties": {
+                    "field": {"type": "string", "enum": [name], "description": str(field.verbose_name)},
+                    "op": {"type": "string", "enum": [operation]},
+                    "value": "boolean" if operation == "isnull" else (in_value if operation == "in" else value),
+                },
+            })
+    return result
+
+
+def plan_contract(entity=None):
     """Public READ schema built from the same limits and operators as validation."""
+    properties = {
+        "entity": {"type": "string", "required": True, "description": "entity ID returned by schema.describe"},
+        "view": {"type": "string", "required": False, "description": "optional business view ID from schema.describe"},
+        "fields": {"type": "string[]", "required": False, "description": "field names from schema.describe; id is always returned"},
+        "search": {"type": "string", "required": False},
+        "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": {"any_of": ["string", "number", "boolean", "null", "string[]", "number[]", "boolean[]"], "description": "JSON value compatible with the selected field"}}},
+        "order_by": {"type": "string|string[]", "required": False, "description": "one or more opened scalar fields, each optionally prefixed with -; id is added as a stable final tiebreaker"},
+        "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": MAX_ROWS},
+        "aggregates": {"type": "object[]", "required": False, "item": {"op": sorted(AGGREGATES), "field": "opened scalar field"}},
+        "group_by": {"type": "string[]", "required": False, "description": "opened scalar field names"},
+    }
+    if entity is not None:
+        model, canonical, fields = _entity(entity)
+        paths = _paths(model, fields)
+        scalar_paths = {name: item for name, item in paths.items() if item["kind"] == "scalar"}
+        path_labels = "; ".join(f"{name} — {item['field'].verbose_name}" for name, item in sorted(paths.items()))
+        scalar_labels = "; ".join(f"{name} — {item['field'].verbose_name}" for name, item in sorted(scalar_paths.items()))
+        views = [item["id"] for item in _business_views(model)]
+        properties.update({
+            "entity": {"type": "string", "required": True, "enum": [canonical]},
+            "view": {"type": "string", "required": False, **({"enum": views} if views else {})},
+            "fields": {"type": "string[]", "required": False, "description": f"Поля: {path_labels}", "item": {"type": "string", "enum": sorted(paths)}},
+            "filters": {"type": "object[]", "required": False, "item": {"any_of": _filter_contracts(paths)}},
+            "order_by": {"any_of": [
+                {"type": "string", "description": f"Поля сортировки: {scalar_labels}", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])},
+                {"type": "string[]", "description": f"Поля сортировки: {scalar_labels}", "item": {"type": "string", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])}},
+            ], "required": False},
+            "aggregates": {"type": "object[]", "required": False, "item": {"any_of": [
+                {"type": "object", "required": True, "additional_properties": False, "properties": {
+                    "op": {"type": "string", "enum": _catalog_field(name, descriptor)["aggregate_ops"]},
+                    "field": {"type": "string", "enum": [name]},
+                }} for name, descriptor in scalar_paths.items() if _catalog_field(name, descriptor)["aggregate_ops"]
+            ]}},
+            "group_by": {"type": "string[]", "required": False, "description": f"Поля группировки: {scalar_labels}", "item": {"type": "string", "enum": sorted(scalar_paths)}},
+        })
     return {
         "type": "object",
         "required": True,
         "additional_properties": False,
-        "properties": {
-            "entity": {"type": "string", "required": True, "description": "entity ID returned by schema.describe"},
-            "view": {"type": "string", "required": False, "description": "optional business view ID from schema.describe"},
-            "fields": {"type": "string[]", "required": False, "description": "field names from schema.describe; id is always returned"},
-            "search": {"type": "string", "required": False},
-            "filters": {"type": "object[]", "required": False, "item": {"field": "opened field name", "op": sorted(OPS), "value": {"any_of": ["string", "number", "boolean", "null", "string[]", "number[]", "boolean[]"], "description": "JSON value compatible with the selected field"}}},
-            "order_by": {"type": "string|string[]", "required": False, "description": "one or more opened scalar fields, each optionally prefixed with -; id is added as a stable final tiebreaker"},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": MAX_ROWS},
-            "aggregates": {"type": "object[]", "required": False, "item": {"op": sorted(AGGREGATES), "field": "opened scalar field"}},
-            "group_by": {"type": "string[]", "required": False, "description": "opened scalar field names"},
-        },
+        "properties": properties,
     }
 
 
-def input_schema():
-    return {"plan": plan_contract()}
+def input_schema(entity=None):
+    return {"plan": plan_contract(entity)}
 
 
 def _sensitive(name):
@@ -277,6 +361,29 @@ def describe_entity(identifier):
     }
 
 
+def present_result(result):
+    """Render only values that a validated READ actually returned."""
+    if not isinstance(result, dict):
+        return "Данные получены."
+    try:
+        model, _entity_name, fields = _entity(result.get("entity"))
+        paths = _paths(model, fields)
+    except ReadPlanError:
+        paths = {}
+    lines = [f"Найдено записей: {result.get('total_count', 0)}."]
+    aggregates = result.get("aggregates") or {}
+    for name, value in aggregates.items():
+        lines.append(f"{name}: {_json_safe_value(value)}.")
+    for record in (result.get("records") or [])[:MAX_ROWS]:
+        values = []
+        for name, value in record.items():
+            label = str(paths[name]["field"].verbose_name) if name in paths else name
+            values.append(f"{label}: {_json_safe_value(value)}")
+        if values:
+            lines.append("• " + "; ".join(values))
+    return "\n".join(lines)
+
+
 def _value(value):
     return _json_safe_value(value)
 
@@ -394,6 +501,7 @@ def validate_plan(user, plan):
             raise ReadPlanError("Некорректный фильтр")
         item["value"] = _filter_value(descriptor, item["op"], item["value"])
     annotations = {}
+    aggregate_specs = []
     aggregates = _validated_items(plan.get("aggregates"), "Некорректная агрегация")
     for item in aggregates:
         if not isinstance(item, dict) or set(item) != {"op", "field"} or item.get("op") not in AGGREGATES:
@@ -403,7 +511,9 @@ def validate_plan(user, plan):
             raise ReadPlanError("Некорректная агрегация")
         if item["op"] in {"sum", "avg"} and (not isinstance(descriptor["field"], NUMERIC_TYPES) or isinstance(descriptor["field"], models.BooleanField)):
             raise ReadPlanError("Эта агрегация доступна только для числового поля")
-        annotations[f"{item['op']}_{item['field'].replace('.', '_')}"] = AGGREGATES[item["op"]](descriptor["lookup"])
+        key = f"{item['op']}_{item['field'].replace('.', '_')}"
+        annotations[key] = AGGREGATES[item["op"]](descriptor["lookup"])
+        aggregate_specs.append((key, item["op"], descriptor))
     group_names = _validated_items(plan.get("group_by"), "Некорректная группировка")
     groups = [_path(model, fields, name) for name in group_names]
     if any(item["kind"] != "scalar" for item in groups):
@@ -435,7 +545,7 @@ def validate_plan(user, plan):
         "model": model, "entity": entity, "view": view, "fields": fields,
         "selected_names": selected_names, "selected": selected,
         "search": search, "searchable": searchable, "filters": filters,
-        "annotations": annotations, "group_names": group_names, "groups": groups,
+        "annotations": annotations, "aggregate_specs": aggregate_specs, "group_names": group_names, "groups": groups,
         "order_descriptors": order_descriptors,
         "limit": limit,
     }
@@ -482,6 +592,74 @@ def execute(user, plan):
     records = [{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(selected_names, selected)} for row in rows]
     sources = [{"entity": entity, "id": row["id"]} for row in records if row.get("id") is not None]
     return {"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}
+
+
+def _cache_filter(value, operation, expected):
+    if operation == "isnull":
+        return (value is None) is expected
+    if operation == "in":
+        return value in expected
+    if operation == "eq":
+        return value == expected
+    if value is None:
+        return False
+    if operation == "contains":
+        return str(expected).lower() in str(value).lower()
+    return {"gte": value >= expected, "gt": value > expected, "lte": value <= expected, "lt": value < expected}[operation]
+
+
+def reuse_result(user, plan, cached):
+    """Reuse a complete, same-conversation READ result without touching ORM."""
+    validated = validate_plan(user, plan)
+    if not isinstance(cached, dict) or cached.get("entity") != validated["entity"]:
+        return None
+    if cached.get("total_count") != cached.get("returned_count") or cached.get("grouped"):
+        return None
+    old_query = cached.get("query") if isinstance(cached.get("query"), dict) else {}
+    if old_query.get("view") != validated["view"] or old_query.get("search") != validated["search"]:
+        return None
+    old_filters = {json.dumps(item, ensure_ascii=False, sort_keys=True, default=str) for item in old_query.get("filters", [])}
+    new_filters = {
+        json.dumps({"field": item["field"], "op": item["op"], "value": _json_safe_value(item["value"])}, ensure_ascii=False, sort_keys=True, default=str)
+        for item in validated["filters"]
+    }
+    if not old_filters <= new_filters or old_query.get("order_by") != _query_summary(validated)["order_by"]:
+        return None
+    required = set(validated["selected_names"])
+    required.update(item["field"] for item in validated["filters"])
+    required.update(descriptor["name"] for _key, _op, descriptor in validated["aggregate_specs"])
+    if not all(required <= set(record) for record in cached.get("records", [])):
+        return None
+    rows = []
+    for record in cached.get("records", []):
+        try:
+            if all(_cache_filter(
+                _path(validated["model"], validated["fields"], item["field"])["field"].to_python(record[item["field"]]),
+                item["op"], item["value"],
+            ) for item in validated["filters"]):
+                rows.append(record)
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return None
+    aggregates = {}
+    for key, operation, descriptor in validated["aggregate_specs"]:
+        values = [descriptor["field"].to_python(row[descriptor["name"]]) for row in rows if row.get(descriptor["name"]) is not None]
+        if operation == "count":
+            aggregates[key] = len(values)
+        elif operation == "sum":
+            aggregates[key] = _value(sum(values)) if values else None
+        elif operation == "avg":
+            aggregates[key] = _value(sum(values) / len(values)) if values else None
+        elif operation == "min":
+            aggregates[key] = _value(min(values)) if values else None
+        elif operation == "max":
+            aggregates[key] = _value(max(values)) if values else None
+    records = [{name: row.get(name) for name in validated["selected_names"]} for row in rows[:validated["limit"]]]
+    return {
+        "entity": validated["entity"], "query": _query_summary(validated), "total_count": len(rows),
+        "returned_count": len(records), "aggregates": aggregates, "records": records,
+        "sources": [{"entity": validated["entity"], "id": row["id"]} for row in records if row.get("id") is not None],
+        "source_scope": "cached complete result",
+    }
 
 
 def _query_summary(validated, *, order_by=None):
