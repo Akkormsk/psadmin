@@ -600,8 +600,8 @@ class Order(models.Model):
     name = models.CharField("Название", max_length=300)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default=DRAFT)
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -630,11 +630,11 @@ class OrderEstimate(models.Model):
     reduction_percent = models.DecimalField("Снижение цены, %", max_digits=5, decimal_places=2, default=Decimal("30.00"))
     russia_delivery = models.DecimalField("Доставка по РФ", max_digits=14, decimal_places=2, default=Decimal("0.00"))
     vat_rate_snapshot = models.DecimalField("НДС, %", max_digits=5, decimal_places=2, default=Decimal("5.00"))
-    summary_snapshot = models.JSONField(default=dict, blank=True)
+    summary_snapshot = models.JSONField("Итоги расчёта", default=dict, blank=True)
     document_analysis = models.JSONField("Анализ документов", default=dict, blank=True)
     notes = models.TextField("Комментарий", blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -747,12 +747,12 @@ class Counterparty(models.Model):
     а не скриншотом."""
 
     name = models.CharField("Название", max_length=200)
-    catalog_supplier = models.ForeignKey(CatalogSupplier, on_delete=models.SET_NULL, null=True, blank=True, related_name="counterparties")
+    catalog_supplier = models.ForeignKey(CatalogSupplier, verbose_name="Поставщик каталога", on_delete=models.SET_NULL, null=True, blank=True, related_name="counterparties")
     notes = models.TextField("Комментарий", blank=True)
     is_active = models.BooleanField("Активен", default=True)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="counterparties")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.PROTECT, related_name="counterparties")
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлён", auto_now=True)
 
     class Meta:
         ordering = ["name"]

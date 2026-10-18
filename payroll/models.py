@@ -27,8 +27,8 @@ class OrderRecord(models.Model):
         (SOURCE_IMPORT, "Import"),
     ]
 
-    order_number = models.CharField(max_length=100)
-    gross_profit = models.DecimalField(max_digits=12, decimal_places=2)
+    order_number = models.CharField("Номер заказа", max_length=100)
+    gross_profit = models.DecimalField("Валовая прибыль", max_digits=12, decimal_places=2)
     record_type = models.CharField(
         "Тип записи",
         max_length=10,
@@ -38,23 +38,25 @@ class OrderRecord(models.Model):
     )
     # Stores accounting period as "YYYY-MM" (e.g. "2026-04") for KPI calculations.
     accounting_period = models.CharField(
+        "Учётный период",
         max_length=7,
         db_index=True,
         default=current_accounting_period,
     )
     manager = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        settings.AUTH_USER_MODEL, verbose_name="Менеджер",
         on_delete=models.CASCADE,
         related_name="managed_order_records",
     )
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        settings.AUTH_USER_MODEL, verbose_name="Создал",
         on_delete=models.CASCADE,
         related_name="created_order_records",
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Создано", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлено", auto_now=True)
     source = models.CharField(
+        "Источник",
         max_length=20,
         choices=SOURCE_CHOICES,
         default=SOURCE_MANUAL,
