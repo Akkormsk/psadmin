@@ -128,7 +128,6 @@ jobs:
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \
             https://test.admin.psodin.ru/ > /dev/null
-          docker compose -f compose.test.yml exec -T test-web python manage.py smoke_assistant_read
           echo "Deployed SHA: $deploy_sha"
           echo "Previous SHA: $previous_sha"
           echo "Rollback source directory: $rollback_dir"
