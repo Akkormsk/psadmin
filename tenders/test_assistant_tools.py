@@ -347,6 +347,24 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(result["name"], "Контракт.docx")
         self.assertEqual(result["html"], "<p>контракт</p>")
 
+    def test_tender_document_list_precedes_the_existing_preview_executor(self):
+        from tender_selection.models import Tender
+
+        tender = Tender.objects.create(
+            purchase_number="assistant-document-list",
+            notification_raw={"source": {"attachmentsInfo": {"attachmentInfo": [{
+                "url": "https://zakupki.gov.ru/contract", "fileName": "Контракт.docx",
+                "docKindInfo": {"name": "Проект контракта"}, "fileSize": 2048,
+            }]}}},
+        )
+        result = execute_tool("tender.documents_list", self.admin, {"tender_id": tender.pk})
+
+        self.assertEqual(result["tender_id"], tender.pk)
+        self.assertEqual(result["documents"], [{
+            "index": 0, "name": "Контракт.docx", "kind": "Проект контракта",
+            "size_kb": 2, "url": "https://zakupki.gov.ru/contract",
+        }])
+
     def test_stage_proposal_confirmation_uses_the_shared_route_executor(self):
         from .models import ProductionTrainingSession
 
@@ -810,6 +828,13 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("cash.transaction_update", actions)
         self.assertIn("tender.discovery_settings", actions)
         self.assertTrue(actions["cash.transaction_update"]["source"])
+
+    def test_mass_and_background_operations_are_not_published_to_the_assistant(self):
+        actions = {item["id"] for item in available_tools(self.admin)}
+        self.assertTrue({
+            "cash.bank_sync", "tender.word_audit_run", "tender.word_audit_apply",
+            "tender.profile_triage_run", "tender.pull",
+        }.isdisjoint(actions))
 
     def test_published_action_sources_resolve_to_real_callables(self):
         for tool in available_tools(self.admin):

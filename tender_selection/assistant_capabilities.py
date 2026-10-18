@@ -3,8 +3,8 @@ from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantT
 
 from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
-    apply_filter_word_audit, decide_document_proposals, pull_tenders_now, run_filter_word_audit, run_profile_triage,
-    preview_tender_document, record_tender_outcome, restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
+    decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
+    restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
     update_tender_review,
 )
 
@@ -93,20 +93,6 @@ def _save_bid(user, payload):
         raise AssistantToolError(str(exc)) from exc
 
 
-def _no_argument_action(call, user, payload):
-    try:
-        return call(user)
-    except ValueError as exc:
-        raise AssistantToolError(str(exc)) from exc
-
-
-def _apply_word_audit(user, payload):
-    try:
-        return apply_filter_word_audit(user, payload["changes"])
-    except ValueError as exc:
-        raise AssistantToolError(str(exc)) from exc
-
-
 def _record_outcome(user, payload):
     try:
         return record_tender_outcome(
@@ -132,27 +118,6 @@ register_tool(AssistantTool(
     False, True, True, _record_outcome, source="tender_selection.services.record_tender_outcome",
 ))
 register_tool(AssistantTool(
-    "tender.word_audit_run", "Запустить аудит плюс- и минус-слов", "Запускает ту же проверку правил отбора, что кнопка страницы аудита.",
-    {}, False, True, True, lambda user, payload: _no_argument_action(run_filter_word_audit, user, payload),
-    source="tender_selection.services.run_filter_word_audit",
-))
-register_tool(AssistantTool(
-    "tender.word_audit_apply", "Применить выбранные предложения аудита слов", "Применяет только явно выбранные изменения фильтра через тот же исполнитель, что страница аудита.",
-    {"changes": "object"}, False, True, True, _apply_word_audit,
-    source="tender_selection.services.apply_filter_word_audit",
-))
-register_tool(AssistantTool(
-    "tender.profile_triage_run", "Запустить проверку входящих тендеров", "Запускает штатную фоновую проверку до 100 доступных входящих тендеров.",
-    {}, False, True, True, lambda user, payload: _no_argument_action(run_profile_triage, user, payload),
-    source="tender_selection.services.run_profile_triage",
-))
-register_tool(AssistantTool(
-    "tender.pull", "Получить новые тендеры", "Запускает ту же ограниченную выгрузку из ГосПлан, что кнопка входящих тендеров.",
-    {}, False, True, True, lambda user, payload: _no_argument_action(pull_tenders_now, user, payload),
-    source="tender_selection.services.pull_tenders_now",
-))
-
-register_tool(AssistantTool(
     "tender.hide", "Скрыть неподходящий тендер", "Архивирует тендер тем же исполнителем, что кнопка интерфейса, и сохраняет причину для входящего тендера.",
     {"tender_id": "integer", "reason": "string?"}, False, True, True, _hide_tender,
     source="tender_selection.services.hide_tender",
@@ -172,9 +137,16 @@ register_tool(AssistantTool(
     source="tender_selection.services.update_tender_review",
 ))
 register_tool(AssistantTool(
+    "tender.documents_list", "Показать документы тендера",
+    "Показывает имена и ссылки на прикреплённые к выбранному тендеру документы. Перед разбором содержания сначала получи этот список.",
+    {"tender_id": {"type": "integer", "description": "Идентификатор выбранного тендера"}},
+    True, False, True, lambda user, payload: list_tender_documents(user, payload["tender_id"]),
+    source="tender_selection.services.list_tender_documents",
+))
+register_tool(AssistantTool(
     "tender.document_preview", "Разобрать документ тендера",
     "Получает документ существующего тендера из ЕИС или кэша и возвращает его проверяемый разбор тем же исполнителем, что кнопка просмотра документа.",
-    {"tender_id": "integer", "document_index": "integer", "refresh": "boolean?"}, True, False, True,
+    {"tender_id": "integer", "document_index": {"type": "integer", "description": "Номер документа из ранее показанного списка"}, "refresh": "boolean?"}, True, False, True,
     _preview_tender_document, source="tender_selection.services.preview_tender_document",
 ))
 register_tool(AssistantTool(
