@@ -123,7 +123,7 @@ jobs:
           stage=""
 
           cd "$app/deploy/vds"
-          ./twin.sh up
+          ./twin.sh up </dev/null
           docker compose -f compose.test.yml ps test-web
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \
