@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json, os
 from urllib.request import Request, urlopen
-from .assistant_tools import AssistantToolError, available_tools, execute_tool, openai_functions
+from .assistant_tools import AssistantToolError, available_tools, execute_tool, openai_functions, validate_tool_call
 from .gateway_budget import preflight
 from .services import TenderAIError
 
@@ -25,7 +25,8 @@ def _gateway(messages, tools):
         raise TenderAIError("Не удалось обратиться к AI Gateway.") from exc
 
 def _history(conversation):
-    return [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in conversation.feedback_events.filter(scope="assistant_conversation").order_by("created_at", "pk")[:20]]
+    events = list(conversation.feedback_events.filter(scope="assistant_conversation").order_by("-created_at", "-pk")[:20])
+    return [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in reversed(events)]
 
 def _new_state(conversation, message, attachments):
     return {"messages": [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. Use functions for PSADMIN data or operations; never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian. Do not expose technical parameters. Actions require explicit user confirmation."}, *_history(conversation), {"role": "user", "content": message}], "steps": [], "attachments": attachments or []}
@@ -54,6 +55,7 @@ def _run(conversation, user, state):
             arguments = json.loads(function.get("arguments", "{}"))
             if not identifier or not isinstance(arguments, dict): raise AssistantToolError("Некорректный вызов функции")
             if registry[identifier]["requires_confirmation"]:
+                validate_tool_call(identifier, user, arguments)
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"]}; _save(conversation, state)
                 return {"text": str(answer.get("content") or "Подтвердите выполнение действия."), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
             result = execute_tool(identifier, user, arguments); state["steps"].append({"tool_id": identifier, "result": result}); content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)

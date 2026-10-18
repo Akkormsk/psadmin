@@ -91,8 +91,20 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
         raise AssistantToolError("Неизвестное действие ассистента")
     if tool.requires_superuser and not user.is_superuser:
         raise AssistantToolError("Недостаточно прав для этого действия")
+    validate_tool_call(identifier, user, payload)
     if tool.requires_confirmation and not confirmed:
         raise AssistantToolConfirmationRequired("Действие требует явного подтверждения")
+    return tool.executor(user, payload)
+
+
+def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
+    """Validate a registered call without performing its side effect."""
+    _discover_app_actions()
+    tool = _TOOLS.get(identifier)
+    if not tool:
+        raise AssistantToolError("Неизвестное действие ассистента")
+    if tool.requires_superuser and not user.is_superuser:
+        raise AssistantToolError("Недостаточно прав для этого действия")
     if not isinstance(payload, dict):
         raise AssistantToolError("Некорректные параметры действия")
     unknown = set(payload) - set(tool.input_schema)
@@ -122,7 +134,6 @@ def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: b
             raise AssistantToolError(f"Поле {name} должно быть списком")
         if kind in {"object"} and not isinstance(value, dict):
             raise AssistantToolError(f"Поле {name} должно быть объектом")
-    return tool.executor(user, payload)
 
 
 def _openai_type(declared):
@@ -130,10 +141,28 @@ def _openai_type(declared):
     optional = isinstance(declared, str) and declared.endswith("?")
     value = declared[:-1] if optional else declared
     if isinstance(value, dict):
-        schema = {"type": value.get("type", "object")}
-        if schema["type"] == "object":
-            schema["additionalProperties"] = False
-        return schema, optional, False
+        kind = value.get("type")
+        if kind is None:
+            kind = "object"
+            value = {"type": kind, "properties": value, "required": True}
+        if kind == "object":
+            properties, required, compatible = {}, [], True
+            for key, nested in value.get("properties", {}).items():
+                child, child_optional, child_compatible = _openai_type(nested)
+                properties[key] = child if not child_optional else {"anyOf": [child, {"type": "null"}]}
+                required.append(key)
+                compatible = compatible and child_compatible
+            schema = {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+        elif kind and kind.endswith("[]"):
+            item = value.get("item", {})
+            child, _ignored, compatible = _openai_type(item)
+            schema = {"type": "array", "items": child}
+        else:
+            schema, _ignored, compatible = _openai_type(kind or "object")
+        for key in ("description", "minimum", "maximum", "enum"):
+            if key in value:
+                schema[key] = value[key]
+        return schema, bool(value.get("required") is False), compatible
     if not isinstance(value, str):
         return {"type": "string"}, optional, False
     if value.endswith("[]"):
@@ -141,7 +170,10 @@ def _openai_type(declared):
         item_type = {"integer": "integer", "number": "number", "boolean": "boolean"}.get(item, "string")
         return {"type": "array", "items": {"type": item_type}}, optional, True
     if "|" in value:
-        return {"type": "string", "enum": value.split("|")}, optional, True
+        variants = value.split("|")
+        if all(part in {"string", "string[]"} for part in variants):
+            return {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}, optional, True
+        return {"type": "string", "enum": variants}, optional, True
     return {"type": {"integer": "integer", "number": "number", "boolean": "boolean", "object": "object", "array": "array"}.get(value, "string")}, optional, value not in {"object", "array"}
 
 
@@ -212,105 +244,6 @@ def _read_data(user, payload):
         return execute(user, payload.get("plan"))
     except ReadPlanError as exc:
         raise AssistantToolError(str(exc)) from exc
-
-
-def _visible_tools(items, user):
-    return [item for item in items if not item["requires_superuser"] or user.is_superuser]
-
-
-def capability_tree(user):
-    """Return the compact, complete route map used for one LLM route choice.
-
-    Detailed field and argument contracts stay behind their leaf nodes.  The
-    tree itself is assembled from the same runtime metadata as ``navigation``;
-    it is not a second, hand-maintained catalogue.
-    """
-    graph = _navigation_index()
-    read_children = []
-    for section in graph["read"].values():
-        read_children.append({
-            "id": section["id"], "label": section["label"],
-            "children": [
-                {"id": model["id"].split(".", 1)[1], "label": model["verbose_name"]}
-                for model in section["models"].values()
-            ],
-        })
-    action_children = []
-    for section in graph["action"].values():
-        tools = _visible_tools(section["tools"], user)
-        if not tools:
-            continue
-        action_children.append({
-            "id": section["id"], "label": section["label"],
-            "children": [
-                {"id": tool["id"], "label": tool["name"], "description": tool["description"]}
-                for tool in tools
-            ],
-        })
-    return {"children": [
-        {"id": "read", "label": "Чтение и анализ данных", "children": read_children},
-        {"id": "action", "label": "Действия приложений", "children": action_children},
-        {"id": "compute", "label": "Вычисления", "operations": ["count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"]},
-    ]}
-
-
-def navigation(user, payload):
-    """Return only one graph node's children; never the whole catalogue."""
-    path = payload.get("path", [])
-    if not isinstance(path, list) or not all(isinstance(item, str) and item for item in path):
-        raise AssistantToolError("Путь навигации должен быть списком идентификаторов")
-    graph = _navigation_index()
-    if not path:
-        return {"path": [], "children": [
-            {"id": "read", "label": "Чтение и анализ данных", "description": "Разрешённые бизнес-данные, фильтры, связи и агрегаты"},
-            {"id": "action", "label": "Действия приложений", "description": "Существующие функции сайта через их штатные исполнители"},
-            {"id": "compute", "label": "Вычисления", "description": "Безопасная арифметика только по уже проверенным результатам"},
-        ]}
-    if path == ["compute"]:
-        return {"path": path, "children": [{"id": "compute", "label": "Вычисления", "operations": ["count", "sum", "avg", "min", "max", "subtract", "divide", "percent_change"]}]}
-    if path[0] == "read":
-        if len(path) == 1:
-            return {"path": path, "children": [
-                {"id": section["id"], "label": section["label"], "kind": "application"}
-                for section in graph["read"].values()
-            ]}
-        section = graph["read"].get(path[1])
-        if section is None:
-            raise AssistantToolError("Раздел чтения не найден")
-        if len(path) == 2:
-            return {"path": path, "children": [
-                {"id": model["id"].split(".", 1)[1], "label": model["verbose_name"], "kind": "model"}
-                for model in section["models"].values()
-            ]}
-        model = section["models"].get(path[2])
-        if model is None or len(path) != 3:
-            raise AssistantToolError("Сущность чтения не найдена")
-        return {
-            "path": path,
-            "entity": model["id"],
-            "description": model.get("description", ""),
-            "views": model.get("views", []),
-            "filter_contract": graph["filter_contract"],
-            "children": [{"id": field["name"], **field} for field in model["fields"]],
-        }
-    if path[0] == "action":
-        if len(path) == 1:
-            return {"path": path, "children": [
-                {"id": section["id"], "label": section["label"], "kind": "application"}
-                for section in graph["action"].values()
-                if _visible_tools(section["tools"], user)
-            ]}
-        section = graph["action"].get(path[1])
-        if section is None or len(path) not in {2, 3}:
-            raise AssistantToolError("Раздел действий не найден")
-        tools = _visible_tools(section["tools"], user)
-        if len(path) == 2:
-            return {"path": path, "children": tools}
-        tool = next((item for item in tools if item["id"] == path[2]), None)
-        if tool is None:
-            raise AssistantToolError("Действие не найдено")
-        return {"path": path, "tool": tool}
-    raise AssistantToolError("Узел навигации не найден")
 
 
 def workflow_catalog(user, actions=None):

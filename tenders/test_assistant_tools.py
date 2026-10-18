@@ -37,6 +37,11 @@ class AssistantToolRegistryTests(TestCase):
         self.assertNotIn("assistant.navigate", names.values())
         self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
+        read = next(item["function"] for item in definitions if item["function"]["name"] == "read")
+        plan = read["parameters"]["properties"]["plan"]
+        self.assertIn("entity", plan["properties"])
+        self.assertIn("filters", plan["properties"])
+        self.assertIn("items", plan["properties"]["filters"]["anyOf"][0])
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan
