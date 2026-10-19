@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os
 from urllib.request import Request, urlopen
 from .assistant_tools import (
-    AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_map_text,
+    AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_map_text, confirmation_arguments,
     execute_tool, openai_functions, validate_tool_call,
 )
 from .assistant_read import present_result, reuse_result
@@ -244,6 +244,7 @@ def _run(conversation, user, state):
                         "action": {
                             "name": registry[identifier]["name"],
                             "description": registry[identifier]["description"],
+                            "arguments": confirmation_arguments(registry[identifier], arguments),
                         },
                     },
                 }

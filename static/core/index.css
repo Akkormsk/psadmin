@@ -2173,6 +2173,9 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-card__actions { display:flex; flex-wrap:wrap; gap:8px; }
 .assistant-card__hint { margin:0; color:var(--ink-2); font-weight:700; }
 .assistant-card__notice { margin:0; color:var(--ink-3); font-size:11px; line-height:1.45; }
+.assistant-card__details { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:6px 12px; margin:0; padding:10px; border-radius:8px; background:var(--tint-neutral); font-size:12px; }
+.assistant-card__details dt { color:var(--ink-2); font-weight:700; }
+.assistant-card__details dd { margin:0; color:var(--ink); text-align:right; overflow-wrap:anywhere; }
 .assistant-confirmed { display:grid; gap:4px; margin-top:12px; border:1px solid var(--border-positive); border-radius:9px; padding:11px; background:var(--tint-positive); color:var(--positive-ink); font-size:11px; }
 .assistant-confirmed span { color:var(--ink-2); }
 .assistant-confirmed a { width:max-content; margin-top:3px; color:var(--positive-ink); font-weight:800; text-decoration:none; }

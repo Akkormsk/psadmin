@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantTool, AssistantToolConfirmationRequired, available_areas, available_capability_map, available_capabilities, available_tools, capability_issues, capability_map_text, execute_tool, openai_functions, register_tool, required_input_names
+from .assistant_tools import AssistantTool, AssistantToolConfirmationRequired, available_areas, available_capability_map, available_capabilities, available_tools, capability_issues, capability_map_text, confirmation_arguments, execute_tool, openai_functions, register_tool, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -278,6 +278,16 @@ class AssistantToolRegistryTests(TestCase):
         finally:
             assistant_tools._TOOLS.pop(public.identifier, None)
             assistant_tools._TOOLS.pop(private.identifier, None)
+
+    def test_confirmation_preview_uses_human_labels_and_omits_empty_arguments(self):
+        tool = next(item for item in available_tools(self.admin) if item["id"] == "provider.create")
+
+        self.assertEqual(confirmation_arguments(tool, {
+            "name": "Атекс", "stage_ids": [self.stage.pk], "source_text": None,
+        }), [
+            {"label": "Название", "value": "Атекс"},
+            {"label": "Этапы производства", "value": str(self.stage.pk)},
+        ])
 
     def test_unplanned_turn_exposes_only_plan_and_finish(self):
         definitions, names = openai_functions(self.admin, planned=False)

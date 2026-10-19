@@ -53,6 +53,26 @@ _TOOLS: dict[str, AssistantTool] = {}
 _RESOURCES: dict[str, AssistantResource] = {}
 _DISCOVERED = False
 _MODEL_HIDDEN_TOOLS = {"assistant.capabilities", "assistant.catalog"}
+_PREVIEW_ENUMS = {
+    "cash": "Наличные", "card": "Карта", "income": "Поступление", "expense": "Расход",
+    "true": "Да", "false": "Нет",
+}
+_PREVIEW_LABELS = {
+    "name": "Название", "notes": "Примечание", "comment": "Комментарий", "amount": "Сумма",
+    "period": "Период", "status": "Статус", "reason": "Основание", "currency": "Валюта",
+    "url": "Ссылка", "text": "Текст", "feedback": "Комментарий", "answer": "Ответ",
+    "lines": "Позиции", "updates": "Изменения", "new": "Новая запись", "managers": "Менеджеры",
+    "sources": "Источники", "parameters": "Параметры", "action": "Действие",
+    "stage_ids": "Этапы производства", "stage_id": "Этап производства",
+    "estimate_id": "Расчёт", "estimate_ids": "Расчёты", "tender_id": "Тендер",
+    "counterparty_id": "Контрагент", "operation_date": "Дата операции",
+    "transaction_id": "Операция кассы", "bank_payment_id": "Банковский платёж",
+    "order_record_id": "Закрытый заказ", "accounting_period": "Учётный период",
+    "order_number": "Номер заказа", "gross_profit": "Валовая прибыль",
+    "product_quantity": "Тираж", "work_hours": "Часы работы", "effective_date": "Дата сверки",
+    "cash_balance": "Остаток наличных", "card_balance": "Остаток на карте",
+    "closed": "Период закрыт", "direction": "Вид движения", "account": "Счёт",
+}
 
 
 def _discover_app_actions():
@@ -213,6 +233,40 @@ def available_capabilities(user, area_id: str) -> list[dict[str, Any]]:
         and area_id in tool["areas"]
     ]
     return sorted([*resources, *actions], key=lambda item: (item["name"], item["id"]))
+
+
+def _preview_label(name: str, declaration: Any) -> str:
+    if isinstance(declaration, dict) and isinstance(declaration.get("description"), str):
+        description = declaration["description"].strip()
+        if description:
+            return re.split(r":|\s+в формате\s+", description, maxsplit=1)[0]
+    return _PREVIEW_LABELS.get(name, name.replace("_", " ").capitalize())
+
+
+def _preview_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return _PREVIEW_ENUMS[str(value).lower()]
+    if isinstance(value, str):
+        if value in _PREVIEW_ENUMS:
+            return _PREVIEW_ENUMS[value]
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            year, month, day = value.split("-")
+            return f"{day}.{month}.{year}"
+        return value
+    if isinstance(value, list):
+        return ", ".join(_preview_value(item) for item in value) if value else "Не выбрано"
+    if isinstance(value, dict):
+        return "; ".join(f"{key}: {_preview_value(item)}" for key, item in value.items()) or "Не указано"
+    return str(value)
+
+
+def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
+    """Present validated action arguments for a human confirmation card."""
+    return [
+        {"label": _preview_label(name, declaration), "value": _preview_value(payload[name])}
+        for name, declaration in tool["input_schema"].items()
+        if name in payload and payload[name] not in (None, "", [], {})
+    ]
 
 
 def available_capability_map(user) -> list[dict[str, Any]]:
