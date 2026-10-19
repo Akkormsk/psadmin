@@ -260,13 +260,52 @@ def _preview_value(value: Any) -> str:
     return str(value)
 
 
-def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
+def _reference_preview_items(declaration: Any, value: Any) -> list[dict[str, str]] | None:
+    if not isinstance(declaration, dict) or not isinstance(declaration.get("reference"), dict):
+        return None
+    reference = declaration["reference"]
+    model_label = reference.get("model")
+    if not isinstance(model_label, str):
+        return None
+    try:
+        model = apps.get_model(model_label)
+    except (LookupError, ValueError):
+        return None
+    values = value if isinstance(value, list) else [value]
+    objects = model._default_manager.in_bulk(values)
+    label_field = reference.get("label", "name")
+    items = []
+    for identifier in values:
+        instance = objects.get(identifier)
+        if instance is None:
+            items.append({"text": "Объект не найден", "hint": f"ID {identifier}"})
+            continue
+        label = getattr(instance, label_field, None) or str(instance)
+        items.append({"text": str(label), "hint": f"ID {identifier}"})
+    return items
+
+
+def _preview_items(declaration: Any, value: Any) -> list[dict[str, str]] | None:
+    reference_items = _reference_preview_items(declaration, value)
+    if reference_items is not None:
+        return reference_items
+    if isinstance(value, list):
+        return [{"text": _preview_value(item)} for item in value]
+    return None
+
+
+def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Present validated action arguments for a human confirmation card."""
-    return [
-        {"label": _preview_label(name, declaration), "value": _preview_value(payload[name])}
-        for name, declaration in tool["input_schema"].items()
-        if name in payload and payload[name] not in (None, "", [], {})
-    ]
+    arguments = []
+    for name, declaration in tool["input_schema"].items():
+        if name not in payload or payload[name] in (None, "", [], {}):
+            continue
+        items = _preview_items(declaration, payload[name])
+        arguments.append(
+            {"label": _preview_label(name, declaration), "items": items}
+            if items is not None else {"label": _preview_label(name, declaration), "value": _preview_value(payload[name])}
+        )
+    return arguments
 
 
 def available_capability_map(user) -> list[dict[str, Any]]:
@@ -349,13 +388,12 @@ def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
         if name not in payload or payload[name] is None:
             continue
         value = payload[name]
-        if isinstance(declared, dict):
-            if declared.get("type") == "object" and not isinstance(value, dict):
-                raise AssistantToolError(f"Поле {name} должно быть объектом")
+        declared_type = declared.get("type") if isinstance(declared, dict) else declared
+        if isinstance(declared, dict) and declared_type == "object" and not isinstance(value, dict):
+            raise AssistantToolError(f"Поле {name} должно быть объектом")
+        if not isinstance(declared_type, str):
             continue
-        if not isinstance(declared, str):
-            continue
-        kind = declared.rstrip("?")
+        kind = declared_type.rstrip("?")
         if kind == "boolean" and not isinstance(value, bool):
             raise AssistantToolError(f"Поле {name} должно иметь значение true или false")
         if kind.endswith("[]") and not isinstance(value, list):
@@ -401,7 +439,7 @@ def _openai_type(declared):
                 child, _ignored, compatible = _openai_type(value["item"])
                 schema = {"type": "array", "items": child}
             elif isinstance(kind, str) and kind.endswith("[]"):
-                child, _ignored, compatible = _openai_type(value.get("item", "string"))
+                child, _ignored, compatible = _openai_type(value.get("item", kind[:-2]))
                 schema = {"type": "array", "items": child}
             else:
                 schema, _ignored, compatible = _openai_type(kind or "object")

@@ -279,15 +279,28 @@ class AssistantToolRegistryTests(TestCase):
             assistant_tools._TOOLS.pop(public.identifier, None)
             assistant_tools._TOOLS.pop(private.identifier, None)
 
-    def test_confirmation_preview_uses_human_labels_and_omits_empty_arguments(self):
+    def test_confirmation_preview_resolves_references_and_omits_empty_arguments(self):
         tool = next(item for item in available_tools(self.admin) if item["id"] == "provider.create")
 
         self.assertEqual(confirmation_arguments(tool, {
             "name": "Атекс", "stage_ids": [self.stage.pk], "source_text": None,
         }), [
             {"label": "Название", "value": "Атекс"},
-            {"label": "Этапы производства", "value": str(self.stage.pk)},
+            {"label": "Этапы производства", "items": [{"text": self.stage.name, "hint": f"ID {self.stage.pk}"}]},
         ])
+
+    def test_reference_preview_metadata_does_not_leak_into_function_schema(self):
+        definitions, _names = openai_functions(
+            self.admin, area_id="tenders", capability_id="provider.create",
+        )
+        schema = next(
+            item["function"]["parameters"] for item in definitions
+            if item["function"]["name"] == "provider_create"
+        )
+
+        self.assertEqual(schema["properties"]["stage_ids"], {
+            "type": "array", "items": {"type": "integer"},
+        })
 
     def test_unplanned_turn_exposes_only_plan_and_finish(self):
         definitions, names = openai_functions(self.admin, planned=False)

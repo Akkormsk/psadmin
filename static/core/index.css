@@ -2173,16 +2173,20 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-card__actions { display:flex; flex-wrap:wrap; gap:8px; }
 .assistant-card__hint { margin:0; color:var(--ink-2); font-weight:700; }
 .assistant-card__notice { margin:0; color:var(--ink-3); font-size:11px; line-height:1.45; }
-.assistant-card__details { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:6px 12px; margin:0; padding:10px; border-radius:8px; background:var(--tint-neutral); font-size:12px; }
+.assistant-card__details { display:grid; gap:8px; margin:0; padding:10px; border-radius:8px; background:var(--tint-neutral); font-size:12px; }
+.assistant-card__details > div { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.4fr); gap:12px; align-items:start; }
 .assistant-card__details dt { color:var(--ink-2); font-weight:700; }
 .assistant-card__details dd { margin:0; color:var(--ink); text-align:right; overflow-wrap:anywhere; }
+.assistant-card__detail-items { display:grid; justify-items:end; gap:5px; margin:0; padding:0; list-style:none; }
+.assistant-card__detail-items li { display:flex; max-width:100%; flex-wrap:wrap; justify-content:flex-end; gap:5px; color:var(--ink); font-weight:650; }
+.assistant-card__detail-items small { color:var(--ink-3); font-size:10px; font-weight:600; }
 .assistant-confirmed { display:grid; gap:4px; margin-top:12px; border:1px solid var(--border-positive); border-radius:9px; padding:11px; background:var(--tint-positive); color:var(--positive-ink); font-size:11px; }
 .assistant-confirmed span { color:var(--ink-2); }
 .assistant-confirmed a { width:max-content; margin-top:3px; color:var(--positive-ink); font-weight:800; text-decoration:none; }
 .assistant-card__error { margin:0; color:var(--negative-ink); font-size:11px; font-weight:700; }
 body.assistant-open .tender-requirements-overlay { right:min(480px,calc(100vw - 32px)); }
 body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - min(480px,calc(100vw - 32px)) - 16px)); }
-@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:12px; bottom:16px; } .assistant-launcher span:last-child { max-width:86px; opacity:1; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
+@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:12px; bottom:16px; } .assistant-launcher span:last-child { max-width:86px; opacity:1; } .assistant-card__details > div { grid-template-columns:1fr; gap:3px; } .assistant-card__details dd, .assistant-card__detail-items, .assistant-card__detail-items li { justify-items:start; justify-content:start; text-align:left; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
 
 .provider-calculator-page { max-width:900px; padding-top:40px; }
 .provider-calculator-page__header { max-width:720px; margin:0 0 22px; }
