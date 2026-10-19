@@ -69,6 +69,10 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertIn("Capability map:", initial_prompt)
         self.assertIn("read:cash.transactions", initial_prompt)
         self.assertNotIn('"properties"', initial_prompt)
+        working_prompt = gateway.call_args_list[1].args[0][0]["content"]
+        self.assertNotIn("Capability map:", working_prompt)
+        self.assertIn("Current plan:", working_prompt)
+        self.assertLess(len(working_prompt.encode()), len(initial_prompt.encode()) // 10)
         self.assertEqual(
             {item["function"]["name"] for item in gateway.call_args_list[0].args[1]},
             {"assistant_plan", "assistant_finish"},
@@ -208,6 +212,9 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual([item.payload["output"]["plan"] for item in plans], [
             "1. Найду операции. 2. Покажу результат.", "Операций нет; сообщу результат без суммы.",
         ])
+        self.assertIn("Capability map:", gateway.call_args_list[0].args[0][0]["content"])
+        self.assertNotIn("Capability map:", gateway.call_args_list[1].args[0][0]["content"])
+        self.assertIn("Capability map:", gateway.call_args_list[5].args[0][0]["content"])
         requests = [item for item in self.conversation.feedback_events.filter(scope="assistant_debug") if item.payload.get("stage") == "function_call.request"]
         self.assertTrue(all(item.payload["input"]["metrics"]["tool_schema_bytes"] > 0 for item in requests))
 
@@ -344,6 +351,8 @@ class AssistantFunctionCallingTests(TestCase):
 
         self.assertIn("касс", explicit[-1]["text"].lower())
         self.assertIn("поступления", inferred[-1]["text"].lower())
+        self.assertIn("Capability map:", gateway.call_args_list[0].args[0][0]["content"])
+        self.assertIn("Capability map:", gateway.call_args_list[3].args[0][0]["content"])
         explicit_area_tools = gateway.call_args_list[1].args[1]
         inferred_area_tools = gateway.call_args_list[4].args[1]
         self.assertEqual(explicit_area_tools, inferred_area_tools)

@@ -15,6 +15,17 @@ MAX_HISTORY_TOKENS = 1_200
 MAX_MEMORY_STRING_CHARS = 240
 MAX_MEMORY_ITEMS = 20
 
+_SYSTEM_RULES = (
+    "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. "
+    "After every tool result, compare it with the user's whole request and the current plan. Continue with the next required step; "
+    "update the plan only if the route materially changes. Use actual tool results, and use backend aggregates for money and quantities. "
+    "Never invent facts, fields, IDs, values, or calculations. If several business interpretations or records are equally plausible, "
+    "first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
+    "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
+    "When the user corrects or supplements the task, continue it when relevant and update the plan; a new task supersedes old filters. "
+    "Actions require explicit user confirmation. Use assistant.finish for a final answer or a clarifying question, never for an intermediate tool result."
+)
+
 def _debug(conversation, stage, **payload):
     from .assistant_conversations import add_debug_event
     add_debug_event(conversation, stage, event_input=payload.get("input"), event_output=payload.get("output"), error=payload.get("error", ""))
@@ -54,29 +65,39 @@ def _history(conversation):
         size += item_size
     return list(reversed(selected))
 
+
+def _system_prompt(user, state):
+    prompt = _SYSTEM_RULES
+    if state.get("capability_map_pending"):
+        purpose = "before the first plan" if not state.get("plan") else "before revising the current plan"
+        return (
+            prompt
+            + " Inspect the compact capability map below " + purpose + ". "
+            + "Then save a concise plan through assistant.plan that names the needed capability IDs before any business tool. "
+            + "Only after the plan, select the needed area and capability; this opens the detailed schema for just that capability. "
+            + "Do not claim that a capability is unavailable before checking this map. "
+            + "Capability map: " + capability_map_text(available_capability_map(user)) + "."
+        )
+    context = []
+    if state.get("plan"):
+        context.append("Current plan: " + str(state["plan"]))
+    if state.get("active_area"):
+        context.append("Selected area: " + str(state["active_area"]))
+    if state.get("active_capability"):
+        context.append("Selected capability: " + str(state["active_capability"]))
+    return prompt + (" " + ". ".join(context) + "." if context else "")
+
+
+def _refresh_system_prompt(user, state):
+    state["messages"] = [{"role": "system", "content": _system_prompt(user, state)}, *state["messages"][1:]]
+
+
 def _new_state(conversation, user, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    capability_map = capability_map_text(available_capability_map(user))
-    messages = [{"role": "system", "content": (
-        "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. "
-        "For a request about PSADMIN data or an operation, first inspect the compact capability map below. "
-        "Then create a concise preliminary plan with assistant.plan that names the needed capability IDs before any business tool. "
-        "Only after the plan, select the needed area and capability; this opens the detailed schema for just that capability. "
-        "Do not claim that a capability is unavailable before checking this map. "
-        f"Capability map: {capability_map}. "
-        "After every tool result, compare it with the user's whole request and the current plan. Continue with the next required step; update the plan only if the route materially changes. "
-        "Use actual tool results, and use backend aggregates for money and quantities. Never invent facts, fields, IDs, values, or calculations. "
-        "If several business interpretations or records are equally plausible, first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
-        "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
-        "When the user corrects or supplements the task, continue it when relevant and update the plan; a new task supersedes old filters. "
-        "Actions require explicit user confirmation. Use assistant.finish for a final answer or a clarifying question, never for an intermediate tool result."
-    )}]
     memory = conversation.context.get("agent_memory")
-    if isinstance(memory, dict):
-        messages.append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
-    state = {"messages": [*messages, *history], "steps": [], "attachments": attachments or []}
+    state = {"messages": [], "steps": [], "attachments": attachments or [], "capability_map_pending": True}
     if isinstance(memory, dict):
         read = memory.get("last_read") if isinstance(memory.get("last_read"), dict) else {}
         location = memory.get("location") if isinstance(memory.get("location"), dict) else {}
@@ -85,6 +106,10 @@ def _new_state(conversation, user, message, attachments):
         state["active_area"] = location.get("area")
         if read.get("owner_id") == conversation.context.get("owner_id") and read.get("records"):
             state["read_cache"] = read
+    state["messages"] = [{"role": "system", "content": _system_prompt(user, state)}]
+    if isinstance(memory, dict):
+        state["messages"].append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
+    state["messages"].extend(history)
     return state
 
 def _save(conversation, state):
@@ -173,7 +198,11 @@ def _run(conversation, user, state):
             "messages": state["messages"], "tools": definitions,
             "metrics": _request_metrics(state["messages"], definitions),
         })
+        map_sent = bool(state.get("capability_map_pending"))
         answer = _gateway(state["messages"], definitions)
+        if map_sent:
+            state["capability_map_pending"] = False
+            _refresh_system_prompt(user, state)
         usage = answer.pop("_gateway_usage", None)
         _debug(conversation, "function_call.response", output={"message": answer, "usage": usage})
         state["messages"].append(answer); calls = answer.get("tool_calls") or []
@@ -201,6 +230,9 @@ def _run(conversation, user, state):
                 if not isinstance(plan, str) or not plan.strip():
                     raise AssistantToolError("План должен быть непустым текстом")
                 state["plan"] = plan.strip()
+                if not map_sent:
+                    state["capability_map_pending"] = True
+                _refresh_system_prompt(user, state)
                 result = {"plan_saved": True}
                 _debug(conversation, "agent.plan", output={"plan": state["plan"]})
             elif identifier == "assistant.select_area":
@@ -210,6 +242,7 @@ def _run(conversation, user, state):
                     raise AssistantToolError("Недоступный раздел PSADMIN")
                 state["active_area"] = area_id
                 state.pop("active_capability", None)
+                _refresh_system_prompt(user, state)
                 result = {"area": area}
             elif identifier == "assistant.select_capability":
                 capability_id = arguments.get("capability")
@@ -217,6 +250,7 @@ def _run(conversation, user, state):
                 if capability is None:
                     raise AssistantToolError("Недоступная возможность раздела")
                 state["active_capability"] = capability_id
+                _refresh_system_prompt(user, state)
                 result = {key: capability[key] for key in ("id", "kind", "name", "description", "requires_confirmation")}
             elif identifier.startswith("read:"):
                 resource_id = identifier.split(":", 1)[1]
