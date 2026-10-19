@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
+from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_capabilities, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -219,7 +219,7 @@ class AssistantToolRegistryTests(TestCase):
     def test_openai_tools_start_with_business_areas_not_django_entities(self):
         definitions, names = openai_functions(self.admin)
 
-        self.assertEqual(set(names.values()), {"assistant.finish", "assistant.select_area"})
+        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.finish", "assistant.select_area"})
         area = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.select_area")
         parameters = area["parameters"]
         self.assertIn("cash", parameters["properties"]["area"]["enum"])
@@ -230,6 +230,21 @@ class AssistantToolRegistryTests(TestCase):
             "type": "object", "properties": {"answer": {"type": "string", "minLength": 1}},
             "required": ["answer"], "additionalProperties": False,
         })
+
+    def test_unplanned_turn_exposes_only_plan_and_finish(self):
+        definitions, names = openai_functions(self.admin, planned=False)
+
+        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.finish"})
+        self.assertEqual(len(definitions), 2)
+
+    def test_selected_capability_is_the_only_detailed_action_schema(self):
+        definitions, names = openai_functions(
+            self.admin, area_id="cash", capability_id="cash.transaction_create",
+        )
+
+        self.assertEqual(names["cash_transaction_create"], "cash.transaction_create")
+        self.assertNotIn("cash_transaction_delete", names)
+        self.assertNotIn("read:cash.transactions", names.values())
 
     def test_opened_resource_publishes_a_specialized_universal_read(self):
         definitions, names = openai_functions(
@@ -257,7 +272,7 @@ class AssistantToolRegistryTests(TestCase):
     def test_openai_definitions_are_generated_from_the_registry(self):
         definitions, names = openai_functions(self.admin, area_id="cash", resource_id="cash.transactions")
         self.assertEqual(len(names), len(definitions))
-        self.assertEqual(names["cash_transaction_update"], "cash.transaction_update")
+        self.assertNotIn("cash_transaction_update", names)
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
         read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
         plan = read["parameters"]["properties"]["plan"]
@@ -436,14 +451,55 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertNotIn("read", names)
         self.assertNotIn("cash_transaction_create", names)
-        self.assertEqual(len(definitions), 2)
-        self.assertEqual(set(names.values()), {"assistant.finish", "assistant.select_area"})
+        self.assertEqual(len(definitions), 3)
+        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.finish", "assistant.select_area"})
 
-    def test_opened_area_publishes_its_action_contracts(self):
-        _definitions, names = openai_functions(self.admin, area_id="cash")
+    def test_opened_area_publishes_only_compact_capability_selection(self):
+        definitions, names = openai_functions(self.admin, area_id="cash")
 
-        self.assertEqual(names["cash_transaction_create"], "cash.transaction_create")
-        self.assertEqual(names["cash_transaction_delete"], "cash.transaction_delete")
+        self.assertNotIn("cash_transaction_create", names)
+        self.assertEqual(names["assistant_select_capability"], "assistant.select_capability")
+        capability = next(item["function"] for item in definitions if item["function"]["name"] == "assistant_select_capability")
+        self.assertIn("cash.transaction_create", capability["parameters"]["properties"]["capability"]["enum"])
+        self.assertIn("read:cash.transactions", capability["parameters"]["properties"]["capability"]["enum"])
+
+    def test_compact_capabilities_are_views_of_the_existing_registry(self):
+        capabilities = available_capabilities(self.admin, "cash")
+
+        self.assertTrue(any(item["id"] == "read:cash.transactions" and item["kind"] == "read" for item in capabilities))
+        action = next(item for item in capabilities if item["id"] == "cash.transaction_create")
+        self.assertEqual(set(action), {"id", "kind", "name", "description", "requires_confirmation"})
+        self.assertTrue(action["requires_confirmation"])
+
+    def test_compact_capability_selection_is_smaller_than_all_area_action_schemas(self):
+        from .assistant_tools import _function_definition, available_resources
+
+        current, _names = openai_functions(self.admin, area_id="cash")
+        _name, finish = _function_definition(
+            "assistant.finish", "Передаёт окончательный ответ или уточняющий вопрос пользователю после завершения работы. Не используй для промежуточных результатов инструментов.",
+            {"answer": {"type": "string", "minLength": 1}},
+        )
+        areas = available_areas(self.admin)
+        _name, select_area = _function_definition(
+            "assistant.select_area", "Выбирает раздел PSADMIN для запроса к данным или операции. Используй, если пользователь прямо назвал раздел или его нужно определить по смыслу запроса.",
+            {"area": {"type": "string", "enum": [item["id"] for item in areas],
+                      "description": "; ".join(f'{item["id"]}: {item["name"]}' for item in areas)}},
+        )
+        resources = available_resources(self.admin, "cash")
+        _name, select_resource = _function_definition(
+            "assistant.select_resource", "Выбирает данные, с которыми нужно работать внутри текущего раздела. Используй перед чтением данных.",
+            {"resource": {"type": "string", "enum": [item["id"] for item in resources],
+                          "description": "; ".join(f'{item["id"]}: {item["name"]} — {item["description"]}' for item in resources)}},
+        )
+        legacy = [finish, select_area, select_resource]
+        for tool in available_tools(self.admin):
+            if tool["available"] and tool["id"] != "read" and "cash" in tool["areas"]:
+                _name, definition = _function_definition(tool["id"], tool["description"], deepcopy(tool["input_schema"]))
+                legacy.append(definition)
+
+        current_bytes = len(json.dumps(current, ensure_ascii=False, separators=(",", ":")).encode())
+        legacy_bytes = len(json.dumps(legacy, ensure_ascii=False, separators=(",", ":")).encode())
+        self.assertLess(current_bytes, legacy_bytes)
 
     def test_read_tool_publishes_the_same_contract_its_validator_uses(self):
         from .assistant_read import ReadPlanError, plan_contract, validate_plan

@@ -17,8 +17,9 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_read_result_returns_through_matching_tool_call(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": json.dumps({"plan": "1. Найду последнюю операцию. 2. Покажу результат."})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": json.dumps({"area": "cash"})}}]},
-            {"role": "assistant", "content": None, "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": json.dumps({"resource": "cash.transactions"})}}]},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": json.dumps({"capability": "read:cash.transactions"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
             {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
                 "name": "assistant_finish", "arguments": json.dumps({"answer": "Последняя операция: 10. Сумма: 10."}),
@@ -31,9 +32,9 @@ class AssistantFunctionCallingTests(TestCase):
             from .assistant_agent import reply
             response = reply(self.conversation, self.user, "Покажи последнюю операцию")
         self.assertEqual(response["text"], "Последняя операция: 10. Сумма: 10.")
-        self.assertEqual(gateway.call_count, 4)
+        self.assertEqual(gateway.call_count, 5)
         self.assertEqual(execute.call_args.args[0], "read")
-        messages = gateway.call_args_list[3].args[0]
+        messages = gateway.call_args_list[4].args[0]
         self.assertEqual(messages[-2]["role"], "tool")
         self.assertEqual(messages[-2]["tool_call_id"], "call_read")
 
@@ -47,8 +48,9 @@ class AssistantFunctionCallingTests(TestCase):
             amount="100", reason="Оплата", created_by=self.user,
         )
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": '{"plan":"1. Найду операции. 2. Покажу результат."}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
-            {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": '{"resource":"cash.transactions"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": '{"capability":"read:cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount", "reason"], "order_by": "-operation_date", "limit": 3}})}}]},
             {"role": "assistant", "content": "Найдена операция: 100, Оплата."},
         ]
@@ -63,8 +65,9 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_empty_final_read_text_falls_back_to_backend_presentation(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": '{"plan":"Найду операцию."}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
-            {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_resource", "arguments": '{"resource":"cash.transactions"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": '{"capability":"read:cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
             {"role": "assistant", "content": ""},
         ]
@@ -102,6 +105,74 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
+    def test_user_correction_continues_the_saved_plan_and_can_replace_it(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan-1", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": "Найду заказы Иванова за указанный период."}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "question", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "За какой период показать заказы?"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "plan-2", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": "Найду заказы Иванова за сентябрь."}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "За сентябрь заказы найдены."}),
+            }}]},
+        ]
+
+        first = respond(self.conversation, self.user, "Покажи заказы Иванова")
+        second = respond(self.conversation, self.user, "За сентябрь")
+
+        self.assertEqual(first[-1]["text"], "За какой период показать заказы?")
+        self.assertEqual(second[-1]["text"], "За сентябрь заказы найдены.")
+        continuation_messages = gateway.call_args_list[2].args[0]
+        self.assertIn("task_plan", continuation_messages[1]["content"])
+        self.assertEqual([item for item in continuation_messages if item.get("role") == "user"][-1]["content"], "За сентябрь")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_read_result_can_trigger_a_saved_replan_before_finish(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan-1", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": "1. Найду операции. 2. Покажу результат."}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
+                "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "capability", "type": "function", "function": {
+                "name": "assistant_select_capability", "arguments": json.dumps({"capability": "read:cash.transactions"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {
+                "name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "plan-2", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": "Операций нет; сообщу результат без суммы."}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "За выбранный период операций нет."}),
+            }}]},
+        ]
+        result = {"entity": "cash.CashTransaction", "query": {}, "total_count": 0,
+                  "returned_count": 0, "aggregates": {}, "records": [], "sources": []}
+        with patch("tenders.assistant_agent.execute_tool", return_value=result):
+            from .assistant_agent import reply
+            response = reply(self.conversation, self.user, "Покажи операции")
+
+        self.assertEqual(response["text"], "За выбранный период операций нет.")
+        self.assertEqual(gateway.call_count, 6)
+        self.assertNotIn("read_cash_transactions", [
+            item["function"]["name"] for item in gateway.call_args_list[4].args[1]
+        ])
+        plans = [item for item in self.conversation.feedback_events.filter(scope="assistant_debug") if item.payload.get("stage") == "agent.plan"]
+        self.assertEqual([item.payload["output"]["plan"] for item in plans], [
+            "1. Найду операции. 2. Покажу результат.", "Операций нет; сообщу результат без суммы.",
+        ])
+        requests = [item for item in self.conversation.feedback_events.filter(scope="assistant_debug") if item.payload.get("stage") == "function_call.request"]
+        self.assertTrue(all(item.payload["input"]["metrics"]["tool_schema_bytes"] > 0 for item in requests))
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
     def test_invalid_arguments_are_returned_to_model_as_tool_error(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "assistant_select_area", "arguments": "[]"}}]},
@@ -116,8 +187,12 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_action_waits_for_confirmation_and_continues_once(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": '{"plan":"Подготовлю операцию."}'}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "area", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "capability", "type": "function", "function": {
+                "name": "assistant_select_capability", "arguments": json.dumps({"capability": "cash.transaction_create"}),
             }}]},
             {"role": "assistant", "content": "Операция подготовлена.", "tool_calls": [{"id": "confirm", "type": "function", "function": {"name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Тест"})}}]},
             {"role": "assistant", "content": "Операция выполнена."},
@@ -126,17 +201,23 @@ class AssistantFunctionCallingTests(TestCase):
         with patch("tenders.assistant_agent.execute_tool"):
             response = reply(self.conversation, self.user, "Добавь операцию с основанием Тест")
         self.assertEqual(response["kind"], "confirmation_required")
-        self.assertEqual(gateway.call_count, 2)
+        self.assertEqual(gateway.call_count, 4)
         response = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 1})
         self.assertEqual(response["text"], "Операция выполнена.")
-        self.assertEqual(gateway.call_args_list[2].args[0][-2]["tool_call_id"], "confirm")
+        self.assertEqual(gateway.call_args_list[4].args[0][-2]["tool_call_id"], "confirm")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_action_rejects_free_text_not_present_in_a_user_message(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": '{"plan":"Подготовлю операцию."}',
+            }}]},
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "capability", "type": "function", "function": {
+                "name": "assistant_select_capability", "arguments": json.dumps({"capability": "cash.transaction_create"}),
             }}]},
             {"role": "assistant", "tool_calls": [{"id": "write", "type": "function", "function": {
                 "name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Придуманное основание"}),
@@ -149,7 +230,7 @@ class AssistantFunctionCallingTests(TestCase):
 
         self.assertEqual(response["kind"], "tool_result")
         self.assertIn("Уточните", response["text"])
-        self.assertIn("сообщения пользователя", gateway.call_args_list[2].args[0][-2]["content"])
+        self.assertIn("сообщения пользователя", gateway.call_args_list[4].args[0][-2]["content"])
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
@@ -190,14 +271,20 @@ class AssistantFunctionCallingTests(TestCase):
 
         prompt = gateway.call_args.args[0][0]["content"]
         self.assertIn("ordinary Russian", prompt)
-        self.assertIn("Never ask the user for a technical field name", prompt)
+        self.assertIn("never for technical fields", prompt)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_explicit_and_inferred_area_use_the_same_area_tool(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan-explicit", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": '{"plan":"Уточню задачу по кассе."}',
+            }}]},
             {"role": "assistant", "tool_calls": [{"id": "explicit", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "content": "Что именно сделать с кассой?"},
+            {"role": "assistant", "tool_calls": [{"id": "plan-inferred", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": '{"plan":"Уточню поступления по кассе."}',
+            }}]},
             {"role": "assistant", "tool_calls": [{"id": "inferred", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "content": "За какой период показать поступления?"},
         ]
@@ -208,24 +295,30 @@ class AssistantFunctionCallingTests(TestCase):
 
         self.assertIn("касс", explicit[-1]["text"].lower())
         self.assertIn("поступления", inferred[-1]["text"].lower())
-        first_tools = gateway.call_args_list[0].args[1]
-        third_tools = gateway.call_args_list[2].args[1]
-        self.assertEqual(first_tools, third_tools)
+        explicit_area_tools = gateway.call_args_list[1].args[1]
+        inferred_area_tools = gateway.call_args_list[4].args[1]
+        self.assertEqual(explicit_area_tools, inferred_area_tools)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_completed_read_is_replaced_with_compact_memory_before_the_next_turn(self, gateway, _preflight):
         gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan-1", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": "Найду операцию и отвечу."}),
+            }}]},
             {"role": "assistant", "tool_calls": [{"id": "area-1", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
             }}]},
             {"role": "assistant", "tool_calls": [{"id": "resource-1", "type": "function", "function": {
-                "name": "assistant_select_resource", "arguments": json.dumps({"resource": "cash.transactions"}),
+                "name": "assistant_select_capability", "arguments": json.dumps({"capability": "read:cash.transactions"}),
             }}]},
             {"role": "assistant", "tool_calls": [{"id": "read-1", "type": "function", "function": {
                 "name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["reason"], "limit": 1}}),
             }}]},
             {"role": "assistant", "content": "Одна операция найдена."},
+            {"role": "assistant", "tool_calls": [{"id": "resource-2", "type": "function", "function": {
+                "name": "assistant_select_capability", "arguments": json.dumps({"capability": "read:cash.transactions"}),
+            }}]},
             {"role": "assistant", "tool_calls": [{"id": "read-2", "type": "function", "function": {
                 "name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["reason"], "limit": 1}}),
             }}]},
@@ -243,6 +336,6 @@ class AssistantFunctionCallingTests(TestCase):
             reply(self.conversation, self.user, "А какая это операция?")
             self.assertEqual(execute.call_count, 1)
 
-        messages = gateway.call_args_list[5].args[0]
+        messages = gateway.call_args_list[7].args[0]
         tools = [item for item in messages if item.get("role") == "tool"]
-        self.assertEqual([item["tool_call_id"] for item in tools], ["read-2"])
+        self.assertEqual([item["tool_call_id"] for item in tools], ["resource-2", "read-2"])
