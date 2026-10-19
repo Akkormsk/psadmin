@@ -14,6 +14,11 @@ MAX_TOOL_CALLS = 8
 MAX_HISTORY_TOKENS = 1_200
 MAX_MEMORY_STRING_CHARS = 240
 MAX_MEMORY_ITEMS = 20
+MAX_MEMORY_SELECTIONS = 5
+MAX_MEMORY_IDS = 50
+MAX_MEMORY_ACTIONS = 5
+MAX_MEMORY_PREVIEWS = 10
+MAX_MEMORY_BYTES = 8 * 1024
 
 _SYSTEM_RULES = (
     "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. "
@@ -23,6 +28,8 @@ _SYSTEM_RULES = (
     "first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
     "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
     "When the user corrects or supplements the task, continue it when relevant and update the plan; a new task supersedes old filters. "
+    "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
+    "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation. Use assistant.finish for a final answer or a clarifying question, never for an intermediate tool result."
 )
 
@@ -96,19 +103,16 @@ def _new_state(conversation, user, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    memory = conversation.context.get("agent_memory")
-    state = {"messages": [], "steps": [], "attachments": attachments or [], "capability_map_pending": True}
-    if isinstance(memory, dict):
-        read = memory.get("last_read") if isinstance(memory.get("last_read"), dict) else {}
-        location = memory.get("location") if isinstance(memory.get("location"), dict) else {}
-        if isinstance(memory.get("task_plan"), str) and memory["task_plan"].strip():
-            state["plan"] = memory["task_plan"]
-        state["active_area"] = location.get("area")
-        if read.get("owner_id") == conversation.context.get("owner_id") and read.get("records"):
-            state["read_cache"] = read
+    memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
+    state = {"messages": [], "steps": [], "attachments": attachments or [], "capability_map_pending": True, "memory": memory}
+    if memory["recent_selections"]:
+        cached = _selection_cache(memory["recent_selections"][-1])
+        if cached is not None:
+            state["read_cache"] = cached
     state["messages"] = [{"role": "system", "content": _system_prompt(user, state)}]
-    if isinstance(memory, dict):
-        state["messages"].append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
+    memory_context = _memory_context(memory)
+    if memory_context:
+        state["messages"].append({"role": "system", "content": "Compact conversation memory: " + json.dumps(memory_context, ensure_ascii=False, default=str)})
     state["messages"].extend(history)
     return state
 
@@ -150,36 +154,160 @@ def _compact_memory(value, depth=0):
     return value
 
 
-def _remember_read_state(state):
-    for step in reversed(state["steps"]):
-        if not str(step["tool_id"]).startswith("read:") or not isinstance(step["result"], dict):
-            continue
-        result = step["result"]
-        return {
-            "entity": result.get("entity"), "query": _compact_memory(result.get("query", {})),
-            "aggregates": _compact_memory(result.get("aggregates", {})), "total_count": result.get("total_count"),
-            "returned_count": result.get("returned_count"), "sources": (result.get("sources") or [])[:MAX_MEMORY_ITEMS],
-            "source_scope": result.get("source_scope"), "records": _compact_memory(result.get("records") or []),
-            "owner_id": (state.get("read_cache") or {}).get("owner_id"),
-        }
-    return None
+def _record_preview(record):
+    if not isinstance(record, dict):
+        return {}
+    # A preview is only for recognising a backend record again.  IDs and the
+    # original query live separately and are never removed by generic nesting.
+    keys = ["id", "purchase_number", "order_number", "name", "title", "reason", "operation_date", "amount", "status"]
+    return {key: _compact_memory(record[key]) for key in keys if key in record}
+
+
+def _selection_from_result(result):
+    if not isinstance(result, dict) or not isinstance(result.get("entity"), str):
+        return None
+    sources = result.get("sources") if isinstance(result.get("sources"), list) else []
+    ids = [item.get("id") for item in sources if isinstance(item, dict) and isinstance(item.get("id"), int)]
+    records = result.get("records") if isinstance(result.get("records"), list) else []
+    previews = [_record_preview(item) for item in records[:MAX_MEMORY_PREVIEWS] if isinstance(item, dict)]
+    external_ids = [
+        {key: record[key] for key in ("purchase_number", "order_number") if key in record}
+        for record in records[:MAX_MEMORY_PREVIEWS] if isinstance(record, dict) and any(key in record for key in ("purchase_number", "order_number"))
+    ]
+    total = result.get("total_count")
+    returned = result.get("returned_count")
+    return {
+        "entity": result["entity"],
+        "record_ids": ids[:MAX_MEMORY_IDS],
+        # ``query`` is already a validated, JSON-safe backend summary.  Keep
+        # its complete filter list: losing one condition would make a saved
+        # selection describe a wider scope than the actual result.
+        "query": result.get("query") if isinstance(result.get("query"), dict) else {},
+        "aggregates": _compact_memory(result.get("aggregates") if isinstance(result.get("aggregates"), dict) else {}),
+        "total_count": total if isinstance(total, int) else None,
+        "returned_count": returned if isinstance(returned, int) else None,
+        "complete": bool(total == returned == len(ids)) and result.get("source_scope") == "all matching records",
+        "source_scope": _compact_memory(result.get("source_scope")),
+        "records": previews,
+        "external_ids": external_ids,
+    }
+
+
+def _selection_cache(selection):
+    """Reconstruct only a complete cached result; incomplete selections read ORM again."""
+    if not isinstance(selection, dict) or not selection.get("complete"):
+        return None
+    ids = selection.get("record_ids")
+    records = selection.get("records")
+    if not isinstance(ids, list) or not isinstance(records, list) or len(ids) != len(records):
+        return None
+    return {
+        "entity": selection.get("entity"), "query": selection.get("query", {}),
+        "total_count": selection.get("total_count"), "returned_count": selection.get("returned_count"),
+        "aggregates": selection.get("aggregates", {}), "records": records,
+        "sources": [{"entity": selection.get("entity"), "id": value} for value in ids],
+        "source_scope": "cached complete result",
+    }
+
+
+def _action_result(tool_id, result):
+    if not isinstance(result, dict):
+        return None
+    ids = {key: value for key, value in result.items() if (key == "id" or key.endswith("_id")) and isinstance(value, int)}
+    return {"tool_id": tool_id, "object_ids": ids, "result": _compact_memory(result)}
+
+
+def _load_memory(raw, owner_id):
+    """Read both the M7 format and the old one-turn memory without failing."""
+    base = {"version": 2, "recent_selections": [], "recent_actions": []}
+    if not isinstance(raw, dict):
+        return base
+    if raw.get("version") == 2:
+        for key in ("active_task", "active_focus"):
+            if isinstance(raw.get(key), dict):
+                base[key] = _compact_memory(raw[key])
+        if isinstance(raw.get("recent_selections"), list):
+            base["recent_selections"] = [_normalise_selection(item) for item in raw["recent_selections"] if isinstance(item, dict)]
+        if isinstance(raw.get("recent_actions"), list):
+            base["recent_actions"] = [_compact_memory(item) for item in raw["recent_actions"] if isinstance(item, dict)]
+        return base
+    # M6 stored only last_read/location/task_plan.  Promote it once so old
+    # conversations remain usable but do not keep the obsolete shape forever.
+    last_read = raw.get("last_read")
+    if isinstance(last_read, dict) and last_read.get("owner_id") in (None, owner_id):
+        selection = _selection_from_result(last_read)
+        if selection:
+            base["recent_selections"] = [selection]
+    plan = raw.get("task_plan")
+    if isinstance(plan, str) and plan.strip():
+        base["active_task"] = {"plan": plan[:MAX_MEMORY_STRING_CHARS]}
+    return base
+
+
+def _normalise_selection(raw):
+    """Bound display details without ever shortening a retained ID/filter list."""
+    result = dict(raw)
+    result["record_ids"] = [value for value in raw.get("record_ids", []) if isinstance(value, int)][:MAX_MEMORY_IDS]
+    result["records"] = [_record_preview(item) for item in raw.get("records", [])[:MAX_MEMORY_PREVIEWS] if isinstance(item, dict)]
+    result["external_ids"] = [
+        _compact_memory(item) for item in raw.get("external_ids", [])[:MAX_MEMORY_PREVIEWS] if isinstance(item, dict)
+    ]
+    result["query"] = raw.get("query") if isinstance(raw.get("query"), dict) else {}
+    result["aggregates"] = _compact_memory(raw.get("aggregates") if isinstance(raw.get("aggregates"), dict) else {})
+    return result
+
+
+def _memory_context(memory):
+    if not isinstance(memory, dict):
+        return {}
+    # Do not send cached record payloads again.  The model gets IDs, a short
+    # recognisable preview, query boundaries and the result scope.
+    context = {"active_task": memory.get("active_task"), "active_focus": memory.get("active_focus"),
+               "recent_selections": memory.get("recent_selections", []), "recent_actions": memory.get("recent_actions", [])}
+    return {key: value for key, value in context.items() if value not in (None, [], {})}
+
+
+def _bound_memory(memory):
+    memory["version"] = 2
+    memory["recent_selections"] = list(memory.get("recent_selections", []))[-MAX_MEMORY_SELECTIONS:]
+    memory["recent_actions"] = list(memory.get("recent_actions", []))[-MAX_MEMORY_ACTIONS:]
+    # Measure the representation Django will store, not an artificially
+    # minified variant, so the documented 8 KiB bound remains true on disk.
+    encoded = json.dumps(memory, ensure_ascii=False, default=str).encode()
+    # Prefer removing the oldest optional selection/action over cutting IDs or
+    # filter objects mid-structure.  This keeps memory truthful under pressure.
+    while len(encoded) > MAX_MEMORY_BYTES and (memory["recent_selections"] or memory["recent_actions"]):
+        if len(memory["recent_selections"]) >= len(memory["recent_actions"]):
+            memory["recent_selections"].pop(0)
+        else:
+            memory["recent_actions"].pop(0)
+        encoded = json.dumps(memory, ensure_ascii=False, default=str).encode()
+    return memory
+
+
+def _merge_memory(conversation, state):
+    memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
+    for step in state.get("steps", []):
+        tool_id, result = step.get("tool_id"), step.get("result")
+        if isinstance(tool_id, str) and tool_id.startswith("read:"):
+            selection = _selection_from_result(result)
+            if selection:
+                memory["recent_selections"].append(selection)
+                # A singleton read is an unambiguous active business object.
+                if len(selection["record_ids"]) == 1:
+                    record = selection["records"][0] if selection["records"] else {}
+                    memory["active_focus"] = {"entity": selection["entity"], "id": selection["record_ids"][0], "label": _compact_memory(record), "external_ids": selection["external_ids"][:1]}
+        elif isinstance(tool_id, str) and tool_id not in {"assistant.plan", "assistant.select_area", "assistant.select_capability"}:
+            action = _action_result(tool_id, result)
+            if action:
+                memory["recent_actions"].append(action)
+    if isinstance(state.get("plan"), str) and state["plan"].strip():
+        memory["active_task"] = {"plan": state["plan"][:MAX_MEMORY_STRING_CHARS]}
+    return _bound_memory(memory)
 
 
 def _finish_turn(conversation, state):
-    memory = {}
-    last_read = _remember_read_state(state)
-    if last_read is not None:
-        memory["last_read"] = last_read
-    if state.get("active_area"):
-        memory["location"] = {
-            "area": state.get("active_area"),
-        }
-    if isinstance(state.get("plan"), str) and state["plan"].strip():
-        memory["task_plan"] = _compact_memory(state["plan"])
-    if memory:
-        conversation.context["agent_memory"] = memory
-    else:
-        conversation.context.pop("agent_memory", None)
+    conversation.context["agent_memory"] = _merge_memory(conversation, state)
     conversation.context.pop("agent_run", None)
     conversation.save(update_fields=["context"])
 

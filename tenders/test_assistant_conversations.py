@@ -171,7 +171,7 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual(first[-1]["text"], "За какой период показать заказы?")
         self.assertEqual(second[-1]["text"], "За сентябрь заказы найдены.")
         continuation_messages = gateway.call_args_list[2].args[0]
-        self.assertIn("task_plan", continuation_messages[1]["content"])
+        self.assertIn("active_task", continuation_messages[1]["content"])
         self.assertEqual([item for item in continuation_messages if item.get("role") == "user"][-1]["content"], "За сентябрь")
 
     @patch("tenders.assistant_agent.preflight")
@@ -389,11 +389,111 @@ class AssistantFunctionCallingTests(TestCase):
             from .assistant_agent import reply
             reply(self.conversation, self.user, "Покажи операцию")
             self.assertNotIn("agent_run", self.conversation.context)
-            self.assertEqual(self.conversation.context["agent_memory"]["last_read"]["records"], [{"id": 1, "reason": "x"}])
-            self.assertLessEqual(len(json.dumps(self.conversation.context["agent_memory"])), 2_000)
+            selection = self.conversation.context["agent_memory"]["recent_selections"][-1]
+            self.assertEqual(selection["records"], [{"id": 1, "reason": "x"}])
+            self.assertEqual(selection["record_ids"], [1])
+            self.assertLessEqual(len(json.dumps(self.conversation.context["agent_memory"])), 8 * 1024)
             reply(self.conversation, self.user, "А какая это операция?")
             self.assertEqual(execute.call_count, 1)
 
         messages = gateway.call_args_list[7].args[0]
         tools = [item for item in messages if item.get("role") == "tool"]
         self.assertEqual([item["tool_call_id"] for item in tools], ["resource-2", "read-2"])
+
+
+class AssistantMemoryTests(TestCase):
+    """M7 persistence tests use the real conversation JSON field and DB."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_superuser("memory", "memory@example.test", "password")
+        self.other = get_user_model().objects.create_superuser("memory-other", "memory-other@example.test", "password")
+        self.conversation = create_conversation(self.user)
+
+    @staticmethod
+    def read(entity, identifiers, *, total=None, records=None, source_scope="all matching records"):
+        records = records if records is not None else [{"id": value, "name": f"Объект {value}"} for value in identifiers]
+        return {
+            "entity": entity, "query": {"entity": entity, "filters": [], "order_by": ["-id"], "limit": len(identifiers)},
+            "total_count": len(identifiers) if total is None else total, "returned_count": len(records),
+            "aggregates": {}, "records": records,
+            "sources": [{"entity": entity, "id": value} for value in identifiers], "source_scope": source_scope,
+        }
+
+    def finish(self, steps, plan="Проверю данные."):
+        from .assistant_agent import _finish_turn
+        _finish_turn(self.conversation, {"steps": steps, "plan": plan})
+        self.conversation.refresh_from_db()
+        return self.conversation.context["agent_memory"]
+
+    def test_read_survives_a_text_turn_and_keeps_real_internal_id(self):
+        memory = self.finish([{"tool_id": "read:tenders.incoming", "result": self.read(
+            "tender_selection.Tender", [17], records=[{"id": 17, "purchase_number": "0123456789", "name": "Тендер"}],
+        )}])
+
+        self.assertEqual(memory["active_focus"]["id"], 17)
+        self.assertEqual(memory["active_focus"]["external_ids"], [{"purchase_number": "0123456789"}])
+        self.finish([], "Отвечу о документах.")
+        self.assertEqual(self.conversation.context["agent_memory"]["active_focus"]["id"], 17)
+
+    def test_multiple_read_selections_are_preserved_in_order(self):
+        self.finish([{"tool_id": "read:cash.transactions", "result": self.read("cash.CashTransaction", [1, 2])}])
+        memory = self.finish([{"tool_id": "read:tenders.incoming", "result": self.read("tender_selection.Tender", [3])}])
+
+        self.assertEqual([item["entity"] for item in memory["recent_selections"]], ["cash.CashTransaction", "tender_selection.Tender"])
+        self.assertEqual(memory["recent_selections"][0]["record_ids"], [1, 2])
+
+    def test_partial_selection_never_becomes_complete_or_a_reusable_global_scope(self):
+        memory = self.finish([{"tool_id": "read:cash.transactions", "result": self.read(
+            "cash.CashTransaction", list(range(1, 11)), total=39,
+        )}])
+        selection = memory["recent_selections"][-1]
+        self.assertFalse(selection["complete"])
+        self.assertEqual(selection["record_ids"], list(range(1, 11)))
+
+    def test_new_state_keeps_prior_plan_as_context_not_an_active_plan(self):
+        self.finish([], "Старый план по кассе.")
+        from .assistant_agent import _new_state
+        state = _new_state(self.conversation, self.user, "Теперь найди тендер", [])
+
+        self.assertNotIn("plan", state)
+        self.assertIn("active_task", state["messages"][1]["content"])
+        self.assertTrue(state["capability_map_pending"])
+
+    def test_action_result_is_retained_only_after_actual_executor_result(self):
+        memory = self.finish([{"tool_id": "cash.transaction_create", "result": {"id": 44, "created": True}}])
+
+        self.assertEqual(memory["recent_actions"][-1]["object_ids"], {"id": 44})
+        self.assertEqual(memory["recent_actions"][-1]["tool_id"], "cash.transaction_create")
+
+    def test_old_memory_format_is_promoted_without_exception(self):
+        self.conversation.context["agent_memory"] = {"task_plan": "Старый план", "last_read": {
+            "owner_id": self.user.pk, "entity": "cash.CashTransaction", "query": {}, "total_count": 1,
+            "returned_count": 1, "records": [{"id": 7, "reason": "x"}],
+            "sources": [{"entity": "cash.CashTransaction", "id": 7}], "source_scope": "all matching records",
+        }}
+        self.conversation.save(update_fields=["context"])
+        from .assistant_agent import _new_state
+        state = _new_state(self.conversation, self.user, "Продолжим", [])
+
+        self.assertEqual(state["memory"]["recent_selections"][0]["record_ids"], [7])
+        self.assertNotIn("plan", state)
+
+    def test_memory_is_bounded_without_cutting_saved_ids(self):
+        for number in range(7):
+            self.finish([{"tool_id": "read:cash.transactions", "result": self.read(
+                "cash.CashTransaction", list(range(number * 50, number * 50 + 50)),
+                records=[{"id": value, "reason": "x" * 200} for value in range(number * 50, number * 50 + 50)],
+            )}], f"План {number}")
+        memory = self.conversation.context["agent_memory"]
+
+        self.assertLessEqual(len(json.dumps(memory, ensure_ascii=False).encode()), 8 * 1024)
+        self.assertLessEqual(len(memory["recent_selections"]), 5)
+        self.assertTrue(all(len(item["record_ids"]) == 50 for item in memory["recent_selections"]), memory["recent_selections"])
+
+    def test_memory_isolated_between_conversations_and_users(self):
+        self.finish([{"tool_id": "read:cash.transactions", "result": self.read("cash.CashTransaction", [1])}])
+        other_conversation = create_conversation(self.other)
+        from .assistant_agent import _new_state
+        state = _new_state(other_conversation, self.other, "Покажи данные", [])
+
+        self.assertNotIn("recent_selections", " ".join(item["content"] for item in state["messages"]))
