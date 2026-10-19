@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os
 from urllib.request import Request, urlopen
 from .assistant_tools import (
-    AssistantToolError, available_areas, available_resources, available_tools,
+    AssistantToolError, available_areas, available_capabilities, available_resources, available_tools,
     execute_tool, openai_functions, validate_tool_call,
 )
 from .assistant_read import present_result, reuse_result
@@ -18,6 +18,13 @@ MAX_MEMORY_ITEMS = 20
 def _debug(conversation, stage, **payload):
     from .assistant_conversations import add_debug_event
     add_debug_event(conversation, stage, event_input=payload.get("input"), event_output=payload.get("output"), error=payload.get("error", ""))
+
+
+def _request_metrics(messages, tools):
+    return {
+        "message_chars": sum(len(str(item.get("content", ""))) for item in messages),
+        "tool_schema_bytes": len(json.dumps(tools, ensure_ascii=False, separators=(",", ":")).encode()),
+    }
 
 def _gateway(messages, tools):
     key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
@@ -47,11 +54,23 @@ def _history(conversation):
         size += item_size
     return list(reversed(selected))
 
-def _new_state(conversation, message, attachments):
+def _new_state(conversation, user, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    messages = [{"role": "system", "content": "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. For PSADMIN data or operations, first choose the relevant business section; if the user named it, follow that direction, otherwise infer it from meaning. Never invent facts, fields or IDs. Ask only necessary business clarifications in ordinary Russian, such as a period, account, amount, person or the intended operation. Never ask the user for a technical field name, entity ID, code, JSON format or database value. Use compact conversation state only when the user's message continues that task; a new task supersedes old filters. Actions require explicit user confirmation. Use assistant.finish for a final answer or a clarifying question, never for an intermediate tool result."}]
+    areas = "; ".join(f'{item["id"]}: {item["name"]} — {item["description"]}' for item in available_areas(user))
+    messages = [{"role": "system", "content": (
+        "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. "
+        "For a request about PSADMIN data or an operation, first create a concise internal plan with assistant.plan before any business tool. "
+        "Use the available business areas, then one compact capability list, then open only the one capability needed for the next step. "
+        f"Available business areas: {areas}. "
+        "After every tool result, compare it with the user's whole request and the current plan. Continue with the next required step; update the plan only if the route materially changes. "
+        "Use actual tool results, and use backend aggregates for money and quantities. Never invent facts, fields, IDs, values, or calculations. "
+        "If several business interpretations or records are equally plausible, first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
+        "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
+        "When the user corrects or supplements the task, continue it when relevant and update the plan; a new task supersedes old filters. "
+        "Actions require explicit user confirmation. Use assistant.finish for a final answer or a clarifying question, never for an intermediate tool result."
+    )}]
     memory = conversation.context.get("agent_memory")
     if isinstance(memory, dict):
         messages.append({"role": "system", "content": "Compact conversation state: " + json.dumps(memory, ensure_ascii=False, default=str)})
@@ -59,8 +78,9 @@ def _new_state(conversation, message, attachments):
     if isinstance(memory, dict):
         read = memory.get("last_read") if isinstance(memory.get("last_read"), dict) else {}
         location = memory.get("location") if isinstance(memory.get("location"), dict) else {}
+        if isinstance(memory.get("task_plan"), str) and memory["task_plan"].strip():
+            state["plan"] = memory["task_plan"]
         state["active_area"] = location.get("area")
-        state["active_resource"] = location.get("resource")
         if read.get("owner_id") == conversation.context.get("owner_id") and read.get("records"):
             state["read_cache"] = read
     return state
@@ -126,8 +146,9 @@ def _finish_turn(conversation, state):
     if state.get("active_area"):
         memory["location"] = {
             "area": state.get("active_area"),
-            "resource": state.get("active_resource"),
         }
+    if isinstance(state.get("plan"), str) and state["plan"].strip():
+        memory["task_plan"] = _compact_memory(state["plan"])
     if memory:
         conversation.context["agent_memory"] = memory
     else:
@@ -143,9 +164,13 @@ def _run(conversation, user, state):
     registry = {item["id"]: item for item in available_tools(user)}
     for _ in range(MAX_TOOL_CALLS + 1):
         definitions, names = openai_functions(
-            user, area_id=state.get("active_area"), resource_id=state.get("active_resource"),
+            user, area_id=state.get("active_area"), capability_id=state.get("active_capability"),
+            planned=bool(state.get("plan")),
         )
-        preflight(); _debug(conversation, "function_call.request", input={"messages": state["messages"], "tools": definitions})
+        preflight(); _debug(conversation, "function_call.request", input={
+            "messages": state["messages"], "tools": definitions,
+            "metrics": _request_metrics(state["messages"], definitions),
+        })
         answer = _gateway(state["messages"], definitions)
         usage = answer.pop("_gateway_usage", None)
         _debug(conversation, "function_call.response", output={"message": answer, "usage": usage})
@@ -169,26 +194,33 @@ def _run(conversation, user, state):
                 _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
                 _finish_turn(conversation, state)
                 return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
-            if identifier == "assistant.select_area":
+            if identifier == "assistant.plan":
+                plan = arguments.get("plan")
+                if not isinstance(plan, str) or not plan.strip():
+                    raise AssistantToolError("План должен быть непустым текстом")
+                state["plan"] = plan.strip()
+                result = {"plan_saved": True}
+                _debug(conversation, "agent.plan", output={"plan": state["plan"]})
+            elif identifier == "assistant.select_area":
                 area_id = arguments.get("area")
                 area = next((item for item in available_areas(user) if item["id"] == area_id), None)
                 if area is None:
                     raise AssistantToolError("Недоступный раздел PSADMIN")
                 state["active_area"] = area_id
-                state.pop("active_resource", None)
+                state.pop("active_capability", None)
                 result = {"area": area}
-            elif identifier == "assistant.select_resource":
-                resource_id = arguments.get("resource")
-                resource = next((item for item in available_resources(user, state.get("active_area")) if item["id"] == resource_id), None)
-                if resource is None:
-                    raise AssistantToolError("Недоступные данные раздела")
-                state["active_resource"] = resource_id
-                result = {"resource": {key: resource[key] for key in ("id", "name", "description")}}
+            elif identifier == "assistant.select_capability":
+                capability_id = arguments.get("capability")
+                capability = next((item for item in available_capabilities(user, state.get("active_area")) if item["id"] == capability_id), None)
+                if capability is None:
+                    raise AssistantToolError("Недоступная возможность раздела")
+                state["active_capability"] = capability_id
+                result = {key: capability[key] for key in ("id", "kind", "name", "description", "requires_confirmation")}
             elif identifier.startswith("read:"):
                 resource_id = identifier.split(":", 1)[1]
                 resource = next((item for item in available_resources(user, state.get("active_area")) if item["id"] == resource_id), None)
-                if resource is None or state.get("active_resource") != resource_id:
-                    raise AssistantToolError("Сначала выберите данные нужного раздела")
+                if resource is None or state.get("active_capability") != identifier:
+                    raise AssistantToolError("Сначала выберите нужную возможность раздела")
                 plan = {"entity": resource["entity"], **arguments.get("plan", {})}
                 cached = state.get("read_cache")
                 result = reuse_result(user, plan, cached) if cached else None
@@ -196,13 +228,19 @@ def _run(conversation, user, state):
                 state["last_read_result"] = result
                 state["read_cache"] = {**result, "owner_id": conversation.context.get("owner_id")}
             elif registry[identifier]["requires_confirmation"]:
+                if state.get("active_capability") != identifier:
+                    raise AssistantToolError("Сначала выберите нужную возможность раздела")
                 validate_tool_call(identifier, user, arguments)
                 _validate_action_text_sources(registry[identifier], arguments, state)
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"]}; _save(conversation, state)
                 return {"text": str(answer.get("content") or "Подтвердите выполнение действия."), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
             else:
+                if state.get("active_capability") != identifier:
+                    raise AssistantToolError("Сначала выберите нужную возможность раздела")
                 result = execute_tool(identifier, user, arguments)
             state["steps"].append({"tool_id": identifier, "result": result})
+            if identifier.startswith("read:") or identifier in registry:
+                state.pop("active_capability", None)
             content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
         except (AssistantToolError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -217,7 +255,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
         state = previous
         _remember_user_message(state, message)
     else:
-        state = _new_state(conversation, message, attachments)
+        state = _new_state(conversation, user, message, attachments)
     return _run(conversation, user, state)
 
 def continue_after_confirmation(conversation, user, tool_id, result):
@@ -226,5 +264,6 @@ def continue_after_confirmation(conversation, user, tool_id, result):
     waiting = state.pop("waiting_confirmation", {})
     if waiting.get("tool_id") != tool_id: return None
     state["steps"].append({"tool_id": tool_id, "result": result})
+    state.pop("active_capability", None)
     state["messages"].append({"role": "tool", "tool_call_id": waiting["tool_call_id"], "content": json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)})
     _save(conversation, state); return _run(conversation, user, state)

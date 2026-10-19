@@ -188,6 +188,33 @@ def available_resources(user, area_id: str | None = None) -> list[dict[str, Any]
     ]
 
 
+def available_capabilities(user, area_id: str) -> list[dict[str, Any]]:
+    """Return compact, user-facing entries from the existing registry.
+
+    This is a view, not a second registry: a selected entry is resolved back
+    to the same resource or action before its detailed Function schema opens.
+    """
+    resources = [
+        {
+            "id": f"read:{resource['id']}", "kind": "read", "name": resource["name"],
+            "description": resource["description"], "requires_confirmation": False,
+            "resource_id": resource["id"],
+        }
+        for resource in available_resources(user, area_id)
+    ]
+    actions = [
+        {
+            "id": tool["id"], "kind": "action", "name": tool["name"],
+            "description": tool["description"],
+            "requires_confirmation": tool["requires_confirmation"],
+        }
+        for tool in available_tools(user)
+        if tool["available"] and tool["id"] not in _MODEL_HIDDEN_TOOLS | {"read"}
+        and area_id in tool["areas"]
+    ]
+    return sorted([*resources, *actions], key=lambda item: (item["name"], item["id"]))
+
+
 def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
     _discover_app_actions()
     tool = _TOOLS.get(identifier)
@@ -343,13 +370,17 @@ def _resource_read_schema(resource):
     return schema
 
 
-def openai_functions(user, *, area_id=None, resource_id=None):
-    """Expose only the current business section and its public capabilities.
-
-    ``read:<resource>`` is a generated public view of the single universal READ
-    executor.  It carries no duplicate business implementation.
-    """
+def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None, planned=True):
+    """Expose one discovery layer or one selected capability at a time."""
     definitions, names = [], {}
+
+    name, definition = _function_definition(
+        "assistant.plan",
+        "Сохраняет краткий внутренний план выполнения задачи или его обновление. Вызывай до первого бизнес-инструмента и только при существенном изменении маршрута.",
+        {"plan": {"type": "string", "minLength": 1}},
+    )
+    definitions.append(definition)
+    names[name] = "assistant.plan"
 
     name, definition = _function_definition(
         "assistant.finish",
@@ -358,6 +389,9 @@ def openai_functions(user, *, area_id=None, resource_id=None):
     )
     definitions.append(definition)
     names[name] = "assistant.finish"
+
+    if not planned:
+        return definitions, names
 
     areas = available_areas(user)
     area_schema = {"area": {"type": "string", "enum": [item["id"] for item in areas],
@@ -375,37 +409,39 @@ def openai_functions(user, *, area_id=None, resource_id=None):
     if area_id not in {item["id"] for item in areas}:
         raise AssistantToolError("Недоступный раздел PSADMIN")
 
-    resources = available_resources(user, area_id)
-    if resources:
-        resource_schema = {"resource": {"type": "string", "enum": [item["id"] for item in resources],
-                                         "description": "; ".join(f'{item["id"]}: {item["name"]} — {item["description"]}' for item in resources)}}
+    capabilities = available_capabilities(user, area_id)
+    if capabilities:
+        capability_schema = {"capability": {"type": "string", "enum": [item["id"] for item in capabilities],
+                                              "description": "; ".join(
+                                                  f'{item["id"]}: {item["name"]} — {item["description"]}'
+                                                  + ("; требуется подтверждение" if item["requires_confirmation"] else "")
+                                                  for item in capabilities
+                                              )}}
         name, definition = _function_definition(
-            "assistant.select_resource",
-            "Выбирает данные, с которыми нужно работать внутри текущего раздела. Используй перед чтением данных.",
-            resource_schema,
+            "assistant.select_capability",
+            "Выбирает одну возможность внутри текущего раздела. Это открывает её подробные параметры для следующего вызова.",
+            capability_schema,
         )
         definitions.append(definition)
-        names[name] = "assistant.select_resource"
+        names[name] = "assistant.select_capability"
 
-    for tool in available_tools(user):
-        if (not tool["available"] or tool["id"] in _MODEL_HIDDEN_TOOLS | {"read"}
-                or area_id not in tool["areas"]):
-            continue
-        name, definition = _function_definition(tool["id"], tool["description"], deepcopy(tool["input_schema"]))
-        if name in names:
-            raise RuntimeError("OpenAI function name collision")
-        definitions.append(definition)
-        names[name] = tool["id"]
-
-    if resource_id is not None:
-        resource = next((item for item in resources if item["id"] == resource_id), None)
-        if resource is None:
-            raise AssistantToolError("Недоступные данные раздела")
-        identifier = f"read:{resource_id}"
+    capability_id = capability_id or (f"read:{resource_id}" if resource_id is not None else None)
+    if capability_id is not None:
+        capability = next((item for item in capabilities if item["id"] == capability_id), None)
+        if capability is None:
+            raise AssistantToolError("Недоступная возможность раздела")
+        if capability["kind"] == "read":
+            resource = next(item for item in available_resources(user, area_id) if item["id"] == capability["resource_id"])
+            identifier = capability["id"]
+            description = f"Читает «{resource['name']}». {resource['description']} Используй только разрешённые поля и значения из схемы."
+            schema = _resource_read_schema(resource)
+        else:
+            tool = next(item for item in available_tools(user) if item["id"] == capability["id"] and item["available"])
+            identifier = tool["id"]
+            description = tool["description"]
+            schema = deepcopy(tool["input_schema"])
         name, definition = _function_definition(
-            identifier,
-            f"Читает «{resource['name']}». {resource['description']} Используй только разрешённые поля и значения из схемы.",
-            _resource_read_schema(resource),
+            identifier, description, schema,
         )
         if name in names:
             raise RuntimeError("OpenAI function name collision")
