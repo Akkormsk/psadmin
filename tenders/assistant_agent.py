@@ -235,7 +235,18 @@ def _run(conversation, user, state):
                 validate_tool_call(identifier, user, arguments)
                 _validate_action_text_sources(registry[identifier], arguments, state)
                 state["waiting_confirmation"] = {"tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"]}; _save(conversation, state)
-                return {"text": str(answer.get("content") or "Подтвердите выполнение действия."), "kind": "confirmation_required", "data": {"tool_id": identifier, "arguments": arguments}}
+                return {
+                    "text": str(answer.get("content") or "Подтвердите выполнение действия."),
+                    "kind": "confirmation_required",
+                    "data": {
+                        "tool_id": identifier,
+                        "arguments": arguments,
+                        "action": {
+                            "name": registry[identifier]["name"],
+                            "description": registry[identifier]["description"],
+                        },
+                    },
+                }
             else:
                 if state.get("active_capability") != identifier:
                     raise AssistantToolError("Сначала выберите нужную возможность раздела")

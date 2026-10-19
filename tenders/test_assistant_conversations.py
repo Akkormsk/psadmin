@@ -209,6 +209,8 @@ class AssistantFunctionCallingTests(TestCase):
         with patch("tenders.assistant_agent.execute_tool"):
             response = reply(self.conversation, self.user, "Добавь операцию с основанием Тест")
         self.assertEqual(response["kind"], "confirmation_required")
+        self.assertEqual(response["data"]["action"]["name"], "Создать операцию кассы")
+        self.assertNotIn("input_schema", response["data"]["action"])
         self.assertEqual(gateway.call_count, 4)
         response = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 1})
         self.assertEqual(response["text"], "Операция выполнена.")
