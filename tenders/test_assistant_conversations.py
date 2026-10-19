@@ -286,7 +286,82 @@ class AssistantFunctionCallingTests(TestCase):
 
         self.assertEqual(response["kind"], "tool_result")
         self.assertIn("Уточните", response["text"])
-        self.assertIn("сообщения пользователя", gateway.call_args_list[4].args[0][-2]["content"])
+        self.assertIn("опираться на слова пользователя", gateway.call_args_list[4].args[0][-2]["content"])
+
+    @patch("tenders.assistant_agent.timezone.localdate", return_value=date(2026, 10, 19))
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_normalised_action_text_reaches_one_confirmation_card(self, gateway, _preflight, _today):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": "Создам поступление по кассе."}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
+                "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "capability", "type": "function", "function": {
+                "name": "assistant_select_capability", "arguments": json.dumps({"capability": "cash.transaction_create"}),
+            }}]},
+            {"role": "assistant", "content": "Проверьте операцию.", "tool_calls": [{"id": "create", "type": "function", "function": {
+                "name": "cash_transaction_create", "arguments": json.dumps({
+                    "operation_date": "2026-10-19", "account": "card", "direction": "income", "amount": 10,
+                    "reason": "Распечатка 1 листа А4 4+4",
+                }),
+            }}]},
+        ]
+
+        response = respond(self.conversation, self.user, "Запиши за сегодня приход на карту 10р за распечатку 1 иста А4 4+4")[-1]
+
+        self.assertEqual(response["kind"], "confirmation_required")
+        self.assertEqual(response["data"]["arguments"]["reason"], "Распечатка 1 листа А4 4+4")
+        self.assertEqual(response["data"]["arguments"]["operation_date"], "2026-10-19")
+        self.assertEqual(gateway.call_count, 4)
+        self.assertEqual(len(response["data"]["action"]["arguments"]), 5)
+
+    def test_action_text_normalisation_accepts_typos_case_spacing_and_punctuation(self):
+        from .assistant_agent import _validate_action_text_sources
+        from .assistant_tools import available_tools
+        tool = next(item for item in available_tools(self.user) if item["id"] == "cash.transaction_create")
+
+        _validate_action_text_sources(tool, {"reason": "Покупка коробок"}, {
+            "messages": [{"role": "user", "content": "  пакупка   каробок!!!  "}],
+        })
+
+    def test_action_text_normalisation_is_generic_for_another_registered_action(self):
+        from .assistant_agent import _validate_action_text_sources
+        from .assistant_tools import available_tools
+        tool = next(item for item in available_tools(self.user) if item["id"] == "provider.create")
+
+        _validate_action_text_sources(tool, {"name": "Атекс"}, {
+            "messages": [{"role": "user", "content": "Создай контрагента Атексс."}],
+        })
+
+    def test_action_text_normalisation_rejects_new_business_facts_and_ambiguous_short_words(self):
+        from .assistant_agent import _validate_action_text_sources
+        from .assistant_tools import AssistantToolError, available_tools
+        tool = next(item for item in available_tools(self.user) if item["id"] == "cash.transaction_create")
+        state = {"messages": [{"role": "user", "content": "Покупка бумаги за 10 рублей"}]}
+
+        with self.assertRaises(AssistantToolError):
+            _validate_action_text_sources(tool, {"reason": "Покупка бумаги для ООО Ромашка"}, state)
+        with self.assertRaises(AssistantToolError):
+            _validate_action_text_sources(tool, {"reason": "Покупка не бумаги"}, state)
+
+    def test_typed_action_arguments_do_not_require_serialized_literals_in_user_text(self):
+        from .assistant_agent import _validate_action_text_sources
+        from .assistant_tools import available_tools
+        tool = next(item for item in available_tools(self.user) if item["id"] == "cash.transaction_create")
+
+        _validate_action_text_sources(tool, {
+            "operation_date": "2026-10-19", "account": "card", "direction": "income", "amount": 10,
+            "reason": "Распечатка",
+        }, {"messages": [{"role": "user", "content": "Сегодня внеси приход на карту десять рублей за распечатку"}]})
+
+    @patch("tenders.assistant_agent.timezone.localdate", return_value=date(2026, 10, 19))
+    def test_system_prompt_exposes_application_date_for_relative_dates(self, _today):
+        from .assistant_agent import _system_prompt
+
+        self.assertIn("2026-10-19", _system_prompt(self.user, {"capability_map_pending": False}))
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")

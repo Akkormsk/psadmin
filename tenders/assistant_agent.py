@@ -1,7 +1,8 @@
 """Standard OpenAI Function Calling loop for PSADMIN."""
 from __future__ import annotations
-import json, os
+import json, os, re
 from urllib.request import Request, urlopen
+from django.utils import timezone
 from .assistant_tools import (
     AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_map_text, confirmation_arguments,
     execute_tool, openai_functions, validate_tool_call,
@@ -74,7 +75,11 @@ def _history(conversation):
 
 
 def _system_prompt(user, state):
-    prompt = _SYSTEM_RULES
+    prompt = (
+        _SYSTEM_RULES
+        + f" The current application date is {timezone.localdate().isoformat()}; use this exact date when the user says today, never guess it. "
+        + "For a free-text action value, you may fix clear spelling, casing, spacing and punctuation, but never add a fact or change its meaning."
+    )
     if state.get("capability_map_pending"):
         purpose = "before the first plan" if not state.get("plan") else "before revising the current plan"
         return (
@@ -125,18 +130,82 @@ def _remember_user_message(state, message):
         state["messages"].append({"role": "user", "content": message})
 
 
+_SOURCE_TOKEN = re.compile(r"[\w]+", re.UNICODE)
+
+
+def _source_tokens(value):
+    return _SOURCE_TOKEN.findall(value.casefold())
+
+
+def _edit_distance(left, right):
+    """Small deterministic edit distance for one-token typo correction."""
+    if left == right:
+        return 0
+    if abs(len(left) - len(right)) > 1:
+        return 2
+    previous = list(range(len(right) + 1))
+    for index, left_char in enumerate(left, 1):
+        current = [index]
+        for column, right_char in enumerate(right, 1):
+            current.append(min(
+                current[-1] + 1, previous[column] + 1,
+                previous[column - 1] + (left_char != right_char),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def _normalised_text_is_grounded(value, user_texts):
+    """Accept only a conservative, ordered normalisation of user wording.
+
+    This is not fuzzy semantic matching: every output token must come from a
+    user message in the same order.  Numbers and short words must match
+    exactly; a single edit is allowed only for longer alphabetic words, which
+    covers ordinary typos and grammatical endings without permitting a new
+    amount, identifier, counterparty or condition.
+    """
+    candidate = _source_tokens(value)
+    if not candidate:
+        return False
+    for text in user_texts:
+        source = _source_tokens(text)
+        position = 0
+        for token in candidate:
+            matched = False
+            for index in range(position, len(source)):
+                original = source[index]
+                exact = token == original
+                typo = (
+                    token.isalpha() and original.isalpha()
+                    and min(len(token), len(original)) >= 4
+                    and _edit_distance(token, original) == 1
+                )
+                if exact or typo:
+                    position = index + 1
+                    matched = True
+                    break
+            if not matched:
+                break
+        else:
+            return True
+    return False
+
+
+def _is_free_user_text(declaration):
+    if isinstance(declaration, dict):
+        return declaration.get("source_from_user") is True
+    return isinstance(declaration, str) and declaration.rstrip("?") == "string"
+
+
 def _validate_action_text_sources(tool, arguments, state):
-    """A free text write value must be copied from a user message, not invented."""
+    """Keep free text grounded in user input while allowing safe normalisation."""
     user_texts = [item.get("content", "") for item in state["messages"] if item.get("role") == "user"]
     for name, declaration in tool["input_schema"].items():
-        requires_source = (isinstance(declaration, str) and declaration.rstrip("?") == "string") or (
-            isinstance(declaration, dict) and declaration.get("source_from_user") is True
-        )
-        if not requires_source:
+        if not _is_free_user_text(declaration):
             continue
         value = arguments.get(name)
-        if value not in (None, "") and not any(value in text for text in user_texts):
-            raise AssistantToolError("Текст для действия нужно получить из сообщения пользователя")
+        if value not in (None, "") and (not isinstance(value, str) or not _normalised_text_is_grounded(value, user_texts)):
+            raise AssistantToolError("Текст действия должен опираться на слова пользователя; новое существенное значение нужно уточнить")
 
 
 def _compact_memory(value, depth=0):

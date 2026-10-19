@@ -2171,6 +2171,7 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-card button:hover { background:var(--accent); }
 .assistant-card button:disabled { opacity:.55; cursor:wait; }
 .assistant-card__actions { display:flex; flex-wrap:wrap; gap:8px; }
+.assistant-card__actions button { width:132px; min-height:42px; justify-self:auto; }
 .assistant-card__hint { margin:0; color:var(--ink-2); font-weight:700; }
 .assistant-card__notice { margin:0; color:var(--ink-3); font-size:11px; line-height:1.45; }
 .assistant-card__details { display:grid; gap:8px; margin:0; padding:10px; border-radius:8px; background:var(--tint-neutral); font-size:12px; }
@@ -2186,7 +2187,8 @@ details.training-catalog-review > summary small { color:var(--ink-3); font-weigh
 .assistant-card__error { margin:0; color:var(--negative-ink); font-size:11px; font-weight:700; }
 body.assistant-open .tender-requirements-overlay { right:min(480px,calc(100vw - 32px)); }
 body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - min(480px,calc(100vw - 32px)) - 16px)); }
-@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:12px; bottom:16px; } .assistant-launcher span:last-child { max-width:86px; opacity:1; } .assistant-card__details > div { grid-template-columns:1fr; gap:3px; } .assistant-card__details dd, .assistant-card__detail-items, .assistant-card__detail-items li { justify-items:start; justify-content:start; text-align:left; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
+@media (max-width:700px) { .assistant-drawer { width:100vw; } .assistant-launcher { right:12px; bottom:16px; } .assistant-launcher span:last-child { max-width:86px; opacity:1; } .assistant-card__details > div { grid-template-columns:1fr; gap:3px; } .assistant-card__details dd, .assistant-card__detail-items, .assistant-card__detail-items li { justify-items:start; justify-content:start; text-align:left; } .assistant-card__actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } .assistant-card__actions button { width:100%; } body.assistant-open .tender-requirements-overlay { right:0; } body.assistant-open .tender-requirements-overlay:not(.is-open) { display:none; } }
+@media (max-width:360px) { .assistant-card__actions { grid-template-columns:1fr; } }
 
 .provider-calculator-page { max-width:900px; padding-top:40px; }
 .provider-calculator-page__header { max-width:720px; margin:0 0 22px; }
