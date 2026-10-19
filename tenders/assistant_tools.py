@@ -215,6 +215,41 @@ def available_capabilities(user, area_id: str) -> list[dict[str, Any]]:
     return sorted([*resources, *actions], key=lambda item: (item["name"], item["id"]))
 
 
+def available_capability_map(user) -> list[dict[str, Any]]:
+    """Compact discovery view of the existing registry, grouped by area."""
+    return [
+        {
+            "id": area["id"],
+            "name": area["name"],
+            "description": area["description"],
+            "capabilities": [
+                {
+                    key: capability[key]
+                    for key in ("id", "kind", "name", "description", "requires_confirmation")
+                }
+                for capability in available_capabilities(user, area["id"])
+            ],
+        }
+        for area in available_areas(user)
+    ]
+
+
+def capability_map_text(capability_map: list[dict[str, Any]]) -> str:
+    """Render the discovery view without repeating JSON keys for every item."""
+    sections = []
+    for area in capability_map:
+        capabilities = "\n".join(
+            f"- {item['id']} | {item['kind']} | {item['name']} — {item['description']}"
+            + (" | confirmation required" if item["requires_confirmation"] else "")
+            for item in area["capabilities"]
+        )
+        sections.append(
+            f"[{area['id']}] {area['name']} — {area['description']}"
+            + (f"\n{capabilities}" if capabilities else "\n- no available capabilities")
+        )
+    return "\n".join(sections)
+
+
 def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
     _discover_app_actions()
     tool = _TOOLS.get(identifier)

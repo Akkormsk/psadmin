@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os
 from urllib.request import Request, urlopen
 from .assistant_tools import (
-    AssistantToolError, available_areas, available_capabilities, available_resources, available_tools,
+    AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_map_text,
     execute_tool, openai_functions, validate_tool_call,
 )
 from .assistant_read import present_result, reuse_result
@@ -58,12 +58,14 @@ def _new_state(conversation, user, message, attachments):
     history = _history(conversation)
     if not history or history[-1] != {"role": "user", "content": message}:
         history.append({"role": "user", "content": message})
-    areas = "; ".join(f'{item["id"]}: {item["name"]} — {item["description"]}' for item in available_areas(user))
+    capability_map = capability_map_text(available_capability_map(user))
     messages = [{"role": "system", "content": (
         "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. "
-        "For a request about PSADMIN data or an operation, first create a concise internal plan with assistant.plan before any business tool. "
-        "Use the available business areas, then one compact capability list, then open only the one capability needed for the next step. "
-        f"Available business areas: {areas}. "
+        "For a request about PSADMIN data or an operation, first inspect the compact capability map below. "
+        "Then create a concise preliminary plan with assistant.plan that names the needed capability IDs before any business tool. "
+        "Only after the plan, select the needed area and capability; this opens the detailed schema for just that capability. "
+        "Do not claim that a capability is unavailable before checking this map. "
+        f"Capability map: {capability_map}. "
         "After every tool result, compare it with the user's whole request and the current plan. Continue with the next required step; update the plan only if the route materially changes. "
         "Use actual tool results, and use backend aggregates for money and quantities. Never invent facts, fields, IDs, values, or calculations. "
         "If several business interpretations or records are equally plausible, first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "

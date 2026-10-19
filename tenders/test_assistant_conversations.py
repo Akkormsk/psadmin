@@ -33,6 +33,14 @@ class AssistantFunctionCallingTests(TestCase):
             response = reply(self.conversation, self.user, "Покажи последнюю операцию")
         self.assertEqual(response["text"], "Последняя операция: 10. Сумма: 10.")
         self.assertEqual(gateway.call_count, 5)
+        initial_prompt = gateway.call_args_list[0].args[0][0]["content"]
+        self.assertIn("Capability map:", initial_prompt)
+        self.assertIn("read:cash.transactions", initial_prompt)
+        self.assertNotIn('"properties"', initial_prompt)
+        self.assertEqual(
+            {item["function"]["name"] for item in gateway.call_args_list[0].args[1]},
+            {"assistant_plan", "assistant_finish"},
+        )
         self.assertEqual(execute.call_args.args[0], "read")
         messages = gateway.call_args_list[4].args[0]
         self.assertEqual(messages[-2]["role"], "tool")

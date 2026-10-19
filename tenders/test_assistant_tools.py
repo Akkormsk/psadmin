@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from datetime import date
 
-from .assistant_tools import AssistantToolConfirmationRequired, available_areas, available_capabilities, available_tools, capability_issues, execute_tool, openai_functions, required_input_names
+from .assistant_tools import AssistantTool, AssistantToolConfirmationRequired, available_areas, available_capability_map, available_capabilities, available_tools, capability_issues, capability_map_text, execute_tool, openai_functions, register_tool, required_input_names
 from .models import CatalogMatchDecision, ProcessDefinition, TenderKnowledgeSource
 
 
@@ -230,6 +230,54 @@ class AssistantToolRegistryTests(TestCase):
             "type": "object", "properties": {"answer": {"type": "string", "minLength": 1}},
             "required": ["answer"], "additionalProperties": False,
         })
+
+    def test_capability_map_exposes_all_permitted_capabilities_without_schemas(self):
+        capability_map = available_capability_map(self.admin)
+        cash = next(item for item in capability_map if item["id"] == "cash")
+        transaction_read = next(item for item in cash["capabilities"] if item["id"] == "read:cash.transactions")
+        transaction_create = next(item for item in cash["capabilities"] if item["id"] == "cash.transaction_create")
+
+        self.assertEqual(transaction_read["kind"], "read")
+        self.assertTrue(transaction_create["requires_confirmation"])
+        self.assertEqual(
+            set(transaction_read),
+            {"id", "kind", "name", "description", "requires_confirmation"},
+        )
+        self.assertNotIn("input_schema", json.dumps(capability_map, ensure_ascii=False))
+        self.assertNotIn("properties", json.dumps(capability_map, ensure_ascii=False))
+        rendered = capability_map_text(capability_map)
+        self.assertIn("read:cash.transactions", rendered)
+        self.assertLess(len(rendered.encode()), len(json.dumps(capability_map, ensure_ascii=False).encode()))
+
+    def test_capability_map_updates_from_registry_and_hides_unavailable_tools(self):
+        from . import assistant_tools
+
+        public = AssistantTool(
+            "test.map_public", "Тестовая публичная возможность", "Проверка динамической карты.",
+            {"value": "string"}, True, False, False, lambda _user, _payload: {}, areas=("cash",),
+        )
+        private = AssistantTool(
+            "test.map_private", "Тестовая закрытая возможность", "Не должна попасть обычному пользователю.",
+            {"value": "string"}, True, False, True, lambda _user, _payload: {}, areas=("cash",),
+        )
+        try:
+            register_tool(public)
+            register_tool(private)
+            admin_ids = {
+                item["id"] for area in available_capability_map(self.admin)
+                for item in area["capabilities"]
+            }
+            user_ids = {
+                item["id"] for area in available_capability_map(self.user)
+                for item in area["capabilities"]
+            }
+            self.assertIn(public.identifier, admin_ids)
+            self.assertIn(private.identifier, admin_ids)
+            self.assertIn(public.identifier, user_ids)
+            self.assertNotIn(private.identifier, user_ids)
+        finally:
+            assistant_tools._TOOLS.pop(public.identifier, None)
+            assistant_tools._TOOLS.pop(private.identifier, None)
 
     def test_unplanned_turn_exposes_only_plan_and_finish(self):
         definitions, names = openai_functions(self.admin, planned=False)
