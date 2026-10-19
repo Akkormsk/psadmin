@@ -8,6 +8,7 @@ urlpatterns = [
     path("assistant/conversations/clear/", assistant_ui.conversations_clear, name="assistant_conversations_clear"),
     path("assistant/conversations/new/", assistant_ui.conversation_new, name="assistant_conversation_new"),
     path("assistant/conversations/<int:conversation_id>/", assistant_ui.conversation_detail, name="assistant_conversation_detail"),
+    path("assistant/conversations/<int:conversation_id>/debug/", assistant_ui.conversation_debug, name="assistant_conversation_debug"),
     path("assistant/conversations/<int:conversation_id>/message/", assistant_ui.conversation_message, name="assistant_conversation_message"),
     path("assistant/conversations/<int:conversation_id>/attachments/", assistant_ui.conversation_attachment, name="assistant_conversation_attachment"),
     path("assistant/conversations/<int:conversation_id>/actions/<int:event_id>/confirm/", assistant_ui.conversation_action_confirm, name="assistant_conversation_action_confirm"),

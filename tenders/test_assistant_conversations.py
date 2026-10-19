@@ -4,8 +4,40 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 
-from .assistant_conversations import create_conversation, respond
+from .assistant_conversations import add_assistant_message, add_debug_event, create_conversation, respond
+
+
+class AssistantConversationUiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_superuser("assistant-ui", "assistant-ui@example.test", "password")
+        self.other = get_user_model().objects.create_superuser("assistant-other", "assistant-other@example.test", "password")
+        self.conversation = create_conversation(self.user)
+        add_assistant_message(self.conversation, "Покажи операции")
+        add_debug_event(self.conversation, "function_call.request", event_input={"trace": "x" * 20_000})
+
+    def test_conversation_detail_excludes_debug_journal(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("assistant_conversation_detail", args=[self.conversation.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("debug_journal", response.json())
+        self.assertNotIn("trace", response.content.decode())
+
+    def test_debug_journal_has_a_separate_owner_only_endpoint(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("assistant_conversation_debug", args=[self.conversation.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["debug_journal"][0]["input"]["trace"], "x" * 20_000)
+        self.client.force_login(self.other)
+        self.assertEqual(
+            self.client.get(reverse("assistant_conversation_debug", args=[self.conversation.pk])).status_code,
+            404,
+        )
 
 
 class AssistantFunctionCallingTests(TestCase):

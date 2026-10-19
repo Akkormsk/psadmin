@@ -47,7 +47,15 @@ def conversation_detail(request, conversation_id):
     conversation = conversation_for_user(request.user, conversation_id)
     if not conversation:
         return JsonResponse({"detail": "Беседа не найдена"}, status=404)
-    return JsonResponse({"conversation": serialize_conversation(conversation), "messages": serialize_messages(conversation), "debug_journal": serialize_debug_journal(conversation)})
+    return JsonResponse({"conversation": serialize_conversation(conversation), "messages": serialize_messages(conversation)})
+
+
+@login_required
+def conversation_debug(request, conversation_id):
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    return JsonResponse({"debug_journal": serialize_debug_journal(conversation)})
 
 
 @login_required
