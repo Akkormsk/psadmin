@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -187,11 +188,12 @@ def add_debug_event(conversation, stage, *, event_input=None, event_output=None,
 
 
 def _add_message(conversation, user, role, text, kind="text", data=None, context=None):
+    data = json.loads(json.dumps(data or {}, ensure_ascii=False, default=str))
     return OwnerFeedbackEvent.objects.create(
         interaction=conversation,
         actor=user if role == "user" else None,
         raw_text=text,
-        payload={"role": role, "kind": kind, "data": data or {}, "context": context or {}},
+        payload={"role": role, "kind": kind, "data": data, "context": context or {}},
         scope="assistant_conversation",
     )
 

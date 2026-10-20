@@ -84,6 +84,112 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
+    def test_m91_simple_read_uses_plan_read_finish_and_display_values(self, gateway, _preflight):
+        from cash.models import CashTransaction
+        CashTransaction.objects.create(
+            operation_date=date(2026, 10, 20), account="cash", direction="expense",
+            amount="1250", reason="Покупка мыла", created_by=self.user,
+        )
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать три операции", "steps": [{
+                    "id": "s1", "capability_id": "read:cash.transactions", "objective": "Получить операции",
+                    "expected_result": "Три последние операции с датой, суммой, счётом и основанием",
+                }]}}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {
+                "name": "read_cash_transactions", "arguments": json.dumps({"plan": {
+                    "fields": ["operation_date", "amount", "account", "reason"], "order_by": ["-operation_date"], "limit": 3,
+                }}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "Последняя операция: Наличные, 1250 рублей."}),
+            }}]},
+        ]
+
+        response = respond(self.conversation, self.user, "Покажи три последние операции по кассе: дату, сумму, счёт и основание")[-1]
+
+        self.assertEqual(gateway.call_count, 3)
+        self.assertIn("Наличные", response["text"])
+        read_step = response["data"]["steps"][-1]
+        self.assertEqual(read_step["result"]["display"]["records"][0]["account"], "Наличные")
+        for call in gateway.call_args_list:
+            self.assertNotIn("assistant_select_area", [item["function"]["name"] for item in call.args[1]])
+            self.assertNotIn("assistant_select_capability", [item["function"]["name"] for item in call.args[1]])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_m91_expenses_and_sum_are_one_read_step_without_calculator(self, gateway, _preflight):
+        from cash.models import CashTransaction
+        for direction, amount in (("expense", "100"), ("expense", "250"), ("income", "900")):
+            CashTransaction.objects.create(
+                operation_date=date(2026, 9, 10), account="cash", direction=direction,
+                amount=amount, reason="Тест", created_by=self.user,
+            )
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать сентябрьские расходы и сумму", "steps": [{
+                    "id": "s1", "capability_id": "read:cash.transactions", "objective": "Получить расходы и сумму",
+                    "expected_result": "Список расходов за сентябрь и общая сумма",
+                }]}}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {
+                "name": "read_cash_transactions", "arguments": json.dumps({"plan": {
+                    "fields": ["operation_date", "amount", "account", "reason"],
+                    "filters": [
+                        {"field": "direction", "op": "eq", "value": "expense"},
+                        {"field": "operation_date", "op": "gte", "value": "2026-09-01"},
+                        {"field": "operation_date", "op": "lt", "value": "2026-10-01"},
+                    ], "aggregates": [{"op": "sum", "field": "amount"}], "order_by": ["-operation_date"], "limit": 20,
+                }}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "За сентябрь два расхода на общую сумму 350 рублей."}),
+            }}]},
+        ]
+
+        response = respond(self.conversation, self.user, "Покажи расходы по кассе за сентябрь, а затем посчитай их общую сумму")[-1]
+
+        self.assertEqual(gateway.call_count, 3)
+        read = response["data"]["steps"][-1]["result"]
+        self.assertEqual(read["aggregates"]["sum_amount"], "350")
+        self.assertEqual(read["query"]["filters"][0], {"field": "direction", "op": "eq", "value": "expense"})
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_direct_read_then_action_keeps_the_next_capability_until_confirmation(self, gateway, _preflight):
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Проверить и добавить операцию", "steps": [
+                    {"id": "s1", "capability_id": "read:cash.transactions", "objective": "Проверить операции", "expected_result": "Список операций"},
+                    {"id": "s2", "capability_id": "cash.transaction_create", "objective": "Подготовить операцию", "expected_result": "Карточка подтверждения"},
+                ]}}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {
+                "name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "create", "type": "function", "function": {
+                "name": "cash_transaction_create", "arguments": json.dumps({
+                    "operation_date": "2026-10-20", "account": "cash", "direction": "expense", "amount": 10, "reason": "Тест",
+                }),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "Операция создана."}),
+            }}]},
+        ]
+        read_result = {"entity": "cash.CashTransaction", "query": {}, "total_count": 0,
+                       "returned_count": 0, "aggregates": {}, "records": [], "sources": []}
+        with patch("tenders.assistant_agent.execute_tool", return_value=read_result):
+            from .assistant_agent import continue_after_confirmation, reply
+            prepared = reply(self.conversation, self.user, "Проверь операции и добавь расход 10 рублей за Тест")
+            finished = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 2})
+
+        self.assertEqual(prepared["kind"], "confirmation_required")
+        self.assertEqual(finished["text"], "Операция создана.")
+        self.assertEqual(gateway.call_count, 4)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
     def test_cash_resource_executes_the_real_universal_read(self, gateway, _preflight):
         from cash.models import CashTransaction
 

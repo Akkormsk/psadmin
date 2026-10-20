@@ -4,7 +4,7 @@ import json, os, re
 from urllib.request import Request, urlopen
 from django.utils import timezone
 from .assistant_tools import (
-    AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_map_text, confirmation_arguments,
+    AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_for_user, capability_map_text, confirmation_arguments,
     execute_tool, openai_functions, validate_tool_call,
 )
 from .assistant_read import present_result, reuse_result
@@ -33,6 +33,7 @@ _SYSTEM_RULES = (
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
     "When an action has all required values, call it immediately to prepare the confirmation card; never ask for a separate textual confirmation first. "
+    "READ results include raw records for backend continuity and a metadata-derived display view; use the display view's labels and values in user-facing answers, never raw choice codes. "
     "Use assistant.finish only for a final answer after the active plan's required steps have actually completed. "
     "For a needed clarification, ask one ordinary Russian question as text and wait without finishing the task."
 )
@@ -89,7 +90,7 @@ def _system_prompt(user, state):
             prompt
             + " Inspect the compact capability map below " + purpose + ". "
             + "Then save a concise plan through assistant.plan that names the needed capability IDs before any business tool. "
-            + "Only after the plan, select the needed area and capability; this opens the detailed schema for just that capability. "
+            + "After the plan, call its current capability directly; its detailed schema opens automatically. "
             + "Do not claim that a capability is unavailable before checking this map. "
             + "Capability map: " + capability_map_text(available_capability_map(user)) + "."
         )
@@ -125,7 +126,7 @@ def _new_state(conversation, user, message, attachments):
     return state
 
 def _save(conversation, state):
-    conversation.context["agent_run"] = state
+    conversation.context["agent_run"] = json.loads(json.dumps(state, ensure_ascii=False, default=str))
     conversation.save(update_fields=["context"])
 
 def _remember_user_message(state, message):
@@ -417,12 +418,13 @@ def _normalise_plan(value, user, previous=None):
         if not isinstance(step, dict):
             raise AssistantToolError("Шаг плана имеет неверный формат")
         identifier, capability_id, objective = step.get("id"), step.get("capability_id"), step.get("objective")
-        if not all(isinstance(item, str) and item.strip() for item in (identifier, capability_id, objective)):
-            raise AssistantToolError("У каждого шага плана нужны идентификатор, возможность и цель")
+        expected_result = step.get("expected_result", objective)
+        if not all(isinstance(item, str) and item.strip() for item in (identifier, capability_id, objective, expected_result)):
+            raise AssistantToolError("У каждого шага плана нужны идентификатор, возможность, цель и ожидаемый результат")
         if identifier in seen or capability_id not in allowed:
             raise AssistantToolError("План содержит недоступную или повторяющуюся возможность")
         seen.add(identifier)
-        normalised.append({"id": identifier, "capability_id": capability_id, "objective": objective})
+        normalised.append({"id": identifier, "capability_id": capability_id, "objective": objective, "expected_result": expected_result})
     return {"version": int((previous or {}).get("version", 0)) + 1, "goal": goal.strip(), "steps": normalised}
 
 
@@ -438,14 +440,47 @@ def _active_plan_step(state, capability_id):
                  if item["capability_id"] == capability_id and item["id"] not in completed), None)
 
 
+def _activate_next_plan_step(user, state):
+    plan = state.get("plan")
+    if not isinstance(plan, dict):
+        return
+    completed = {
+        item.get("plan_step_id") for item in state.get("steps", [])
+        if item.get("status") == "completed" and item.get("plan_version") == plan.get("version")
+    }
+    next_step = next((item for item in plan.get("steps", []) if item["id"] not in completed), None)
+    if next_step is None:
+        state.pop("active_area", None)
+        state.pop("active_capability", None)
+        state.pop("active_plan_step_id", None)
+        return
+    area, capability = capability_for_user(user, next_step["capability_id"])
+    if area is None or capability is None:
+        raise AssistantToolError("План содержит недоступную возможность")
+    state["active_area"] = area["id"]
+    state["active_capability"] = capability["id"]
+    state["active_plan_step_id"] = next_step["id"]
+
+
+def _has_execution_evidence(capability_id, result):
+    if not isinstance(result, dict):
+        return False
+    if capability_id.startswith("read:"):
+        return isinstance(result.get("entity"), str) and all(
+            key in result for key in ("records", "aggregates", "total_count")
+        )
+    return bool(result)
+
+
 def _record_execution(state, identifier, result, *, status="completed", error=None):
+    safe_result = json.loads(json.dumps(result, ensure_ascii=False, default=str)) if error is None else None
     state["steps"].append({
         "plan_version": state["plan"].get("version") if isinstance(state.get("plan"), dict) else None,
         "plan_step_id": state.pop("active_plan_step_id", None),
         "tool_id": identifier,
         "arguments": state.pop("active_arguments", None),
         "status": status,
-        "result": result if error is None else None,
+        "result": safe_result,
         "error": error,
     })
 
@@ -458,7 +493,9 @@ def _missing_plan_steps(state):
         return ["обновлённый план"]
     completed = {
         item.get("plan_step_id") for item in state.get("steps", [])
-        if item.get("status") == "completed" and item.get("plan_version") == plan.get("version")
+        if item.get("status") == "completed"
+        and item.get("plan_version") == plan.get("version")
+        and _has_execution_evidence(item.get("tool_id", ""), item.get("result"))
     }
     return [item["id"] for item in plan.get("steps", []) if item["id"] not in completed]
 
@@ -511,6 +548,7 @@ def _run(conversation, user, state):
                 previous_plan = state.get("plan") if isinstance(state.get("plan"), dict) else None
                 state["plan"] = _normalise_plan(arguments.get("plan"), user, previous_plan)
                 state.pop("waiting_user", None)
+                _activate_next_plan_step(user, state)
                 if not map_sent:
                     state["capability_map_pending"] = True
                 _refresh_system_prompt(user, state)
@@ -578,10 +616,9 @@ def _run(conversation, user, state):
             if identifier.startswith("read:") or identifier in registry:
                 state["active_arguments"] = arguments
                 _record_execution(state, identifier, result)
+                _activate_next_plan_step(user, state)
             else:
                 state["steps"].append({"tool_id": identifier, "result": result, "status": "completed"})
-            if identifier.startswith("read:") or identifier in registry:
-                state.pop("active_capability", None)
             content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
         except (AssistantToolError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -617,7 +654,7 @@ def continue_after_confirmation(conversation, user, tool_id, result):
     state["active_plan_step_id"] = waiting.get("plan_step_id")
     state["active_arguments"] = waiting.get("arguments")
     _record_execution(state, tool_id, result)
-    state.pop("active_capability", None)
+    _activate_next_plan_step(user, state)
     state["messages"].append({"role": "tool", "tool_call_id": waiting["tool_call_id"], "content": json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)})
     _save(conversation, state); return _run(conversation, user, state)
 
@@ -632,7 +669,7 @@ def continue_after_cancellation(conversation, user, tool_id):
     state["active_plan_step_id"] = waiting.get("plan_step_id")
     state["active_arguments"] = waiting.get("arguments")
     _record_execution(state, tool_id, None, status="cancelled", error="Действие отменено пользователем")
-    state.pop("active_capability", None)
+    _activate_next_plan_step(user, state)
     state["messages"].append({
         "role": "tool", "tool_call_id": waiting["tool_call_id"],
         "content": json.dumps({"ok": False, "cancelled": True, "error": "Действие отменено пользователем"}, ensure_ascii=False),

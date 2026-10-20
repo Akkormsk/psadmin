@@ -386,26 +386,62 @@ def describe_entity(identifier):
     }
 
 
+def _display_value(value, field):
+    for raw, label in field.flatchoices:
+        if value == raw or value == _json_safe_value(raw):
+            return str(label)
+    if isinstance(field, models.DateTimeField) and isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).strftime("%d.%m.%Y %H:%M")
+        except ValueError:
+            pass
+    if isinstance(field, models.DateField) and isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10]).strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    return _json_safe_value(value)
+
+
+def _with_display(result, model, fields):
+    paths = _paths(model, fields)
+    records = result.get("records") if isinstance(result.get("records"), list) else []
+    names = []
+    for record in records:
+        if isinstance(record, dict):
+            for name in record:
+                if name not in names:
+                    names.append(name)
+    result["display"] = {
+        "entity": str(model._meta.verbose_name),
+        "fields": [{"name": name, "label": str(paths[name]["field"].verbose_name) if name in paths else name}
+                   for name in names],
+        "records": [
+            {
+                name: _display_value(value, paths[name]["field"]) if name in paths else _json_safe_value(value)
+                for name, value in record.items()
+            }
+            for record in records if isinstance(record, dict)
+        ],
+        "aggregates": {name: _json_safe_value(value) for name, value in (result.get("aggregates") or {}).items()},
+    }
+    return result
+
+
 def present_result(result):
     """Render only values that a validated READ actually returned."""
     if not isinstance(result, dict):
         return "Данные получены."
-    try:
-        model, _entity_name, fields = _entity(result.get("entity"))
-        paths = _paths(model, fields)
-    except ReadPlanError:
-        paths = {}
+    display = result.get("display") if isinstance(result.get("display"), dict) else {}
+    labels = {item.get("name"): item.get("label") for item in display.get("fields", []) if isinstance(item, dict)}
     lines = [f"Найдено записей: {result.get('total_count', 0)}."]
-    aggregates = result.get("aggregates") or {}
-    for name, value in aggregates.items():
+    for name, value in (display.get("aggregates") or result.get("aggregates") or {}).items():
         lines.append(f"{name}: {_json_safe_value(value)}.")
-    for record in (result.get("records") or [])[:MAX_ROWS]:
-        values = []
-        for name, value in record.items():
-            label = str(paths[name]["field"].verbose_name) if name in paths else name
-            values.append(f"{label}: {_json_safe_value(value)}")
-        if values:
-            lines.append("• " + "; ".join(values))
+    for record in (display.get("records") or result.get("records") or [])[:MAX_ROWS]:
+        if isinstance(record, dict):
+            values = [f"{labels.get(name, name)}: {_json_safe_value(value)}" for name, value in record.items()]
+            if values:
+                lines.append("• " + "; ".join(values))
     return "\n".join(lines)
 
 
@@ -605,7 +641,7 @@ def execute(user, plan):
         group_lookups = [item["lookup"] for item in groups]
         rows = list(qs.values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
         records = [{**{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(group_names, groups)}, **{key: _value(row[key]) for key in annotations}} for row in rows]
-        return {"entity": entity, "query": _query_summary(validated, order_by=group_names), "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}
+        return _with_display({"entity": entity, "query": _query_summary(validated, order_by=group_names), "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}, model, fields)
     summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
     limit = validated["limit"]
     value_lookups = [item["lookup"] for item in selected]
@@ -616,7 +652,7 @@ def execute(user, plan):
     rows = list(qs.order_by(*order_lookups).values(*value_lookups)[:limit])
     records = [{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(selected_names, selected)} for row in rows]
     sources = [{"entity": entity, "id": row["id"]} for row in records if row.get("id") is not None]
-    return {"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}
+    return _with_display({"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}, model, fields)
 
 
 def _cache_filter(value, operation, expected):
@@ -679,12 +715,12 @@ def reuse_result(user, plan, cached):
         elif operation == "max":
             aggregates[key] = _value(max(values)) if values else None
     records = [{name: row.get(name) for name in validated["selected_names"]} for row in rows[:validated["limit"]]]
-    return {
+    return _with_display({
         "entity": validated["entity"], "query": _query_summary(validated), "total_count": len(rows),
         "returned_count": len(records), "aggregates": aggregates, "records": records,
         "sources": [{"entity": validated["entity"], "id": row["id"]} for row in records if row.get("id") is not None],
         "source_scope": "cached complete result",
-    }
+    }, validated["model"], validated["fields"])
 
 
 def _query_summary(validated, *, order_by=None):

@@ -310,6 +310,7 @@ def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> lis
 
 def available_capability_map(user) -> list[dict[str, Any]]:
     """Compact discovery view of the existing registry, grouped by area."""
+    read_suffix = " Поддерживает фильтры, сортировку, группировку и агрегаты count/sum/avg/min/max по разрешённым полям."
     return [
         {
             "id": area["id"],
@@ -317,14 +318,26 @@ def available_capability_map(user) -> list[dict[str, Any]]:
             "description": area["description"],
             "capabilities": [
                 {
-                    key: capability[key]
-                    for key in ("id", "kind", "name", "description", "requires_confirmation")
+                    **{
+                        key: capability[key]
+                        for key in ("id", "kind", "name", "description", "requires_confirmation")
+                    },
+                    **({"description": capability["description"] + read_suffix} if capability["kind"] == "read" else {}),
                 }
                 for capability in available_capabilities(user, area["id"])
             ],
         }
         for area in available_areas(user)
     ]
+
+
+def capability_for_user(user, capability_id):
+    for area in available_areas(user):
+        capability = next((item for item in available_capabilities(user, area["id"])
+                           if item["id"] == capability_id), None)
+        if capability is not None:
+            return area, capability
+    return None, None
 
 
 def capability_map_text(capability_map: list[dict[str, Any]]) -> str:
@@ -516,6 +529,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
                             "id": {"type": "string", "minLength": 1},
                             "capability_id": {"type": "string", "minLength": 1},
                             "objective": {"type": "string", "minLength": 1},
+                            "expected_result": {"type": "string", "minLength": 1},
                         },
                         "additional_properties": False,
                     },
@@ -537,46 +551,16 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
     )
     definitions.append(definition)
     names[name] = "assistant.finish"
-
-    areas = available_areas(user)
-    area_schema = {"area": {"type": "string", "enum": [item["id"] for item in areas],
-                            "description": "; ".join(f'{item["id"]}: {item["name"]}' for item in areas)}}
-    name, definition = _function_definition(
-        "assistant.select_area",
-        "Выбирает раздел PSADMIN для запроса к данным или операции. Используй, если пользователь прямо назвал раздел или его нужно определить по смыслу запроса.",
-        area_schema,
-    )
-    definitions.append(definition)
-    names[name] = "assistant.select_area"
-
-    if area_id is None:
-        return definitions, names
-    if area_id not in {item["id"] for item in areas}:
-        raise AssistantToolError("Недоступный раздел PSADMIN")
-
-    capabilities = available_capabilities(user, area_id)
-    if capabilities:
-        capability_schema = {"capability": {"type": "string", "enum": [item["id"] for item in capabilities],
-                                              "description": "; ".join(
-                                                  f'{item["id"]}: {item["name"]} — {item["description"]}'
-                                                  + ("; требуется подтверждение" if item["requires_confirmation"] else "")
-                                                  for item in capabilities
-                                              )}}
-        name, definition = _function_definition(
-            "assistant.select_capability",
-            "Выбирает одну возможность внутри текущего раздела. Это открывает её подробные параметры для следующего вызова.",
-            capability_schema,
-        )
-        definitions.append(definition)
-        names[name] = "assistant.select_capability"
+    names["assistant_select_area"] = "assistant.select_area"
+    names["assistant_select_capability"] = "assistant.select_capability"
 
     capability_id = capability_id or (f"read:{resource_id}" if resource_id is not None else None)
     if capability_id is not None:
-        capability = next((item for item in capabilities if item["id"] == capability_id), None)
-        if capability is None:
+        area, capability = capability_for_user(user, capability_id)
+        if area is None or capability is None:
             raise AssistantToolError("Недоступная возможность раздела")
         if capability["kind"] == "read":
-            resource = next(item for item in available_resources(user, area_id) if item["id"] == capability["resource_id"])
+            resource = next(item for item in available_resources(user, area["id"]) if item["id"] == capability["resource_id"])
             identifier = capability["id"]
             description = f"Читает «{resource['name']}». {resource['description']} Используй только разрешённые поля и значения из схемы."
             schema = _resource_read_schema(resource)

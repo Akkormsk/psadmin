@@ -216,13 +216,13 @@ class AssistantToolRegistryTests(TestCase):
                 )
                 self.assertNotIn("entity", read["parameters"]["properties"]["plan"]["properties"])
 
-    def test_openai_tools_start_with_business_areas_not_django_entities(self):
+    def test_openai_tools_start_with_plan_and_finish_not_django_entities(self):
         definitions, names = openai_functions(self.admin)
 
-        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.finish", "assistant.select_area"})
-        area = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.select_area")
-        parameters = area["parameters"]
-        self.assertIn("cash", parameters["properties"]["area"]["enum"])
+        self.assertEqual(
+            {names[item["function"]["name"]] for item in definitions},
+            {"assistant.plan", "assistant.finish"},
+        )
 
         finish = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.finish")
         self.assertTrue(finish["strict"])
@@ -238,6 +238,7 @@ class AssistantToolRegistryTests(TestCase):
         transaction_create = next(item for item in cash["capabilities"] if item["id"] == "cash.transaction_create")
 
         self.assertEqual(transaction_read["kind"], "read")
+        self.assertIn("count/sum/avg/min/max", transaction_read["description"])
         self.assertTrue(transaction_create["requires_confirmation"])
         self.assertEqual(
             set(transaction_read),
@@ -317,7 +318,7 @@ class AssistantToolRegistryTests(TestCase):
         self.assertEqual(set(schema["properties"]), {"goal", "steps"})
         self.assertFalse(schema["additionalProperties"])
         step = schema["properties"]["steps"]["items"]
-        self.assertEqual(set(step["properties"]), {"id", "capability_id", "objective"})
+        self.assertEqual(set(step["properties"]), {"id", "capability_id", "objective", "expected_result"})
         self.assertFalse(step["additionalProperties"])
 
     def test_selected_capability_is_the_only_detailed_action_schema(self):
@@ -354,7 +355,7 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_openai_definitions_are_generated_from_the_registry(self):
         definitions, names = openai_functions(self.admin, area_id="cash", resource_id="cash.transactions")
-        self.assertEqual(len(names), len(definitions))
+        self.assertTrue(all(item["function"]["name"] in names for item in definitions))
         self.assertNotIn("cash_transaction_update", names)
         self.assertTrue(all(item["function"]["parameters"]["additionalProperties"] is False for item in definitions))
         read = next(item["function"] for item in definitions if names[item["function"]["name"]] == "read:cash.transactions")
@@ -529,22 +530,22 @@ class AssistantToolRegistryTests(TestCase):
         self.assertLess(total_new_filters, total_old_filters)
         self.assertLess(total_new_aggregates, total_old_aggregates)
 
-    def test_only_area_selection_is_published_before_context_is_known(self):
+    def test_no_navigation_tool_is_published_before_context_is_known(self):
         definitions, names = openai_functions(self.admin)
 
         self.assertNotIn("read", names)
         self.assertNotIn("cash_transaction_create", names)
-        self.assertEqual(len(definitions), 3)
-        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.finish", "assistant.select_area"})
+        self.assertEqual(len(definitions), 2)
+        self.assertNotIn("assistant_select_area", [item["function"]["name"] for item in definitions])
+        self.assertNotIn("assistant_select_capability", [item["function"]["name"] for item in definitions])
 
-    def test_opened_area_publishes_only_compact_capability_selection(self):
+    def test_opened_area_does_not_publish_navigation_or_action_schemas(self):
         definitions, names = openai_functions(self.admin, area_id="cash")
 
         self.assertNotIn("cash_transaction_create", names)
         self.assertEqual(names["assistant_select_capability"], "assistant.select_capability")
-        capability = next(item["function"] for item in definitions if item["function"]["name"] == "assistant_select_capability")
-        self.assertIn("cash.transaction_create", capability["parameters"]["properties"]["capability"]["enum"])
-        self.assertIn("read:cash.transactions", capability["parameters"]["properties"]["capability"]["enum"])
+        self.assertEqual(len(definitions), 2)
+        self.assertNotIn("assistant_select_capability", [item["function"]["name"] for item in definitions])
 
     def test_compact_capabilities_are_views_of_the_existing_registry(self):
         capabilities = available_capabilities(self.admin, "cash")
