@@ -299,6 +299,28 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
+    def test_legacy_saved_plan_cannot_finish_without_a_structured_replan(self, gateway, _preflight):
+        self.conversation.context["agent_run"] = {
+            "messages": [{"role": "system", "content": "old"}], "steps": [], "plan": "Старый план",
+        }
+        self.conversation.save(update_fields=["context"])
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "Готово."}),
+            }}]},
+            {"role": "assistant", "content": "Уточните следующий шаг."},
+        ]
+
+        from .assistant_agent import reply
+        response = reply(self.conversation, self.user, "Продолжай")
+
+        self.assertEqual(response["text"], "Уточните следующий шаг.")
+        self.assertIn("обновлённый план", gateway.call_args_list[1].args[0][-2]["content"])
+        self.conversation.refresh_from_db()
+        self.assertTrue(self.conversation.context["agent_run"]["plan"]["legacy"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
     def test_invalid_arguments_are_returned_to_model_as_tool_error(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "assistant_select_area", "arguments": "[]"}}]},

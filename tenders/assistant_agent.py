@@ -454,6 +454,8 @@ def _missing_plan_steps(state):
     plan = state.get("plan")
     if not isinstance(plan, dict):
         return []
+    if plan.get("legacy"):
+        return ["обновлённый план"]
     completed = {
         item.get("plan_step_id") for item in state.get("steps", [])
         if item.get("status") == "completed" and item.get("plan_version") == plan.get("version")
@@ -597,6 +599,10 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
     previous = conversation.context.get("agent_run")
     if isinstance(previous, dict) and not previous.get("waiting_confirmation"):
         state = previous
+        if isinstance(state.get("plan"), str) and state["plan"].strip():
+            state["plan"] = {
+                "version": 0, "goal": state["plan"].strip(), "steps": [], "legacy": True,
+            }
         state.pop("waiting_user", None)
         _remember_user_message(state, message)
     else:
