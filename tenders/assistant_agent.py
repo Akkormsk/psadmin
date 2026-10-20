@@ -175,10 +175,11 @@ def _normalised_text_is_grounded(value, user_texts):
             for index in range(position, len(source)):
                 original = source[index]
                 exact = token == original
+                allowed_edits = 2 if min(len(token), len(original)) >= 7 else 1
                 typo = (
                     token.isalpha() and original.isalpha()
                     and min(len(token), len(original)) >= 4
-                    and _edit_distance(token, original) == 1
+                    and 0 < _edit_distance(token, original) <= allowed_edits
                 )
                 if exact or typo:
                     position = index + 1
