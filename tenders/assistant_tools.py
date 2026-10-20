@@ -443,7 +443,7 @@ def _openai_type(declared):
                 schema = {"type": "array", "items": child}
             else:
                 schema, _ignored, compatible = _openai_type(kind or "object")
-        for key in ("description", "minimum", "maximum", "minLength", "maxLength", "enum"):
+        for key in ("description", "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "enum"):
             if key in value:
                 schema[key] = value[key]
         return schema, bool(value.get("required") is False), compatible
@@ -503,22 +503,40 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
 
     name, definition = _function_definition(
         "assistant.plan",
-        "Сохраняет краткий внутренний план выполнения задачи или его обновление. Вызывай до первого бизнес-инструмента и только при существенном изменении маршрута.",
-        {"plan": {"type": "string", "minLength": 1}},
+        "Сохраняет внутренний план выполнения задачи или его обновление. Каждый шаг должен ссылаться на опубликованную возможность PSADMIN. Вызывай до первого бизнес-инструмента и только при существенном изменении маршрута.",
+        {"plan": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string", "minLength": 1},
+                "steps": {
+                    "type": "array", "minItems": 1,
+                    "item": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "capability_id": {"type": "string", "minLength": 1},
+                            "objective": {"type": "string", "minLength": 1},
+                        },
+                        "additional_properties": False,
+                    },
+                },
+            },
+            "additional_properties": False,
+        }},
     )
     definitions.append(definition)
     names[name] = "assistant.plan"
 
+    if not planned:
+        return definitions, names
+
     name, definition = _function_definition(
         "assistant.finish",
-        "Передаёт окончательный ответ или уточняющий вопрос пользователю после завершения работы. Не используй для промежуточных результатов инструментов.",
+        "Передаёт окончательный ответ пользователю только после выполнения актуального плана. Не используй для вопросов, пауз или промежуточных результатов.",
         {"answer": {"type": "string", "minLength": 1}},
     )
     definitions.append(definition)
     names[name] = "assistant.finish"
-
-    if not planned:
-        return definitions, names
 
     areas = available_areas(user)
     area_schema = {"area": {"type": "string", "enum": [item["id"] for item in areas],

@@ -302,11 +302,23 @@ class AssistantToolRegistryTests(TestCase):
             "type": "array", "items": {"type": "integer"},
         })
 
-    def test_unplanned_turn_exposes_only_plan_and_finish(self):
+    def test_unplanned_turn_exposes_only_plan(self):
         definitions, names = openai_functions(self.admin, planned=False)
 
-        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.finish"})
-        self.assertEqual(len(definitions), 2)
+        self.assertEqual(set(names.values()), {"assistant.plan"})
+        self.assertEqual(len(definitions), 1)
+
+    def test_plan_schema_is_strict_and_has_structured_steps(self):
+        definitions, names = openai_functions(self.admin, planned=False)
+        plan = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.plan")
+        schema = plan["parameters"]["properties"]["plan"]
+
+        self.assertTrue(plan["strict"])
+        self.assertEqual(set(schema["properties"]), {"goal", "steps"})
+        self.assertFalse(schema["additionalProperties"])
+        step = schema["properties"]["steps"]["items"]
+        self.assertEqual(set(step["properties"]), {"id", "capability_id", "objective"})
+        self.assertFalse(step["additionalProperties"])
 
     def test_selected_capability_is_the_only_detailed_action_schema(self):
         definitions, names = openai_functions(
