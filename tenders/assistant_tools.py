@@ -513,10 +513,15 @@ def _resource_read_schema(resource):
 def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None, planned=True):
     """Expose one discovery layer or one selected capability at a time."""
     definitions, names = [], {}
+    capability_ids = sorted({
+        capability["id"]
+        for area in available_areas(user)
+        for capability in available_capabilities(user, area["id"])
+    })
 
     name, definition = _function_definition(
         "assistant.plan",
-        "Сохраняет внутренний план выполнения задачи или его обновление. Каждый шаг должен ссылаться на опубликованную возможность PSADMIN. Вызывай до первого бизнес-инструмента и только при существенном изменении маршрута.",
+        "Сохраняет внутренний план выполнения задачи или его обновление. Каждый capability_id должен точно выбрать опубликованную возможность, а не ID раздела. Вызывай до первого бизнес-инструмента и только при существенном изменении маршрута.",
         {"plan": {
             "type": "object",
             "properties": {
@@ -527,7 +532,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
                         "type": "object",
                         "properties": {
                             "id": {"type": "string", "minLength": 1},
-                            "capability_id": {"type": "string", "minLength": 1},
+                            "capability_id": {"type": "string", "enum": capability_ids},
                             "objective": {"type": "string", "minLength": 1},
                             "expected_result": {"type": "string", "minLength": 1},
                         },

@@ -129,8 +129,6 @@ def conversation_action_confirm(request, conversation_id, event_id):
                 result = execute_tool(data["tool_id"], request.user, data.get("arguments", {}), confirmed=True)
             except (KeyError, AssistantToolError) as exc:
                 return JsonResponse({"detail": str(exc)}, status=400)
-        if not cancelled:
-            add_assistant_message(conversation, "Действие выполнено.", "tool_result", {"tool_id": data["tool_id"], "result": result})
     try:
         continuation = (
             continue_after_cancellation(conversation, request.user, data["tool_id"])

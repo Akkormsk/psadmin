@@ -12,7 +12,6 @@ from .gateway_budget import preflight
 from .services import TenderAIError
 
 MAX_TOOL_CALLS = 8
-MAX_HISTORY_TOKENS = 1_200
 MAX_MEMORY_STRING_CHARS = 240
 MAX_MEMORY_ITEMS = 20
 MAX_MEMORY_SELECTIONS = 5
@@ -65,19 +64,6 @@ def _gateway(messages, tools):
     except Exception as exc:
         raise TenderAIError("Не удалось обратиться к AI Gateway.") from exc
 
-def _history(conversation):
-    events = list(conversation.feedback_events.filter(scope="assistant_conversation").order_by("-created_at", "-pk")[:20])
-    items = [{"role": (x.payload or {}).get("role", "user"), "content": x.raw_text} for x in reversed(events)]
-    selected, size = [], 0
-    for item in reversed(items):
-        item_size = max(1, len(str(item.get("content", ""))) // 4)
-        if selected and size + item_size > MAX_HISTORY_TOKENS:
-            break
-        selected.append(item)
-        size += item_size
-    return list(reversed(selected))
-
-
 def _system_prompt(user, state):
     prompt = (
         _SYSTEM_RULES
@@ -109,9 +95,6 @@ def _refresh_system_prompt(user, state):
 
 
 def _new_state(conversation, user, message, attachments):
-    history = _history(conversation)
-    if not history or history[-1] != {"role": "user", "content": message}:
-        history.append({"role": "user", "content": message})
     memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
     state = {"messages": [], "steps": [], "attachments": attachments or [], "capability_map_pending": True, "memory": memory}
     if memory["recent_selections"]:
@@ -122,7 +105,7 @@ def _new_state(conversation, user, message, attachments):
     memory_context = _memory_context(memory)
     if memory_context:
         state["messages"].append({"role": "system", "content": "Compact conversation memory: " + json.dumps(memory_context, ensure_ascii=False, default=str)})
-    state["messages"].extend(history)
+    state["messages"].append({"role": "user", "content": message})
     return state
 
 def _save(conversation, state):

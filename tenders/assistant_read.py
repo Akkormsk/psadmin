@@ -1,7 +1,7 @@
 """Validated, metadata-driven read-only ORM plans for the global assistant."""
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from inspect import cleandoc
 import json
@@ -13,6 +13,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Avg, Count, Max, Min, Sum, Q
+from django.db.models.functions import TruncDay, TruncMonth, TruncQuarter, TruncWeek, TruncYear
+from django.utils import timezone
 
 
 class ReadPlanError(Exception):
@@ -32,6 +34,15 @@ SCALAR_TYPES = (models.CharField, models.TextField, models.IntegerField, models.
 NUMERIC_TYPES = (models.IntegerField, models.DecimalField, models.FloatField)
 AGGREGATES = {"count": Count, "sum": Sum, "min": Min, "max": Max, "avg": Avg}
 OPS = {"eq", "contains", "gte", "gt", "lte", "lt", "in", "isnull"}
+DATE_GROUP_PERIODS = ("day", "week", "month", "quarter", "year")
+DATE_GROUP_LABELS = {
+    "day": "день", "week": "неделя", "month": "месяц",
+    "quarter": "квартал", "year": "год",
+}
+DATE_TRUNCS = {
+    "day": TruncDay, "week": TruncWeek, "month": TruncMonth,
+    "quarter": TruncQuarter, "year": TruncYear,
+}
 _AUTH_VALUE = re.compile(r"(?i)\\b(?:bearer|basic|api[-_ ]?key)\\s+[A-Za-z0-9._~+/=-]{8,}")
 _JWT_VALUE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _OPAQUE_VALUE = re.compile(r"^[A-Za-z0-9_+/=-]{40,}$")
@@ -155,7 +166,23 @@ def plan_contract(entity=None):
                 {"type": "string[]", "description": f"Поля сортировки: {scalar_labels}", "item": {"type": "string", "enum": sorted([name for name in scalar_paths] + [f"-{name}" for name in scalar_paths])}},
             ], "required": False},
             "aggregates": {"type": "object[]", "required": False, "item": {"any_of": _aggregate_contracts(scalar_paths)}},
-            "group_by": {"type": "string[]", "required": False, "description": f"Поля группировки: {scalar_labels}", "item": {"type": "string", "enum": sorted(scalar_paths)}},
+            "group_by": {
+                "type": "object[]", "required": False,
+                "description": f"Поля группировки: {scalar_labels}. Даты можно группировать по day/week/month/quarter/year.",
+                "item": {"any_of": [
+                    {"type": "string", "enum": sorted(scalar_paths)},
+                    {
+                        "type": "object", "required": True, "additional_properties": False,
+                        "properties": {
+                            "field": {"type": "string", "enum": sorted(
+                                name for name, item in scalar_paths.items()
+                                if isinstance(item["field"], (models.DateField, models.DateTimeField))
+                            )},
+                            "period": {"type": "string", "enum": list(DATE_GROUP_PERIODS)},
+                        },
+                    },
+                ]},
+            },
         })
     return {
         "type": "object",
@@ -403,23 +430,27 @@ def _display_value(value, field):
     return _json_safe_value(value)
 
 
-def _with_display(result, model, fields):
+def _with_display(result, model, fields, labels=None):
     paths = _paths(model, fields)
+    labels = labels or {}
     records = result.get("records") if isinstance(result.get("records"), list) else []
     names = []
     for record in records:
         if isinstance(record, dict):
             for name in record:
+                if name == "empty_period":
+                    continue
                 if name not in names:
                     names.append(name)
     result["display"] = {
         "entity": str(model._meta.verbose_name),
-        "fields": [{"name": name, "label": str(paths[name]["field"].verbose_name) if name in paths else name}
+        "fields": [{"name": name, "label": labels.get(name, str(paths[name]["field"].verbose_name) if name in paths else name)}
                    for name in names],
         "records": [
             {
                 name: _display_value(value, paths[name]["field"]) if name in paths else _json_safe_value(value)
                 for name, value in record.items()
+                if name != "empty_period"
             }
             for record in records if isinstance(record, dict)
         ],
@@ -521,6 +552,146 @@ def _filter_value(descriptor, op, value):
     return normalized
 
 
+def _group_spec(model, fields, value, index):
+    if isinstance(value, str):
+        descriptor = _path(model, fields, value)
+        if descriptor["kind"] != "scalar":
+            raise ReadPlanError("Некорректная группировка")
+        return {
+            "descriptor": descriptor, "field": value, "period": None,
+            "name": value, "label": str(descriptor["field"].verbose_name),
+            "lookup": descriptor["lookup"],
+        }
+    if not isinstance(value, dict) or set(value) != {"field", "period"}:
+        raise ReadPlanError("Некорректная группировка")
+    field_name, period = value.get("field"), value.get("period")
+    descriptor = _path(model, fields, field_name)
+    if period not in DATE_GROUP_PERIODS or not isinstance(descriptor["field"], (models.DateField, models.DateTimeField)):
+        raise ReadPlanError("Группировка по периоду доступна только для даты")
+    return {
+        "descriptor": descriptor, "field": field_name, "period": period,
+        "name": f"{field_name}:{period}",
+        "label": f"{descriptor['field'].verbose_name} ({DATE_GROUP_LABELS[period]})",
+        "lookup": f"_assistant_group_{index}",
+    }
+
+
+def _group_expression(group):
+    if group["period"] is None:
+        return None
+    arguments = [group["descriptor"]["lookup"]]
+    if isinstance(group["descriptor"]["field"], models.DateTimeField):
+        return DATE_TRUNCS[group["period"]](*arguments, tzinfo=timezone.get_current_timezone())
+    return DATE_TRUNCS[group["period"]](*arguments)
+
+
+def _as_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _period_start(value, period):
+    if period == "day":
+        return value
+    if period == "week":
+        return value - timedelta(days=value.weekday())
+    if period == "month":
+        return value.replace(day=1)
+    if period == "quarter":
+        return value.replace(month=((value.month - 1) // 3) * 3 + 1, day=1)
+    return value.replace(month=1, day=1)
+
+
+def _next_period(value, period):
+    if period == "day":
+        return value + timedelta(days=1)
+    if period == "week":
+        return value + timedelta(days=7)
+    if period == "month":
+        return date(value.year + (value.month == 12), value.month % 12 + 1, 1)
+    if period == "quarter":
+        month = value.month + 3
+        return date(value.year + (month > 12), (month - 1) % 12 + 1, 1)
+    return date(value.year + 1, 1, 1)
+
+
+def _date_group_bounds(filters, group):
+    lower = upper = None
+    for item in filters:
+        if item["field"] != group["field"]:
+            continue
+        value = _as_date(item["value"])
+        if value is None:
+            continue
+        if item["op"] == "gte":
+            lower = max(lower, value) if lower else value
+        elif item["op"] == "gt":
+            candidate = value + timedelta(days=1)
+            lower = max(lower, candidate) if lower else candidate
+        elif item["op"] == "lte":
+            upper = min(upper, value) if upper else value
+        elif item["op"] == "lt":
+            candidate = value - timedelta(days=1)
+            upper = min(upper, candidate) if upper else candidate
+    return (lower, upper) if lower is not None and upper is not None else (None, None)
+
+
+def _fill_empty_periods(records, groups, aggregate_specs, filters):
+    if len(groups) != 1 or groups[0]["period"] is None:
+        return records
+    group = groups[0]
+    lower, upper = _date_group_bounds(filters, group)
+    if lower is None or upper is None:
+        return records
+    start, end = _period_start(lower, group["period"]), _period_start(upper, group["period"])
+    if start > end:
+        return records
+    existing = {_period_start(_as_date(row.get(group["name"])), group["period"]): row for row in records if _as_date(row.get(group["name"]))}
+    result, current = [], start
+    while current <= end:
+        row = existing.get(current)
+        if row is None:
+            row = {
+                group["name"]: current.isoformat(), "empty_period": True,
+                **{key: 0 if operation in {"count", "sum"} else None for key, operation, _descriptor in aggregate_specs},
+            }
+        result.append(row)
+        current = _next_period(current, group["period"])
+    return result
+
+
+def _group_comparisons(records, groups, aggregate_specs):
+    if not groups:
+        return {}
+    comparisons = {}
+    for key, _operation, _descriptor in aggregate_specs:
+        values = []
+        for row in records:
+            try:
+                value = Decimal(str(row.get(key)))
+            except (ArithmeticError, ValueError, TypeError):
+                continue
+            values.append((value, row))
+        if not values:
+            continue
+        values.sort(key=lambda item: item[0], reverse=True)
+        maximum, row = values[0]
+        comparisons[key] = {"maximum": {
+            "group": {item["name"]: row.get(item["name"]) for item in groups},
+            "value": _value(maximum),
+            "difference_to_next": _value(maximum - values[1][0]) if len(values) > 1 else None,
+        }}
+    return comparisons
+
+
 def validate_plan(user, plan):
     """Validate a read plan from the same metadata used by ``execute``.
 
@@ -576,9 +747,9 @@ def validate_plan(user, plan):
         annotations[key] = AGGREGATES[item["op"]](descriptor["lookup"])
         aggregate_specs.append((key, item["op"], descriptor))
     group_names = _validated_items(plan.get("group_by"), "Некорректная группировка")
-    groups = [_path(model, fields, name) for name in group_names]
-    if any(item["kind"] != "scalar" for item in groups):
-        raise ReadPlanError("Некорректная группировка")
+    groups = [_group_spec(model, fields, item, index) for index, item in enumerate(group_names)]
+    if len({item["name"] for item in groups}) != len(groups):
+        raise ReadPlanError("Поле группировки указано повторно")
     order = plan.get("order_by")
     if order is None:
         order = "-id"
@@ -638,10 +809,26 @@ def execute(user, plan):
     groups = validated["groups"]
     total = qs.count()
     if groups:
+        group_annotations = {
+            group["lookup"]: expression
+            for group in groups if (expression := _group_expression(group)) is not None
+        }
         group_lookups = [item["lookup"] for item in groups]
-        rows = list(qs.values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
-        records = [{**{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(group_names, groups)}, **{key: _value(row[key]) for key in annotations}} for row in rows]
-        return _with_display({"entity": entity, "query": _query_summary(validated, order_by=group_names), "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record"}, model, fields)
+        rows = list(qs.annotate(**group_annotations).values(*group_lookups).annotate(**annotations).order_by(*group_lookups)[:MAX_ROWS])
+        records = [
+            {
+                **{item["name"]: _output_value(row.get(item["lookup"]), item["descriptor"]) for item in groups},
+                **{key: _value(row[key]) for key in annotations},
+            }
+            for row in rows
+        ]
+        records = _fill_empty_periods(records, groups, validated["aggregate_specs"], validated["filters"])
+        return _with_display({
+            "entity": entity, "query": _query_summary(validated, order_by=group_names),
+            "total_count": total, "returned_count": len(records), "aggregates": {}, "records": records,
+            "comparisons": _group_comparisons(records, groups, validated["aggregate_specs"]),
+            "grouped": True, "sources": [], "source_scope": "grouped results; IDs do not represent every matching record",
+        }, model, fields, {item["name"]: item["label"] for item in groups})
     summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
     limit = validated["limit"]
     value_lookups = [item["lookup"] for item in selected]
@@ -734,5 +921,6 @@ def _query_summary(validated, *, order_by=None):
             ("-" if descending else "") + descriptor["name"]
             for descriptor, descending in validated["order_descriptors"]
         ],
+        "group_by": validated["group_names"],
         "limit": validated["limit"],
     }

@@ -157,6 +157,45 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
+    def test_m92_three_months_use_one_grouped_read_and_backend_comparison(self, gateway, _preflight):
+        from cash.models import CashTransaction
+        for operation_date, amount in ((date(2026, 8, 5), "100"), (date(2026, 9, 5), "350")):
+            CashTransaction.objects.create(
+                operation_date=operation_date, account="cash", direction="expense", amount=amount,
+                reason="Тест", created_by=self.user,
+            )
+        gateway.side_effect = [
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Сравнить три месяца", "steps": [{
+                    "id": "s1", "capability_id": "read:cash.transactions", "objective": "Получить суммы по месяцам",
+                    "expected_result": "Месячные суммы и их разность",
+                }]}}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {
+                "name": "read_cash_transactions", "arguments": json.dumps({"plan": {
+                    "filters": [
+                        {"field": "direction", "op": "eq", "value": "expense"},
+                        {"field": "operation_date", "op": "gte", "value": "2026-07-01"},
+                        {"field": "operation_date", "op": "lt", "value": "2026-10-01"},
+                    ],
+                    "group_by": [{"field": "operation_date", "period": "month"}],
+                    "aggregates": [{"op": "sum", "field": "amount"}],
+                }}),
+            }}]},
+            {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "Больше всего расходов в сентябре: 350 рублей, на 250 рублей больше августа."}),
+            }}]},
+        ]
+
+        response = respond(self.conversation, self.user, "Посмотри расходы по кассе за последние три полных месяца. В каком месяце их больше всего и насколько?")[-1]
+
+        self.assertEqual(gateway.call_count, 3)
+        read = response["data"]["steps"][-1]["result"]
+        self.assertEqual(read["records"][0]["sum_amount"], 0)
+        self.assertEqual(read["comparisons"]["sum_amount"]["maximum"]["difference_to_next"], "250")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
     def test_direct_read_then_action_keeps_the_next_capability_until_confirmation(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
@@ -539,6 +578,12 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual(CashTransaction.objects.get().reason, "Покупка коробок")
         self.conversation.refresh_from_db()
         self.assertNotIn("agent_run", self.conversation.context)
+        assistant_texts = [
+            event.raw_text for event in self.conversation.feedback_events.filter(scope="assistant_conversation")
+            if (event.payload or {}).get("role") == "assistant"
+        ]
+        self.assertNotIn("Действие выполнено.", assistant_texts)
+        self.assertEqual(assistant_texts[-1], "Операция проведена.")
         repeated = self.client.post(reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, response["id"]]), {"accept": "yes"})
         self.assertEqual(repeated.status_code, 409)
         self.assertEqual(CashTransaction.objects.count(), 1)
@@ -636,7 +681,7 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_follow_up_uses_the_existing_conversation_state_once(self, gateway, _preflight):
+    def test_finished_text_turn_does_not_keep_visible_history(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "content": "За какой период?"},
             {"role": "assistant", "content": "За сентябрь найдено 3 заказа."},
@@ -648,7 +693,6 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual(second[-1]["text"], "За сентябрь найдено 3 заказа.")
         messages = gateway.call_args_list[1].args[0]
         self.assertEqual([item for item in messages if item.get("role") == "user"], [
-            {"role": "user", "content": "Покажи заказы Иванова"},
             {"role": "user", "content": "За сентябрь"},
         ])
 
@@ -740,6 +784,8 @@ class AssistantFunctionCallingTests(TestCase):
 
         messages = gateway.call_args_list[5].args[0]
         self.assertIn("Compact conversation memory", messages[1]["content"])
+        self.assertEqual([item["role"] for item in messages], ["system", "system", "user"])
+        self.assertNotIn("Одна операция найдена.", json.dumps(messages, ensure_ascii=False))
 
 
 class AssistantMemoryTests(TestCase):
@@ -799,6 +845,15 @@ class AssistantMemoryTests(TestCase):
         self.assertNotIn("plan", state)
         self.assertIn("active_task", state["messages"][1]["content"])
         self.assertTrue(state["capability_map_pending"])
+
+    def test_new_state_uses_compact_memory_not_completed_visible_history(self):
+        add_assistant_message(self.conversation, "Старый длинный ответ " + "x" * 4000)
+        from .assistant_agent import _new_state
+
+        state = _new_state(self.conversation, self.user, "Новая задача", [])
+
+        self.assertEqual([item["role"] for item in state["messages"]], ["system", "user"])
+        self.assertEqual(state["messages"][-1]["content"], "Новая задача")
 
     def test_action_result_is_retained_only_after_actual_executor_result(self):
         memory = self.finish([{"tool_id": "cash.transaction_create", "result": {"id": 44, "created": True}}])

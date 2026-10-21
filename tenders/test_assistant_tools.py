@@ -231,6 +231,19 @@ class AssistantToolRegistryTests(TestCase):
             "required": ["answer"], "additionalProperties": False,
         })
 
+    def test_plan_schema_limits_each_step_to_registered_capabilities(self):
+        definitions, names = openai_functions(self.admin)
+        plan = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.plan")
+        capability = plan["parameters"]["properties"]["plan"]["properties"]["steps"]["items"]["properties"]["capability_id"]
+
+        expected = {
+            item["id"]
+            for area in available_areas(self.admin)
+            for item in available_capabilities(self.admin, area["id"])
+        }
+        self.assertEqual(set(capability["enum"]), expected)
+        self.assertNotIn("calculator", capability["enum"])
+
     def test_capability_map_exposes_all_permitted_capabilities_without_schemas(self):
         capability_map = available_capability_map(self.admin)
         cash = next(item for item in capability_map if item["id"] == "cash")
@@ -1081,6 +1094,62 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(ascending["aggregates"], descending["aggregates"])
         self.assertEqual(str(ascending["aggregates"]["sum_amount"]), "60")
+
+    def test_read_groups_dates_by_month_and_reports_empty_periods_and_comparison(self):
+        from cash.models import CashTransaction
+
+        for operation_date, amount in ((date(2026, 8, 5), "100"), (date(2026, 9, 10), "350")):
+            CashTransaction.objects.create(
+                operation_date=operation_date, account="cash", direction="expense", amount=amount,
+                reason="Группировка", created_by=self.admin,
+            )
+
+        result = execute_tool("read", self.admin, {"plan": {
+            "entity": "cash.CashTransaction", "fields": ["amount"],
+            "filters": [
+                {"field": "operation_date", "op": "gte", "value": "2026-07-01"},
+                {"field": "operation_date", "op": "lt", "value": "2026-10-01"},
+            ],
+            "group_by": [{"field": "operation_date", "period": "month"}],
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }})
+
+        self.assertEqual(
+            [(row["operation_date:month"], str(row["sum_amount"])) for row in result["records"]],
+            [("2026-07-01", "0"), ("2026-08-01", "100"), ("2026-09-01", "350")],
+        )
+        self.assertTrue(result["records"][0]["empty_period"])
+        self.assertEqual(result["comparisons"]["sum_amount"]["maximum"]["value"], "350")
+        self.assertEqual(result["comparisons"]["sum_amount"]["maximum"]["difference_to_next"], "250")
+
+    def test_read_rejects_period_grouping_for_non_date_fields(self):
+        from .assistant_read import ReadPlanError, validate_plan
+
+        with self.assertRaises(ReadPlanError):
+            validate_plan(self.admin, {"entity": "cash.CashTransaction", "group_by": [
+                {"field": "amount", "period": "month"},
+            ]})
+
+    def test_read_groups_datetime_fields_in_the_configured_timezone(self):
+        from cash.models import CashTransaction
+        from django.utils import timezone
+
+        transaction = CashTransaction.objects.create(
+            operation_date=date(2026, 9, 1), account="cash", direction="expense", amount="10",
+            reason="Дата", created_by=self.admin,
+        )
+        CashTransaction.objects.filter(pk=transaction.pk).update(
+            created_at=timezone.make_aware(datetime(2026, 9, 30, 22, 30)),
+        )
+
+        result = execute_tool("read", self.admin, {"plan": {
+            "entity": "cash.CashTransaction", "fields": ["amount"],
+            "group_by": [{"field": "created_at", "period": "month"}],
+            "aggregates": [{"op": "sum", "field": "amount"}],
+        }})
+
+        self.assertTrue(result["records"][0]["created_at:month"].startswith("2026-09-01"))
+        self.assertEqual(str(result["records"][0]["sum_amount"]), "10")
 
     def test_complete_read_result_can_be_reused_for_a_narrower_aggregate(self):
         from cash.models import CashTransaction
