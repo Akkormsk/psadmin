@@ -1,0 +1,47 @@
+{
+  "source_sha": "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a",
+  "required_application_base": "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a",
+  "base_url": "https://api.timeweb.ai/v1",
+  "models": [
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4.1"
+  ],
+  "test_runtime_configuration": "NOT VERIFIED",
+  "application_date": "2026-10-23",
+  "timezone": "Europe/Moscow",
+  "gateway_calls": 0,
+  "paid_calls": 0,
+  "primary_attempts": 24,
+  "supplemental_attempts": "not_in_primary_schedule_or_budget",
+  "first_request_sha256": {
+    "A": "f292670106e4499743711b0e9dd9ed5d46c3311e7d3d499b171dd2d7b39165fc",
+    "B": "6cd0206b3a4dff983311557817be3e50e81715912b33655fc8199b6ed2565246",
+    "C": "aa5b07794bd262d7650432b47a2e5730f9a469e29df9494f10eeade907869b98",
+    "D": "8e2c6e8ff5cbafca94ea20e9db2762251a68f66fd4e0c4f1bc8a54208d1892bf"
+  },
+  "first_request_utf8_bytes": {
+    "A": 41036,
+    "B": 41106,
+    "C": 41276,
+    "D": 41365
+  },
+  "maximum_tools_utf8_bytes": 68270,
+  "data": "synthetic only; no source/production database copied",
+  "validation": [
+    "real READ finds 2 lines",
+    "real READ verifies empty lines",
+    "real executor returns created=false and estimate_id",
+    "real executor created=true then false with same estimate_id; rolled back",
+    "cash empty",
+    "C absent estimate absent",
+    "estimate status ready/draft"
+  ],
+  "live_requirements": [
+    "fresh seed copy for every attempt",
+    "capture full Gateway usage including missing fields as null",
+    "capture failed HTTP attempts and reservations",
+    "price/budget gate before network",
+    "manual semantic review of every attempt",
+    "no application backend changes"
+  ]
+}

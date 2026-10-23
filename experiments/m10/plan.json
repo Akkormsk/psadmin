@@ -1,0 +1,91 @@
+{
+  "status": "PREPARED_NOT_RUN",
+  "paid_calls": 0,
+  "test_runtime_model": "NOT VERIFIED",
+  "pilot": {
+    "attempts": [
+      {
+        "scenario": "A",
+        "repeat": 1,
+        "model": "openai/gpt-4.1-mini"
+      },
+      {
+        "scenario": "A",
+        "repeat": 1,
+        "model": "openai/gpt-4.1"
+      }
+    ],
+    "proposed_spend_limit_rub": 100,
+    "max_calls_per_attempt": 8,
+    "requires_user_approval_before_start": true,
+    "all_16_calls_at_maximum_envelope_rub": 394.64755199999996,
+    "budget_note": "100 RUB stop budget may end the pilot early. It is deliberately below the theoretical 16-call envelope (~394.65 RUB). Missing usage retains reservation."
+  },
+  "primary": {
+    "attempts": 24,
+    "repeats_per_scenario_per_model": 3,
+    "proposed_spend_limit_rub": 500,
+    "decision": "Reassess after pilot; do not launch bulk automatically",
+    "includes_pilot_attempts": true,
+    "all_192_calls_at_maximum_envelope_rub": 4735.770624,
+    "budget_note": "500 RUB is a proposed stop budget, not a guarantee of completing 24 attempts. Full envelope allowance would be ~4735.77 RUB; choose budget after pilot measurements."
+  },
+  "supplemental": {
+    "cases": [
+      "C_existing",
+      "D_empty"
+    ],
+    "status": "prepared outside 24-attempt primary schedule; budget/count separately before execution"
+  },
+  "request_envelope": {
+    "serialized_body_max_bytes": 131072,
+    "token_framing_reserve": 16384,
+    "max_tokens": 1200,
+    "bound_type": "Conservative byte-based reservation, not observed tokens or provider billing guarantee",
+    "on_envelope_exceeded": "stop attempt and record; never shorten schemas/prompts selectively",
+    "on_missing_usage_or_transport_error": "retain reservation; charge not assumed zero",
+    "on_observed_cost_above_reservation": "stop and reconcile",
+    "on_budget_exhausted": "stop and retain all failed attempts",
+    "maximum_reservation_rub_per_call": {
+      "openai/gpt-4.1-mini": 8.221824,
+      "openai/gpt-4.1": 41.10912
+    }
+  },
+  "fairness": [
+    "Same seed snapshot cloned independently",
+    "Same prompts and schemas; model ID only request difference",
+    "Same 8-call experiment ceiling for both models",
+    "Fixed application date and timezone; real wall-time timing",
+    "Alternate model order between repeats",
+    "No nonce/cache-busting prompt additions; cache usage reported",
+    "C/D object identification appended equally because baseline ignores page context"
+  ],
+  "metrics": {
+    "quality": [
+      "success",
+      "completeness",
+      "hallucinations",
+      "extra_actions",
+      "omissions",
+      "clarifying_questions",
+      "replans",
+      "protocol_errors",
+      "recoveries"
+    ],
+    "compute": [
+      "gateway_calls",
+      "prompt_tokens",
+      "completion_tokens",
+      "cached_tokens",
+      "reasoning_tokens",
+      "total_tokens",
+      "seconds",
+      "price_rub_range",
+      "actual_response_model",
+      "request_id"
+    ],
+    "unknown_fields": null,
+    "budget_stops": "Record separately from model/protocol failures; include all incurred expenses, show completed and interrupted attempt counts."
+  },
+  "review": "Semantic success requires review of every recorded attempt; cannot be inferred from assistant.finish alone"
+}

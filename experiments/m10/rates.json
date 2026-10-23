@@ -1,0 +1,213 @@
+{
+  "observed_at_utc": "2026-10-23T14:19:39.327977+00:00",
+  "source": "https://api.timeweb.cloud/api/v3/cloud-ai/models",
+  "discovery": "Current public Timeweb panel JavaScript uses this endpoint for Gateway catalog; parameter_values.cost_in/cost_out/cost_cache_read",
+  "currency": "RUB",
+  "raw_unit": "RUB per token",
+  "rates": {
+    "openai/gpt-4.1-mini": {
+      "input_rub_per_million": 54.0,
+      "output_rub_per_million": 216.0,
+      "cached_input_rub_per_million": 13.5,
+      "is_reasoning": false,
+      "price_tiers": []
+    },
+    "openai/gpt-4.1": {
+      "input_rub_per_million": 270.0,
+      "output_rub_per_million": 1080.0,
+      "cached_input_rub_per_million": 67.5,
+      "is_reasoning": false,
+      "price_tiers": [
+        {
+          "above_context_tokens": 272000,
+          "cost_in": 0.00054,
+          "cost_out": 0.00162
+        }
+      ]
+    }
+  },
+  "raw_catalog_rows": [
+    {
+      "id": 13,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 4.1 mini",
+      "model_name": "openai/gpt-4.1-mini",
+      "type": "llm",
+      "version": "4.1-mini",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2027-01-12T21:00:00.000Z",
+      "created_at": "2025-07-31T17:57:27.000Z",
+      "updated_at": "2026-10-20T12:34:04.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 16384,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 2,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "presence_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes tokens based on presence in text"
+        },
+        "frequency_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes repeated tokens based on frequency"
+        }
+      },
+      "parameter_values": {
+        "is_reasoning": false,
+        "cost_in": 5.4e-05,
+        "cost_out": 0.000216,
+        "cost_cache_read": 1.35e-05
+      },
+      "price_tiers": [],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    },
+    {
+      "id": 17,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 4.1",
+      "model_name": "openai/gpt-4.1",
+      "type": "llm",
+      "version": "4.1",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2027-01-12T21:00:00.000Z",
+      "created_at": "2025-07-31T17:57:27.000Z",
+      "updated_at": "2026-10-20T12:33:33.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 128000,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 2,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "presence_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes tokens based on presence in text"
+        },
+        "frequency_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes repeated tokens based on frequency"
+        }
+      },
+      "parameter_values": {
+        "aa_intelligence_index": 26,
+        "avg_speed": 110,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "context_window": 1000000,
+        "max_output_tokens": 32768,
+        "release_date": "2025-04-14",
+        "is_reasoning": false,
+        "cost_in": 0.00027,
+        "cost_out": 0.00108,
+        "cost_cache_read": 6.75e-05
+      },
+      "price_tiers": [
+        {
+          "above_context_tokens": 272000,
+          "cost_in": 0.00054,
+          "cost_out": 0.00162
+        }
+      ],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    }
+  ],
+  "account_billing_prices": {
+    "source": "https://api.timeweb.cloud/api/v1/cloud-ai/billing-prices",
+    "http_status": 200,
+    "override_count": 0
+  },
+  "cache_policy": {
+    "published_discounted_prices": true,
+    "key_specific_discount_applicability": "NOT VERIFIED",
+    "account_cache_billing_flag_observed": false,
+    "usage_cached_subset_of_prompt": "standard OpenAI usage contract; verify returned usage in pilot",
+    "cost_without_cache_discount": "(prompt_tokens * input_rate + completion_tokens * output_rate) / 1e6",
+    "cost_with_cache_discount": "((prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_rate + completion_tokens * output_rate) / 1e6",
+    "missing_usage": "unknown; never zero",
+    "cache_write_rate": "not published for these models; do not invent",
+    "batch_discount": "not applicable; synchronous requests",
+    "reasoning": "catalog is_reasoning=false; preserve usage details if returned"
+  },
+  "documentation": [
+    "https://timeweb.cloud/docs/ai-gateway/manage",
+    "https://timeweb.cloud/docs/ai-gateway/logs"
+  ],
+  "fixed_key_cost": "Existing key: 1 RUB/month per published docs; no new key created; not marginal per-attempt spend",
+  "limitations": [
+    "Catalog prices are not an invoice",
+    "AI key account identity not inferred from cloud token",
+    "Fallback model must be checked from actual response/logs; no key changes"
+  ]
+}

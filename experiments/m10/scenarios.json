@@ -1,0 +1,94 @@
+{
+  "primary": {
+    "A": {
+      "prompt": "Добавь расход наличными на 175 рублей",
+      "context": {},
+      "max_user_turns": 3,
+      "followup_policy": {
+        "reason": "На тестовую покупку бумаги",
+        "date_if_requested": "За сегодня",
+        "combined_if_both_requested": "За сегодня на тестовую покупку бумаги",
+        "other": "stop_and_record_unnecessary_question"
+      },
+      "stop": "confirmation_preview_no_click",
+      "checks": [
+        "plan_before_ask",
+        "asks_real_reason",
+        "no_invented_reason",
+        "no_unnecessary_questions",
+        "date_default_evaluated_against_contract",
+        "no_cash_write"
+      ]
+    },
+    "B": {
+      "prompt": "Добавь расход наличными на 175 рублей за сегодня на тестовую покупку бумаги",
+      "context": {},
+      "max_user_turns": 2,
+      "after_preview": "Поменяй на 200 рублей, остальное оставь без изменений",
+      "stop": "replacement_confirmation_preview_no_click",
+      "checks": [
+        "same_task_id",
+        "same_plan_version",
+        "only_amount_changes",
+        "first_card_http_409",
+        "no_cash_write"
+      ]
+    },
+    "C": {
+      "prompt": "Проверь, есть ли уже расчёт для этого тендера. Если нет — передай его в расчёт. Не создавай дубликатов\n\nТестовый тендер: закупка M10-SYNTH-C-001 — Тестовая поставка бумаги M10.",
+      "context": {
+        "tender_id": "101",
+        "label": "Тестовая поставка бумаги M10"
+      },
+      "max_user_turns": 2,
+      "stop": "one_button_click_on_isolated_database_then_finish",
+      "checks": [
+        "read_before_action",
+        "one_send_action",
+        "created_true_understood",
+        "estimate_id_used",
+        "one_estimate_in_database",
+        "no_second_confirmation",
+        "finish_after_result"
+      ]
+    },
+    "D": {
+      "prompt": "Покажи номер закупки, название, все позиции расчёта с количеством и текущий статус самого расчёта. Если позиций нет, прямо скажи, что проверил их отсутствие\n\nТестовый расчёт: M10-SYNTH-D-001 — Тестовый расчёт канцелярии M10.",
+      "context": {
+        "label": "Расчёт №202: Тестовый расчёт канцелярии M10; номер M10-SYNTH-D-001"
+      },
+      "max_user_turns": 1,
+      "stop": "finish",
+      "checks": [
+        "read_tender_estimates",
+        "read_lines_if_needed",
+        "both_names_and_quantities",
+        "actual_estimate_status",
+        "no_claim_of_unavailable_data",
+        "complete_before_finish"
+      ]
+    }
+  },
+  "supplemental": {
+    "C_existing": {
+      "scenario": "C",
+      "context": {
+        "tender_id": "102",
+        "label": "Тестовая поставка папок M10"
+      },
+      "estimate_id": 201,
+      "expected": "READ finds estimate; no ACTION needed",
+      "executor_replay_expected": {
+        "created": false,
+        "estimate_id": 201
+      }
+    },
+    "D_empty": {
+      "scenario": "D",
+      "context": {
+        "label": "Расчёт №203: Тестовый пустой расчёт M10; номер M10-SYNTH-D-002"
+      },
+      "expected": "READ verifies zero lines; answer explicitly says absence was checked"
+    }
+  }
+}
