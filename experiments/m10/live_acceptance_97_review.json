@@ -1,0 +1,255 @@
+{
+  "source_export_sha256": "8456dce39fd952ceb7c524363c20756170a3b89145bfdb89a33010acda0d3560",
+  "conversation_id": 97,
+  "exported_at_utc": "2026-10-23T17:34:43.078Z",
+  "raw_export_committed": false,
+  "model": "anthropic/claude-haiku-5-5",
+  "model_provenance": "Verified TEST deployment configuration; export response debug omits model ID",
+  "deployed_sha_last_verified": "6fe8476a05cfdbbd2ab591ebf486d95acc249daa",
+  "score": {
+    "pass": 6,
+    "partial": 3,
+    "fail": 1,
+    "denominator": 10,
+    "claim": "Selected scenarios, not model-wide reliability; retries included in costs"
+  },
+  "cases": [
+    {
+      "number": 1,
+      "status": "PASS",
+      "user_event_ids": [
+        2991
+      ],
+      "finding": "Short chat and arithmetic correct",
+      "calls": 1,
+      "cost_rub": "0.1529280"
+    },
+    {
+      "number": 2,
+      "status": "FAIL",
+      "user_event_ids": [
+        2996,
+        3001
+      ],
+      "finding": "Prior chat answer absent from both outgoing prompts; clarification cannot recover missing context",
+      "calls": 2,
+      "cost_rub": "0.3155895"
+    },
+    {
+      "number": 3,
+      "status": "PARTIAL",
+      "user_event_ids": [
+        3006
+      ],
+      "finding": "Unfiltered all-account query and rows correct; aware UTC timestamp formatted without Europe/Moscow conversion or timezone label",
+      "calls": 3,
+      "cost_rub": "0.4116960"
+    },
+    {
+      "number": 4,
+      "status": "PASS",
+      "user_event_ids": [
+        3019
+      ],
+      "finding": "Correct calendar period, both accounts, ORM grouped totals and arithmetic; transparently states transfer classification unavailable",
+      "calls": 3,
+      "cost_rub": "0.4494825"
+    },
+    {
+      "number": 5,
+      "status": "PASS",
+      "user_event_ids": [
+        3032
+      ],
+      "finding": "Correct full preview; no executed cash action in export",
+      "calls": 2,
+      "cost_rub": "0.2645595"
+    },
+    {
+      "number": 6,
+      "status": "PASS",
+      "user_event_ids": [
+        3040
+      ],
+      "finding": "Only amount changes; stale-button rejection not exercised in export",
+      "calls": 1,
+      "cost_rub": "0.0922320"
+    },
+    {
+      "number": 7,
+      "status": "PARTIAL",
+      "user_event_ids": [
+        3044,
+        3062
+      ],
+      "finding": "Cancellation succeeds; new task lost, user repeats. Repeated query uses incoming scope compatible with open list page, not history of all tenders; missing arrival dates disclosed, ID order is only proxy",
+      "calls": 7,
+      "cost_rub": "1.0927980"
+    },
+    {
+      "number": 8,
+      "status": "PASS",
+      "user_event_ids": [
+        3075
+      ],
+      "finding": "Second prior selection resolved, details match READ, no estimates returned; nonempty estimate-status branch untested",
+      "calls": 4,
+      "cost_rub": "0.9529650"
+    },
+    {
+      "number": 9,
+      "status": "PASS",
+      "user_event_ids": [
+        3091
+      ],
+      "finding": "Empty estimate check, matching preview, created=true executor result and final; no evidence of confirmation bypass, raw button HTTP request absent; existing-estimate branch untested",
+      "calls": 4,
+      "cost_rub": "0.7516800"
+    },
+    {
+      "number": 10,
+      "status": "PARTIAL",
+      "user_event_ids": [
+        3107
+      ],
+      "finding": "Old empty selection reused after write despite new estimate/line; incomplete final lacks estimate status, wrong monetary material_unit selected as units. Finish guard enforces lines read and model recovers",
+      "calls": 5,
+      "cost_rub": "1.5160500"
+    }
+  ],
+  "turns": [
+    {
+      "user_event_id": 2991,
+      "calls": 1,
+      "prompt_tokens": 11023,
+      "completion_tokens": 61,
+      "cost_rub": "0.1529280"
+    },
+    {
+      "user_event_id": 2996,
+      "calls": 1,
+      "prompt_tokens": 11046,
+      "completion_tokens": 160,
+      "cost_rub": "0.1599210"
+    },
+    {
+      "user_event_id": 3001,
+      "calls": 1,
+      "prompt_tokens": 11001,
+      "completion_tokens": 106,
+      "cost_rub": "0.1556685"
+    },
+    {
+      "user_event_id": 3006,
+      "calls": 3,
+      "prompt_tokens": 26586,
+      "completion_tokens": 782,
+      "cost_rub": "0.4116960"
+    },
+    {
+      "user_event_id": 3019,
+      "calls": 3,
+      "prompt_tokens": 28590,
+      "completion_tokens": 941,
+      "cost_rub": "0.4494825"
+    },
+    {
+      "user_event_id": 3032,
+      "calls": 2,
+      "prompt_tokens": 17622,
+      "completion_tokens": 395,
+      "cost_rub": "0.2645595"
+    },
+    {
+      "user_event_id": 3040,
+      "calls": 1,
+      "prompt_tokens": 6077,
+      "completion_tokens": 151,
+      "cost_rub": "0.0922320"
+    },
+    {
+      "user_event_id": 3044,
+      "calls": 4,
+      "prompt_tokens": 36635,
+      "completion_tokens": 627,
+      "cost_rub": "0.5368950"
+    },
+    {
+      "user_event_id": 3062,
+      "calls": 3,
+      "prompt_tokens": 37543,
+      "completion_tokens": 727,
+      "cost_rub": "0.5559030"
+    },
+    {
+      "user_event_id": 3075,
+      "calls": 4,
+      "prompt_tokens": 65540,
+      "completion_tokens": 1010,
+      "cost_rub": "0.9529650"
+    },
+    {
+      "user_event_id": 3091,
+      "calls": 4,
+      "prompt_tokens": 51965,
+      "completion_tokens": 743,
+      "cost_rub": "0.7516800"
+    },
+    {
+      "user_event_id": 3107,
+      "calls": 5,
+      "prompt_tokens": 105760,
+      "completion_tokens": 1308,
+      "cost_rub": "1.5160500"
+    }
+  ],
+  "usage": {
+    "calls": 32,
+    "prompt_tokens": 409388,
+    "completion_tokens": 7011,
+    "total_tokens": 416399,
+    "cached_tokens": 0,
+    "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
+    "all_usage_present": true
+  },
+  "pricing": {
+    "currency": "RUB",
+    "input_per_million": "13.5",
+    "output_per_million": "67.5",
+    "cache_discount_applied": false,
+    "source": "experiments/m10/rates.json, observed 2026-10-23",
+    "input_cost": "5.5267380",
+    "output_cost": "0.4732425",
+    "conversation_cost": "5.9999805",
+    "prior_accounted_cost": "101.275677",
+    "combined_accounted_cost": "107.2756575",
+    "authorized_limit": "110",
+    "remaining_accounted_budget": "2.7243425",
+    "invoice_verified": false,
+    "scope": "Uploaded conversation plus previously accounted M10 only; other usage not included"
+  },
+  "findings": {
+    "backend_confirmed": [
+      "ordinary chat context omitted",
+      "stale READ cache after successful ACTION",
+      "UTC display not converted to Django timezone",
+      "calculation display status is computed and not published as a normal READ field"
+    ],
+    "mixed_model_backend": [
+      "cancel-plus-new-task replay ambiguity and wrong recovery"
+    ],
+    "model_confirmed": [
+      "material_unit is monetary material cost, not measurement unit",
+      "wording after confirmation falsely implies no card was prepared"
+    ],
+    "not_verified": [
+      "HTTP stale-card rejection in this conversation",
+      "raw button click request",
+      "existing-estimate no-duplicate branch",
+      "database-wide absence of unintended writes",
+      "correct unit source for newly generated line"
+    ]
+  },
+  "changes_made": "Review artifacts/protocol only; no application fixes, deploy or paid calls"
+}
