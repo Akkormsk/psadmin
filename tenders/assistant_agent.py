@@ -264,7 +264,7 @@ def _selection_from_result(result):
 
 def _selection_cache(selection):
     """Reconstruct only a complete cached result; incomplete selections read ORM again."""
-    if not isinstance(selection, dict) or not selection.get("complete"):
+    if not isinstance(selection, dict) or not selection.get("complete") or selection.get("cache_invalidated"):
         return None
     ids = selection.get("record_ids")
     records = selection.get("records")
@@ -354,6 +354,13 @@ def _bound_memory(memory):
     return memory
 
 
+def _invalidate_read_selections(memory):
+    # Actions can change related models too. Keep selected IDs/scope for
+    # references, but no earlier selection may answer a fresh READ.
+    for selection in memory.get("recent_selections", []):
+        selection["cache_invalidated"] = True
+
+
 def _merge_memory(conversation, state):
     memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
     for step in state.get("steps", []):
@@ -367,6 +374,8 @@ def _merge_memory(conversation, state):
                     record = selection["records"][0] if selection["records"] else {}
                     memory["active_focus"] = {"entity": selection["entity"], "id": selection["record_ids"][0], "label": _compact_memory(record), "external_ids": selection["external_ids"][:1]}
         elif isinstance(tool_id, str) and tool_id not in {"assistant.plan", "assistant.select_area", "assistant.select_capability"}:
+            if step.get("status", "completed") == "completed" and not step.get("error"):
+                _invalidate_read_selections(memory)
             action = _action_result(tool_id, result)
             if action:
                 memory["recent_actions"].append(action)
@@ -477,6 +486,9 @@ def _has_execution_evidence(capability_id, result):
 
 
 def _record_execution(state, identifier, result, *, status="completed", error=None):
+    if not identifier.startswith("read:") and status == "completed" and error is None:
+        state.pop("read_cache", None)
+        _invalidate_read_selections(state.get("memory", {}))
     safe_result = json.loads(json.dumps(result, ensure_ascii=False, default=str)) if error is None else None
     state["steps"].append({
         "plan_version": state["plan"].get("version") if isinstance(state.get("plan"), dict) else None,
