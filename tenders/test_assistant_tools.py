@@ -328,7 +328,9 @@ class AssistantToolRegistryTests(TestCase):
         schema = plan["parameters"]["properties"]["plan"]
 
         self.assertTrue(plan["strict"])
-        self.assertEqual(set(schema["properties"]), {"goal", "steps"})
+        self.assertEqual(set(schema["properties"]), {"goal", "steps", "revision_reason"})
+        self.assertEqual({item["type"] for item in schema["properties"]["revision_reason"]["anyOf"]}, {"string", "null"})
+        self.assertIn("revision_reason", schema["required"])
         self.assertFalse(schema["additionalProperties"])
         step = schema["properties"]["steps"]["items"]
         self.assertEqual(set(step["properties"]), {"id", "capability_id", "objective", "expected_result"})

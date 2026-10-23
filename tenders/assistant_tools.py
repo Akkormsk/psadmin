@@ -526,6 +526,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
             "type": "object",
             "properties": {
                 "goal": {"type": "string", "minLength": 1},
+                "revision_reason": {"type": "string", "required": False, "description": "Причина существенного изменения цели или маршрута. null для первого плана. Не пересоздавай план при уточнении обычных аргументов."},
                 "steps": {
                     "type": "array", "minItems": 1,
                     "item": {
