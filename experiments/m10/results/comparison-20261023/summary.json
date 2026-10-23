@@ -1449,7 +1449,8 @@
     "model_order": "Not randomized/interleaved: Nano expansion ran before baseline after user steering. Report no-cache primary costs to reduce cache-order bias.",
     "samples": "3 per scenario/model, small set and identical repeated outputs; descriptive result, not statistical proof of future success rates",
     "forecast": "Illustrative equal four-scenario workload only; baseline success cost undefined at zero successes. No invented mixed production workload.",
-    "recoveries": "Every observed protocol_error here triggers one bounded recovery and a following real Gateway call; 3 in Nano B, zero in baseline. All included in calls/cost."
+    "recoveries": "Every observed protocol_error here triggers one bounded recovery and a following real Gateway call; 3 in Nano B, zero in baseline. All included in calls/cost.",
+    "selected_pricing": "No cache discount, explicitly selected by user. Discounted figures retained only as historical alternative calculations, not the active budget estimate."
   },
   "backend_fixes": "Not started",
   "test_deploy": "No",

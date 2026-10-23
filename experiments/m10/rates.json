@@ -344,7 +344,9 @@
     "missing_usage": "unknown; never zero",
     "cache_write_rate": "not published for these models; do not invent",
     "batch_discount": "not applicable; synchronous requests",
-    "reasoning": "5.4 nano/mini is_reasoning=true, effort options none/low/medium/high; preserve actual usage details and do not add reasoning again if included in completion_tokens"
+    "reasoning": "5.4 nano/mini is_reasoning=true, effort options none/low/medium/high; preserve actual usage details and do not add reasoning again if included in completion_tokens",
+    "selected_accounting": "no_cache_discount",
+    "selection_source": "User explicitly instructed to calculate without discount until further notice"
   },
   "documentation": [
     "https://timeweb.cloud/docs/ai-gateway/manage",

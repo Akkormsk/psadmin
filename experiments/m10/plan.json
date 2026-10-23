@@ -111,5 +111,6 @@
     "status": "Saved; not full comparative A/B",
     "result_summary": "results/nano-expanded-20261023/summary.json",
     "diagnosis": "results/nano-expanded-20261023/diagnosis.json"
-  }
+  },
+  "accounting_policy": "Use full prompt input rate, without cache discount, per user instruction. Continue recording actual cached usage; do not assume discount applies."
 }
