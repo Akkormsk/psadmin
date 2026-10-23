@@ -113,8 +113,13 @@ def conversation_action_confirm(request, conversation_id, event_id):
         payload = event.payload if event else {}
         data = payload.get("data", {}) if isinstance(payload, dict) else {}
         used = list(conversation.context.get("confirmed_action_events", []))
+        run = conversation.context.get("agent_run", {})
+        waiting = run.get("waiting_confirmation", {})
         if (not event or payload.get("kind") != "confirmation_required" or event.pk in used
-                or conversation.feedback_events.filter(pk__gt=event.pk).exists()):
+                or conversation.feedback_events.filter(pk__gt=event.pk).exists()
+                or waiting.get("tool_id") != data.get("tool_id")
+                or waiting.get("arguments") != data.get("arguments")
+                or waiting.get("plan_version") != (run.get("plan") or {}).get("version")):
             return JsonResponse({"detail": "Подтверждение недействительно, устарело или уже использовано"}, status=409)
         used.append(event.pk)
         conversation.context["confirmed_action_events"] = used

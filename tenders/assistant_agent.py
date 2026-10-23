@@ -1,6 +1,7 @@
 """Standard OpenAI Function Calling loop for PSADMIN."""
 from __future__ import annotations
 import json, os, re
+from uuid import uuid4
 from urllib.request import Request, urlopen
 from django.utils import timezone
 from .assistant_tools import (
@@ -27,7 +28,10 @@ _SYSTEM_RULES = (
     "Never invent facts, fields, IDs, values, or calculations. If several business interpretations or records are equally plausible, "
     "first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
     "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
-    "When the user corrects or supplements the task, continue it when relevant and update the plan; a new task supersedes old filters. "
+    "Every READ/ACTION task MUST start with assistant.plan, BEFORE even a clarification question; arguments may still be unknown. "
+    "Keep the same task and plan when collecting or correcting amounts, dates and other arguments. "
+    "Revise the plan only for a changed goal, capability or route, with a specific revision_reason. Preserve completed work. "
+    "A new task supersedes old filters. Ordinary conversation needs neither plan nor finish. "
     "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
@@ -96,7 +100,7 @@ def _refresh_system_prompt(user, state):
 
 def _new_state(conversation, user, message, attachments):
     memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
-    state = {"messages": [], "steps": [], "attachments": attachments or [], "capability_map_pending": True, "memory": memory}
+    state = {"messages": [], "steps": [], "status": "RUNNING", "attachments": attachments or [], "capability_map_pending": True, "memory": memory}
     if memory["recent_selections"]:
         cached = _selection_cache(memory["recent_selections"][-1])
         if cached is not None:
@@ -105,6 +109,17 @@ def _new_state(conversation, user, message, attachments):
     memory_context = _memory_context(memory)
     if memory_context:
         state["messages"].append({"role": "system", "content": "Compact conversation memory: " + json.dumps(memory_context, ensure_ascii=False, default=str)})
+    # An unplanned text reply cannot reveal whether the model overlooked a
+    # business request or just chatted. Keep one exchange, never its tool log.
+    for item in memory.pop("unplanned_exchange", []):
+        if item.get("event_id"):
+            event = conversation.feedback_events.filter(
+                pk=item["event_id"], scope="assistant_conversation", payload__role=item["role"],
+            ).first()
+            if event is None:
+                continue
+            item = {"role": item["role"], "content": event.raw_text}
+        state["messages"].append(item)
     state["messages"].append({"role": "user", "content": message})
     return state
 
@@ -280,6 +295,15 @@ def _load_memory(raw, owner_id):
     if not isinstance(raw, dict):
         return base
     if raw.get("version") == 2:
+        exchange = raw.get("unplanned_exchange")
+        if (isinstance(exchange, list) and len(exchange) == 2
+                and [item.get("role") for item in exchange if isinstance(item, dict)] == ["user", "assistant"]
+                and all(isinstance(item.get("content"), str) for item in exchange)):
+            base["unplanned_exchange"] = [
+                {"role": item["role"], "content": item["content"],
+                 **({"event_id": item["event_id"]} if isinstance(item.get("event_id"), int) else {})}
+                for item in exchange
+            ]
         for key in ("active_task", "active_focus"):
             if isinstance(raw.get(key), dict):
                 base[key] = _compact_memory(raw[key])
@@ -344,6 +368,7 @@ def _bound_memory(memory):
 
 def _merge_memory(conversation, state):
     memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
+    memory.pop("unplanned_exchange", None)
     for step in state.get("steps", []):
         tool_id, result = step.get("tool_id"), step.get("result")
         if isinstance(tool_id, str) and tool_id.startswith("read:"):
@@ -362,6 +387,17 @@ def _merge_memory(conversation, state):
         memory["active_task"] = {"plan": state["plan"]["goal"][:MAX_MEMORY_STRING_CHARS]}
     elif isinstance(state.get("plan"), str) and state["plan"].strip():
         memory["active_task"] = {"plan": state["plan"][:MAX_MEMORY_STRING_CHARS]}
+    else:
+        user_message = next((item for item in reversed(state["messages"]) if item["role"] == "user"), None)
+        answer = state["messages"][-1]
+        if user_message and answer.get("role") == "assistant" and isinstance(answer.get("content"), str):
+            original = conversation.feedback_events.filter(
+                scope="assistant_conversation", payload__role="user", raw_text=user_message["content"],
+            ).order_by("-pk").first()
+            memory["unplanned_exchange"] = [
+                {"role": "user", "content": "", "event_id": original.pk} if original else user_message.copy(),
+                {"role": "assistant", "content": answer["content"][:MAX_MEMORY_STRING_CHARS]},
+            ]
     return _bound_memory(memory)
 
 
@@ -385,11 +421,6 @@ def _capability_ids(user):
 
 def _normalise_plan(value, user, previous=None):
     """Validate the compact plan against the same registry shown to the model."""
-    if isinstance(value, str):
-        # Old persisted runs and pre-M9 debug fixtures did not have structured
-        # steps.  They remain resumable, but a current model cannot emit this
-        # representation because its strict Function schema is object-shaped.
-        return {"version": int((previous or {}).get("version", 0)) + 1, "goal": value.strip(), "steps": []}
     if not isinstance(value, dict):
         raise AssistantToolError("План должен содержать цель и шаги")
     goal, steps = value.get("goal"), value.get("steps")
@@ -408,17 +439,34 @@ def _normalise_plan(value, user, previous=None):
             raise AssistantToolError("План содержит недоступную или повторяющуюся возможность")
         seen.add(identifier)
         normalised.append({"id": identifier, "capability_id": capability_id, "objective": objective, "expected_result": expected_result})
-    return {"version": int((previous or {}).get("version", 0)) + 1, "goal": goal.strip(), "steps": normalised}
+    reason = value.get("revision_reason")
+    if previous and (not isinstance(reason, str) or not reason.strip()):
+        raise AssistantToolError("Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план")
+    if previous and not previous.get("legacy") and goal.strip() == previous.get("goal") and normalised == previous.get("steps"):
+        raise AssistantToolError("План не изменился; продолжите его без повторного планирования")
+    return {"version": int((previous or {}).get("version", 0)) + 1, "goal": goal.strip(), "steps": normalised,
+            "revision_reason": reason.strip() if isinstance(reason, str) else None}
+
+
+def _completed_plan_steps(state):
+    plan = state.get("plan")
+    if not isinstance(plan, dict) or plan.get("legacy"):
+        return set()
+    return {
+        step["id"] for step in plan.get("steps", [])
+        for index, execution in enumerate(state.get("steps", []))
+        if execution.get("plan_step_id") == step["id"] and execution.get("tool_id") == step["capability_id"]
+        and (execution.get("plan_version") == plan.get("version") or index in plan.get("carried_execution", []))
+        and execution.get("status") == "completed"
+        and _has_execution_evidence(execution.get("tool_id", ""), execution.get("result"))
+    }
 
 
 def _active_plan_step(state, capability_id):
     plan = state.get("plan")
     if not isinstance(plan, dict):
         return None
-    completed = {
-        item.get("plan_step_id") for item in state.get("steps", [])
-        if item.get("status") == "completed"
-    }
+    completed = _completed_plan_steps(state)
     return next((item["id"] for item in plan.get("steps", [])
                  if item["capability_id"] == capability_id and item["id"] not in completed), None)
 
@@ -427,10 +475,7 @@ def _activate_next_plan_step(user, state):
     plan = state.get("plan")
     if not isinstance(plan, dict):
         return
-    completed = {
-        item.get("plan_step_id") for item in state.get("steps", [])
-        if item.get("status") == "completed" and item.get("plan_version") == plan.get("version")
-    }
+    completed = _completed_plan_steps(state)
     next_step = next((item for item in plan.get("steps", []) if item["id"] not in completed), None)
     if next_step is None:
         state.pop("active_area", None)
@@ -474,15 +519,14 @@ def _missing_plan_steps(state):
         return []
     if plan.get("legacy"):
         return ["обновлённый план"]
-    completed = {
-        item.get("plan_step_id") for item in state.get("steps", [])
-        if item.get("status") == "completed"
-        and item.get("plan_version") == plan.get("version")
-        and _has_execution_evidence(item.get("tool_id", ""), item.get("result"))
-    }
+    completed = _completed_plan_steps(state)
     return [item["id"] for item in plan.get("steps", []) if item["id"] not in completed]
 
 def _run(conversation, user, state):
+    state["status"] = "RUNNING"
+    if state.get("plan"):
+        state.setdefault("task_id", uuid4().hex)
+    _save(conversation, state)
     registry = {item["id"]: item for item in available_tools(user)}
     for _ in range(MAX_TOOL_CALLS + 1):
         definitions, names = openai_functions(
@@ -507,6 +551,7 @@ def _run(conversation, user, state):
             text = content if isinstance(content, str) and content.strip() else (present_result(factual) if factual is not None else "Готово.")
             if state.get("plan"):
                 state["waiting_user"] = True
+                state["status"] = "WAITING_USER"
                 _save(conversation, state)
             else:
                 _finish_turn(conversation, state)
@@ -516,11 +561,19 @@ def _run(conversation, user, state):
         call = calls[0]; function = call.get("function", {}); identifier = names.get(function.get("name"))
         try:
             arguments = json.loads(function.get("arguments", "{}"))
-            if not identifier or not isinstance(arguments, dict): raise AssistantToolError("Некорректный вызов функции")
+            if not identifier or not isinstance(arguments, dict):
+                raise AssistantToolError("Некорректный вызов функции; бизнес-инструменты доступны только после действующего плана")
+            if identifier.startswith("read:") or identifier in registry:
+                step_id = _active_plan_step(state, identifier)
+                if step_id is None or state.get("active_capability") != identifier:
+                    raise AssistantToolError("Инструмент не соответствует текущему незавершённому шагу действующего плана")
+                state["active_plan_step_id"] = step_id
             if identifier == "assistant.finish":
                 text = arguments.get("answer")
                 if not isinstance(text, str) or not text.strip():
                     raise AssistantToolError("Финальный ответ должен быть непустым текстом")
+                if not isinstance(state.get("plan"), dict):
+                    raise AssistantToolError("Нельзя завершить бизнес-задачу без действующего плана")
                 missing = _missing_plan_steps(state)
                 if missing or state.get("waiting_confirmation"):
                     raise AssistantToolError("Нельзя завершить задачу: не подтверждены шаги " + ", ".join(missing or ["действие"]))
@@ -529,14 +582,25 @@ def _run(conversation, user, state):
                 return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
             if identifier == "assistant.plan":
                 previous_plan = state.get("plan") if isinstance(state.get("plan"), dict) else None
-                state["plan"] = _normalise_plan(arguments.get("plan"), user, previous_plan)
+                plan = _normalise_plan(arguments.get("plan"), user, previous_plan)
+                if previous_plan:
+                    unchanged = [item["id"] for item in plan["steps"] if item in previous_plan.get("steps", [])]
+                    completed = _completed_plan_steps(state)
+                    plan["carried_execution"] = [
+                        index for index, item in enumerate(state["steps"])
+                        if item.get("plan_step_id") in unchanged and item.get("plan_step_id") in completed
+                        and (item.get("plan_version") == previous_plan.get("version")
+                             or index in previous_plan.get("carried_execution", []))
+                    ]
+                state["plan"] = plan
+                state.setdefault("task_id", uuid4().hex)
                 state.pop("waiting_user", None)
                 _activate_next_plan_step(user, state)
                 if not map_sent:
                     state["capability_map_pending"] = True
                 _refresh_system_prompt(user, state)
                 result = {"plan_saved": True}
-                _debug(conversation, "agent.plan", output={"plan": state["plan"]})
+                _debug(conversation, "agent.plan", output={"task_id": state["task_id"], "plan": state["plan"]})
             elif identifier == "assistant.select_area":
                 area_id = arguments.get("area")
                 area = next((item for item in available_areas(user) if item["id"] == area_id), None)
@@ -570,15 +634,15 @@ def _run(conversation, user, state):
                 state["last_read_result"] = result
                 state["read_cache"] = {**result, "owner_id": conversation.context.get("owner_id")}
             elif registry[identifier]["requires_confirmation"]:
-                if state.get("active_capability") != identifier:
-                    raise AssistantToolError("Сначала выберите нужную возможность раздела")
                 validate_tool_call(identifier, user, arguments)
                 _validate_action_text_sources(registry[identifier], arguments, state)
                 state["waiting_confirmation"] = {
                     "tool_id": identifier, "arguments": arguments, "tool_call_id": call["id"],
                     "plan_step_id": state.get("active_plan_step_id"),
                     "plan_version": state["plan"].get("version") if isinstance(state.get("plan"), dict) else None,
-                }; _save(conversation, state)
+                }
+                state["status"] = "WAITING_CONFIRMATION"
+                _save(conversation, state)
                 return {
                     "text": str(answer.get("content") or "Подтвердите выполнение действия."),
                     "kind": "confirmation_required",
@@ -593,8 +657,6 @@ def _run(conversation, user, state):
                     },
                 }
             else:
-                if state.get("active_capability") != identifier:
-                    raise AssistantToolError("Сначала выберите нужную возможность раздела")
                 result = execute_tool(identifier, user, arguments)
             if identifier.startswith("read:") or identifier in registry:
                 state["active_arguments"] = arguments
@@ -612,13 +674,23 @@ def _run(conversation, user, state):
             _debug(conversation, "function_call.tool", output={"tool_id": identifier or function.get("name"), "ok": False, "error": str(exc)})
         state["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": content}); _save(conversation, state)
     state["waiting_user"] = True
+    state["status"] = "WAITING_USER"
     _save(conversation, state)
     return {"text": "Задача ещё не завершена; продолжу после следующего сообщения.", "kind": "text", "data": {"steps": state["steps"]}}
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
     previous = conversation.context.get("agent_run")
-    if isinstance(previous, dict) and not previous.get("waiting_confirmation"):
+    if isinstance(previous, dict):
         state = previous
+        waiting = state.get("waiting_confirmation")
+        if waiting:
+            state["messages"].append({"role": "tool", "tool_call_id": waiting["tool_call_id"],
+                "content": json.dumps({"ok": False, "cancelled": True,
+                    "error": "Пользователь прислал текст вместо подтверждения; прежняя карточка недействительна. Учтите уточнение и подготовьте новую карточку."}, ensure_ascii=False)})
+            state.pop("waiting_confirmation")
+            # The text is never permission to execute. The next preview must
+            # validate the updated arguments and obtain its own button click.
+            state.pop("active_arguments", None)
         if isinstance(state.get("plan"), str) and state["plan"].strip():
             state["plan"] = {
                 "version": 0, "goal": state["plan"].strip(), "steps": [], "legacy": True,
@@ -632,8 +704,9 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
 def continue_after_confirmation(conversation, user, tool_id, result):
     state = conversation.context.get("agent_run")
     if not isinstance(state, dict): return None
-    waiting = state.pop("waiting_confirmation", {})
+    waiting = state.get("waiting_confirmation", {})
     if waiting.get("tool_id") != tool_id: return None
+    state.pop("waiting_confirmation")
     state["active_plan_step_id"] = waiting.get("plan_step_id")
     state["active_arguments"] = waiting.get("arguments")
     _record_execution(state, tool_id, result)
@@ -646,9 +719,10 @@ def continue_after_cancellation(conversation, user, tool_id):
     state = conversation.context.get("agent_run")
     if not isinstance(state, dict):
         return None
-    waiting = state.pop("waiting_confirmation", {})
+    waiting = state.get("waiting_confirmation", {})
     if waiting.get("tool_id") != tool_id:
         return None
+    state.pop("waiting_confirmation")
     state["active_plan_step_id"] = waiting.get("plan_step_id")
     state["active_arguments"] = waiting.get("arguments")
     _record_execution(state, tool_id, None, status="cancelled", error="Действие отменено пользователем")

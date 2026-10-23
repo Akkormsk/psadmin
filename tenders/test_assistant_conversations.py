@@ -9,6 +9,256 @@ from django.urls import reverse
 from .assistant_conversations import add_assistant_message, add_debug_event, create_conversation, respond
 
 
+def planned_call(capability, goal="Выполнить задачу", *, revision_reason=None, steps=None):
+    return {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
+        "name": "assistant_plan", "arguments": json.dumps({"plan": {
+            "goal": goal, "revision_reason": revision_reason,
+            "steps": steps or [{"id": "s1", "capability_id": capability,
+                                "objective": goal, "expected_result": "Результат инструмента"}],
+        }}),
+    }}]}
+
+
+def function_call(name, arguments, call_id="call"):
+    return {"role": "assistant", "tool_calls": [{"id": call_id, "type": "function", "function": {
+        "name": name, "arguments": json.dumps(arguments),
+    }}]}
+
+
+class AssistantTaskLifecycleTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_superuser("lifecycle", "lifecycle@example.test", "password")
+        self.conversation = create_conversation(self.user)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_action_clarifications_and_correction_keep_one_plan_and_one_confirmation(self, gateway, _preflight):
+        from cash.models import CashTransaction
+        gateway.side_effect = [
+            planned_call("cash.transaction_create"),
+            {"role": "assistant", "content": "На какую дату записать?"},
+            {"role": "assistant", "content": "За что расход?"},
+            {"role": "assistant", "content": "Хорошо, 200 рублей. За что расход?"},
+            function_call("cash_transaction_create", {"operation_date": "2026-10-22", "account": "cash",
+                "direction": "expense", "amount": 200, "reason": "На покупку бумаги"}, "write"),
+            function_call("assistant_finish", {"answer": "Расход записан."}),
+        ]
+        respond(self.conversation, self.user, "Добавь расход наличными на 175 рублей")
+        run = self.conversation.context["agent_run"]
+        self.assertEqual(run["status"], "WAITING_USER")
+        task_id = run["task_id"]
+        respond(self.conversation, self.user, "За вчера")
+        respond(self.conversation, self.user, "Нет, сумма 200 рублей")
+        card = respond(self.conversation, self.user, "На покупку бумаги")[-1]
+        self.assertEqual(card["kind"], "confirmation_required")
+        self.assertEqual(card["data"]["arguments"]["amount"], 200)
+        self.assertEqual(self.conversation.context["agent_run"]["status"], "WAITING_CONFIRMATION")
+        self.assertEqual(self.conversation.context["agent_run"]["task_id"], task_id)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.client.force_login(self.user)
+        url = reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, card["id"]])
+        self.assertEqual(self.client.post(url, {"accept": "yes"}).status_code, 200)
+        self.assertEqual(self.client.post(url, {"accept": "yes"}).status_code, 409)
+        self.assertEqual(CashTransaction.objects.count(), 1)
+        self.assertEqual(CashTransaction.objects.get().amount, 200)
+        self.conversation.refresh_from_db()
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(self.conversation.feedback_events.filter(scope="assistant_debug", payload__stage="agent.plan").count(), 1)
+        messages = gateway.call_args_list[-1].args[0]
+        self.assertEqual(next(m for m in messages if m.get("tool_call_id") == "write")["role"], "tool")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_conversation_94_reaches_confirmation_without_a_read(self, gateway, _preflight):
+        from cash.models import CashTransaction
+        arguments = {"operation_date": "2026-10-22", "account": "cash", "direction": "expense",
+                     "amount": 175, "reason": "На покупку бумаги"}
+        gateway.side_effect = [planned_call("cash.transaction_create"),
+            {"role": "assistant", "content": "На какую дату записать?"},
+            {"role": "assistant", "content": "За что расход?"},
+            function_call("cash_transaction_create", arguments)]
+        respond(self.conversation, self.user, "Добавь расход наличными на 175 рублей")
+        respond(self.conversation, self.user, "За вчера")
+        card = respond(self.conversation, self.user, "На покупку бумаги")[-1]
+        self.assertEqual(card["kind"], "confirmation_required")
+        self.assertEqual(card["data"]["arguments"], arguments)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.assertEqual(self.conversation.feedback_events.filter(
+            scope="assistant_conversation", payload__kind="confirmation_required").count(), 1)
+        self.assertFalse(any(s["tool_id"].startswith("read:") for s in self.conversation.context["agent_run"]["steps"]))
+        self.assertEqual(gateway.call_count, 4)
+        responses = self.conversation.feedback_events.filter(
+            scope="assistant_debug", payload__stage="function_call.response",
+        ).order_by("pk")
+        route = [
+            (event.payload["output"]["message"].get("tool_calls") or [{"function": {"name": "text"}}])[0]["function"]["name"]
+            for event in responses
+        ]
+        self.assertEqual(route, ["assistant_plan", "text", "text", "cash_transaction_create"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_unplanned_clarification_is_recoverable_without_classifying_user_phrases(self, gateway, _preflight):
+        original = "Добавь расход наличными на 175 рублей" + " " * 2100 + "На покупку бумаги"
+        gateway.side_effect = [
+            {"role": "assistant", "content": "На какую дату записать?"},
+            planned_call("cash.transaction_create"),
+            {"role": "assistant", "content": "За что расход?"},
+        ]
+        respond(self.conversation, self.user, original)
+        self.assertNotIn("agent_run", self.conversation.context)
+        respond(self.conversation, self.user, "За вчера")
+        users = [m["content"] for m in gateway.call_args_list[1].args[0] if m["role"] == "user"]
+        self.assertEqual(users, [original, "За вчера"])
+        self.assertEqual(self.conversation.context["agent_run"]["status"], "WAITING_USER")
+        self.assertEqual(gateway.call_count, 3)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_replan_requires_reason_and_preserves_task_and_execution_evidence(self, gateway, _preflight):
+        gateway.side_effect = [
+            planned_call("cash.transaction_create", "Создать расход"),
+            {"role": "assistant", "content": "За что расход?"},
+            planned_call("cash.transaction_update", "Изменить расход"),
+            planned_call("cash.transaction_update", "Изменить расход", revision_reason="Пользователь просит изменить существующий расход вместо создания"),
+            {"role": "assistant", "content": "Какой расход изменить?"},
+        ]
+        respond(self.conversation, self.user, "Создай расход")
+        task_id = self.conversation.context["agent_run"]["task_id"]
+        respond(self.conversation, self.user, "Нет, измени существующий")
+        run = self.conversation.context["agent_run"]
+        self.assertEqual(run["task_id"], task_id)
+        self.assertEqual(run["plan"]["version"], 2)
+        self.assertTrue(any("причин" in m.get("content", "") for m in run["messages"] if m["role"] == "tool"))
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_read_clarification_read_finish_keeps_one_plan(self, gateway, _preflight):
+        steps = [{"id": f"s{i}", "capability_id": "read:cash.transactions", "objective": "Прочитать операции",
+                  "expected_result": "Список операций"} for i in (1, 2)]
+        gateway.side_effect = [
+            planned_call("read:cash.transactions", steps=steps),
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}, "read1"),
+            {"role": "assistant", "content": "За какой период показать остальные?"},
+            function_call("read_cash_transactions", {"plan": {"limit": 2}}, "read2"),
+            function_call("assistant_finish", {"answer": "Операций нет."}),
+        ]
+        respond(self.conversation, self.user, "Прочитай операции, затем уточни период и прочитай остальные")
+        task_id = self.conversation.context["agent_run"]["task_id"]
+        answer = respond(self.conversation, self.user, "За сентябрь")[-1]
+        self.assertEqual(answer["text"], "Операций нет.")
+        self.assertEqual(len([s for s in answer["data"]["steps"] if s.get("tool_id", "").startswith("read:")]), 2)
+        self.assertTrue(task_id)
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(gateway.call_count, 5)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_backend_blocks_business_without_plan_even_with_selected_capability(self, gateway, _preflight):
+        from .assistant_agent import _new_state, _run
+        state = _new_state(self.conversation, self.user, "Покажи операции", [])
+        state.update(active_capability="read:cash.transactions", active_area="cash")
+        gateway.side_effect = [
+            function_call("read_cash_transactions", {"plan": {}}),
+            {"role": "assistant", "content": "Нужно составить план."},
+        ]
+        with patch("tenders.assistant_agent.execute_tool") as execute:
+            _run(self.conversation, self.user, state)
+        execute.assert_not_called()
+        self.assertIn("план", gateway.call_args_list[1].args[0][-2]["content"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_text_at_confirmation_replaces_preview_without_executing_or_replanning(self, gateway, _preflight):
+        from cash.models import CashTransaction
+        arguments = {"operation_date": "2026-10-22", "account": "cash", "direction": "expense",
+                     "amount": 175, "reason": "На покупку бумаги"}
+        gateway.side_effect = [
+            planned_call("cash.transaction_create"),
+            function_call("cash_transaction_create", arguments, "old-preview"),
+            function_call("cash_transaction_create", {**arguments, "amount": 200}, "new-preview"),
+            {"role": "assistant", "content": "Действие отменено. Что изменить?"},
+        ]
+        old = respond(self.conversation, self.user, "Запиши за вчера расход наличными 175 рублей на покупку бумаги")[-1]
+        new = respond(self.conversation, self.user, "Нет, 200 рублей")[-1]
+        self.assertEqual(new["data"]["arguments"]["amount"], 200)
+        self.assertEqual(self.conversation.context["agent_run"]["plan"]["version"], 1)
+        self.client.force_login(self.user)
+        old_url = reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, old["id"]])
+        new_url = reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, new["id"]])
+        self.assertEqual(self.client.post(old_url, {"accept": "yes"}).status_code, 409)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.assertEqual(self.client.post(new_url, {"accept": "no"}).status_code, 200)
+        self.assertEqual(self.client.post(new_url, {"accept": "yes"}).status_code, 409)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.context["agent_run"]["status"], "WAITING_USER")
+        messages = gateway.call_args_list[2].args[0]
+        self.assertEqual(len([m for m in messages if m.get("tool_call_id") == "old-preview"]), 1)
+        self.assertIn("Нет, 200 рублей", [m.get("content") for m in messages if m["role"] == "user"])
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_plan_does_not_allow_an_unplanned_step_or_an_early_finish(self, gateway, _preflight):
+        from .assistant_agent import _new_state, _normalise_plan, _run
+        state = _new_state(self.conversation, self.user, "Создай расход", [])
+        state["plan"] = _normalise_plan({"goal": "Создать расход", "steps": [{
+            "id": "s1", "capability_id": "cash.transaction_create", "objective": "Создать расход",
+        }]}, self.user)
+        state.update(active_capability="read:cash.transactions", active_area="cash")
+        gateway.side_effect = [
+            function_call("read_cash_transactions", {"plan": {}}, "wrong-step"),
+            function_call("assistant_finish", {"answer": "Выполнено"}, "early-finish"),
+            {"role": "assistant", "content": "За что расход?"},
+        ]
+        with patch("tenders.assistant_agent.execute_tool") as execute:
+            _run(self.conversation, self.user, state)
+        execute.assert_not_called()
+        errors = [json.loads(m["content"]) for m in state["messages"] if m["role"] == "tool"]
+        self.assertEqual([e["ok"] for e in errors], [False, False])
+        self.assertEqual(state["status"], "WAITING_USER")
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_replan_preserves_completed_steps_but_requires_changed_steps_again(self, gateway, _preflight):
+        initial = [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции",
+                    "expected_result": "Список операций"},
+                   {"id": "s2", "capability_id": "cash.transaction_create", "objective": "Создать расход",
+                    "expected_result": "Созданная операция"}]
+        revised = [initial[0], {**initial[1], "capability_id": "cash.transaction_update", "objective": "Изменить расход"}]
+        gateway.side_effect = [
+            planned_call("read:cash.transactions", "Найти и создать", steps=initial),
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}),
+            {"role": "assistant", "content": "За что расход?"},
+            planned_call("read:cash.transactions", "Найти и изменить", steps=revised,
+                         revision_reason="Пользователь заменил создание изменением существующей операции"),
+            {"role": "assistant", "content": "Какой расход изменить?"},
+        ]
+        respond(self.conversation, self.user, "Покажи операции и создай расход")
+        respond(self.conversation, self.user, "Вместо создания измени существующий расход")
+        from .assistant_agent import _missing_plan_steps
+        run = self.conversation.context["agent_run"]
+        self.assertEqual(_missing_plan_steps(run), ["s2"])
+        self.assertEqual(run["active_capability"], "cash.transaction_update")
+        self.assertEqual(run["plan"]["version"], 2)
+        self.assertTrue(run["plan"]["carried_execution"])
+        self.assertEqual(len([s for s in run["steps"] if s.get("tool_id", "").startswith("read:")]), 1)
+
+    @patch("tenders.assistant_agent.preflight")
+    @patch("tenders.assistant_agent._gateway")
+    def test_finish_starts_the_next_task_without_the_old_chain(self, gateway, _preflight):
+        gateway.side_effect = [planned_call("read:cash.transactions"),
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}),
+            function_call("assistant_finish", {"answer": "Операций нет."}),
+            {"role": "assistant", "content": "Здравствуйте!"}]
+        respond(self.conversation, self.user, "Покажи операции")
+        self.assertNotIn("agent_run", self.conversation.context)
+        respond(self.conversation, self.user, "Привет")
+        self.assertEqual([m["role"] for m in gateway.call_args_list[3].args[0]], ["system", "system", "user"])
+        self.assertEqual(gateway.call_count, 4)
+        self.assertNotIn("agent_run", self.conversation.context)
+
+
 class AssistantConversationUiTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_superuser("assistant-ui", "assistant-ui@example.test", "password")
@@ -237,7 +487,7 @@ class AssistantFunctionCallingTests(TestCase):
             amount="100", reason="Оплата", created_by=self.user,
         )
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": '{"plan":"1. Найду операции. 2. Покажу результат."}'}}]},
+            planned_call("read:cash.transactions", "1. Найду операции. 2. Покажу результат."),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": '{"capability":"read:cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount", "reason"], "order_by": "-operation_date", "limit": 3}})}}]},
@@ -254,7 +504,7 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_empty_final_read_text_falls_back_to_backend_presentation(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": '{"plan":"Найду операцию."}'}}]},
+            planned_call("read:cash.transactions", "Найду операцию."),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": '{"capability":"read:cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
@@ -298,38 +548,30 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_user_correction_continues_the_saved_plan_and_can_replace_it(self, gateway, _preflight):
+    def test_user_correction_continues_the_saved_plan_without_replanning(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan-1", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": "Найду заказы Иванова за указанный период."}),
-            }}]},
-            {"role": "assistant", "tool_calls": [{"id": "question", "type": "function", "function": {
-                "name": "assistant_finish", "arguments": json.dumps({"answer": "За какой период показать заказы?"}),
-            }}]},
-            {"role": "assistant", "tool_calls": [{"id": "plan-2", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": "Найду заказы Иванова за сентябрь."}),
-            }}]},
+            planned_call("read:cash.transactions", "Найду операции за указанный период"),
+            {"role": "assistant", "content": "За какой период показать операции?"},
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}),
             {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
-                "name": "assistant_finish", "arguments": json.dumps({"answer": "За сентябрь заказы найдены."}),
+                "name": "assistant_finish", "arguments": json.dumps({"answer": "За сентябрь операций нет."}),
             }}]},
         ]
 
-        first = respond(self.conversation, self.user, "Покажи заказы Иванова")
+        first = respond(self.conversation, self.user, "Покажи операции")
         second = respond(self.conversation, self.user, "За сентябрь")
 
-        self.assertEqual(first[-1]["text"], "За какой период показать заказы?")
-        self.assertEqual(second[-1]["text"], "За сентябрь заказы найдены.")
+        self.assertEqual(first[-1]["text"], "За какой период показать операции?")
+        self.assertEqual(second[-1]["text"], "За сентябрь операций нет.")
         continuation_messages = gateway.call_args_list[2].args[0]
-        self.assertIn("active_task", continuation_messages[1]["content"])
+        self.assertEqual([m["content"] for m in continuation_messages if m["role"] == "user"], ["Покажи операции", "За сентябрь"])
         self.assertEqual([item for item in continuation_messages if item.get("role") == "user"][-1]["content"], "За сентябрь")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_read_result_can_trigger_a_saved_replan_before_finish(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan-1", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": "1. Найду операции. 2. Покажу результат."}),
-            }}]},
+            planned_call("read:cash.transactions", "1. Найду операции. 2. Покажу результат."),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
             }}]},
@@ -339,9 +581,9 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {
                 "name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}}),
             }}]},
-            {"role": "assistant", "tool_calls": [{"id": "plan-2", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": "Операций нет; сообщу результат без суммы."}),
-            }}]},
+            planned_call("read:cash.transactions", "Операций нет; сообщу результат без суммы.",
+                revision_reason="READ показал отсутствие операций; прежняя цель с суммой неприменима",
+                steps=[{"id": "s1", "capability_id": "read:cash.transactions", "objective": "1. Найду операции. 2. Покажу результат.", "expected_result": "Результат инструмента"}]),
             {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
                 "name": "assistant_finish", "arguments": json.dumps({"answer": "За выбранный период операций нет."}),
             }}]},
@@ -480,7 +722,7 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_action_waits_for_confirmation_and_continues_once(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": '{"plan":"Подготовлю операцию."}'}}]},
+            planned_call("cash.transaction_create", "Подготовлю операцию."),
             {"role": "assistant", "content": None, "tool_calls": [{"id": "area", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
             }}]},
@@ -512,9 +754,7 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_action_rejects_free_text_not_present_in_a_user_message(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": '{"plan":"Подготовлю операцию."}',
-            }}]},
+            planned_call("cash.transaction_create", "Подготовлю операцию."),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
             }}]},
@@ -681,7 +921,7 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_finished_text_turn_does_not_keep_visible_history(self, gateway, _preflight):
+    def test_unplanned_text_keeps_only_one_exchange_for_protocol_recovery(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "content": "За какой период?"},
             {"role": "assistant", "content": "За сентябрь найдено 3 заказа."},
@@ -693,6 +933,7 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual(second[-1]["text"], "За сентябрь найдено 3 заказа.")
         messages = gateway.call_args_list[1].args[0]
         self.assertEqual([item for item in messages if item.get("role") == "user"], [
+            {"role": "user", "content": "Покажи заказы Иванова"},
             {"role": "user", "content": "За сентябрь"},
         ])
 
@@ -723,14 +964,10 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_explicit_and_inferred_area_use_the_same_area_tool(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan-explicit", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": '{"plan":"Уточню задачу по кассе."}',
-            }}]},
+            planned_call("read:cash.transactions", "Уточню задачу по кассе."),
             {"role": "assistant", "tool_calls": [{"id": "explicit", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "content": "Что именно сделать с кассой?"},
-            {"role": "assistant", "tool_calls": [{"id": "plan-inferred", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": '{"plan":"Уточню поступления по кассе."}',
-            }}]},
+            planned_call("read:cash.transactions", "Уточню поступления по кассе."),
             {"role": "assistant", "tool_calls": [{"id": "inferred", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "content": "За какой период показать поступления?"},
         ]
