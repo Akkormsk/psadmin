@@ -125,6 +125,19 @@ jobs:
           cd "$app/deploy/vds"
           ./twin.sh up </dev/null
           docker compose -f compose.test.yml ps test-web
+          test "$(sed -n 's/^sha=//p' ../../.twin-version)" = "$deploy_sha"
+          docker compose -f compose.test.yml exec -T test-web python - <<'PY'
+          import json
+          import os
+
+          model = os.getenv("TIMEWEB_AI_ASSISTANT_MODEL")
+          base_url = os.getenv("TIMEWEB_AI_BASE_URL")
+          key_configured = bool(os.getenv("TIMEWEB_AI_API_KEY", "").strip())
+          assert model == "anthropic/claude-haiku-5-5", "Unexpected TEST assistant model"
+          assert base_url == "https://api.timeweb.ai/v1", "Unexpected TEST Gateway URL"
+          assert key_configured, "TEST Gateway key is missing"
+          print(json.dumps({"assistant_model": model, "base_url": base_url, "key_configured": key_configured}))
+          PY
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \
             https://test.admin.psodin.ru/ > /dev/null
