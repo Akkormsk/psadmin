@@ -116,5 +116,10 @@
   ],
   "repeats": 1,
   "approved_remaining_budget_rub": "28.683322",
-  "pricing": "No cache discount"
+  "pricing": "No cache discount",
+  "budget_update": {
+    "total_limit_rub": 60,
+    "source": "Explicit user approval",
+    "cash_discount": false
+  }
 }

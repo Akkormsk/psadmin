@@ -20,12 +20,12 @@
     "requires_user_approval_before_start": false,
     "all_16_calls_at_maximum_envelope_rub": 99.247488,
     "budget_note": "50 RUB total pilot stop budget; may stop early. Live runner and compatibility must honor it, including paid failures. Full trial budget remains unapproved.",
-    "approved_spend_limit_rub": 50,
-    "authorization": "User explicitly allocated 50 RUB total to pilot; compatibility calls, failed attempts and both models share this budget. Do not request the same approval again.",
+    "approved_spend_limit_rub": 60,
+    "authorization": "User explicitly approved total limit 60 RUB on 2026-10-23",
     "status": "Complete paired 24-trial comparison plus one earlier backup trial",
     "result_summary": "results/pilot-20261023/summary.json",
-    "charged_or_reserved_rub": "21.316678",
-    "remaining_approved_budget_rub": "28.683322",
+    "charged_or_reserved_rub": "49.828831",
+    "remaining_approved_budget_rub": "10.171169",
     "backup_authorized": "User authorized 5.4 Mini if Nano has issues or is worse; used after redundant account question"
   },
   "primary": {
@@ -112,5 +112,13 @@
     "result_summary": "results/nano-expanded-20261023/summary.json",
     "diagnosis": "results/nano-expanded-20261023/diagnosis.json"
   },
-  "accounting_policy": "Use full prompt input rate, without cache discount, per user instruction. Continue recording actual cached usage; do not assume discount applies."
+  "accounting_policy": "Use full prompt input rate, without cache discount, per user instruction. Continue recording actual cached usage; do not assume discount applies.",
+  "real_task_comparison": {
+    "model_A": "openai/gpt-4.1-mini",
+    "model_B": "openai/gpt-5.4-mini",
+    "status": "Seven paired outcomes complete; final strong-model L outcome budget limited",
+    "summary": "results/real-tasks-20261023/summary.json",
+    "business_outcomes_completed_pairs": "5/7 baseline; 6/7 strong model",
+    "ordinary_tasks": "4/6 baseline; 6/6 strong model"
+  }
 }

@@ -46,10 +46,10 @@ def run(args):
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {
         "approved_limit_rub": 50, "reservations": [], "attempt_calls": {}, "calls": [],
     }
-    if ledger["approved_limit_rub"] != 50:
-        raise RuntimeError("Only the approved 50 RUB pilot is supported")
+    if ledger["approved_limit_rub"] not in (50, 60):
+        raise RuntimeError("Only an explicitly approved 50 or 60 RUB limit is supported")
     rates = json.loads((ROOT / "experiments/m10/rates.json").read_text())["rates"]
-    budget = Budget(50, rates)
+    budget = Budget(ledger["approved_limit_rub"], rates)
     budget.reservations = [Decimal(x) for x in ledger["reservations"]]
     budget.attempt_calls = ledger["attempt_calls"]
     database = directory / (args.attempt + ".sqlite3")
