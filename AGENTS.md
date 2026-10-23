@@ -1,153 +1,45 @@
-# Project invariants
+# PSADMIN: правила разработки
 
-## Shared agent rules
+## Инварианты
 
-- GitHub is the source of truth for code. Production PostgreSQL is the source of truth for operational knowledge; never copy it into Git.
-- Work in an isolated branch and test environment. Do not change production, production flags, secrets, or run destructive migrations without the owner's direct approval.
-- Preserve V1 behaviour until the corresponding V2 workflow has been accepted. Reuse existing models and domain services; do not add parallel registries, calculator engines, or learning stores.
-- Do not hardcode suppliers, products, or business rules in core logic. LLMs interpret language; backend services validate, rank, and calculate.
-- Verify the actual test commit and health before claiming a deployment. Do not run mass AI/backfill work without a defined budget.
-- Check UI changes in a real browser when authentication is available. Do not create pages-inside-pages, duplicate global chrome, or substitute a fake modal page for an in-app workspace.
-- Every new user-facing screen must use the PSADMIN navigation contract: logical parent fallback, Home access, and no navigation traps.
-- After a milestone report: completed work, verification, commit, test deployment state, limitations, and a concrete manual check.
+- GitHub — источник истины для кода; production PostgreSQL на Timeweb — для операционных знаний. Не копировать production-данные в Git.
+- Работать только в изолированной ветке и TEST-среде. Без прямого разрешения владельца не менять PROD, production-флаги, секреты и не запускать destructive migrations, deploy или массовый AI/backfill; для backfill нужен определённый бюджет.
+- Сохранять V1 до принятия соответствующего V2. Использовать существующие модели и доменные сервисы, не создавать параллельные реестры, calculation engines или learning stores.
+- LLM интерпретирует язык; backend выполняет расчёты, валидацию, фильтрацию каталога и ранжирование. Не хардкодить поставщиков, товары или бизнес-правила в core. Подтверждённая обратная связь и вытесненные знания должны быть версионируемы и восстанавливаемы.
+- Локальные тесты не подключаются к production и не меняют его. Git содержит код, миграции и curated fixtures, но не credentials, production dumps, клиентские документы или выгрузки поставщиков. Интеграции поставщиков не скачивают изображения без явного запроса.
+- Не объявлять deploy состоявшимся без проверки фактического commit SHA и health. UI проверять в реальном браузере, когда доступна аутентификация; новые экраны соблюдают navigation contract: логический parent fallback, Home и отсутствие navigation traps.
+- В отчёте этапа указать изменения, проверку, commit, состояние TEST-deploy, ограничения и конкретную ручную проверку.
+- Новая пользовательская Django-модель или поле, доступное через assistant READ, имеет осмысленный `verbose_name`, а при необходимости `help_text`; не создавать assistant-only каталог имён и отвечать пользователю человеческими подписями, а не техническими именами. Для составного отбора публиковать existing generic READ hook модели и общий read-only service экрана, не копировать правило в агента и не делать phrase-specific tool; проверять их одинаковое поведение.
 
-- Before changing assistant, catalogue search, ranking, feedback, or calculation behavior, read `docs/assistant_protocol.md`.
-- The production database on Timeweb is the canonical assistant knowledge base.
-- Local automated tests must not connect to or modify production data.
-- Git contains code, migrations, and curated test fixtures, not production database dumps, credentials, customer documents, or supplier exports.
-- The LLM interprets natural language. Calculations, validation, catalogue filtering, and ranking are performed by the backend.
-- Confirmed administrator feedback and superseded knowledge must remain versioned and recoverable.
-- Production changes are deployed through GitHub. Do not deploy or mutate Timeweb configuration without explicit authorization.
-- Supplier integrations must not download images unless explicitly requested.
-- Every new user-facing Django model and field that can be exposed through assistant READ must define a meaningful human `verbose_name`; add `help_text` when the label alone cannot distinguish its business meaning. Do not create a second assistant-only naming catalogue: READ publishes these model metadata automatically, and the agent must use human labels in replies rather than technical field names.
-- If a site screen exposes a composite business selection that cannot be represented by ordinary ORM filters, publish it on the owning model through the existing generic READ view hook and reuse the same shared read-only service as the screen. Never copy its rules into the agent or add a phrase-specific tool; test that the screen and READ use the same selector.
+## Минимальный, проверяемый код
 
-# Personal coding behavior
+- Сначала назвать допущения и неоднозначности; при существенной неясности остановиться и спросить. Делать минимальное решение без спекулятивных функций, абстракций и рефакторинга по соседству.
+- Менять только необходимое, сохранять стиль; удалять лишь созданные своими изменениями orphaned imports/variables/functions. Каждый изменённый фрагмент должен относиться к задаче.
+- Задать проверяемый критерий успеха. Для бага по возможности сначала воспроизвести его тестом; для новой логики сначала написать проверку. Если test-first невозможен, назвать причину.
+- Код должен объяснять себя; комментарии нужны только для нетривиальных ограничений, схем или причин, не для механики языка.
 
-These rules apply to all coding work across projects on this machine. They are the sole repo-wide human/AI development instructions; do not introduce or require CLAUDE.md.
+## Документация и расход контекста
 
-## 1. Think before coding
+`AGENTS.md` задаёт нормы разработки; `docs/assistant_protocol.md` — единственный источник подтверждённого поведения, решений и состояния системы. Не создавать новые человеческие `*.md`/`*.txt` как roadmap, handoff, prompt, архитектурные заметки, TODO, отчёты или параллельные протоколы. Новые сведения — в существующий протокол; старые документы не удалять без проверки переноса и разрешения владельца. Машинные тестовые артефакты допустимы и не являются вторым источником решений.
 
-Don't assume. Don't hide confusion. Surface tradeoffs.
+Эти правила едины для Claude, Codex, ChatGPT, локальных и облачных агентов; не вводить и не требовать `CLAUDE.md`.
 
-Before implementing:
+- Перед задачей сначала посмотреть структуру протокола и прочитать только разделы, относящиеся к изменяемому поведению, данным, рискам и проверкам. Полностью читать обе версии (`main` и `test-server`) нужно только для релизной сверки или когда задача действительно требует полного контракта.
+- Начинать с точечного `rg`, импортов и определений, затем читать нужные диапазоны файлов. Не загружать целиком большие документы, JSON, логи или результаты тестов без причины.
+- Для бага: воспроизведение → целевые тесты после исправления → необходимая регрессия. Полный набор — перед завершением значимого изменения или при затрагивании общей логики. Не повторять неизменившиеся тесты без причины.
+- Не использовать субагентов и широкое исследование репозитория по умолчанию. Экономия контекста не отменяет проверок безопасности, прав, сохранности данных, миграций и релиза.
 
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+## Протокол, окружения и релизы
 
-## 2. Simplicity first
+- `main/docs/assistant_protocol.md` описывает только подтверждённый PROD; `test-server/docs/assistant_protocol.md` — подтверждённый TEST, отличия и план. Ветка, PR, mock-тест или локальный тест не являются релизом.
+- Для каждой возможности использовать честный статус: `PROD_VERIFIED`, `TEST_VERIFIED`, `CODE_ONLY`, `DECIDED_BACKLOG`, `DEFERRED` или `REJECTED`. Подтверждение требует server/release SHA: для TEST — `.twin-version` или равный достоверный источник, для PROD — deployed Git SHA/версия. В протоколе фиксировать дату, ветку, source SHA, deployed SHA либо «не подтверждён», проверки и известные пробелы; не включать персональные данные, секреты или реальные выгрузки.
+- Не смешивать согласованный план, код/автотесты и проверенную работу сервера. Изменение архитектуры/тестового кода, принятое решение, находка, эксперимент или перенос в TEST обновляет протокол в том же наборе коммитов; после TEST-deploy сверить SHA и health. Перед PROD-deploy подготовить обновление `main` и после него сверить SHA и основные сценарии. Расхождения фиксировать, а не угадывать.
+- Любое слияние, удаление документов, migration production DB, test/prod deploy или массовый AI backfill требует ранее данного явного разрешения владельца; молчание не является согласием. `test-server` деплоится при любом push, включая документацию: перед merge проверить workflow и текущий релиз, после разрешённого push дождаться deploy+health. PROD запрещён без прямой команды; в 09:00–19:00 Москвы нужно отдельное однозначное подтверждение запуска в рабочее окно, вне окна тоже нужна явная команда. Использовать реальные backup/migration/health scripts.
+- Перед передачей или релизной сверкой: проверить ветку, status, HEAD, base/PR, дату и deployed SHA; при необходимости прочитать обе версии протокола и сравнить схему/алгоритмы с кодом, миграциями и тестами; запустить нужные тесты; сообщить изменения, SHA, результаты, серверную приёмку, долг и требуемый approval. Не удалять неперенесённые требования и не считать один адаптер принятым V2.
 
-Minimum code that solves the problem. Nothing speculative.
+## Ассистент и пользовательские операции
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Self-check: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical changes
-
-Touch only what you must. Clean up only your own mess.
-
-When editing existing code:
-
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it — don't delete it.
-
-When your changes create orphans:
-
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-Test: every changed line should trace directly to the user's request.
-
-## 4. Goal-driven execution
-
-Define success criteria. Loop until verified.
-
-Transform tasks into verifiable goals:
-
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan with explicit verification steps.
-
-## 5. TDD and Test-first execution
-
-Build your own evaluation loop. Fail first, then fix.
-
-Before writing functional code:
-
-- Whenever possible, write the test that reproduces the bug or validates the new feature first.
-- Run the test to watch it fail before implementing the solution.
-- Use local test execution as your primary feedback mechanism for agent self-evaluation.
-- If a test cannot be written upfront, explicitly state the blocker before proceeding.
-
-Test: You should observe a failing test state before you ever write the code to make it pass.
-
-## 6. Code over comments
-
-Self-explanatory code first. If comments are necessary, they must explain the code.
-Comment context and constraints, not mechanics.
-
-- Prioritize expressive naming and clean structure over explanatory comments.
-- Only comment when the logic is inherently non-obvious or bound by external schemas.
-- Focus comments strictly on the "why" of system quirks, business rules, and third-party restrictions.
-- DO NOT explain language features, frameworks, or generic technology mechanics.
-
-When tempted to write a comment, first try renaming or restructuring. Usually that removes the need.
-Self-check: "If I delete this comment, does the code become harder to understand correctly?" If no, delete it.
-
----
-
-Tradeoff: these rules bias toward caution over speed. For trivial tasks, use judgment.
-
-## Единый живой протокол и сменяемость AI-разработчика (с 2026-10-13)
-
-**Правила:** этот `AGENTS.md` — единственная инструкция о том, КАК вести разработку. `docs/assistant_protocol.md` — единственный документ о том, ЧТО реально работает, как проходит тендер от ЕИС до исполнения и какие решения согласованы, но не выпущены. Это правило относится к Claude, Codex, ChatGPT, локальным и облачным агентам одинаково. При смене агента не нужен отдельный handoff: прочитать `AGENTS.md`, протокол `main`, протокол `test-server`, затем проверить Git/развёрнутые SHA и тесты.
-
-### Различать код, тест и фактический релиз
-
-- `main/docs/assistant_protocol.md` описывает **подтверждённое поведение продакшена**, а не обещания, только что слитый код или гипотезы. При неустановленном deployed SHA честно помечать состояние «сверка с сервером не выполнена», не объявлять Git-ветку запущенным релизом.
-- `test-server/docs/assistant_protocol.md` описывает **подтверждённое поведение тестового сервера**, отличия от продакшена и отдельно план. Экспериментальная ветка/PR и локальные тесты не означают «развёрнуто на тесте».
-- Для каждой возможности явно указывать статус: `PROD_VERIFIED` (проверены сервер и коммит), `TEST_VERIFIED`, `CODE_ONLY` (присутствует в ветке, без живой приёмки), `DECIDED_BACKLOG`, `DEFERRED` или `REJECTED`. Не повышать статус на основании одного текста handoff или mock-теста. Фактические статусы серверов — только по release SHA (для тестового VDS `.twin-version` или эквивалентный достоверный источник, для прода — развёрнутый Git SHA/версия релиза).
-- В начале каждого протокола фиксировать дату, ветку, commit SHA исходного кода, deployed SHA **или** отметку «не подтверждён», пройденные проверки/известные пробелы. Не хранить персональные данные, секреты и реальные выгрузки.
-- Не путать три вещи: **согласованный продуктовый план**, **код и автоматические тесты** и **подтверждённую работу на сервере**. Результат промежуточного этапа фиксировать в протоколе текущей feature-ветки, но не объявлять тестовым или продовым релизом.
-- При изменении тестового кода/архитектуры, принятом решении пользователя, находке, результате эксперимента или переносе в тест: **в том же наборе коммитов** обновлять `docs/assistant_protocol.md` в рабочей ветке. После успешного тестового деплоя сверять SHA/health и приводить протокол `test-server` к реально проверенному состоянию; бэклог сохранять отдельно от работающего.
-- Перед **каждым** production deploy подготовить изменение протокола для `main`; после релиза сверить deployed SHA и основные сценарии и актуализировать запись о реально работающем. Если сервер и ветка разошлись, не исправлять историю догадками, не заявлять окончание релиза, зафиксировать расхождение. Никогда не обновлять продовый протокол только потому, что M3/другая ветка готова.
-- Протокол описывает полный путь (ЕИС → фильтрация → документы/факты/риски → V2 коммерческие позиции и маршруты → подготовка и кэш → калькуляторы/экономика → торги/протокол/результат → исполнение), вызовы и модели, источники истины, ограничения, очередь/интеграции, тесты, решения и бэклог. Ссылаться на реальные кодовые пути и тесты, а не пересказывать предполагаемые функции.
-- **Запрещено создавать новые текстовые документы** `*.md`/`*.txt` в качестве roadmap, handoff, промптов Claude/Codex, архитектурных заметок, TODO, отчётов или параллельных протоколов. Новые сведения пишутся в `docs/assistant_protocol.md`; нормы работы — в `AGENTS.md`. Уже существующие файлы до подтверждённого переноса не удалять. Исключения — необходимые для работы кода/инструментов стандартизованные файлы (`requirements.txt`, данные тестов, машинные fixtures, лицензии), но не вторые человеческие инструкции.
-- История тестовых замеров и контрактные автотесты могут оставаться отдельными **машинными артефактами**; они не становятся вторым текстовым источником решений. Старые заметки удаляются только после проверки, что все действующие требования перенесены, и с одобрения владельца.
-- Любое слияние веток, удаление документов, миграции production DB, prod/test deploy или массовый AI backfill — только в соответствии с ранее выданным явным разрешением владельца; отсутствие ответа не является согласием.
-
-### Контрольный список перед передачей работы или релизом
-
-1. Сверить `git branch`, `git status`, HEAD, base/PR, дату и последний подтверждённый deployed SHA нужного окружения.
-2. Открыть обе версии протокола, сравнить изменения схемы и алгоритмов с кодом, миграциями и тестами; актуализировать статусы, открытые вопросы, отклонённые подходы и следующий проверяемый шаг.
-3. Не удалять не перенесённые требования; не объявлять интеграцию принятой по одному адаптеру; сохранять V1 до явной приёмки V2.
-4. Запустить целевые тесты; указать реальные результаты или блокер. После релиза проверить health и пользовательский путь на целевом сервере, зафиксировать точную ревизию.
-5. В итоговом сообщении оставить пользователю: изменения, commit SHA, тесты/серверную приёмку, оставшийся долг, нужен ли его approval. Никаких отдельных handoff-файлов.
-
-### Дополнительные проверяемые ограничения релиза
-
-- `test-server` автоматически деплоится GitHub Actions при **любом push**, включая изменения только документов. Перед merge в эту ветку проверить последний успешный workflow и текущую ветку/релиз, чтобы не затереть незакоммиченные серверные изменения; после push дождаться успешного deploy+health. Если SHA нельзя проверить — не обещать, что сервер соответствует ветке.
-- Прод-деплой запрещён без прямой команды владельца. Сохраняется ранее согласованное дополнительное ограничение: в **09:00–19:00 по Москве** нужно отдельно и однозначно подтвердить выполнение релиза именно в рабочее окно; вне окна также требуется явная команда на деплой. Обязательны backup, миграции и проверка здоровья по реально используемым скриптам.
-- При добавлении новых приложений либо изменении ACTION требуется тест, что все опубликованные `source` реально разрешаются в callable и что UI/ассистент используют **один** backend executor. Ни один статус `PROD_VERIFIED` или `TEST_VERIFIED` не ставить только по наличию Python-функции.
-- Удалённые в ходе консолидации инструкции восстанавливаются из Git-истории соответствующей ветки. Удаление markdown **не** означает удаление тестов/фикстур, миграций, механизмов журналирования или операционных скриптов.
-
-### Рост энциклопедии пользовательских операций (M3.1, решение владельца 2026-10-13)
-
-- Единица энциклопедии — законченная пользовательская задача (макрофункция), а не каждый внутренний вызов, сохранение, лог или служебный шаг. Описание включает назначение, обязательные входы, результат, побочные эффекты, подтверждение и источник общего исполнителя.
-- Любая новая или изменённая пользовательская возможность сайта в том же PR должна быть сопоставлена с реестром assistant capabilities приложения-владельца: добавить/изменить/исключить декларацию и тесты. Нельзя оставлять новые возможности неизвестными энциклопедии молча. Если операция не может быть безопасно опубликована, явно указать причину в действующем протоколе, а не создавать ложный executable source.
-- Инвентаризация должна быть автоматизируема и проверяема тестами, но обнаружение новой функции не означает автоматического разрешения AI на её выполнение. Для записи обязательны права, preview/confirmation, идемпотентность и аудит.
-- Для функций, доступных только через логику HTTP View/JavaScript, сначала выделить реальный общий backend executor, используемый одновременно сайтом и агентом. Нельзя переписывать бизнес-логику в assistant-only helper.
-- Пользователь может дать входные данные в любом количестве сообщений. Сохранять собранные аргументы и задавать вопросы только о недостающих; изменение введённого значения заменяет старое. На исполнение переходить только после проверки полного контракта входов и server-side подтверждения записи.
-- Интерфейсные представления Web и Telegram являются адаптерами к общему диалоговому состоянию и семантическим действиям: текст, одиночный/множественный выбор, дата/число, вложение, preview, подтверждение/отмена, статус долгой задачи. Telegram не реализует отдельную бизнес-логику.
-- M3.1 — одна макрооперация с любым количеством её штатных backend-шагов, один требующий подтверждения итог. Самостоятельный AI-цикл из нескольких независимых READ/ACTION относится к M3.2, не маскировать его гигантским AI-only исполнителем.
+- Единица capabilities — законченная пользовательская макрофункция: назначение, обязательные входы, результат, побочные эффекты, подтверждение и общий executor. Любая новая/изменённая пользовательская возможность в том же PR изменяет декларацию capabilities и тесты; если её нельзя безопасно публиковать, указать причину в протоколе.
+- Автоматизированный реестр не даёт AI разрешение на выполнение. Для записи обязательны права, preview/confirmation, идемпотентность и аудит. Логику HTTP/JavaScript сначала выносить в реальный общий backend executor для сайта и агента, не в assistant-only helper.
+- Сохранять аргументы из нескольких сообщений, спрашивать только недостающие, заменять исправленное значение и выполнять запись лишь после полного контракта и server-side confirmation. Web и Telegram — адаптеры общего диалогового состояния и семантических действий; Telegram не имеет отдельной бизнес-логики.
+- M3.1 — одна макрооперация с её штатными backend-шагами и одним итоговым подтверждением. Несколько независимых READ/ACTION — M3.2, не маскировать их одним гигантским AI-only executor. Для нового приложения или изменения ACTION тестировать разрешение каждого опубликованного `source` в callable и единый executor для UI/ассистента; Python-функция сама по себе не даёт `TEST_VERIFIED` или `PROD_VERIFIED`.
