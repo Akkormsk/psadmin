@@ -8,11 +8,12 @@ from .assistant_tools import (
     AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_for_user, capability_map_text, confirmation_arguments,
     execute_tool, openai_functions, validate_tool_call,
 )
-from .assistant_read import present_result, reuse_result
+from .assistant_read import reuse_result
 from .gateway_budget import preflight
 from .services import TenderAIError
 
 MAX_TOOL_CALLS = 8
+MAX_PROTOCOL_RECOVERIES = 1
 MAX_MEMORY_STRING_CHARS = 240
 MAX_MEMORY_ITEMS = 20
 MAX_MEMORY_SELECTIONS = 5
@@ -31,15 +32,22 @@ _SYSTEM_RULES = (
     "Every READ/ACTION task MUST start with assistant.plan, BEFORE even a clarification question; arguments may still be unknown. "
     "Keep the same task and plan when collecting or correcting amounts, dates and other arguments. "
     "Revise the plan only for a changed goal, capability or route, with a specific revision_reason. Preserve completed work. "
-    "A new task supersedes old filters. Ordinary conversation needs neither plan nor finish. "
+    "For ordinary conversation and self-contained elementary arithmetic without business data or actions, use assistant.chat instead of plan/finish. "
+    "If the user cancels or switches to an independent task, call assistant.cancel; set new_task=true only for switching. "
+    "Do not use replanning to replace an independent task or to pretend cancellation is success. "
     "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
     "When an action has all required values, call it immediately to prepare the confirmation card; never ask for a separate textual confirmation first. "
     "READ results include raw records for backend continuity and a metadata-derived display view; use the display view's labels and values in user-facing answers, never raw choice codes. "
     "Use assistant.finish only for a final answer after the active plan's required steps have actually completed. "
-    "For a needed clarification, ask one ordinary Russian question as text and wait without finishing the task."
+    "For a needed clarification inside a plan, call assistant.ask with one ordinary Russian question. "
+    "Never emit a bare text response: chat, ask and finish are different explicit function calls."
 )
+
+
+class AgentProtocolError(AssistantToolError):
+    """The model attempted an invalid task lifecycle transition."""
 
 def _debug(conversation, stage, **payload):
     from .assistant_conversations import add_debug_event
@@ -56,7 +64,7 @@ def _gateway(messages, tools):
     key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     if not key:
         raise TenderAIError("AI Gateway не настроен.")
-    body = {"model": os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini"), "messages": messages, "tools": tools, "tool_choice": "auto", "parallel_tool_calls": False, "max_tokens": 1200}
+    body = {"model": os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini"), "messages": messages, "tools": tools, "tool_choice": "required", "parallel_tool_calls": False, "max_tokens": 1200}
     request = Request(f"{os.getenv('TIMEWEB_AI_BASE_URL', 'https://api.timeweb.ai/v1').rstrip('/')}/chat/completions", data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, method="POST")
     try:
         with urlopen(request, timeout=45) as response:
@@ -78,8 +86,8 @@ def _system_prompt(user, state):
         purpose = "before the first plan" if not state.get("plan") else "before revising the current plan"
         return (
             prompt
-            + " Inspect the compact capability map below " + purpose + ". "
-            + "Then save a concise plan through assistant.plan that names the needed capability IDs before any business tool. "
+            + " For business requests, inspect the compact capability map below " + purpose + ". "
+            + "Then save a concise plan through assistant.plan that names the needed capability IDs before any business tool or clarification. "
             + "After the plan, call its current capability directly; its detailed schema opens automatically. "
             + "Do not claim that a capability is unavailable before checking this map. "
             + "Capability map: " + capability_map_text(available_capability_map(user)) + "."
@@ -109,17 +117,6 @@ def _new_state(conversation, user, message, attachments):
     memory_context = _memory_context(memory)
     if memory_context:
         state["messages"].append({"role": "system", "content": "Compact conversation memory: " + json.dumps(memory_context, ensure_ascii=False, default=str)})
-    # An unplanned text reply cannot reveal whether the model overlooked a
-    # business request or just chatted. Keep one exchange, never its tool log.
-    for item in memory.pop("unplanned_exchange", []):
-        if item.get("event_id"):
-            event = conversation.feedback_events.filter(
-                pk=item["event_id"], scope="assistant_conversation", payload__role=item["role"],
-            ).first()
-            if event is None:
-                continue
-            item = {"role": item["role"], "content": event.raw_text}
-        state["messages"].append(item)
     state["messages"].append({"role": "user", "content": message})
     return state
 
@@ -295,15 +292,6 @@ def _load_memory(raw, owner_id):
     if not isinstance(raw, dict):
         return base
     if raw.get("version") == 2:
-        exchange = raw.get("unplanned_exchange")
-        if (isinstance(exchange, list) and len(exchange) == 2
-                and [item.get("role") for item in exchange if isinstance(item, dict)] == ["user", "assistant"]
-                and all(isinstance(item.get("content"), str) for item in exchange)):
-            base["unplanned_exchange"] = [
-                {"role": item["role"], "content": item["content"],
-                 **({"event_id": item["event_id"]} if isinstance(item.get("event_id"), int) else {})}
-                for item in exchange
-            ]
         for key in ("active_task", "active_focus"):
             if isinstance(raw.get(key), dict):
                 base[key] = _compact_memory(raw[key])
@@ -368,7 +356,6 @@ def _bound_memory(memory):
 
 def _merge_memory(conversation, state):
     memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
-    memory.pop("unplanned_exchange", None)
     for step in state.get("steps", []):
         tool_id, result = step.get("tool_id"), step.get("result")
         if isinstance(tool_id, str) and tool_id.startswith("read:"):
@@ -384,20 +371,9 @@ def _merge_memory(conversation, state):
             if action:
                 memory["recent_actions"].append(action)
     if isinstance(state.get("plan"), dict) and isinstance(state["plan"].get("goal"), str):
-        memory["active_task"] = {"plan": state["plan"]["goal"][:MAX_MEMORY_STRING_CHARS]}
+        memory["active_task"] = {"plan": state["plan"]["goal"][:MAX_MEMORY_STRING_CHARS], "status": state.get("outcome", "completed")}
     elif isinstance(state.get("plan"), str) and state["plan"].strip():
         memory["active_task"] = {"plan": state["plan"][:MAX_MEMORY_STRING_CHARS]}
-    else:
-        user_message = next((item for item in reversed(state["messages"]) if item["role"] == "user"), None)
-        answer = state["messages"][-1]
-        if user_message and answer.get("role") == "assistant" and isinstance(answer.get("content"), str):
-            original = conversation.feedback_events.filter(
-                scope="assistant_conversation", payload__role="user", raw_text=user_message["content"],
-            ).order_by("-pk").first()
-            memory["unplanned_exchange"] = [
-                {"role": "user", "content": "", "event_id": original.pk} if original else user_message.copy(),
-                {"role": "assistant", "content": answer["content"][:MAX_MEMORY_STRING_CHARS]},
-            ]
     return _bound_memory(memory)
 
 
@@ -441,9 +417,9 @@ def _normalise_plan(value, user, previous=None):
         normalised.append({"id": identifier, "capability_id": capability_id, "objective": objective, "expected_result": expected_result})
     reason = value.get("revision_reason")
     if previous and (not isinstance(reason, str) or not reason.strip()):
-        raise AssistantToolError("Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план")
+        raise AgentProtocolError("Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план")
     if previous and not previous.get("legacy") and goal.strip() == previous.get("goal") and normalised == previous.get("steps"):
-        raise AssistantToolError("План не изменился; продолжите его без повторного планирования")
+        raise AgentProtocolError("План не изменился; продолжите его без повторного планирования")
     return {"version": int((previous or {}).get("version", 0)) + 1, "goal": goal.strip(), "steps": normalised,
             "revision_reason": reason.strip() if isinstance(reason, str) else None}
 
@@ -522,12 +498,26 @@ def _missing_plan_steps(state):
     completed = _completed_plan_steps(state)
     return [item["id"] for item in plan.get("steps", []) if item["id"] not in completed]
 
+
+def _recover_protocol(conversation, user, state, error, recoveries):
+    _debug(conversation, "agent.protocol_error", output={"task_id": state.get("task_id"), "status": state["status"]}, error=error)
+    if not state.get("plan"):
+        state["capability_map_pending"] = True
+        _refresh_system_prompt(user, state)
+    _save(conversation, state)
+    if recoveries >= MAX_PROTOCOL_RECOVERIES:
+        raise TenderAIError("Ассистент нарушил порядок выполнения. Исходная задача и её результаты сохранены; выполнение остановлено.")
+    return recoveries + 1
+
+
 def _run(conversation, user, state):
     state["status"] = "RUNNING"
+    state.pop("waiting_user", None)
     if state.get("plan"):
         state.setdefault("task_id", uuid4().hex)
     _save(conversation, state)
     registry = {item["id"]: item for item in available_tools(user)}
+    recoveries = 0
     for _ in range(MAX_TOOL_CALLS + 1):
         definitions, names = openai_functions(
             user, area_id=state.get("active_area"), capability_id=state.get("active_capability"),
@@ -546,38 +536,67 @@ def _run(conversation, user, state):
         _debug(conversation, "function_call.response", output={"message": answer, "usage": usage})
         state["messages"].append(answer); calls = answer.get("tool_calls") or []
         if not calls:
-            factual = state.get("last_read_result")
-            content = answer.get("content")
-            text = content if isinstance(content, str) and content.strip() else (present_result(factual) if factual is not None else "Готово.")
-            if state.get("plan"):
-                state["waiting_user"] = True
-                state["status"] = "WAITING_USER"
-                _save(conversation, state)
-            else:
-                _finish_turn(conversation, state)
-            return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
+            error = "Bare text is not a lifecycle transition. Use assistant.plan before any business clarification, assistant.chat only for ordinary conversation; inside a plan use assistant.ask for a question or assistant.finish after completing its steps."
+            state["messages"].append({"role": "system", "content": error})
+            recoveries = _recover_protocol(conversation, user, state, error, recoveries)
+            continue
         if len(calls) != 1:
+            _debug(conversation, "agent.protocol_error", error="Parallel tool calls are not an allowed lifecycle transition")
             raise TenderAIError("Одновременные действия сейчас не поддерживаются.")
         call = calls[0]; function = call.get("function", {}); identifier = names.get(function.get("name"))
         try:
             arguments = json.loads(function.get("arguments", "{}"))
             if not identifier or not isinstance(arguments, dict):
-                raise AssistantToolError("Некорректный вызов функции; бизнес-инструменты доступны только после действующего плана")
+                raise AgentProtocolError("Некорректный вызов функции; бизнес-инструменты и вопросы доступны только после действующего плана")
             if identifier.startswith("read:") or identifier in registry:
                 step_id = _active_plan_step(state, identifier)
                 if step_id is None or state.get("active_capability") != identifier:
-                    raise AssistantToolError("Инструмент не соответствует текущему незавершённому шагу действующего плана")
+                    raise AgentProtocolError("Инструмент не соответствует текущему незавершённому шагу действующего плана")
                 state["active_plan_step_id"] = step_id
+            if identifier in {"assistant.chat", "assistant.ask", "assistant.cancel"}:
+                key = "question" if identifier == "assistant.ask" else "answer"
+                required_keys = {"reason", "answer", "new_task"} if identifier == "assistant.cancel" else {key}
+                if set(arguments) != required_keys:
+                    raise AgentProtocolError("Некорректные параметры служебного перехода")
+                text = arguments.get(key)
+                if not isinstance(text, str) or not text.strip():
+                    raise AgentProtocolError("Для перехода требуется непустой текст")
+                has_plan = isinstance(state.get("plan"), dict) and not state["plan"].get("legacy")
+                if (identifier == "assistant.chat" and state.get("plan")) or (identifier != "assistant.chat" and not has_plan):
+                    raise AgentProtocolError("Вопрос и отмена требуют действующего плана; свободный разговор допустим только вне задачи")
+                if identifier == "assistant.cancel" and (not isinstance(arguments.get("reason"), str)
+                        or not arguments["reason"].strip() or not isinstance(arguments.get("new_task"), bool)):
+                    raise AgentProtocolError("Отмена требует причины и явного признака новой задачи")
+                state["messages"].append({"role": "tool", "tool_call_id": call["id"],
+                    "content": json.dumps({"ok": True, "transition": identifier}, ensure_ascii=False)})
+                _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
+                if identifier == "assistant.ask":
+                    state["status"] = "WAITING_USER"
+                    state["waiting_user"] = True
+                    _save(conversation, state)
+                elif identifier == "assistant.chat":
+                    _finish(conversation)
+                else:
+                    state["outcome"] = "cancelled"
+                    _debug(conversation, "agent.task_cancelled", output={"task_id": state["task_id"], "reason": arguments["reason"]})
+                    _finish_turn(conversation, state)
+                    if arguments["new_task"]:
+                        message = next(item["content"] for item in reversed(state["messages"]) if item["role"] == "user")
+                        state = _new_state(conversation, user, message, state.get("attachments"))
+                        _save(conversation, state)
+                        continue
+                return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
             if identifier == "assistant.finish":
                 text = arguments.get("answer")
-                if not isinstance(text, str) or not text.strip():
-                    raise AssistantToolError("Финальный ответ должен быть непустым текстом")
+                if set(arguments) != {"answer"} or not isinstance(text, str) or not text.strip():
+                    raise AgentProtocolError("Финальный ответ должен быть непустым текстом без дополнительных параметров")
                 if not isinstance(state.get("plan"), dict):
-                    raise AssistantToolError("Нельзя завершить бизнес-задачу без действующего плана")
+                    raise AgentProtocolError("Нельзя завершить бизнес-задачу без действующего плана")
                 missing = _missing_plan_steps(state)
                 if missing or state.get("waiting_confirmation"):
-                    raise AssistantToolError("Нельзя завершить задачу: не подтверждены шаги " + ", ".join(missing or ["действие"]))
+                    raise AgentProtocolError("Нельзя завершить задачу: не подтверждены шаги " + ", ".join(missing or ["действие"]))
                 _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
+                _debug(conversation, "agent.task_finished", output={"task_id": state["task_id"]})
                 _finish_turn(conversation, state)
                 return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
             if identifier == "assistant.plan":
@@ -672,11 +691,14 @@ def _run(conversation, user, state):
                 _refresh_system_prompt(user, state)
             content = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier or function.get("name"), "ok": False, "error": str(exc)})
+            if isinstance(exc, AgentProtocolError):
+                state["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": content})
+                recoveries = _recover_protocol(conversation, user, state, str(exc), recoveries)
+                continue
         state["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": content}); _save(conversation, state)
-    state["waiting_user"] = True
-    state["status"] = "WAITING_USER"
     _save(conversation, state)
-    return {"text": "Задача ещё не завершена; продолжу после следующего сообщения.", "kind": "text", "data": {"steps": state["steps"]}}
+    _debug(conversation, "agent.protocol_error", error="Agent execution limit reached without finish, ask or confirmation")
+    raise TenderAIError("Достигнут лимит шагов. Незавершённая задача и её результаты сохранены.")
 
 def reply(conversation, user, message, page_context=None, attachments=None, image_data_urls=None):
     previous = conversation.context.get("agent_run")

@@ -548,7 +548,24 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
     names[name] = "assistant.plan"
 
     if not planned:
+        name, definition = _function_definition(
+            "assistant.chat",
+            "Ответ на обычный разговор, не требующий бизнес-данных или действий. Не используй для бизнес-уточнений: сначала assistant.plan.",
+            {"answer": {"type": "string", "minLength": 1}},
+        )
+        definitions.append(definition)
+        names[name] = "assistant.chat"
         return definitions, names
+
+    for identifier, description, schema in (
+        ("assistant.ask", "Задаёт необходимый вопрос по активной задаче и ждёт ответа пользователя. Не завершает задачу.",
+         {"question": {"type": "string", "minLength": 1}}),
+        ("assistant.cancel", "Закрывает задачу как отменённую по просьбе пользователя. При переключении на независимую задачу укажи new_task=true; уточнение аргументов не является новой задачей.",
+         {"reason": {"type": "string", "minLength": 1}, "answer": {"type": "string", "minLength": 1}, "new_task": "boolean"}),
+    ):
+        name, definition = _function_definition(identifier, description, schema)
+        definitions.append(definition)
+        names[name] = identifier
 
     name, definition = _function_definition(
         "assistant.finish",

@@ -36,9 +36,9 @@ class AssistantTaskLifecycleTests(TestCase):
         from cash.models import CashTransaction
         gateway.side_effect = [
             planned_call("cash.transaction_create"),
-            {"role": "assistant", "content": "На какую дату записать?"},
-            {"role": "assistant", "content": "За что расход?"},
-            {"role": "assistant", "content": "Хорошо, 200 рублей. За что расход?"},
+            function_call("assistant_ask", {"question": "На какую дату записать?"}),
+            function_call("assistant_ask", {"question": "За что расход?"}),
+            function_call("assistant_ask", {"question": "Хорошо, 200 рублей. За что расход?"}),
             function_call("cash_transaction_create", {"operation_date": "2026-10-22", "account": "cash",
                 "direction": "expense", "amount": 200, "reason": "На покупку бумаги"}, "write"),
             function_call("assistant_finish", {"answer": "Расход записан."}),
@@ -74,9 +74,10 @@ class AssistantTaskLifecycleTests(TestCase):
         arguments = {"operation_date": "2026-10-22", "account": "cash", "direction": "expense",
                      "amount": 175, "reason": "На покупку бумаги"}
         gateway.side_effect = [planned_call("cash.transaction_create"),
-            {"role": "assistant", "content": "На какую дату записать?"},
-            {"role": "assistant", "content": "За что расход?"},
-            function_call("cash_transaction_create", arguments)]
+            function_call("assistant_ask", {"question": "На какую дату записать?"}),
+            function_call("assistant_ask", {"question": "За что расход?"}),
+            function_call("cash_transaction_create", arguments),
+            function_call("assistant_finish", {"answer": "Расход 175 рублей записан."})]
         respond(self.conversation, self.user, "Добавь расход наличными на 175 рублей")
         respond(self.conversation, self.user, "За вчера")
         card = respond(self.conversation, self.user, "На покупку бумаги")[-1]
@@ -94,7 +95,15 @@ class AssistantTaskLifecycleTests(TestCase):
             (event.payload["output"]["message"].get("tool_calls") or [{"function": {"name": "text"}}])[0]["function"]["name"]
             for event in responses
         ]
-        self.assertEqual(route, ["assistant_plan", "text", "text", "cash_transaction_create"])
+        self.assertEqual(route, ["assistant_plan", "assistant_ask", "assistant_ask", "cash_transaction_create"])
+        self.client.force_login(self.user)
+        url = reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, card["id"]])
+        self.assertEqual(self.client.post(url, {"accept": "yes"}).status_code, 200)
+        self.assertEqual(self.client.post(url, {"accept": "yes"}).status_code, 409)
+        self.assertEqual(CashTransaction.objects.count(), 1)
+        self.assertEqual(CashTransaction.objects.get().amount, 175)
+        self.conversation.refresh_from_db()
+        self.assertNotIn("agent_run", self.conversation.context)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
@@ -103,25 +112,26 @@ class AssistantTaskLifecycleTests(TestCase):
         gateway.side_effect = [
             {"role": "assistant", "content": "На какую дату записать?"},
             planned_call("cash.transaction_create"),
-            {"role": "assistant", "content": "За что расход?"},
+            function_call("assistant_ask", {"question": "На какую дату записать?"}),
+            function_call("assistant_ask", {"question": "За что расход?"}),
         ]
         respond(self.conversation, self.user, original)
-        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertIn("agent_run", self.conversation.context)
         respond(self.conversation, self.user, "За вчера")
-        users = [m["content"] for m in gateway.call_args_list[1].args[0] if m["role"] == "user"]
+        users = [m["content"] for m in gateway.call_args_list[3].args[0] if m["role"] == "user"]
         self.assertEqual(users, [original, "За вчера"])
         self.assertEqual(self.conversation.context["agent_run"]["status"], "WAITING_USER")
-        self.assertEqual(gateway.call_count, 3)
+        self.assertEqual(gateway.call_count, 4)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_replan_requires_reason_and_preserves_task_and_execution_evidence(self, gateway, _preflight):
         gateway.side_effect = [
             planned_call("cash.transaction_create", "Создать расход"),
-            {"role": "assistant", "content": "За что расход?"},
+            function_call("assistant_ask", {"question": "За что расход?"}),
             planned_call("cash.transaction_update", "Изменить расход"),
             planned_call("cash.transaction_update", "Изменить расход", revision_reason="Пользователь просит изменить существующий расход вместо создания"),
-            {"role": "assistant", "content": "Какой расход изменить?"},
+            function_call("assistant_ask", {"question": "Какой расход изменить?"}),
         ]
         respond(self.conversation, self.user, "Создай расход")
         task_id = self.conversation.context["agent_run"]["task_id"]
@@ -139,7 +149,7 @@ class AssistantTaskLifecycleTests(TestCase):
         gateway.side_effect = [
             planned_call("read:cash.transactions", steps=steps),
             function_call("read_cash_transactions", {"plan": {"limit": 1}}, "read1"),
-            {"role": "assistant", "content": "За какой период показать остальные?"},
+            function_call("assistant_ask", {"question": "За какой период показать остальные?"}),
             function_call("read_cash_transactions", {"plan": {"limit": 2}}, "read2"),
             function_call("assistant_finish", {"answer": "Операций нет."}),
         ]
@@ -160,12 +170,13 @@ class AssistantTaskLifecycleTests(TestCase):
         state.update(active_capability="read:cash.transactions", active_area="cash")
         gateway.side_effect = [
             function_call("read_cash_transactions", {"plan": {}}),
-            {"role": "assistant", "content": "Нужно составить план."},
+            planned_call("read:cash.transactions"),
+            function_call("assistant_ask", {"question": "За какой период?"}),
         ]
         with patch("tenders.assistant_agent.execute_tool") as execute:
             _run(self.conversation, self.user, state)
         execute.assert_not_called()
-        self.assertIn("план", gateway.call_args_list[1].args[0][-2]["content"])
+        self.assertTrue(any("план" in m.get("content", "") for m in state["messages"] if m["role"] == "tool"))
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
@@ -177,7 +188,7 @@ class AssistantTaskLifecycleTests(TestCase):
             planned_call("cash.transaction_create"),
             function_call("cash_transaction_create", arguments, "old-preview"),
             function_call("cash_transaction_create", {**arguments, "amount": 200}, "new-preview"),
-            {"role": "assistant", "content": "Действие отменено. Что изменить?"},
+            function_call("assistant_ask", {"question": "Действие отменено. Что изменить?"}),
         ]
         old = respond(self.conversation, self.user, "Запиши за вчера расход наличными 175 рублей на покупку бумаги")[-1]
         new = respond(self.conversation, self.user, "Нет, 200 рублей")[-1]
@@ -209,14 +220,15 @@ class AssistantTaskLifecycleTests(TestCase):
         gateway.side_effect = [
             function_call("read_cash_transactions", {"plan": {}}, "wrong-step"),
             function_call("assistant_finish", {"answer": "Выполнено"}, "early-finish"),
-            {"role": "assistant", "content": "За что расход?"},
         ]
+        from .services import TenderAIError
         with patch("tenders.assistant_agent.execute_tool") as execute:
-            _run(self.conversation, self.user, state)
+            with self.assertRaises(TenderAIError):
+                _run(self.conversation, self.user, state)
         execute.assert_not_called()
         errors = [json.loads(m["content"]) for m in state["messages"] if m["role"] == "tool"]
         self.assertEqual([e["ok"] for e in errors], [False, False])
-        self.assertEqual(state["status"], "WAITING_USER")
+        self.assertEqual(state["status"], "RUNNING")
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
@@ -229,10 +241,10 @@ class AssistantTaskLifecycleTests(TestCase):
         gateway.side_effect = [
             planned_call("read:cash.transactions", "Найти и создать", steps=initial),
             function_call("read_cash_transactions", {"plan": {"limit": 1}}),
-            {"role": "assistant", "content": "За что расход?"},
+            function_call("assistant_ask", {"question": "За что расход?"}),
             planned_call("read:cash.transactions", "Найти и изменить", steps=revised,
                          revision_reason="Пользователь заменил создание изменением существующей операции"),
-            {"role": "assistant", "content": "Какой расход изменить?"},
+            function_call("assistant_ask", {"question": "Какой расход изменить?"}),
         ]
         respond(self.conversation, self.user, "Покажи операции и создай расход")
         respond(self.conversation, self.user, "Вместо создания измени существующий расход")
@@ -250,13 +262,123 @@ class AssistantTaskLifecycleTests(TestCase):
         gateway.side_effect = [planned_call("read:cash.transactions"),
             function_call("read_cash_transactions", {"plan": {"limit": 1}}),
             function_call("assistant_finish", {"answer": "Операций нет."}),
-            {"role": "assistant", "content": "Здравствуйте!"}]
+            function_call("assistant_chat", {"answer": "Здравствуйте!"})]
         respond(self.conversation, self.user, "Покажи операции")
         self.assertNotIn("agent_run", self.conversation.context)
         respond(self.conversation, self.user, "Привет")
         self.assertEqual([m["role"] for m in gateway.call_args_list[3].args[0]], ["system", "system", "user"])
         self.assertEqual(gateway.call_count, 4)
         self.assertNotIn("agent_run", self.conversation.context)
+
+
+class AssistantStrictProtocolTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_superuser("strict-agent", "strict@example.test", "password")
+        self.conversation = create_conversation(self.user)
+        self.gateway = patch("tenders.assistant_agent._gateway").start()
+        self.addCleanup(patch.stopall)
+        patch("tenders.assistant_agent.preflight").start()
+
+    def test_repeated_question_before_plan_is_not_shown_and_original_intent_survives(self):
+        from .services import TenderAIError
+        original = "Добавь расход наличными на 175 рублей"
+        self.gateway.side_effect = [
+            {"role": "assistant", "content": "Какая дата?"},
+            function_call("assistant_ask", {"question": "Какая дата?"}),
+        ]
+        with self.assertRaises(TenderAIError):
+            respond(self.conversation, self.user, original)
+        run = self.conversation.context["agent_run"]
+        self.assertEqual(run["status"], "RUNNING")
+        self.assertNotIn("waiting_user", run)
+        self.assertEqual(self.gateway.call_count, 2)
+        self.assertEqual([m["content"] for m in run["messages"] if m["role"] == "user"], [original])
+        self.assertFalse(self.conversation.feedback_events.filter(
+            scope="assistant_conversation", payload__role="assistant").exists())
+        self.gateway.side_effect = [
+            {"role": "assistant", "content": "За что расход?"},
+            planned_call("cash.transaction_create"),
+            function_call("assistant_ask", {"question": "За что расход?"}),
+        ]
+        reply = respond(self.conversation, self.user, "За вчера")[-1]
+        self.assertEqual(reply["text"], "За что расход?")
+        run = self.conversation.context["agent_run"]
+        self.assertEqual(run["status"], "WAITING_USER")
+        self.assertEqual([m["content"] for m in run["messages"] if m["role"] == "user"], [original, "За вчера"])
+        self.assertGreaterEqual(self.conversation.feedback_events.filter(
+            scope="assistant_debug", payload__stage="agent.protocol_error").count(), 3)
+
+    def test_final_text_after_read_must_recover_through_finish(self):
+        self.gateway.side_effect = [planned_call("read:cash.transactions"),
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}),
+            {"role": "assistant", "content": "Готово, операций нет."},
+            function_call("assistant_finish", {"answer": "Операций нет."})]
+        answer = respond(self.conversation, self.user, "Покажи операции")[-1]
+        self.assertEqual(answer["text"], "Операций нет.")
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(self.gateway.call_count, 4)
+
+    def test_repeated_final_text_is_not_a_success_or_a_user_wait(self):
+        from .services import TenderAIError
+        self.gateway.side_effect = [planned_call("read:cash.transactions"),
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}),
+            {"role": "assistant", "content": "Готово."},
+            {"role": "assistant", "content": "Готово."}]
+        with self.assertRaises(TenderAIError):
+            respond(self.conversation, self.user, "Покажи операции")
+        run = self.conversation.context["agent_run"]
+        self.assertEqual(run["status"], "RUNNING")
+        self.assertNotIn("waiting_user", run)
+        self.assertTrue(run["steps"][-1]["result"]["entity"])
+
+    def test_cancellation_and_new_task_do_not_replan_the_old_task(self):
+        self.gateway.side_effect = [planned_call("cash.transaction_create"),
+            function_call("assistant_ask", {"question": "За что расход?"}),
+            function_call("assistant_cancel", {"reason": "Пользователь сменил задачу", "answer": "Отменено.", "new_task": True}),
+            planned_call("read:cash.transactions"),
+            function_call("read_cash_transactions", {"plan": {"limit": 1}}),
+            function_call("assistant_finish", {"answer": "Операций нет."})]
+        respond(self.conversation, self.user, "Создай расход")
+        old_id = self.conversation.context["agent_run"]["task_id"]
+        reply = respond(self.conversation, self.user, "Отмени, вместо этого покажи операции")[-1]
+        self.assertEqual(reply["text"], "Операций нет.")
+        plans = list(self.conversation.feedback_events.filter(scope="assistant_debug", payload__stage="agent.plan").order_by("pk"))
+        self.assertNotEqual(plans[-1].payload["output"]["task_id"], old_id)
+        self.assertEqual([p.payload["output"]["plan"]["version"] for p in plans], [1, 1])
+        self.assertTrue(self.conversation.feedback_events.filter(scope="assistant_debug", payload__stage="agent.task_cancelled").exists())
+        messages = self.gateway.call_args_list[3].args[0]
+        self.assertEqual([m["content"] for m in messages if m["role"] == "user"], ["Отмени, вместо этого покажи операции"])
+
+    def test_explicit_cancel_returns_idle_without_successful_finish(self):
+        self.gateway.side_effect = [planned_call("cash.transaction_create"),
+            function_call("assistant_ask", {"question": "За что расход?"}),
+            function_call("assistant_cancel", {"reason": "Отмена пользователем", "answer": "Задача отменена.", "new_task": False})]
+        respond(self.conversation, self.user, "Создай расход")
+        reply = respond(self.conversation, self.user, "Отмени задачу")[-1]
+        self.assertEqual(reply["text"], "Задача отменена.")
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(self.conversation.context["agent_memory"]["active_task"]["status"], "cancelled")
+        self.assertFalse(self.conversation.feedback_events.filter(scope="assistant_debug", payload__stage="agent.task_finished").exists())
+
+    def test_chat_is_not_an_escape_from_an_active_plan(self):
+        self.gateway.side_effect = [planned_call("cash.transaction_create"),
+            function_call("assistant_chat", {"answer": "Всё готово."}),
+            function_call("assistant_ask", {"question": "За что расход?"})]
+        answer = respond(self.conversation, self.user, "Создай расход")[-1]
+        self.assertEqual(answer["text"], "За что расход?")
+        self.assertEqual(self.conversation.context["agent_run"]["status"], "WAITING_USER")
+        self.assertEqual(self.conversation.feedback_events.filter(
+            scope="assistant_debug", payload__stage="agent.protocol_error").count(), 1)
+
+    def test_invalid_question_arguments_do_not_create_a_wait(self):
+        from .services import TenderAIError
+        self.gateway.side_effect = [planned_call("cash.transaction_create"),
+            function_call("assistant_ask", {"question": "", "extra": "wrong"}),
+            function_call("assistant_ask", {"question": None})]
+        with self.assertRaises(TenderAIError):
+            respond(self.conversation, self.user, "Создай расход")
+        self.assertEqual(self.conversation.context["agent_run"]["status"], "RUNNING")
+        self.assertNotIn("waiting_user", self.conversation.context["agent_run"])
 
 
 class AssistantConversationUiTests(TestCase):
@@ -295,6 +417,23 @@ class AssistantFunctionCallingTests(TestCase):
         self.user = get_user_model().objects.create_superuser("agent", "agent@example.test", "password")
         self.conversation = create_conversation(self.user)
 
+    def test_gateway_requires_an_explicit_protocol_function_without_an_extra_request(self):
+        from .assistant_agent import _gateway
+        from .assistant_tools import openai_functions
+        definitions, _names = openai_functions(self.user, planned=False)
+        with patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": "test-only-placeholder"}), patch("tenders.assistant_agent.urlopen") as transport:
+            transport.return_value.__enter__.return_value.read.return_value = json.dumps({"choices": [
+                {"message": function_call("assistant_chat", {"answer": "Здравствуйте!"})}
+            ]}).encode()
+            response = _gateway([{"role": "user", "content": "Привет"}], definitions)
+        body = json.loads(transport.call_args.args[0].data)
+        self.assertEqual(body["tool_choice"], "required")
+        self.assertFalse(body["parallel_tool_calls"])
+        self.assertEqual({tool["function"]["name"] for tool in body["tools"]}, {"assistant_plan", "assistant_chat"})
+        self.assertTrue(all(tool["function"]["strict"] for tool in body["tools"]))
+        self.assertEqual(response["tool_calls"][0]["function"]["name"], "assistant_chat")
+        self.assertEqual(transport.call_count, 1)
+
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_read_result_returns_through_matching_tool_call(self, gateway, _preflight):
@@ -325,7 +464,7 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertLess(len(working_prompt.encode()), len(initial_prompt.encode()) // 10)
         self.assertEqual(
             {item["function"]["name"] for item in gateway.call_args_list[0].args[1]},
-            {"assistant_plan"},
+            {"assistant_plan", "assistant_chat"},
         )
         self.assertEqual(execute.call_args.args[0], "read")
         messages = gateway.call_args_list[4].args[0]
@@ -491,7 +630,7 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": '{"capability":"read:cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount", "reason"], "order_by": "-operation_date", "limit": 3}})}}]},
-            {"role": "assistant", "content": "Найдена операция: 100, Оплата."},
+            function_call("assistant_finish", {"answer": "Найдена операция: 100, Оплата."}),
         ]
 
         messages = respond(self.conversation, self.user, "В приложении Касса покажи три последние операции")
@@ -502,13 +641,14 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_empty_final_read_text_falls_back_to_backend_presentation(self, gateway, _preflight):
+    def test_empty_final_read_text_requires_explicit_finish(self, gateway, _preflight):
         gateway.side_effect = [
             planned_call("read:cash.transactions", "Найду операцию."),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": '{"capability":"read:cash.transactions"}'}}]},
             {"role": "assistant", "tool_calls": [{"id": "read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
             {"role": "assistant", "content": ""},
+            function_call("assistant_finish", {"answer": "Сумма операции: 10"}),
         ]
         result = {"entity": "cash.CashTransaction", "query": {}, "total_count": 1,
                   "returned_count": 1, "aggregates": {}, "records": [{"id": 1, "amount": "10"}], "sources": []}
@@ -521,13 +661,15 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_final_text_without_read_is_unchanged(self, gateway, _preflight):
-        gateway.return_value = {"role": "assistant", "content": "За какой период показать данные?"}
+    def test_ordinary_chat_is_idle_without_plan_or_finish(self, gateway, _preflight):
+        gateway.return_value = function_call("assistant_chat", {"answer": "Здравствуйте!"})
 
         from .assistant_agent import reply
-        response = reply(self.conversation, self.user, "Покажи данные")
+        response = reply(self.conversation, self.user, "Привет")
 
-        self.assertEqual(response, {"text": "За какой период показать данные?", "kind": "tool_result", "data": {"steps": []}})
+        self.assertEqual(response, {"text": "Здравствуйте!", "kind": "tool_result", "data": {"steps": []}})
+        self.assertEqual(gateway.call_count, 1)
+        self.assertNotIn("agent_run", self.conversation.context)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
@@ -536,7 +678,7 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
                 "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции"}]}}),
             }}]},
-            {"role": "assistant", "content": "За какой период показать операции?"},
+            function_call("assistant_ask", {"question": "За какой период показать операции?"}),
         ]
 
         from .assistant_agent import reply
@@ -551,7 +693,7 @@ class AssistantFunctionCallingTests(TestCase):
     def test_user_correction_continues_the_saved_plan_without_replanning(self, gateway, _preflight):
         gateway.side_effect = [
             planned_call("read:cash.transactions", "Найду операции за указанный период"),
-            {"role": "assistant", "content": "За какой период показать операции?"},
+            function_call("assistant_ask", {"question": "За какой период показать операции?"}),
             function_call("read_cash_transactions", {"plan": {"limit": 1}}),
             {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
                 "name": "assistant_finish", "arguments": json.dumps({"answer": "За сентябрь операций нет."}),
@@ -649,7 +791,7 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
                 "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции за период", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции"}]}}),
             }}]},
-            {"role": "assistant", "content": "За какой период показать операции?"},
+            function_call("assistant_ask", {"question": "За какой период показать операции?"}),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),
             }}]},
@@ -699,10 +841,10 @@ class AssistantFunctionCallingTests(TestCase):
         ]
 
         from .assistant_agent import reply
-        response = reply(self.conversation, self.user, "Продолжай")
-
-        self.assertEqual(response["text"], "Уточните следующий шаг.")
-        self.assertIn("обновлённый план", gateway.call_args_list[1].args[0][-2]["content"])
+        from .services import TenderAIError
+        with self.assertRaises(TenderAIError):
+            reply(self.conversation, self.user, "Продолжай")
+        self.assertTrue(any("обновлённый план" in m.get("content", "") for m in self.conversation.context["agent_run"]["messages"] if m["role"] == "tool"))
         self.conversation.refresh_from_db()
         self.assertTrue(self.conversation.context["agent_run"]["plan"]["legacy"])
 
@@ -711,12 +853,13 @@ class AssistantFunctionCallingTests(TestCase):
     def test_invalid_arguments_are_returned_to_model_as_tool_error(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "assistant_select_area", "arguments": "[]"}}]},
-            {"role": "assistant", "content": "Уточните, пожалуйста, нужный показатель."},
+            planned_call("read:cash.transactions"),
+            function_call("assistant_ask", {"question": "Уточните, пожалуйста, нужный показатель."}),
         ]
         from .assistant_agent import reply
         response = reply(self.conversation, self.user, "Покажи данные")
         self.assertIn("Уточните", response["text"])
-        self.assertIn('"ok": false', gateway.call_args_list[1].args[0][-2]["content"])
+        self.assertTrue(any('"ok": false' in m.get("content", "") for m in self.conversation.context["agent_run"]["messages"] if m["role"] == "tool"))
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
@@ -730,7 +873,7 @@ class AssistantFunctionCallingTests(TestCase):
                 "name": "assistant_select_capability", "arguments": json.dumps({"capability": "cash.transaction_create"}),
             }}]},
             {"role": "assistant", "content": "Операция подготовлена.", "tool_calls": [{"id": "confirm", "type": "function", "function": {"name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Тест"})}}]},
-            {"role": "assistant", "content": "Операция выполнена."},
+            function_call("assistant_finish", {"answer": "Операция выполнена."}),
         ]
         from .assistant_agent import continue_after_confirmation, reply
         with patch("tenders.assistant_agent.execute_tool"):
@@ -764,7 +907,7 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "write", "type": "function", "function": {
                 "name": "cash_transaction_create", "arguments": json.dumps({"operation_date": "2026-01-01", "account": "cash", "direction": "income", "amount": 1, "reason": "Придуманное основание"}),
             }}]},
-            {"role": "assistant", "content": "Уточните основание операции."},
+            function_call("assistant_ask", {"question": "Уточните основание операции."}),
         ]
         with patch("tenders.assistant_agent.execute_tool"):
             from .assistant_agent import reply
@@ -772,7 +915,8 @@ class AssistantFunctionCallingTests(TestCase):
 
         self.assertEqual(response["kind"], "tool_result")
         self.assertIn("Уточните", response["text"])
-        self.assertIn("опираться на слова пользователя", gateway.call_args_list[4].args[0][-2]["content"])
+        self.assertTrue(any("опираться на слова пользователя" in m.get("content", "")
+                            for m in self.conversation.context["agent_run"]["messages"] if m["role"] == "tool"))
 
     @patch("tenders.assistant_agent.timezone.localdate", return_value=date(2026, 10, 19))
     @patch("tenders.assistant_agent.preflight")
@@ -847,7 +991,7 @@ class AssistantFunctionCallingTests(TestCase):
                     "operation_date": "2026-10-20", "account": "cash", "direction": "expense", "amount": 10, "reason": "Тест",
                 }),
             }}]},
-            {"role": "assistant", "content": "Действие отменено. Что изменить?"},
+            function_call("assistant_ask", {"question": "Действие отменено. Что изменить?"}),
         ]
 
         response = respond(self.conversation, self.user, "Запиши расход наличными 10 рублей за Тест")[-1]
@@ -921,17 +1065,19 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_unplanned_text_keeps_only_one_exchange_for_protocol_recovery(self, gateway, _preflight):
+    def test_unplanned_text_recovers_to_plan_before_showing_a_question(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "content": "За какой период?"},
-            {"role": "assistant", "content": "За сентябрь найдено 3 заказа."},
+            planned_call("read:cash.transactions"),
+            function_call("assistant_ask", {"question": "За какой период?"}),
+            function_call("assistant_ask", {"question": "Какой счёт показать?"}),
         ]
         first = respond(self.conversation, self.user, "Покажи заказы Иванова")
         second = respond(self.conversation, self.user, "За сентябрь")
 
         self.assertEqual(first[-1]["text"], "За какой период?")
-        self.assertEqual(second[-1]["text"], "За сентябрь найдено 3 заказа.")
-        messages = gateway.call_args_list[1].args[0]
+        self.assertEqual(second[-1]["text"], "Какой счёт показать?")
+        messages = gateway.call_args_list[3].args[0]
         self.assertEqual([item for item in messages if item.get("role") == "user"], [
             {"role": "user", "content": "Покажи заказы Иванова"},
             {"role": "user", "content": "За сентябрь"},
@@ -940,7 +1086,7 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_persisted_user_message_is_not_added_to_a_new_state_twice(self, gateway, _preflight):
-        gateway.return_value = {"role": "assistant", "content": "Здравствуйте."}
+        gateway.return_value = function_call("assistant_chat", {"answer": "Здравствуйте."})
 
         respond(self.conversation, self.user, "Привет")
 
@@ -952,7 +1098,8 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_clarification_guidance_uses_business_language(self, gateway, _preflight):
-        gateway.return_value = {"role": "assistant", "content": "За какой период показать операции?"}
+        gateway.side_effect = [planned_call("read:cash.transactions"),
+            function_call("assistant_ask", {"question": "За какой период показать операции?"})]
 
         respond(self.conversation, self.user, "Покажи три последних поступления по кассе")
 
@@ -966,10 +1113,10 @@ class AssistantFunctionCallingTests(TestCase):
         gateway.side_effect = [
             planned_call("read:cash.transactions", "Уточню задачу по кассе."),
             {"role": "assistant", "tool_calls": [{"id": "explicit", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
-            {"role": "assistant", "content": "Что именно сделать с кассой?"},
+            function_call("assistant_ask", {"question": "Что именно сделать с кассой?"}),
             planned_call("read:cash.transactions", "Уточню поступления по кассе."),
             {"role": "assistant", "tool_calls": [{"id": "inferred", "type": "function", "function": {"name": "assistant_select_area", "arguments": '{"area":"cash"}'}}]},
-            {"role": "assistant", "content": "За какой период показать поступления?"},
+            function_call("assistant_ask", {"question": "За какой период показать поступления?"}),
         ]
 
         explicit = respond(self.conversation, self.user, "В приложении Касса покажи операции")
@@ -1003,7 +1150,7 @@ class AssistantFunctionCallingTests(TestCase):
             {"role": "assistant", "tool_calls": [{"id": "finish-1", "type": "function", "function": {
                 "name": "assistant_finish", "arguments": json.dumps({"answer": "Одна операция найдена."}),
             }}]},
-            {"role": "assistant", "content": "Это была расходная операция."},
+            function_call("assistant_chat", {"answer": "Это была расходная операция."}),
         ]
         result = {"entity": "cash.CashTransaction", "query": {"filters": [], "view": None, "search": None, "order_by": ["-id"]}, "total_count": 1,
                   "returned_count": 1, "aggregates": {}, "records": [{"id": 1, "reason": "x"}],

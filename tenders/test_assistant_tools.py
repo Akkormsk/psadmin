@@ -221,7 +221,7 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertEqual(
             {names[item["function"]["name"]] for item in definitions},
-            {"assistant.plan", "assistant.finish"},
+            {"assistant.plan", "assistant.ask", "assistant.cancel", "assistant.finish"},
         )
 
         finish = next(item["function"] for item in definitions if names[item["function"]["name"]] == "assistant.finish")
@@ -316,11 +316,26 @@ class AssistantToolRegistryTests(TestCase):
             "type": "array", "items": {"type": "integer"},
         })
 
-    def test_unplanned_turn_exposes_only_plan(self):
+    def test_unplanned_turn_exposes_plan_or_explicit_chat_not_questions(self):
         definitions, names = openai_functions(self.admin, planned=False)
 
-        self.assertEqual(set(names.values()), {"assistant.plan"})
-        self.assertEqual(len(definitions), 1)
+        self.assertEqual(set(names.values()), {"assistant.plan", "assistant.chat"})
+        self.assertEqual(len(definitions), 2)
+
+    def test_dialogue_functions_have_strict_schemas_and_state_specific_availability(self):
+        for planned, expected in ((False, {"assistant.chat"}), (True, {"assistant.ask", "assistant.cancel", "assistant.finish"})):
+            definitions, names = openai_functions(self.admin, planned=planned)
+            controls = {names[item["function"]["name"]]: item["function"] for item in definitions
+                        if names[item["function"]["name"]] != "assistant.plan"}
+            self.assertEqual(set(controls), expected)
+            for tool in controls.values():
+                self.assertTrue(tool["strict"])
+                schema = tool["parameters"]
+                self.assertFalse(schema["additionalProperties"])
+                self.assertEqual(set(schema["required"]), set(schema["properties"]))
+                sample = _schema_sample(schema)
+                self.assertTrue(_schema_accepts(sample, schema))
+                self.assertFalse(_schema_accepts({**sample, "extra": 1}, schema))
 
     def test_plan_schema_is_strict_and_has_structured_steps(self):
         definitions, names = openai_functions(self.admin, planned=False)
@@ -550,7 +565,7 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertNotIn("read", names)
         self.assertNotIn("cash_transaction_create", names)
-        self.assertEqual(len(definitions), 2)
+        self.assertEqual(len(definitions), 4)
         self.assertNotIn("assistant_select_area", [item["function"]["name"] for item in definitions])
         self.assertNotIn("assistant_select_capability", [item["function"]["name"] for item in definitions])
 
@@ -559,7 +574,7 @@ class AssistantToolRegistryTests(TestCase):
 
         self.assertNotIn("cash_transaction_create", names)
         self.assertEqual(names["assistant_select_capability"], "assistant.select_capability")
-        self.assertEqual(len(definitions), 2)
+        self.assertEqual(len(definitions), 4)
         self.assertNotIn("assistant_select_capability", [item["function"]["name"] for item in definitions])
 
     def test_compact_capabilities_are_views_of_the_existing_registry(self):
