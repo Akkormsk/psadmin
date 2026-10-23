@@ -1,0 +1,25 @@
+scenario,model,repeat,strict_success,gateway_calls,prompt_tokens,cached_tokens,completion_tokens,reasoning_tokens,total_tokens,seconds,price_rub_no_cache_discount,price_rub_with_published_cache_discount,verdict
+A,openai/gpt-4.1-mini,1,False,2,8580,0,118,0,8698,6.606556026999897,0.488808,0.488808,Fail: generic reason replaces real clarification
+A,openai/gpt-4.1-mini,2,False,2,8590,6528,123,0,8713,8.45766041800016,0.490428,0.226044,Fail: generic reason replaces real clarification
+A,openai/gpt-4.1-mini,3,False,2,8590,6528,123,0,8713,3.1446046340006433,0.490428,0.226044,Fail: generic reason replaces real clarification
+B,openai/gpt-4.1-mini,1,False,4,18067,8320,308,0,18375,11.803047656001581,1.042146,0.705186,Correct amount/card and stale rejection; fail no-replanning criterion
+B,openai/gpt-4.1-mini,2,False,4,18067,8320,308,0,18375,5.235755820998747,1.042146,0.705186,Correct amount/card and stale rejection; fail no-replanning criterion
+B,openai/gpt-4.1-mini,3,False,4,18067,8320,308,0,18375,5.329017000001841,1.042146,0.705186,Correct amount/card and stale rejection; fail no-replanning criterion
+C,openai/gpt-4.1-mini,1,False,3,21214,6528,300,0,21514,7.6750581430005695,1.210356,0.945972,"Fail: invented tender_id=1, expected 101; invalid preview not clicked"
+C,openai/gpt-4.1-mini,2,False,3,21214,6528,300,0,21514,3.673032767001132,1.210356,0.945972,"Fail: invented tender_id=1, expected 101; invalid preview not clicked"
+C,openai/gpt-4.1-mini,3,False,3,21214,6528,300,0,21514,4.2296806539998215,1.210356,0.945972,"Fail: invented tender_id=1, expected 101; invalid preview not clicked"
+D,openai/gpt-4.1-mini,1,False,4,20364,6528,377,0,20741,9.927115254000455,1.181088,0.916704,"Fail: wrong resource OrderEstimate, false claim that estimate/lines absent"
+D,openai/gpt-4.1-mini,2,False,4,20364,6528,377,0,20741,4.118164371000603,1.181088,0.916704,"Fail: wrong resource OrderEstimate, false claim that estimate/lines absent"
+D,openai/gpt-4.1-mini,3,False,4,20364,6528,377,0,20741,4.21135744700041,1.181088,0.916704,"Fail: wrong resource OrderEstimate, false claim that estimate/lines absent"
+A,openai/gpt-5.4-nano,1,False,3,10919,1664,217,0,11136,9.570607603000099,0.331486,0.2910508,Correct preview; redundant account question
+A,openai/gpt-5.4-nano,2,True,3,10997,1664,214,0,11211,11.146950595000817,0.333085,0.2926498,Pass: clarifies missing data and correct preview
+A,openai/gpt-5.4-nano,3,True,3,10997,1664,214,0,11211,4.973706603999744,0.333085,0.2926498,Pass: clarifies missing data and correct preview
+B,openai/gpt-5.4-nano,1,False,5,26109,14208,477,0,26586,15.030899317000149,0.785556,0.4403016,Correct amount/card and stale rejection; fail no-replanning criterion
+B,openai/gpt-5.4-nano,2,False,5,26109,14208,477,0,26586,6.7632101149993105,0.785556,0.4403016,Correct amount/card and stale rejection; fail no-replanning criterion
+B,openai/gpt-5.4-nano,3,False,5,26109,14208,477,0,26586,6.719005892999121,0.785556,0.4403016,Correct amount/card and stale rejection; fail no-replanning criterion
+C,openai/gpt-5.4-nano,1,False,4,24088,7424,441,0,24529,13.090510363999783,0.724905,0.5445018,"Fail: invented tender_id=0, expected 101; invalid preview not clicked"
+C,openai/gpt-5.4-nano,2,False,4,24088,7424,441,0,24529,5.972326916999009,0.724905,0.5445018,"Fail: invented tender_id=0, expected 101; invalid preview not clicked"
+C,openai/gpt-5.4-nano,3,False,4,24088,7424,441,0,24529,6.0708747649987345,0.724905,0.5445018,"Fail: invented tender_id=0, expected 101; invalid preview not clicked"
+D,openai/gpt-5.4-nano,1,False,3,31672,28544,482,0,32154,9.308916648000377,0.936602,0.2429828,"Fail: invented view rejected; asks technical question, no answer"
+D,openai/gpt-5.4-nano,2,False,3,31672,28544,482,0,32154,5.522126627000034,0.936602,0.2429828,"Fail: invented view rejected; asks technical question, no answer"
+D,openai/gpt-5.4-nano,3,False,3,31672,28544,482,0,32154,3.766654159000609,0.936602,0.2429828,"Fail: invented view rejected; asks technical question, no answer"

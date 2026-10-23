@@ -1,0 +1,1457 @@
+{
+  "status": "COMPARISON_COMPLETE_FOR_FIXED_FOUR_SCENARIOS",
+  "goal": "Correct PSADMIN business task under original M10 requirements; same fixed criteria, no post-hoc relaxation",
+  "application_sha": "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a",
+  "models": {
+    "openai/gpt-4.1-mini": {
+      "attempts": 12,
+      "strict_successes": 0,
+      "strict_success_rate": 0.0,
+      "correct_action_previews": 3,
+      "gateway_calls": 39,
+      "mean_calls": 3.25,
+      "prompt_tokens": 204695,
+      "cached_tokens": 77184,
+      "completion_tokens": 3319,
+      "reasoning_tokens": 0,
+      "total_tokens": 208014,
+      "total_seconds": 74.41105019200586,
+      "mean_seconds": 6.200920849333822,
+      "seconds_range": [
+        3.1446046340006433,
+        11.803047656001581
+      ],
+      "price_total_no_discount_rub": "11.770434",
+      "price_total_with_published_discount_rub": "8.644482",
+      "price_mean_no_discount_rub": "0.9808695",
+      "price_range_no_discount_rub": [
+        0.488808,
+        1.210356
+      ],
+      "price_per_strict_success_no_discount_rub": null,
+      "price_per_strict_success_with_discount_rub": null,
+      "questions": 0,
+      "accepted_replans": 3,
+      "protocol_errors": 0,
+      "tool_errors": 0,
+      "monthly_100_500_1000_successes_no_discount_rub": {
+        "100": null,
+        "500": null,
+        "1000": null
+      },
+      "recovery_calls": 0
+    },
+    "openai/gpt-5.4-nano": {
+      "attempts": 12,
+      "strict_successes": 2,
+      "strict_success_rate": 0.16666666666666666,
+      "correct_action_previews": 6,
+      "gateway_calls": 45,
+      "mean_calls": 3.75,
+      "prompt_tokens": 278520,
+      "cached_tokens": 155520,
+      "completion_tokens": 4845,
+      "reasoning_tokens": 0,
+      "total_tokens": 283365,
+      "total_seconds": 97.93578960699779,
+      "mean_seconds": 8.161315800583148,
+      "seconds_range": [
+        3.766654159000609,
+        15.030899317000149
+      ],
+      "price_total_no_discount_rub": "8.338845",
+      "price_total_with_published_discount_rub": "4.5597090",
+      "price_mean_no_discount_rub": "0.69490375",
+      "price_range_no_discount_rub": [
+        0.331486,
+        0.936602
+      ],
+      "price_per_strict_success_no_discount_rub": "4.1694225",
+      "price_per_strict_success_with_discount_rub": "2.2798545",
+      "questions": 9,
+      "accepted_replans": 3,
+      "protocol_errors": 3,
+      "tool_errors": 6,
+      "monthly_100_500_1000_successes_no_discount_rub": {
+        "100": "416.9422500",
+        "500": "2084.7112500",
+        "1000": "4169.4225000"
+      },
+      "recovery_calls": 3
+    }
+  },
+  "scenarios": {
+    "A": {
+      "openai/gpt-4.1-mini": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 0,
+        "gateway_calls": 6,
+        "mean_calls": 2,
+        "prompt_tokens": 25760,
+        "cached_tokens": 13056,
+        "completion_tokens": 364,
+        "reasoning_tokens": 0,
+        "total_tokens": 26124,
+        "total_seconds": 18.2088210790007,
+        "mean_seconds": 6.069607026333567,
+        "seconds_range": [
+          3.1446046340006433,
+          8.45766041800016
+        ],
+        "price_total_no_discount_rub": "1.469664",
+        "price_total_with_published_discount_rub": "0.940896",
+        "price_mean_no_discount_rub": "0.489888",
+        "price_range_no_discount_rub": [
+          0.488808,
+          0.490428
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 0,
+        "accepted_replans": 0,
+        "protocol_errors": 0,
+        "tool_errors": 0,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 0
+      },
+      "openai/gpt-5.4-nano": {
+        "attempts": 3,
+        "strict_successes": 2,
+        "strict_success_rate": 0.6666666666666666,
+        "correct_action_previews": 3,
+        "gateway_calls": 9,
+        "mean_calls": 3,
+        "prompt_tokens": 32913,
+        "cached_tokens": 4992,
+        "completion_tokens": 645,
+        "reasoning_tokens": 0,
+        "total_tokens": 33558,
+        "total_seconds": 25.69126480200066,
+        "mean_seconds": 8.56375493400022,
+        "seconds_range": [
+          4.973706603999744,
+          11.146950595000817
+        ],
+        "price_total_no_discount_rub": "0.997656",
+        "price_total_with_published_discount_rub": "0.8763504",
+        "price_mean_no_discount_rub": "0.332552",
+        "price_range_no_discount_rub": [
+          0.331486,
+          0.333085
+        ],
+        "price_per_strict_success_no_discount_rub": "0.498828",
+        "price_per_strict_success_with_discount_rub": "0.4381752",
+        "questions": 3,
+        "accepted_replans": 0,
+        "protocol_errors": 0,
+        "tool_errors": 0,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": "49.882800",
+          "500": "249.414000",
+          "1000": "498.828000"
+        },
+        "recovery_calls": 0
+      }
+    },
+    "B": {
+      "openai/gpt-4.1-mini": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 3,
+        "gateway_calls": 12,
+        "mean_calls": 4,
+        "prompt_tokens": 54201,
+        "cached_tokens": 24960,
+        "completion_tokens": 924,
+        "reasoning_tokens": 0,
+        "total_tokens": 55125,
+        "total_seconds": 22.36782047700217,
+        "mean_seconds": 7.455940159000723,
+        "seconds_range": [
+          5.235755820998747,
+          11.803047656001581
+        ],
+        "price_total_no_discount_rub": "3.126438",
+        "price_total_with_published_discount_rub": "2.115558",
+        "price_mean_no_discount_rub": "1.042146",
+        "price_range_no_discount_rub": [
+          1.042146,
+          1.042146
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 0,
+        "accepted_replans": 3,
+        "protocol_errors": 0,
+        "tool_errors": 0,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 0
+      },
+      "openai/gpt-5.4-nano": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 3,
+        "gateway_calls": 15,
+        "mean_calls": 5,
+        "prompt_tokens": 78327,
+        "cached_tokens": 42624,
+        "completion_tokens": 1431,
+        "reasoning_tokens": 0,
+        "total_tokens": 79758,
+        "total_seconds": 28.51311532499858,
+        "mean_seconds": 9.504371774999527,
+        "seconds_range": [
+          6.719005892999121,
+          15.030899317000149
+        ],
+        "price_total_no_discount_rub": "2.356668",
+        "price_total_with_published_discount_rub": "1.3209048",
+        "price_mean_no_discount_rub": "0.785556",
+        "price_range_no_discount_rub": [
+          0.785556,
+          0.785556
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 0,
+        "accepted_replans": 3,
+        "protocol_errors": 3,
+        "tool_errors": 3,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 3
+      }
+    },
+    "C": {
+      "openai/gpt-4.1-mini": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 0,
+        "gateway_calls": 9,
+        "mean_calls": 3,
+        "prompt_tokens": 63642,
+        "cached_tokens": 19584,
+        "completion_tokens": 900,
+        "reasoning_tokens": 0,
+        "total_tokens": 64542,
+        "total_seconds": 15.577771564001523,
+        "mean_seconds": 5.192590521333841,
+        "seconds_range": [
+          3.673032767001132,
+          7.6750581430005695
+        ],
+        "price_total_no_discount_rub": "3.631068",
+        "price_total_with_published_discount_rub": "2.837916",
+        "price_mean_no_discount_rub": "1.210356",
+        "price_range_no_discount_rub": [
+          1.210356,
+          1.210356
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 0,
+        "accepted_replans": 0,
+        "protocol_errors": 0,
+        "tool_errors": 0,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 0
+      },
+      "openai/gpt-5.4-nano": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 0,
+        "gateway_calls": 12,
+        "mean_calls": 4,
+        "prompt_tokens": 72264,
+        "cached_tokens": 22272,
+        "completion_tokens": 1323,
+        "reasoning_tokens": 0,
+        "total_tokens": 73587,
+        "total_seconds": 25.133712045997527,
+        "mean_seconds": 8.37790401533251,
+        "seconds_range": [
+          5.972326916999009,
+          13.090510363999783
+        ],
+        "price_total_no_discount_rub": "2.174715",
+        "price_total_with_published_discount_rub": "1.6335054",
+        "price_mean_no_discount_rub": "0.724905",
+        "price_range_no_discount_rub": [
+          0.724905,
+          0.724905
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 3,
+        "accepted_replans": 0,
+        "protocol_errors": 0,
+        "tool_errors": 0,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 0
+      }
+    },
+    "D": {
+      "openai/gpt-4.1-mini": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 0,
+        "gateway_calls": 12,
+        "mean_calls": 4,
+        "prompt_tokens": 61092,
+        "cached_tokens": 19584,
+        "completion_tokens": 1131,
+        "reasoning_tokens": 0,
+        "total_tokens": 62223,
+        "total_seconds": 18.256637072001467,
+        "mean_seconds": 6.085545690667156,
+        "seconds_range": [
+          4.118164371000603,
+          9.927115254000455
+        ],
+        "price_total_no_discount_rub": "3.543264",
+        "price_total_with_published_discount_rub": "2.750112",
+        "price_mean_no_discount_rub": "1.181088",
+        "price_range_no_discount_rub": [
+          1.181088,
+          1.181088
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 0,
+        "accepted_replans": 0,
+        "protocol_errors": 0,
+        "tool_errors": 0,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 0
+      },
+      "openai/gpt-5.4-nano": {
+        "attempts": 3,
+        "strict_successes": 0,
+        "strict_success_rate": 0.0,
+        "correct_action_previews": 0,
+        "gateway_calls": 9,
+        "mean_calls": 3,
+        "prompt_tokens": 95016,
+        "cached_tokens": 85632,
+        "completion_tokens": 1446,
+        "reasoning_tokens": 0,
+        "total_tokens": 96462,
+        "total_seconds": 18.59769743400102,
+        "mean_seconds": 6.19923247800034,
+        "seconds_range": [
+          3.766654159000609,
+          9.308916648000377
+        ],
+        "price_total_no_discount_rub": "2.809806",
+        "price_total_with_published_discount_rub": "0.7289484",
+        "price_mean_no_discount_rub": "0.936602",
+        "price_range_no_discount_rub": [
+          0.936602,
+          0.936602
+        ],
+        "price_per_strict_success_no_discount_rub": null,
+        "price_per_strict_success_with_discount_rub": null,
+        "questions": 3,
+        "accepted_replans": 0,
+        "protocol_errors": 0,
+        "tool_errors": 3,
+        "monthly_100_500_1000_successes_no_discount_rub": {
+          "100": null,
+          "500": null,
+          "1000": null
+        },
+        "recovery_calls": 0
+      }
+    }
+  },
+  "runs": [
+    {
+      "attempt": "A-mini",
+      "scenario": "A",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: generic reason replaces real clarification",
+      "checks": {
+        "correct_preview": false,
+        "real_reason_requested": false,
+        "unnecessary_account_question": false,
+        "cash_write": false
+      },
+      "gateway_calls": 2,
+      "prompt_tokens": 8580,
+      "cached_tokens": 0,
+      "completion_tokens": 118,
+      "reasoning_tokens": 0,
+      "total_tokens": 8698,
+      "seconds": 6.606556026999897,
+      "http_seconds": 5.4331711850009015,
+      "price_rub_no_cache_discount": "0.488808",
+      "price_rub_with_published_cache_discount": "0.488808",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "A-mini-2",
+      "scenario": "A",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: generic reason replaces real clarification",
+      "checks": {
+        "correct_preview": false,
+        "real_reason_requested": false,
+        "unnecessary_account_question": false,
+        "cash_write": false
+      },
+      "gateway_calls": 2,
+      "prompt_tokens": 8590,
+      "cached_tokens": 6528,
+      "completion_tokens": 123,
+      "reasoning_tokens": 0,
+      "total_tokens": 8713,
+      "seconds": 8.45766041800016,
+      "http_seconds": 6.249701985001593,
+      "price_rub_no_cache_discount": "0.490428",
+      "price_rub_with_published_cache_discount": "0.226044",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "A-mini-3",
+      "scenario": "A",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: generic reason replaces real clarification",
+      "checks": {
+        "correct_preview": false,
+        "real_reason_requested": false,
+        "unnecessary_account_question": false,
+        "cash_write": false
+      },
+      "gateway_calls": 2,
+      "prompt_tokens": 8590,
+      "cached_tokens": 6528,
+      "completion_tokens": 123,
+      "reasoning_tokens": 0,
+      "total_tokens": 8713,
+      "seconds": 3.1446046340006433,
+      "http_seconds": 2.372273460001452,
+      "price_rub_no_cache_discount": "0.490428",
+      "price_rub_with_published_cache_discount": "0.226044",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "B-mini-1",
+      "scenario": "B",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct amount/card and stale rejection; fail no-replanning criterion",
+      "checks": {
+        "same_task_id": true,
+        "only_amount_changed": true,
+        "final_amount": 200,
+        "plan_version": 2,
+        "stale_card_http": 409,
+        "no_cash_write": true
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 18067,
+      "cached_tokens": 8320,
+      "completion_tokens": 308,
+      "reasoning_tokens": 0,
+      "total_tokens": 18375,
+      "seconds": 11.803047656001581,
+      "http_seconds": 10.216561837001791,
+      "price_rub_no_cache_discount": "1.042146",
+      "price_rub_with_published_cache_discount": "0.705186",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 1,
+      "plan_calls": 2,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "B-mini-2",
+      "scenario": "B",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct amount/card and stale rejection; fail no-replanning criterion",
+      "checks": {
+        "same_task_id": true,
+        "only_amount_changed": true,
+        "final_amount": 200,
+        "plan_version": 2,
+        "stale_card_http": 409,
+        "no_cash_write": true
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 18067,
+      "cached_tokens": 8320,
+      "completion_tokens": 308,
+      "reasoning_tokens": 0,
+      "total_tokens": 18375,
+      "seconds": 5.235755820998747,
+      "http_seconds": 3.7468718480013194,
+      "price_rub_no_cache_discount": "1.042146",
+      "price_rub_with_published_cache_discount": "0.705186",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 1,
+      "plan_calls": 2,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "B-mini-3",
+      "scenario": "B",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct amount/card and stale rejection; fail no-replanning criterion",
+      "checks": {
+        "same_task_id": true,
+        "only_amount_changed": true,
+        "final_amount": 200,
+        "plan_version": 2,
+        "stale_card_http": 409,
+        "no_cash_write": true
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 18067,
+      "cached_tokens": 8320,
+      "completion_tokens": 308,
+      "reasoning_tokens": 0,
+      "total_tokens": 18375,
+      "seconds": 5.329017000001841,
+      "http_seconds": 3.771595761001663,
+      "price_rub_no_cache_discount": "1.042146",
+      "price_rub_with_published_cache_discount": "0.705186",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 1,
+      "plan_calls": 2,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "C-mini-1",
+      "scenario": "C",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented tender_id=1, expected 101; invalid preview not clicked",
+      "checks": {
+        "correct_estimate_read": true,
+        "preview_target": 1,
+        "expected_target": 101,
+        "card_clicked": false,
+        "new_estimate_created": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 21214,
+      "cached_tokens": 6528,
+      "completion_tokens": 300,
+      "reasoning_tokens": 0,
+      "total_tokens": 21514,
+      "seconds": 7.6750581430005695,
+      "http_seconds": 6.972934520999843,
+      "price_rub_no_cache_discount": "1.210356",
+      "price_rub_with_published_cache_discount": "0.945972",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "tender_send_to_calculation"
+      ]
+    },
+    {
+      "attempt": "C-mini-2",
+      "scenario": "C",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented tender_id=1, expected 101; invalid preview not clicked",
+      "checks": {
+        "correct_estimate_read": true,
+        "preview_target": 1,
+        "expected_target": 101,
+        "card_clicked": false,
+        "new_estimate_created": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 21214,
+      "cached_tokens": 6528,
+      "completion_tokens": 300,
+      "reasoning_tokens": 0,
+      "total_tokens": 21514,
+      "seconds": 3.673032767001132,
+      "http_seconds": 2.9582781299995986,
+      "price_rub_no_cache_discount": "1.210356",
+      "price_rub_with_published_cache_discount": "0.945972",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "tender_send_to_calculation"
+      ]
+    },
+    {
+      "attempt": "C-mini-3",
+      "scenario": "C",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented tender_id=1, expected 101; invalid preview not clicked",
+      "checks": {
+        "correct_estimate_read": true,
+        "preview_target": 1,
+        "expected_target": 101,
+        "card_clicked": false,
+        "new_estimate_created": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 21214,
+      "cached_tokens": 6528,
+      "completion_tokens": 300,
+      "reasoning_tokens": 0,
+      "total_tokens": 21514,
+      "seconds": 4.2296806539998215,
+      "http_seconds": 3.506680462998702,
+      "price_rub_no_cache_discount": "1.210356",
+      "price_rub_with_published_cache_discount": "0.945972",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "tender_send_to_calculation"
+      ]
+    },
+    {
+      "attempt": "D-mini-1",
+      "scenario": "D",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: wrong resource OrderEstimate, false claim that estimate/lines absent",
+      "checks": {
+        "correct_tender_estimate_resource": false,
+        "actual_lines_returned": false,
+        "full_answer": false,
+        "false_claim_estimate_absent": true
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 20364,
+      "cached_tokens": 6528,
+      "completion_tokens": 377,
+      "reasoning_tokens": 0,
+      "total_tokens": 20741,
+      "seconds": 9.927115254000455,
+      "http_seconds": 9.087169618002008,
+      "price_rub_no_cache_discount": "1.181088",
+      "price_rub_with_published_cache_discount": "0.916704",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_order_estimates",
+        "read_tenders_order_lines",
+        "assistant_finish"
+      ]
+    },
+    {
+      "attempt": "D-mini-2",
+      "scenario": "D",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: wrong resource OrderEstimate, false claim that estimate/lines absent",
+      "checks": {
+        "correct_tender_estimate_resource": false,
+        "actual_lines_returned": false,
+        "full_answer": false,
+        "false_claim_estimate_absent": true
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 20364,
+      "cached_tokens": 6528,
+      "completion_tokens": 377,
+      "reasoning_tokens": 0,
+      "total_tokens": 20741,
+      "seconds": 4.118164371000603,
+      "http_seconds": 3.113650134000636,
+      "price_rub_no_cache_discount": "1.181088",
+      "price_rub_with_published_cache_discount": "0.916704",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_order_estimates",
+        "read_tenders_order_lines",
+        "assistant_finish"
+      ]
+    },
+    {
+      "attempt": "D-mini-3",
+      "scenario": "D",
+      "model": "openai/gpt-4.1-mini",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: wrong resource OrderEstimate, false claim that estimate/lines absent",
+      "checks": {
+        "correct_tender_estimate_resource": false,
+        "actual_lines_returned": false,
+        "full_answer": false,
+        "false_claim_estimate_absent": true
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 20364,
+      "cached_tokens": 6528,
+      "completion_tokens": 377,
+      "reasoning_tokens": 0,
+      "total_tokens": 20741,
+      "seconds": 4.21135744700041,
+      "http_seconds": 3.1154948609982966,
+      "price_rub_no_cache_discount": "1.181088",
+      "price_rub_with_published_cache_discount": "0.916704",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_order_estimates",
+        "read_tenders_order_lines",
+        "assistant_finish"
+      ]
+    },
+    {
+      "attempt": "A-nano",
+      "scenario": "A",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct preview; redundant account question",
+      "checks": {
+        "correct_preview": true,
+        "real_reason_requested": true,
+        "unnecessary_account_question": true,
+        "cash_write": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 10919,
+      "cached_tokens": 1664,
+      "completion_tokens": 217,
+      "reasoning_tokens": 0,
+      "total_tokens": 11136,
+      "seconds": 9.570607603000099,
+      "http_seconds": 7.767554861999088,
+      "price_rub_no_cache_discount": "0.331486",
+      "price_rub_with_published_cache_discount": "0.2910508",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "assistant_ask",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "A-nano-2",
+      "scenario": "A",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 2,
+      "strict_success": true,
+      "business_correct_preview": true,
+      "verdict": "Pass: clarifies missing data and correct preview",
+      "checks": {
+        "correct_preview": true,
+        "real_reason_requested": true,
+        "unnecessary_account_question": false,
+        "cash_write": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 10997,
+      "cached_tokens": 1664,
+      "completion_tokens": 214,
+      "reasoning_tokens": 0,
+      "total_tokens": 11211,
+      "seconds": 11.146950595000817,
+      "http_seconds": 8.462389252999856,
+      "price_rub_no_cache_discount": "0.333085",
+      "price_rub_with_published_cache_discount": "0.2926498",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "assistant_ask",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "A-nano-3",
+      "scenario": "A",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 3,
+      "strict_success": true,
+      "business_correct_preview": true,
+      "verdict": "Pass: clarifies missing data and correct preview",
+      "checks": {
+        "correct_preview": true,
+        "real_reason_requested": true,
+        "unnecessary_account_question": false,
+        "cash_write": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 10997,
+      "cached_tokens": 1664,
+      "completion_tokens": 214,
+      "reasoning_tokens": 0,
+      "total_tokens": 11211,
+      "seconds": 4.973706603999744,
+      "http_seconds": 3.4969817740002327,
+      "price_rub_no_cache_discount": "0.333085",
+      "price_rub_with_published_cache_discount": "0.2926498",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "assistant_ask",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "B-nano-1",
+      "scenario": "B",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct amount/card and stale rejection; fail no-replanning criterion",
+      "checks": {
+        "same_task_id": true,
+        "only_amount_changed": true,
+        "final_amount": 200,
+        "plan_version": 2,
+        "stale_card_http": 409,
+        "no_cash_write": true
+      },
+      "gateway_calls": 5,
+      "prompt_tokens": 26109,
+      "cached_tokens": 14208,
+      "completion_tokens": 477,
+      "reasoning_tokens": 0,
+      "total_tokens": 26586,
+      "seconds": 15.030899317000149,
+      "http_seconds": 13.711919281999144,
+      "price_rub_no_cache_discount": "0.785556",
+      "price_rub_with_published_cache_discount": "0.4403016",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 1,
+      "plan_calls": 3,
+      "protocol_errors": 1,
+      "recoveries": 1,
+      "tool_errors": [
+        {
+          "tool_id": "assistant.plan",
+          "ok": false,
+          "error": "Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план"
+        }
+      ],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "B-nano-2",
+      "scenario": "B",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct amount/card and stale rejection; fail no-replanning criterion",
+      "checks": {
+        "same_task_id": true,
+        "only_amount_changed": true,
+        "final_amount": 200,
+        "plan_version": 2,
+        "stale_card_http": 409,
+        "no_cash_write": true
+      },
+      "gateway_calls": 5,
+      "prompt_tokens": 26109,
+      "cached_tokens": 14208,
+      "completion_tokens": 477,
+      "reasoning_tokens": 0,
+      "total_tokens": 26586,
+      "seconds": 6.7632101149993105,
+      "http_seconds": 5.580057743998623,
+      "price_rub_no_cache_discount": "0.785556",
+      "price_rub_with_published_cache_discount": "0.4403016",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 1,
+      "plan_calls": 3,
+      "protocol_errors": 1,
+      "recoveries": 1,
+      "tool_errors": [
+        {
+          "tool_id": "assistant.plan",
+          "ok": false,
+          "error": "Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план"
+        }
+      ],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "B-nano-3",
+      "scenario": "B",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": true,
+      "verdict": "Correct amount/card and stale rejection; fail no-replanning criterion",
+      "checks": {
+        "same_task_id": true,
+        "only_amount_changed": true,
+        "final_amount": 200,
+        "plan_version": 2,
+        "stale_card_http": 409,
+        "no_cash_write": true
+      },
+      "gateway_calls": 5,
+      "prompt_tokens": 26109,
+      "cached_tokens": 14208,
+      "completion_tokens": 477,
+      "reasoning_tokens": 0,
+      "total_tokens": 26586,
+      "seconds": 6.719005892999121,
+      "http_seconds": 5.107307572001446,
+      "price_rub_no_cache_discount": "0.785556",
+      "price_rub_with_published_cache_discount": "0.4403016",
+      "invoice_price_rub": null,
+      "questions": 0,
+      "accepted_replans": 1,
+      "plan_calls": 3,
+      "protocol_errors": 1,
+      "recoveries": 1,
+      "tool_errors": [
+        {
+          "tool_id": "assistant.plan",
+          "ok": false,
+          "error": "Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план"
+        }
+      ],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "assistant_plan",
+        "cash_transaction_create"
+      ]
+    },
+    {
+      "attempt": "C-nano-1",
+      "scenario": "C",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented tender_id=0, expected 101; invalid preview not clicked",
+      "checks": {
+        "correct_estimate_read": true,
+        "preview_target": 0,
+        "expected_target": 101,
+        "card_clicked": false,
+        "new_estimate_created": false
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 24088,
+      "cached_tokens": 7424,
+      "completion_tokens": 441,
+      "reasoning_tokens": 0,
+      "total_tokens": 24529,
+      "seconds": 13.090510363999783,
+      "http_seconds": 11.78298268800063,
+      "price_rub_no_cache_discount": "0.724905",
+      "price_rub_with_published_cache_discount": "0.5445018",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask",
+        "tender_send_to_calculation"
+      ]
+    },
+    {
+      "attempt": "C-nano-2",
+      "scenario": "C",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented tender_id=0, expected 101; invalid preview not clicked",
+      "checks": {
+        "correct_estimate_read": true,
+        "preview_target": 0,
+        "expected_target": 101,
+        "card_clicked": false,
+        "new_estimate_created": false
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 24088,
+      "cached_tokens": 7424,
+      "completion_tokens": 441,
+      "reasoning_tokens": 0,
+      "total_tokens": 24529,
+      "seconds": 5.972326916999009,
+      "http_seconds": 4.544476676999693,
+      "price_rub_no_cache_discount": "0.724905",
+      "price_rub_with_published_cache_discount": "0.5445018",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask",
+        "tender_send_to_calculation"
+      ]
+    },
+    {
+      "attempt": "C-nano-3",
+      "scenario": "C",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented tender_id=0, expected 101; invalid preview not clicked",
+      "checks": {
+        "correct_estimate_read": true,
+        "preview_target": 0,
+        "expected_target": 101,
+        "card_clicked": false,
+        "new_estimate_created": false
+      },
+      "gateway_calls": 4,
+      "prompt_tokens": 24088,
+      "cached_tokens": 7424,
+      "completion_tokens": 441,
+      "reasoning_tokens": 0,
+      "total_tokens": 24529,
+      "seconds": 6.0708747649987345,
+      "http_seconds": 4.741643130997545,
+      "price_rub_no_cache_discount": "0.724905",
+      "price_rub_with_published_cache_discount": "0.5445018",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask",
+        "tender_send_to_calculation"
+      ]
+    },
+    {
+      "attempt": "D-nano-1",
+      "scenario": "D",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 1,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented view rejected; asks technical question, no answer",
+      "checks": {
+        "correct_tender_estimate_resource": true,
+        "actual_lines_returned": false,
+        "full_answer": false,
+        "false_claim_estimate_absent": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 31672,
+      "cached_tokens": 28544,
+      "completion_tokens": 482,
+      "reasoning_tokens": 0,
+      "total_tokens": 32154,
+      "seconds": 9.308916648000377,
+      "http_seconds": 8.735036605001369,
+      "price_rub_no_cache_discount": "0.936602",
+      "price_rub_with_published_cache_discount": "0.2429828",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [
+        {
+          "tool_id": "read:tenders.tender_estimates",
+          "ok": false,
+          "error": "Неизвестное бизнес-представление"
+        }
+      ],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask"
+      ]
+    },
+    {
+      "attempt": "D-nano-2",
+      "scenario": "D",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 2,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented view rejected; asks technical question, no answer",
+      "checks": {
+        "correct_tender_estimate_resource": true,
+        "actual_lines_returned": false,
+        "full_answer": false,
+        "false_claim_estimate_absent": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 31672,
+      "cached_tokens": 28544,
+      "completion_tokens": 482,
+      "reasoning_tokens": 0,
+      "total_tokens": 32154,
+      "seconds": 5.522126627000034,
+      "http_seconds": 4.73069034999935,
+      "price_rub_no_cache_discount": "0.936602",
+      "price_rub_with_published_cache_discount": "0.2429828",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [
+        {
+          "tool_id": "read:tenders.tender_estimates",
+          "ok": false,
+          "error": "Неизвестное бизнес-представление"
+        }
+      ],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask"
+      ]
+    },
+    {
+      "attempt": "D-nano-3",
+      "scenario": "D",
+      "model": "openai/gpt-5.4-nano",
+      "repeat": 3,
+      "strict_success": false,
+      "business_correct_preview": false,
+      "verdict": "Fail: invented view rejected; asks technical question, no answer",
+      "checks": {
+        "correct_tender_estimate_resource": true,
+        "actual_lines_returned": false,
+        "full_answer": false,
+        "false_claim_estimate_absent": false
+      },
+      "gateway_calls": 3,
+      "prompt_tokens": 31672,
+      "cached_tokens": 28544,
+      "completion_tokens": 482,
+      "reasoning_tokens": 0,
+      "total_tokens": 32154,
+      "seconds": 3.766654159000609,
+      "http_seconds": 2.9446886669993546,
+      "price_rub_no_cache_discount": "0.936602",
+      "price_rub_with_published_cache_discount": "0.2429828",
+      "invoice_price_rub": null,
+      "questions": 1,
+      "accepted_replans": 0,
+      "plan_calls": 1,
+      "protocol_errors": 0,
+      "recoveries": 0,
+      "tool_errors": [
+        {
+          "tool_id": "read:tenders.tender_estimates",
+          "ok": false,
+          "error": "Неизвестное бизнес-представление"
+        }
+      ],
+      "cash_records": 0,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask"
+      ]
+    }
+  ],
+  "nano_minus_baseline": {
+    "gateway_calls": {
+      "absolute": 6.0,
+      "percent": 15.384615384615374
+    },
+    "mean_calls": {
+      "absolute": 0.5,
+      "percent": 15.384615384615374
+    },
+    "prompt_tokens": {
+      "absolute": 73825.0,
+      "percent": 36.06585407557586
+    },
+    "cached_tokens": {
+      "absolute": 78336.0,
+      "percent": 101.49253731343282
+    },
+    "completion_tokens": {
+      "absolute": 1526.0,
+      "percent": 45.977704127749334
+    },
+    "total_tokens": {
+      "absolute": 75351.0,
+      "percent": 36.22400415356659
+    },
+    "mean_seconds": {
+      "absolute": 1.9603949512493264,
+      "percent": 31.61457788095998
+    },
+    "price_total_no_discount_rub": {
+      "absolute": -3.4315890000000007,
+      "percent": -29.154311557245894
+    },
+    "price_total_with_published_discount_rub": {
+      "absolute": -4.084773,
+      "percent": -47.25295280850836
+    }
+  },
+  "initial_requests_identical_except_model": true,
+  "request_hashes": {
+    "A": "766e2f205772b4827713d3afa0dbfa1a361a209bca9dec5c70666cbbe05854a0",
+    "B": "1a218165585a090b6f949e5225755c9e6416662fefc40e836d09a28799be747d",
+    "C": "d47ae480bcd0701179571914d31440005f09a570af36983b7227537273814e4b",
+    "D": "2067d592b9f35823e83b0e08833b96cb21f2e0819f7f8200de74caafb3d0e17a"
+  },
+  "overall_shared_budget": {
+    "approved_rub": 50,
+    "charged_or_reserved_rub": "21.316678",
+    "remaining_rub": "28.683322",
+    "gateway_calls": 87,
+    "backup_54mini_not_in_AB": {
+      "attempts": 1,
+      "calls": 3,
+      "cost_no_discount_rub": "1.207399"
+    }
+  },
+  "conclusion": {
+    "preferred_candidate": "openai/gpt-5.4-nano",
+    "strict_successes": "Nano 2/12 vs baseline 0/12",
+    "correct_action_previews": "Nano 6/12 vs baseline 3/12 (secondary metric, does not waive strict failures)",
+    "nano_attempt_cost_reduction_no_discount_percent": 29.154311557245894,
+    "readiness": "Neither model meets the business reliability goal on unchanged application; no TEST replacement justified yet",
+    "reason": "Nano resolves missing-reason case and avoids false absent-data claim at lower measured cost; both fail B no-replan and C target ID, D fails differently"
+  },
+  "methodology": {
+    "strict_success": "All scenario checks must pass; correct final amount alone does not excuse replan; technical finish alone does not establish correct answer",
+    "usage": "Actual Gateway response usage. Cache is subset of prompt; reasoning fields present and zero. No double-counting. Missing data would remain null.",
+    "pricing": "Two published-rate calculations; key-specific cache billing/invoice not verified",
+    "failed_attempts": "All included, no rejected run removed",
+    "time": "Backend turns plus HTTP old-card checks; excludes human wait time",
+    "data": "Fresh synthetic SQLite copies and new conversations; no live writes; application code/prompts/schemas unchanged",
+    "conditional_turns": "Replies follow actual missing information; C Nano receives confirmation of already specified tender after unnecessary ask, baseline invalid preview stops immediately",
+    "model_order": "Not randomized/interleaved: Nano expansion ran before baseline after user steering. Report no-cache primary costs to reduce cache-order bias.",
+    "samples": "3 per scenario/model, small set and identical repeated outputs; descriptive result, not statistical proof of future success rates",
+    "forecast": "Illustrative equal four-scenario workload only; baseline success cost undefined at zero successes. No invented mixed production workload.",
+    "recoveries": "Every observed protocol_error here triggers one bounded recovery and a following real Gateway call; 3 in Nano B, zero in baseline. All included in calls/cost."
+  },
+  "backend_fixes": "Not started",
+  "test_deploy": "No",
+  "prod_changes": "No"
+}

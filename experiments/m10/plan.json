@@ -1,6 +1,6 @@
 {
-  "status": "PREPARED_NOT_RUN",
-  "paid_calls": 0,
+  "status": "COMPARISON_COMPLETE",
+  "paid_calls": 87,
   "test_runtime_model": "NOT VERIFIED",
   "pilot": {
     "attempts": [
@@ -22,20 +22,23 @@
     "budget_note": "50 RUB total pilot stop budget; may stop early. Live runner and compatibility must honor it, including paid failures. Full trial budget remains unapproved.",
     "approved_spend_limit_rub": 50,
     "authorization": "User explicitly allocated 50 RUB total to pilot; compatibility calls, failed attempts and both models share this budget. Do not request the same approval again.",
-    "status": "Completed preliminary A pilot: baseline, Nano, conditional backup Mini",
+    "status": "Complete paired 24-trial comparison plus one earlier backup trial",
     "result_summary": "results/pilot-20261023/summary.json",
-    "charged_or_reserved_rub": "10.035052",
-    "remaining_approved_budget_rub": "39.964948",
+    "charged_or_reserved_rub": "21.316678",
+    "remaining_approved_budget_rub": "28.683322",
     "backup_authorized": "User authorized 5.4 Mini if Nano has issues or is worse; used after redundant account question"
   },
   "primary": {
     "attempts": 24,
     "repeats_per_scenario_per_model": 3,
     "proposed_spend_limit_rub": 500,
-    "decision": "Full A/B remains pending; A pilot is saved. B/C/D and 3 repeats not yet measured; no backend fixes before complete A/B.",
+    "decision": "Nano preferred on observed goal/cost outcomes; neither ready for reliable business operation. No model change/deploy performed.",
     "includes_pilot_attempts": true,
     "all_192_calls_at_maximum_envelope_rub": 1190.9698560000002,
-    "budget_note": "All 24 attempts at the maximum envelope: approximately 1190.97 RUB. Actual budget must be based on pilot usage; no bulk spend approved."
+    "budget_note": "All 24 attempts at the maximum envelope: approximately 1190.97 RUB. Actual budget must be based on pilot usage; no bulk spend approved.",
+    "status": "Completed 3 repeats x 4 scenarios x 2 models within approved 50 RUB after explicit user request for comparison",
+    "result_summary": "results/comparison-20261023/summary.json",
+    "authorization": "User: prove worse or better for our purpose; perform direct comparison. Supersedes prior Nano-only request for this baseline evaluation."
   },
   "supplemental": {
     "cases": [
