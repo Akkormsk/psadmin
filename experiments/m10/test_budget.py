@@ -70,6 +70,29 @@ class BudgetTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 budget.reserve("A", {**self.body, key: value})
 
+    def test_separate_write_category_unknown_retains_reservation(self):
+        rates = {MODEL: {**RATES[MODEL], "cache_write_rub_per_million": 300}}
+        budget = Budget(100, rates)
+        index = budget.reserve("A", self.body)
+        reserved = budget.charged_or_reserved
+        budget.settle(index, MODEL, {"prompt_tokens": 1000, "completion_tokens": 100})
+        self.assertEqual(budget.charged_or_reserved, reserved)
+
+    def test_cache_write_aliases_are_not_added_twice(self):
+        rates = {MODEL: {**RATES[MODEL], "cache_write_rub_per_million": 300}}
+        budget = Budget(100, rates)
+        index = budget.reserve("A", self.body)
+        budget.settle(index, MODEL, {"prompt_tokens": 1000, "completion_tokens": 100,
+            "prompt_tokens_details": {"cache_write_tokens": 100, "cache_creation_tokens": 100}})
+        self.assertEqual(budget.charged_or_reserved, Decimal("0.408"))
+
+    def test_ordinary_multiturn_case_has_bounded_twelve_calls(self):
+        budget = Budget(1000, RATES)
+        for _ in range(12):
+            budget.reserve("L-haiku-2", self.body)
+        with self.assertRaisesRegex(RuntimeError, "request limit"):
+            budget.reserve("L-haiku-2", self.body)
+
 
 if __name__ == "__main__":
     unittest.main()

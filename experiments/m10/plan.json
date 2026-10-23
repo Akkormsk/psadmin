@@ -20,12 +20,12 @@
     "requires_user_approval_before_start": false,
     "all_16_calls_at_maximum_envelope_rub": 99.247488,
     "budget_note": "50 RUB total pilot stop budget; may stop early. Live runner and compatibility must honor it, including paid failures. Full trial budget remains unapproved.",
-    "approved_spend_limit_rub": 60,
-    "authorization": "User explicitly approved total limit 60 RUB on 2026-10-23",
+    "approved_spend_limit_rub": 110,
+    "authorization": "User added 50 RUB after 60 RUB approval; total110, Gemini/Haiku/GPT5.4 Mini then winner vs4.1 Mini",
     "status": "Complete paired 24-trial comparison plus one earlier backup trial",
     "result_summary": "results/pilot-20261023/summary.json",
-    "charged_or_reserved_rub": "49.828831",
-    "remaining_approved_budget_rub": "10.171169",
+    "charged_or_reserved_rub": "101.27567700",
+    "remaining_approved_budget_rub": "8.72432300",
     "backup_authorized": "User authorized 5.4 Mini if Nano has issues or is worse; used after redundant account question"
   },
   "primary": {
@@ -120,5 +120,10 @@
     "summary": "results/real-tasks-20261023/summary.json",
     "business_outcomes_completed_pairs": "5/7 baseline; 6/7 strong model",
     "ordinary_tasks": "4/6 baseline; 6/6 strong model"
+  },
+  "three_model_round": {
+    "status": "COMPLETE",
+    "winner": "anthropic/claude-haiku-5-5",
+    "report": "round3_final.json"
   }
 }

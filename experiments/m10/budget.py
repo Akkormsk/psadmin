@@ -29,7 +29,10 @@ class Budget:
         return sum(self.reservations, Decimal(0))
 
     def reserve(self, attempt, body):
-        if self.attempt_calls.get(attempt, 0) >= MAX_CALLS_PER_ATTEMPT:
+        # Ordinary multi-turn cases include clarification and optional button
+        # continuation; the agent retains its own unchanged per-run loop limit.
+        limit = 12 if attempt[:1] in "EFGHIJKL" else MAX_CALLS_PER_ATTEMPT
+        if self.attempt_calls.get(attempt, 0) >= limit:
             raise RuntimeError("Attempt request limit reached")
         if body.get("max_tokens") != MAX_OUTPUT_TOKENS:
             raise ValueError("Baseline max_tokens changed")
@@ -39,6 +42,8 @@ class Budget:
         if size > MAX_REQUEST_BYTES:
             raise RuntimeError("Request envelope exceeded; stop, do not truncate prompts")
         rate = self.rates[body["model"]]
+        # Conservative ceiling when a provider separately charges cache writes.
+        reserve_input_rate = rate["input_rub_per_million"] + rate.get("cache_write_rub_per_million", 0)
         # Byte upper envelope for byte-level tokenization plus framing reserve.
         # Remains below the published 272k higher-price tier for GPT 4.1.
         # The provider tokenizes parsed Unicode, not Python's ASCII \u escapes.
@@ -49,7 +54,7 @@ class Budget:
             raise RuntimeError("Unicode request envelope exceeded")
         reserved_input = token_byte_bound + TOKEN_OVERHEAD_RESERVE
         reservation = rubles(reserved_input, MAX_OUTPUT_TOKENS,
-            rate["input_rub_per_million"], rate["output_rub_per_million"])
+            reserve_input_rate, rate["output_rub_per_million"])
         if self.charged_or_reserved + reservation > self.limit:
             raise RuntimeError("Approved budget would be exceeded")
         self.reservations.append(reservation)
@@ -66,6 +71,15 @@ class Budget:
             return
         rate = self.rates[model]
         cost = rubles(prompt, completion, rate["input_rub_per_million"], rate["output_rub_per_million"])
+        details = usage.get("prompt_tokens_details") or {}
+        write_values = [details.get("cache_write_tokens"), details.get("cache_creation_tokens")]
+        writes = max((x for x in write_values if type(x) is int and x >= 0), default=None)
+        write_rate = rate.get("cache_write_rub_per_million")
+        if write_rate:
+            if writes is None:
+                return  # Unknown extra billing category retains the reservation.
+            # Do not assume writes are a subset of prompt until reconciled.
+            cost += Decimal(writes) * Decimal(str(write_rate)) / Decimal(1000000)
         previous = self.reservations[index]
         self.reservations[index] = cost
         if cost > previous:

@@ -1,0 +1,25 @@
+scenario,model,success,gateway_calls,prompt_tokens,cached_tokens,completion_tokens,reasoning_tokens,http_seconds,price_rub_no_cache_discount,verdict
+E,anthropic/claude-haiku-5-5,True,1,11005,0,53,0,1.8696061650007323,0.152145,Correct business outcome
+F,anthropic/claude-haiku-5-5,True,1,10997,0,50,0,1.7401571569971566,0.1518345,Correct business outcome
+G,anthropic/claude-haiku-5-5,True,3,24990,0,487,0,7.861095037002087,0.3702375,Correct business outcome
+H,anthropic/claude-haiku-5-5,True,4,33657,0,613,0,11.14777122900341,0.495747,Correct business outcome
+I,anthropic/claude-haiku-5-5,True,2,15724,0,357,0,4.026463045000128,0.2363715,Correct business outcome
+J,anthropic/claude-haiku-5-5,True,3,20674,0,505,0,4.3345426640044025,0.3131865,Correct business outcome
+K,anthropic/claude-haiku-5-5,False,8,111293,0,1762,0,21.591040004001115,1.6213905,Protocol/backend error prevents completion
+L,anthropic/claude-haiku-5-5,False,10,182094,0,2119,0,30.469670222002605,2.6013015,Full read contains lines but wrong/missing estimate status
+E,gemini/gemini-3.8-flash,True,1,7225,,118,89,3.670115460998204,0.79126875,Correct business outcome
+F,gemini/gemini-3.8-flash,True,1,7219,,111,89,3.6151196909995633,0.7871175,Correct business outcome
+G,gemini/gemini-3.8-flash,True,3,15965,,882,491,12.841082637001819,2.06296875,Correct business outcome
+H,gemini/gemini-3.8-flash,False,4,26284,,3392,3272,37.98117137899317,4.378455,Protocol/backend error prevents completion
+I,gemini/gemini-3.8-flash,True,2,10016,,632,447,10.019549956003175,1.33407,Correct business outcome
+J,gemini/gemini-3.8-flash,True,3,13014,,930,682,14.515653987004043,1.78848,Correct business outcome
+K,gemini/gemini-3.8-flash,False,4,30927,,3274,2965,39.31546215900016,4.78882125,Protocol/backend error prevents completion
+L,gemini/gemini-3.8-flash,False,8,110431,,2622,1401,47.021004098995036,12.50852625,Full read contains lines but wrong/missing estimate status
+E,openai/gpt-5.4-mini,True,1,6749,5888,26,0,7.986315641002875,0.697457,Correct business outcome
+F,openai/gpt-5.4-mini,True,1,6743,5888,21,0,2.195446425999762,0.693811,Correct business outcome
+G,openai/gpt-5.4-mini,True,3,13076,7680,276,0,7.34296265500052,1.488484,Correct business outcome
+H,openai/gpt-5.4-mini,True,6,29341,9600,626,0,15.436029832992062,3.344049,Correct business outcome
+I,openai/gpt-5.4-mini,True,2,8802,5888,145,0,1.964356720998694,0.977162,Correct business outcome
+J,openai/gpt-5.4-mini,True,4,18375,7680,316,0,8.5698184890025,2.048003,Correct business outcome
+K,openai/gpt-5.4-mini,False,6,69992,45824,908,0,23.515989441000784,7.621256,Protocol/backend error prevents completion
+L,openai/gpt-5.4-mini,False,7,56792,27648,714,0,21.922120711002208,6.170104,Missing lines and wrong estimate status

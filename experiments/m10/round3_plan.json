@@ -1,0 +1,37 @@
+{
+  "status": "COMPLETE",
+  "models": [
+    "gemini/gemini-3.8-flash",
+    "anthropic/claude-haiku-5-5",
+    "openai/gpt-5.4-mini"
+  ],
+  "cases": "real_task_cases.json",
+  "dataset": "/tmp/psadmin-m10-real-seed.sqlite3; fresh copy per attempt",
+  "application_sha": "cc1cd264",
+  "budget_total_rub": 110,
+  "spent_before_round_rub": "49.828831",
+  "remaining_before_round_rub": "60.171169",
+  "pricing": "No input-cache discounts; retain possible cache-write surcharge/reservation until usage clarified",
+  "scoring": [
+    "Business success first, dangerous errors next, cost per success then latency",
+    "Extra replan alone does not fail the business task",
+    "Budget stops are unknown outcomes, not model failures",
+    "Selection reuses unchanged GPT-5.4 Mini reference, completes L; no paid duplication solely to rebuild same evidence",
+    "After selecting winner run fresh paired validation with GPT-4.1 Mini on same 8 cases"
+  ],
+  "known_limits": [
+    "Selected cases from two real conversations, synthetic data; not production usage distribution",
+    "One initial repeat/model/case; no broad statistical claims",
+    "Keep all failed/compatibility calls in cost; do not change backend, global model, TEST or PROD"
+  ],
+  "tie_break": "If equal business success and no dangerous outcome difference, lower measured cost per success, then lower latency",
+  "fresh_validation": "Independent dialogue/data copies for winner and baseline; conditional followups identical when questions match",
+  "winner": "anthropic/claude-haiku-5-5",
+  "result": "round3_final.json",
+  "budget_final": {
+    "approved_rub": 110,
+    "charged_or_reserved_rub": "101.27567700",
+    "remaining_rub": "8.72432300",
+    "calls_all_m10": 255
+  }
+}

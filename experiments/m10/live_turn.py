@@ -31,7 +31,7 @@ def save(path, value):
 
 
 def run(args):
-    if not re.fullmatch(r"[A-L]-(?:mini|nano|54mini)(?:-[1-3])?", args.attempt):
+    if not re.fullmatch(r"[A-L]-(?:mini|nano|54mini|gemini|haiku)(?:-[1-3])?", args.attempt):
         raise ValueError("Invalid attempt name")
     if args.start and args.confirm_event is not None:
         raise ValueError("A button cannot start a conversation")
@@ -46,8 +46,8 @@ def run(args):
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {
         "approved_limit_rub": 50, "reservations": [], "attempt_calls": {}, "calls": [],
     }
-    if ledger["approved_limit_rub"] not in (50, 60):
-        raise RuntimeError("Only an explicitly approved 50 or 60 RUB limit is supported")
+    if ledger["approved_limit_rub"] not in (50, 60, 110):
+        raise RuntimeError("Only an explicitly approved 50, 60 or 110 RUB limit is supported")
     rates = json.loads((ROOT / "experiments/m10/rates.json").read_text())["rates"]
     budget = Budget(ledger["approved_limit_rub"], rates)
     budget.reservations = [Decimal(x) for x in ledger["reservations"]]
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=Path, required=True)
     parser.add_argument("--attempt", required=True)
-    parser.add_argument("--model", required=True, choices=["openai/gpt-4.1-mini", "openai/gpt-5.4-nano", "openai/gpt-5.4-mini"])
+    parser.add_argument("--model", required=True, choices=["openai/gpt-4.1-mini", "openai/gpt-5.4-nano", "openai/gpt-5.4-mini", "gemini/gemini-3.8-flash", "anthropic/claude-haiku-5-5"])
     parser.add_argument("--scenario", default="A", choices=list("ABCDEFGHIJKL"))
     parser.add_argument("--message")
     parser.add_argument("--confirm-event", type=int)

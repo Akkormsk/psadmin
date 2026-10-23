@@ -1,0 +1,17 @@
+scenario,model,business_success,gateway_calls,prompt_tokens,cached_tokens,completion_tokens,reasoning_tokens,http_seconds,cost_rub_no_cache_discount,verdict
+E,anthropic/claude-haiku-5-5,True,1,11005,0,53,0,1.621766584001307,0.152145,Correct business outcome
+F,anthropic/claude-haiku-5-5,True,1,10997,0,50,0,1.4453277529974002,0.1518345,Correct business outcome
+G,anthropic/claude-haiku-5-5,True,3,24868,0,483,0,6.949156992999633,0.3683205,Correct business outcome
+H,anthropic/claude-haiku-5-5,True,4,33443,0,610,0,9.142731013002049,0.4926555,Correct business outcome
+I,anthropic/claude-haiku-5-5,True,2,15736,0,361,0,1.3313306589989224,0.2368035,Correct business outcome
+J,anthropic/claude-haiku-5-5,True,3,20698,0,509,0,9.600412010000582,0.3137805,Correct business outcome
+K,anthropic/claude-haiku-5-5,False,9,138590,0,1971,0,21.089670416000445,2.0040075,Protocol errors prevent completion; no duplicate created
+L,anthropic/claude-haiku-5-5,False,4,89759,0,776,0,10.748896059998515,1.2641265,Protocol errors stop reading before completed answer
+E,openai/gpt-4.1-mini,True,1,6668,6528,22,0,3.0512880259993835,0.364824,Correct business outcome
+F,openai/gpt-4.1-mini,True,1,6662,6528,22,0,1.7505488860006153,0.3645,Correct business outcome
+G,openai/gpt-4.1-mini,False,3,12796,6016,307,0,6.535945507002907,0.757296,Wrong cash-only scope; card omitted
+H,openai/gpt-4.1-mini,False,4,16479,10112,292,0,9.667584867002006,0.952938,Wrong cash-only scope; card omitted
+I,openai/gpt-4.1-mini,True,2,8652,6528,147,0,1.5416203210006643,0.49896,Correct business outcome
+J,openai/gpt-4.1-mini,True,4,18052,14336,307,0,9.081899764001719,1.04112,Correct business outcome
+K,openai/gpt-4.1-mini,False,5,33736,6528,463,0,12.996521339002356,1.921752,Executor returned created=false and existing estimate201; final answer wrongly says estimate absent and tender newly sent
+L,openai/gpt-4.1-mini,False,9,69117,14976,923,0,30.302287572998466,3.931686,"After extra clarification returns lines, but only Tender status instead of estimate status"
