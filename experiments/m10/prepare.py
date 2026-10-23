@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a"
-MODELS = ["openai/gpt-4.1-mini", "openai/gpt-4.1"]
+MODELS = ["openai/gpt-4.1-mini", "openai/gpt-5.4-nano"]
 BASE_URL = "https://api.timeweb.ai/v1"
 
 

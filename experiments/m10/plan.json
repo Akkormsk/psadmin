@@ -12,23 +12,25 @@
       {
         "scenario": "A",
         "repeat": 1,
-        "model": "openai/gpt-4.1"
+        "model": "openai/gpt-5.4-nano"
       }
     ],
-    "proposed_spend_limit_rub": 100,
+    "proposed_spend_limit_rub": 50,
     "max_calls_per_attempt": 8,
-    "requires_user_approval_before_start": true,
-    "all_16_calls_at_maximum_envelope_rub": 394.64755199999996,
-    "budget_note": "100 RUB stop budget may end the pilot early. It is deliberately below the theoretical 16-call envelope (~394.65 RUB). Missing usage retains reservation."
+    "requires_user_approval_before_start": false,
+    "all_16_calls_at_maximum_envelope_rub": 99.247488,
+    "budget_note": "50 RUB total pilot stop budget; may stop early. Live runner and compatibility must honor it, including paid failures. Full trial budget remains unapproved.",
+    "approved_spend_limit_rub": 50,
+    "authorization": "User explicitly allocated 50 RUB total to pilot; compatibility calls, failed attempts and both models share this budget. Do not request the same approval again."
   },
   "primary": {
     "attempts": 24,
     "repeats_per_scenario_per_model": 3,
     "proposed_spend_limit_rub": 500,
-    "decision": "Reassess after pilot; do not launch bulk automatically",
+    "decision": "Reassess after 50 RUB pilot; 500 RUB is historical proposal, NOT approved",
     "includes_pilot_attempts": true,
-    "all_192_calls_at_maximum_envelope_rub": 4735.770624,
-    "budget_note": "500 RUB is a proposed stop budget, not a guarantee of completing 24 attempts. Full envelope allowance would be ~4735.77 RUB; choose budget after pilot measurements."
+    "all_192_calls_at_maximum_envelope_rub": 1190.9698560000002,
+    "budget_note": "All 24 attempts at the maximum envelope: approximately 1190.97 RUB. Actual budget must be based on pilot usage; no bulk spend approved."
   },
   "supplemental": {
     "cases": [
@@ -48,7 +50,7 @@
     "on_budget_exhausted": "stop and retain all failed attempts",
     "maximum_reservation_rub_per_call": {
       "openai/gpt-4.1-mini": 8.221824,
-      "openai/gpt-4.1": 41.10912
+      "openai/gpt-5.4-nano": 4.184112
     }
   },
   "fairness": [
@@ -87,5 +89,11 @@
     "unknown_fields": null,
     "budget_stops": "Record separately from model/protocol failures; include all incurred expenses, show completed and interrupted attempt counts."
   },
-  "review": "Semantic success requires review of every recorded attempt; cannot be inferred from assistant.finish alone"
+  "review": "Semantic success requires review of every recorded attempt; cannot be inferred from assistant.finish alone",
+  "selection": {
+    "A": "openai/gpt-4.1-mini",
+    "B": "openai/gpt-5.4-nano",
+    "previous_B": "openai/gpt-4.1",
+    "why": "Budget-oriented stronger-model candidate; superiority must be measured"
+  }
 }

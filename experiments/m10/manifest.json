@@ -1,10 +1,10 @@
 {
-  "source_sha": "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a",
+  "source_sha": "da8afce42a55e4bb16cf35246a2cd99875ebb964",
   "required_application_base": "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a",
   "base_url": "https://api.timeweb.ai/v1",
   "models": [
     "openai/gpt-4.1-mini",
-    "openai/gpt-4.1"
+    "openai/gpt-5.4-nano"
   ],
   "test_runtime_configuration": "NOT VERIFIED",
   "application_date": "2026-10-23",

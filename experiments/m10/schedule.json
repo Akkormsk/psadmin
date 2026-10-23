@@ -11,7 +11,7 @@
     "id": "A-1-B",
     "scenario": "A",
     "repeat": 1,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -27,7 +27,7 @@
     "id": "B-1-B",
     "scenario": "B",
     "repeat": 1,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -43,7 +43,7 @@
     "id": "C-1-B",
     "scenario": "C",
     "repeat": 1,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -59,7 +59,7 @@
     "id": "D-1-B",
     "scenario": "D",
     "repeat": 1,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -67,7 +67,7 @@
     "id": "A-2-B",
     "scenario": "A",
     "repeat": 2,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -83,7 +83,7 @@
     "id": "B-2-B",
     "scenario": "B",
     "repeat": 2,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -99,7 +99,7 @@
     "id": "C-2-B",
     "scenario": "C",
     "repeat": 2,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -115,7 +115,7 @@
     "id": "D-2-B",
     "scenario": "D",
     "repeat": 2,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -139,7 +139,7 @@
     "id": "A-3-B",
     "scenario": "A",
     "repeat": 3,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -155,7 +155,7 @@
     "id": "B-3-B",
     "scenario": "B",
     "repeat": 3,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -171,7 +171,7 @@
     "id": "C-3-B",
     "scenario": "C",
     "repeat": 3,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   },
@@ -187,7 +187,7 @@
     "id": "D-3-B",
     "scenario": "D",
     "repeat": 3,
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.4-nano",
     "database": "fresh_copy_of_seed_per_attempt",
     "new_conversation": true
   }

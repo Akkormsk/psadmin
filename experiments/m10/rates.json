@@ -1,5 +1,5 @@
 {
-  "observed_at_utc": "2026-10-23T14:19:39.327977+00:00",
+  "observed_at_utc": "2026-10-23T14:44:17.782911+00:00",
   "source": "https://api.timeweb.cloud/api/v3/cloud-ai/models",
   "discovery": "Current public Timeweb panel JavaScript uses this endpoint for Gateway catalog; parameter_values.cost_in/cost_out/cost_cache_read",
   "currency": "RUB",
@@ -24,6 +24,20 @@
           "cost_out": 0.00162
         }
       ]
+    },
+    "openai/gpt-5.4-mini": {
+      "input_rub_per_million": 101.0,
+      "output_rub_per_million": 608.0,
+      "cached_input_rub_per_million": 10.1,
+      "is_reasoning": true,
+      "price_tiers": []
+    },
+    "openai/gpt-5.4-nano": {
+      "input_rub_per_million": 27.0,
+      "output_rub_per_million": 169.0,
+      "cached_input_rub_per_million": 2.7,
+      "is_reasoning": true,
+      "price_tiers": []
     }
   },
   "raw_catalog_rows": [
@@ -181,6 +195,138 @@
         ],
         "supports_images": false
       }
+    },
+    {
+      "id": 119,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 5.4 Mini",
+      "model_name": "openai/gpt-5.4-mini",
+      "type": "llm",
+      "version": "5.4-mini",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-04-09T16:16:01.000Z",
+      "updated_at": "2026-09-02T22:56:58.000Z",
+      "params_info": {
+        "max_tokens": {
+          "max": 128000,
+          "min": 10,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "reasoning_effort": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "type": "enum",
+          "default": "none",
+          "description": "Controls how much reasoning the model performs"
+        }
+      },
+      "parameter_values": {
+        "context_window": 400000,
+        "aa_intelligence_index": 49,
+        "avg_speed": 167.7,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-03-17",
+        "aa_coding_index": 51.5,
+        "aa_agentic_index": 55.7,
+        "max_output_tokens": 128000,
+        "is_reasoning": true,
+        "cost_in": 0.000101,
+        "cost_out": 0.000608,
+        "cost_cache_read": 1.01e-05
+      },
+      "price_tiers": [],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    },
+    {
+      "id": 121,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 5.4 Nano",
+      "model_name": "openai/gpt-5.4-nano",
+      "type": "llm",
+      "version": "5.4-nano",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2027-03-31T21:00:00.000Z",
+      "created_at": "2026-04-09T16:21:16.000Z",
+      "updated_at": "2026-10-09T20:54:04.000Z",
+      "params_info": {
+        "max_tokens": {
+          "max": 128000,
+          "min": 10,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "reasoning_effort": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "type": "enum",
+          "default": "none",
+          "description": "Controls how much reasoning the model performs"
+        }
+      },
+      "parameter_values": {
+        "aa_intelligence_index": 44,
+        "aa_coding_index": 43.9,
+        "aa_agentic_index": 49.3,
+        "avg_speed": 155.9,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "context_window": 400000,
+        "max_output_tokens": 128000,
+        "release_date": "2026-03-17",
+        "is_reasoning": true,
+        "cost_in": 2.7e-05,
+        "cost_out": 0.000169,
+        "cost_cache_read": 2.7e-06
+      },
+      "price_tiers": [],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
     }
   ],
   "account_billing_prices": {
@@ -198,7 +344,7 @@
     "missing_usage": "unknown; never zero",
     "cache_write_rate": "not published for these models; do not invent",
     "batch_discount": "not applicable; synchronous requests",
-    "reasoning": "catalog is_reasoning=false; preserve usage details if returned"
+    "reasoning": "5.4 nano/mini is_reasoning=true, effort options none/low/medium/high; preserve actual usage details and do not add reasoning again if included in completion_tokens"
   },
   "documentation": [
     "https://timeweb.cloud/docs/ai-gateway/manage",

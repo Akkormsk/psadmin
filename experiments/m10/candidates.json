@@ -1,0 +1,695 @@
+{
+  "observed_at_utc": "2026-10-23T14:44:17.782911+00:00",
+  "catalog_source": "https://api.timeweb.cloud/api/v3/cloud-ai/models",
+  "availability_source": "https://api.timeweb.ai/v1/models",
+  "selection": "openai/gpt-5.4-nano",
+  "rationale": [
+    "Input price 50% below 4.1-mini; output price about 21.8% below",
+    "Catalog supports_function_calling=true; official model page lists Function calling and Structured outputs",
+    "Catalog overall/agentic indices are screening evidence only, not PSADMIN measurements",
+    "Same provider family reduces protocol adaptation compared with cross-provider candidates; Gateway strict/required/parallel=false remains NOT VERIFIED"
+  ],
+  "backup": "openai/gpt-5.4-mini",
+  "raw_catalog_rows": [
+    {
+      "id": 13,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 4.1 mini",
+      "model_name": "openai/gpt-4.1-mini",
+      "type": "llm",
+      "version": "4.1-mini",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2027-01-12T21:00:00.000Z",
+      "created_at": "2025-07-31T17:57:27.000Z",
+      "updated_at": "2026-10-20T12:34:04.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 16384,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 2,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "presence_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes tokens based on presence in text"
+        },
+        "frequency_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes repeated tokens based on frequency"
+        }
+      },
+      "parameter_values": {
+        "is_reasoning": false,
+        "cost_in": 5.4e-05,
+        "cost_out": 0.000216,
+        "cost_cache_read": 1.35e-05
+      },
+      "price_tiers": [],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    },
+    {
+      "id": 17,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 4.1",
+      "model_name": "openai/gpt-4.1",
+      "type": "llm",
+      "version": "4.1",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2027-01-12T21:00:00.000Z",
+      "created_at": "2025-07-31T17:57:27.000Z",
+      "updated_at": "2026-10-20T12:33:33.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 128000,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 2,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "presence_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes tokens based on presence in text"
+        },
+        "frequency_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes repeated tokens based on frequency"
+        }
+      },
+      "parameter_values": {
+        "aa_intelligence_index": 26,
+        "avg_speed": 110,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "context_window": 1000000,
+        "max_output_tokens": 32768,
+        "release_date": "2025-04-14",
+        "is_reasoning": false,
+        "cost_in": 0.00027,
+        "cost_out": 0.00108,
+        "cost_cache_read": 6.75e-05
+      },
+      "price_tiers": [
+        {
+          "above_context_tokens": 272000,
+          "cost_in": 0.00054,
+          "cost_out": 0.00162
+        }
+      ],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    },
+    {
+      "id": 119,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 5.4 Mini",
+      "model_name": "openai/gpt-5.4-mini",
+      "type": "llm",
+      "version": "5.4-mini",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-04-09T16:16:01.000Z",
+      "updated_at": "2026-09-02T22:56:58.000Z",
+      "params_info": {
+        "max_tokens": {
+          "max": 128000,
+          "min": 10,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "reasoning_effort": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "type": "enum",
+          "default": "none",
+          "description": "Controls how much reasoning the model performs"
+        }
+      },
+      "parameter_values": {
+        "context_window": 400000,
+        "aa_intelligence_index": 49,
+        "avg_speed": 167.7,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-03-17",
+        "aa_coding_index": 51.5,
+        "aa_agentic_index": 55.7,
+        "max_output_tokens": 128000,
+        "is_reasoning": true,
+        "cost_in": 0.000101,
+        "cost_out": 0.000608,
+        "cost_cache_read": 1.01e-05
+      },
+      "price_tiers": [],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    },
+    {
+      "id": 121,
+      "provider_id": 1,
+      "name": "gpt",
+      "public_name": "GPT 5.4 Nano",
+      "model_name": "openai/gpt-5.4-nano",
+      "type": "llm",
+      "version": "5.4-nano",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2027-03-31T21:00:00.000Z",
+      "created_at": "2026-04-09T16:21:16.000Z",
+      "updated_at": "2026-10-09T20:54:04.000Z",
+      "params_info": {
+        "max_tokens": {
+          "max": 128000,
+          "min": 10,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "reasoning_effort": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "type": "enum",
+          "default": "none",
+          "description": "Controls how much reasoning the model performs"
+        }
+      },
+      "parameter_values": {
+        "aa_intelligence_index": 44,
+        "aa_coding_index": 43.9,
+        "aa_agentic_index": 49.3,
+        "avg_speed": 155.9,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "context_window": 400000,
+        "max_output_tokens": 128000,
+        "release_date": "2026-03-17",
+        "is_reasoning": true,
+        "cost_in": 2.7e-05,
+        "cost_out": 0.000169,
+        "cost_cache_read": 2.7e-06
+      },
+      "price_tiers": [],
+      "batch": {
+        "multiplier_in": 0.5,
+        "multiplier_out": 0.5,
+        "multiplier_cache_read": 0.5,
+        "multiplier_cache_write": 0.5,
+        "endpoints": [
+          "/v1/chat/completions"
+        ],
+        "supports_images": false
+      }
+    },
+    {
+      "id": 129,
+      "provider_id": 3,
+      "name": "deepseek",
+      "public_name": "DeepSeek V4 Flash",
+      "model_name": "deepseek/deepseek-v4-flash",
+      "type": "llm",
+      "version": "v4-flash",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": "2026-10-25T09:00:00.000Z",
+      "created_at": "2026-04-24T19:04:06.000Z",
+      "updated_at": "2026-10-12T12:41:04.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0.01,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 8192,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 2,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "enable_thinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enables thinking mode (on/off)"
+        },
+        "presence_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes tokens based on presence in text"
+        },
+        "frequency_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes repeated tokens based on frequency"
+        }
+      },
+      "parameter_values": {
+        "aa_intelligence_index": 36,
+        "avg_speed": 96.1,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "context_window": 1000000,
+        "max_output_tokens": 384000,
+        "release_date": "2026-04-24",
+        "is_reasoning": true,
+        "cost_in": 5.94e-05,
+        "cost_out": 0.0001782,
+        "cost_cache_read": 1.89e-06
+      },
+      "price_tiers": [],
+      "batch": null
+    },
+    {
+      "id": 131,
+      "provider_id": 3,
+      "name": "deepseek",
+      "public_name": "DeepSeek V4 Flash Thinking",
+      "model_name": "deepseek/deepseek-v4-flash",
+      "type": "llm",
+      "version": "v4-flash-thinking",
+      "is_deprecated": true,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-04-24T19:04:13.000Z",
+      "updated_at": "2026-08-27T14:56:43.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 393216,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 2,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "presence_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes tokens based on presence in text"
+        },
+        "frequency_penalty": {
+          "max": 2,
+          "min": -2,
+          "type": "number",
+          "default": 0,
+          "description": "Penalizes repeated tokens based on frequency"
+        }
+      },
+      "parameter_values": {
+        "context_window": 1000000,
+        "aa_intelligence_index": 47,
+        "avg_speed": 96.7,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-04-24",
+        "max_output_tokens": 384000,
+        "is_reasoning": true,
+        "cost_in": 5.94e-05,
+        "cost_out": 0.0001782
+      },
+      "price_tiers": [],
+      "batch": null
+    },
+    {
+      "id": 259,
+      "provider_id": 17,
+      "name": "glm",
+      "public_name": "GLM 5.3 Flash",
+      "model_name": "zai/glm-5.3-flash",
+      "type": "llm",
+      "version": "5-3-flash",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-08-26T17:52:28.000Z",
+      "updated_at": "2026-09-02T22:56:59.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 0.95,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 131072,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 0.7,
+          "description": "Controls randomness of the model output"
+        }
+      },
+      "parameter_values": {
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "context_window": 1000000,
+        "max_output_tokens": 131072,
+        "release_date": "2026-08-26",
+        "is_reasoning": true,
+        "cost_in": 2.025e-05,
+        "cost_out": 6.75e-05,
+        "cost_cache_read": 3.76e-06
+      },
+      "price_tiers": [],
+      "batch": null
+    },
+    {
+      "id": 337,
+      "provider_id": 7,
+      "name": "claude",
+      "public_name": "Claude 5.5 Haiku",
+      "model_name": "anthropic/claude-haiku-5-5",
+      "type": "llm",
+      "version": "haiku-5-5",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-10-08T01:56:09.000Z",
+      "updated_at": "2026-10-08T01:59:23.000Z",
+      "params_info": {
+        "max_tokens": {
+          "max": 128000,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        }
+      },
+      "parameter_values": {
+        "context_window": 1000000,
+        "max_output_tokens": 128000,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-10-07",
+        "aa_intelligence_index": 43,
+        "is_reasoning": true,
+        "cost_in": 1.35e-05,
+        "cost_out": 6.75e-05,
+        "cost_cache_read": 1.35e-06,
+        "cost_cache_write": 1.6875e-05
+      },
+      "price_tiers": [],
+      "batch": null
+    },
+    {
+      "id": 343,
+      "provider_id": 11,
+      "name": "qwen3.8",
+      "public_name": "Qwen 3.8 Flash",
+      "model_name": "dashscope/qwen3.8-flash",
+      "type": "llm",
+      "version": "flash",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-10-09T13:42:19.000Z",
+      "updated_at": "2026-10-12T13:10:09.000Z",
+      "params_info": {
+        "top_k": {
+          "max": 100,
+          "min": 0,
+          "type": "number",
+          "default": 100,
+          "description": "The number of candidate tokens to sample from"
+        },
+        "top_p": {
+          "max": 1,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 131072,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 1.99,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        },
+        "enable_thinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enables thinking mode (on/off)"
+        }
+      },
+      "parameter_values": {
+        "aa_intelligence_index": 40,
+        "aa_agentic_index": 56,
+        "avg_speed": 56,
+        "supported_input_modalities": [
+          "text"
+        ],
+        "supported_output_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "context_window": 1000000,
+        "max_output_tokens": 131072,
+        "release_date": "2026-08-26",
+        "is_reasoning": true,
+        "cost_in": 2.025e-05,
+        "cost_out": 6.345e-05,
+        "cost_cache_read": 2.16e-06
+      },
+      "price_tiers": [],
+      "batch": null
+    },
+    {
+      "id": 351,
+      "provider_id": 25,
+      "name": "mimo",
+      "public_name": "MiMo V2.6 Flash",
+      "model_name": "xiaomi/mimo-v2.6-flash",
+      "type": "llm",
+      "version": "v2.6-flash",
+      "is_deprecated": false,
+      "is_stopped": false,
+      "deprecation_date": null,
+      "created_at": "2026-10-19T15:31:59.000Z",
+      "updated_at": "2026-10-20T17:22:22.000Z",
+      "params_info": {
+        "top_p": {
+          "max": 1,
+          "min": 0.01,
+          "type": "number",
+          "default": 0.95,
+          "description": "Nucleus sampling parameter"
+        },
+        "max_tokens": {
+          "max": 131072,
+          "min": 1,
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum number of tokens in the output"
+        },
+        "temperature": {
+          "max": 1.5,
+          "min": 0,
+          "type": "number",
+          "default": 1,
+          "description": "Controls randomness of the model output"
+        }
+      },
+      "parameter_values": {
+        "context_window": 1000000,
+        "max_output_tokens": 131072,
+        "supports_function_calling": true,
+        "supported_input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "supported_output_modalities": [
+          "text"
+        ],
+        "is_reasoning": true,
+        "cost_in": 1.89e-05,
+        "cost_out": 3.78e-05,
+        "cost_cache_read": 3.78e-07
+      },
+      "price_tiers": [],
+      "batch": null
+    }
+  ],
+  "provider_sources": [
+    "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+  ],
+  "limitations": [
+    "Reasoning output can change tokens/latency; lower per-token price does not prove lower task cost",
+    "DeepSeek has two active catalog entries for same model ID with different metadata; do not average benchmark scores or invent cache pricing",
+    "Haiku has separately priced cache writes; lower headline rates need full cost accounting",
+    "Qwen supports_function_calling not stated in this catalog entry; benchmark scores do not establish strict tool compatibility",
+    "Live Gateway compatibility and task quality untested; no paid candidate sweep authorized beyond total pilot budget"
+  ],
+  "paid_calls": 0
+}
