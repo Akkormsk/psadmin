@@ -1,0 +1,558 @@
+{
+  "scope": "Nano-only expanded evaluation; 3 repeats x 4 scenarios. Not a full A/B comparison.",
+  "source_application_sha": "cc1cd2649ae741e0f90b30fc7e94d4d9900fb76a",
+  "model": "openai/gpt-5.4-nano",
+  "total_nano_attempts": 12,
+  "strict_successes": 2,
+  "nano_gateway_calls": 45,
+  "overall_pilot_gateway_calls_including_prior_Minis": 50,
+  "overall_pilot_charged_or_reserved_rub": "10.035052",
+  "remaining_approved_rub": "39.964948",
+  "scenario_stats": {
+    "A": {
+      "attempts": 3,
+      "strict_successes": 2,
+      "sum_cost_rub_no_cache_discount": 0.9976560000000001,
+      "mean_cost_rub_no_cache_discount": 0.332552,
+      "range_cost_rub": [
+        0.331486,
+        0.333085
+      ],
+      "mean_seconds": 8.56375493400022,
+      "range_seconds": [
+        4.973706603999744,
+        11.146950595000817
+      ],
+      "mean_calls": 3,
+      "cost_per_strict_success_rub": 0.49882800000000005
+    },
+    "B": {
+      "attempts": 3,
+      "strict_successes": 0,
+      "sum_cost_rub_no_cache_discount": 2.356668,
+      "mean_cost_rub_no_cache_discount": 0.785556,
+      "range_cost_rub": [
+        0.785556,
+        0.785556
+      ],
+      "mean_seconds": 9.504371774999527,
+      "range_seconds": [
+        6.719005892999121,
+        15.030899317000149
+      ],
+      "mean_calls": 5,
+      "cost_per_strict_success_rub": null
+    },
+    "C": {
+      "attempts": 3,
+      "strict_successes": 0,
+      "sum_cost_rub_no_cache_discount": 2.174715,
+      "mean_cost_rub_no_cache_discount": 0.724905,
+      "range_cost_rub": [
+        0.724905,
+        0.724905
+      ],
+      "mean_seconds": 8.37790401533251,
+      "range_seconds": [
+        5.972326916999009,
+        13.090510363999783
+      ],
+      "mean_calls": 4,
+      "cost_per_strict_success_rub": null
+    },
+    "D": {
+      "attempts": 3,
+      "strict_successes": 0,
+      "sum_cost_rub_no_cache_discount": 2.809806,
+      "mean_cost_rub_no_cache_discount": 0.936602,
+      "range_cost_rub": [
+        0.936602,
+        0.936602
+      ],
+      "mean_seconds": 6.19923247800034,
+      "range_seconds": [
+        3.766654159000609,
+        9.308916648000377
+      ],
+      "mean_calls": 3,
+      "cost_per_strict_success_rub": null
+    }
+  },
+  "attempts": [
+    {
+      "id": "A-nano",
+      "scenario": "A",
+      "strict_success": false,
+      "gateway_calls": 3,
+      "prompt_tokens": 10919,
+      "cached_tokens": 1664,
+      "completion_tokens": 217,
+      "reasoning_tokens": 0,
+      "total_tokens": 11136,
+      "seconds": 9.570607603000099,
+      "cost_rub_no_cache_discount": "0.331486",
+      "cost_rub_with_published_cache_discount": "0.2910508",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "assistant_ask",
+        "cash_transaction_create"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [],
+      "checks": {
+        "correct_preview": true,
+        "real_reason_requested": true,
+        "unnecessary_questions": 1
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "A-nano-2",
+      "scenario": "A",
+      "strict_success": true,
+      "gateway_calls": 3,
+      "prompt_tokens": 10997,
+      "cached_tokens": 1664,
+      "completion_tokens": 214,
+      "reasoning_tokens": 0,
+      "total_tokens": 11211,
+      "seconds": 11.146950595000817,
+      "cost_rub_no_cache_discount": "0.333085",
+      "cost_rub_with_published_cache_discount": "0.2926498",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "assistant_ask",
+        "cash_transaction_create"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [],
+      "checks": {
+        "correct_preview": true,
+        "real_reason_requested": true,
+        "unnecessary_questions": 0
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "A-nano-3",
+      "scenario": "A",
+      "strict_success": true,
+      "gateway_calls": 3,
+      "prompt_tokens": 10997,
+      "cached_tokens": 1664,
+      "completion_tokens": 214,
+      "reasoning_tokens": 0,
+      "total_tokens": 11211,
+      "seconds": 4.973706603999744,
+      "cost_rub_no_cache_discount": "0.333085",
+      "cost_rub_with_published_cache_discount": "0.2926498",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "assistant_ask",
+        "cash_transaction_create"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [],
+      "checks": {
+        "correct_preview": true,
+        "real_reason_requested": true,
+        "unnecessary_questions": 0
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "B-nano-1",
+      "scenario": "B",
+      "strict_success": false,
+      "gateway_calls": 5,
+      "prompt_tokens": 26109,
+      "cached_tokens": 14208,
+      "completion_tokens": 477,
+      "reasoning_tokens": 0,
+      "total_tokens": 26586,
+      "seconds": 15.030899317000149,
+      "cost_rub_no_cache_discount": "0.785556",
+      "cost_rub_with_published_cache_discount": "0.4403016",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "assistant_plan",
+        "cash_transaction_create"
+      ],
+      "plan_calls": 3,
+      "accepted_replans": 1,
+      "questions": 0,
+      "protocol_errors": 1,
+      "tool_errors": [
+        {
+          "tool_id": "assistant.plan",
+          "ok": false,
+          "error": "Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план"
+        }
+      ],
+      "checks": {
+        "same_task_id": true,
+        "plan_version": 2,
+        "only_amount_changed": true,
+        "new_amount": 200,
+        "old_card_http": 409,
+        "no_cash_write": true
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "B-nano-2",
+      "scenario": "B",
+      "strict_success": false,
+      "gateway_calls": 5,
+      "prompt_tokens": 26109,
+      "cached_tokens": 14208,
+      "completion_tokens": 477,
+      "reasoning_tokens": 0,
+      "total_tokens": 26586,
+      "seconds": 6.7632101149993105,
+      "cost_rub_no_cache_discount": "0.785556",
+      "cost_rub_with_published_cache_discount": "0.4403016",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "assistant_plan",
+        "cash_transaction_create"
+      ],
+      "plan_calls": 3,
+      "accepted_replans": 1,
+      "questions": 0,
+      "protocol_errors": 1,
+      "tool_errors": [
+        {
+          "tool_id": "assistant.plan",
+          "ok": false,
+          "error": "Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план"
+        }
+      ],
+      "checks": {
+        "same_task_id": true,
+        "plan_version": 2,
+        "only_amount_changed": true,
+        "new_amount": 200,
+        "old_card_http": 409,
+        "no_cash_write": true
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "B-nano-3",
+      "scenario": "B",
+      "strict_success": false,
+      "gateway_calls": 5,
+      "prompt_tokens": 26109,
+      "cached_tokens": 14208,
+      "completion_tokens": 477,
+      "reasoning_tokens": 0,
+      "total_tokens": 26586,
+      "seconds": 6.719005892999121,
+      "cost_rub_no_cache_discount": "0.785556",
+      "cost_rub_with_published_cache_discount": "0.4403016",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "cash_transaction_create",
+        "assistant_plan",
+        "assistant_plan",
+        "cash_transaction_create"
+      ],
+      "plan_calls": 3,
+      "accepted_replans": 1,
+      "questions": 0,
+      "protocol_errors": 1,
+      "tool_errors": [
+        {
+          "tool_id": "assistant.plan",
+          "ok": false,
+          "error": "Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план"
+        }
+      ],
+      "checks": {
+        "same_task_id": true,
+        "plan_version": 2,
+        "only_amount_changed": true,
+        "new_amount": 200,
+        "old_card_http": 409,
+        "no_cash_write": true
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "C-nano-1",
+      "scenario": "C",
+      "strict_success": false,
+      "gateway_calls": 4,
+      "prompt_tokens": 24088,
+      "cached_tokens": 7424,
+      "completion_tokens": 441,
+      "reasoning_tokens": 0,
+      "total_tokens": 24529,
+      "seconds": 13.090510363999783,
+      "cost_rub_no_cache_discount": "0.724905",
+      "cost_rub_with_published_cache_discount": "0.5445018",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask",
+        "tender_send_to_calculation"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [],
+      "checks": {
+        "read_estimates": 1,
+        "read_actual_tender": 0,
+        "preview_tender_id": 0,
+        "expected_tender_id": 101,
+        "action_executed": false,
+        "new_estimate_created": false,
+        "why_not_clicked": "Invalid target tender_id=0; no valid preview to approve"
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "C-nano-2",
+      "scenario": "C",
+      "strict_success": false,
+      "gateway_calls": 4,
+      "prompt_tokens": 24088,
+      "cached_tokens": 7424,
+      "completion_tokens": 441,
+      "reasoning_tokens": 0,
+      "total_tokens": 24529,
+      "seconds": 5.972326916999009,
+      "cost_rub_no_cache_discount": "0.724905",
+      "cost_rub_with_published_cache_discount": "0.5445018",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask",
+        "tender_send_to_calculation"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [],
+      "checks": {
+        "read_estimates": 1,
+        "read_actual_tender": 0,
+        "preview_tender_id": 0,
+        "expected_tender_id": 101,
+        "action_executed": false,
+        "new_estimate_created": false,
+        "why_not_clicked": "Invalid target tender_id=0; no valid preview to approve"
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "C-nano-3",
+      "scenario": "C",
+      "strict_success": false,
+      "gateway_calls": 4,
+      "prompt_tokens": 24088,
+      "cached_tokens": 7424,
+      "completion_tokens": 441,
+      "reasoning_tokens": 0,
+      "total_tokens": 24529,
+      "seconds": 6.0708747649987345,
+      "cost_rub_no_cache_discount": "0.724905",
+      "cost_rub_with_published_cache_discount": "0.5445018",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask",
+        "tender_send_to_calculation"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [],
+      "checks": {
+        "read_estimates": 1,
+        "read_actual_tender": 0,
+        "preview_tender_id": 0,
+        "expected_tender_id": 101,
+        "action_executed": false,
+        "new_estimate_created": false,
+        "why_not_clicked": "Invalid target tender_id=0; no valid preview to approve"
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "D-nano-1",
+      "scenario": "D",
+      "strict_success": false,
+      "gateway_calls": 3,
+      "prompt_tokens": 31672,
+      "cached_tokens": 28544,
+      "completion_tokens": 482,
+      "reasoning_tokens": 0,
+      "total_tokens": 32154,
+      "seconds": 9.308916648000377,
+      "cost_rub_no_cache_discount": "0.936602",
+      "cost_rub_with_published_cache_discount": "0.2429828",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [
+        {
+          "tool_id": "read:tenders.tender_estimates",
+          "ok": false,
+          "error": "Неизвестное бизнес-представление"
+        }
+      ],
+      "checks": {
+        "invented_view": "tender_estimates_for_lines",
+        "backend_error": "Неизвестное бизнес-представление",
+        "read_lines": 0,
+        "finish": 0,
+        "technical_question_to_user": true
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "D-nano-2",
+      "scenario": "D",
+      "strict_success": false,
+      "gateway_calls": 3,
+      "prompt_tokens": 31672,
+      "cached_tokens": 28544,
+      "completion_tokens": 482,
+      "reasoning_tokens": 0,
+      "total_tokens": 32154,
+      "seconds": 5.522126627000034,
+      "cost_rub_no_cache_discount": "0.936602",
+      "cost_rub_with_published_cache_discount": "0.2429828",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [
+        {
+          "tool_id": "read:tenders.tender_estimates",
+          "ok": false,
+          "error": "Неизвестное бизнес-представление"
+        }
+      ],
+      "checks": {
+        "invented_view": "tender_estimates_for_lines",
+        "backend_error": "Неизвестное бизнес-представление",
+        "read_lines": 0,
+        "finish": 0,
+        "technical_question_to_user": true
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    },
+    {
+      "id": "D-nano-3",
+      "scenario": "D",
+      "strict_success": false,
+      "gateway_calls": 3,
+      "prompt_tokens": 31672,
+      "cached_tokens": 28544,
+      "completion_tokens": 482,
+      "reasoning_tokens": 0,
+      "total_tokens": 32154,
+      "seconds": 3.766654159000609,
+      "cost_rub_no_cache_discount": "0.936602",
+      "cost_rub_with_published_cache_discount": "0.2429828",
+      "cost_actual_invoice": null,
+      "function_sequence": [
+        "assistant_plan",
+        "read_tenders_tender_estimates",
+        "assistant_ask"
+      ],
+      "plan_calls": 1,
+      "accepted_replans": 0,
+      "questions": 1,
+      "protocol_errors": 0,
+      "tool_errors": [
+        {
+          "tool_id": "read:tenders.tender_estimates",
+          "ok": false,
+          "error": "Неизвестное бизнес-представление"
+        }
+      ],
+      "checks": {
+        "invented_view": "tender_estimates_for_lines",
+        "backend_error": "Неизвестное бизнес-представление",
+        "read_lines": 0,
+        "finish": 0,
+        "technical_question_to_user": true
+      },
+      "cash_count": 0,
+      "fallbacks": false
+    }
+  ],
+  "limitations": [
+    "Only Nano has repeats of all four scenarios; no general comparative claim vs baseline/Mini",
+    "A first repeat was earlier pilot and included one redundant account question",
+    "B amount correction works but violates no-replan criterion",
+    "C stopped at invalid ID preview; full created=true/false live route not tested",
+    "D failure blocks line/status completeness assessment",
+    "All repeated failures retained; repeated exact outputs observed, not evidence of broad reliability",
+    "Billing cache applicability remains unknown; two cost calculations retained",
+    "No backend fixes, TEST/PROD changes or live model configuration changes"
+  ],
+  "nano_total_cost_rub_no_cache_discount": "8.338845",
+  "nano_total_cost_rub_with_published_cache_discount": "4.5597090",
+  "cost_per_strict_success_rub": "4.1694225",
+  "monthly_success_cost_projection_illustrative_only": {
+    "100": "416.9422500",
+    "500": "2084.7112500",
+    "1000": "4169.4225000"
+  },
+  "projection_limit": "Uses 2 strict successes from 12 attempts on balanced four-scenario test set, includes all failures. Not representative production mix; not reliable forecast."
+}

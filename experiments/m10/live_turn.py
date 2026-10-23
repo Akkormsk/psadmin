@@ -9,6 +9,7 @@ from decimal import Decimal
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -30,6 +31,10 @@ def save(path, value):
 
 
 def run(args):
+    if not re.fullmatch(r"[A-D]-(?:mini|nano|54mini)(?:-[1-3])?", args.attempt):
+        raise ValueError("Invalid attempt name")
+    if args.start and args.confirm_event is not None:
+        raise ValueError("A button cannot start a conversation")
     if subprocess.check_output(["git", "branch", "--show-current"], cwd=ROOT, text=True).strip() != "feature/m3-agent-simple":
         raise RuntimeError("M10 branch required")
     difference = subprocess.check_output(["git", "diff", "cc1cd264", "--", "*.py", ":!experiments/**"], cwd=ROOT)
@@ -126,12 +131,24 @@ def run(args):
             entry["seconds"] = time.monotonic() - started
             persist()
 
+    if args.message is None and args.confirm_event is None:
+        args.message = json.loads((ROOT / "experiments/m10/scenarios.json").read_text())["primary"][args.scenario]["prompt"]
     started = time.monotonic()
     turn = {"input": args.message, "error": None}
     try:
         with patch("tenders.assistant_agent.urlopen", observed_transport), patch(
                 "django.utils.timezone.localdate", return_value=date(2026, 10, 23)):
-            respond(conversation, user, args.message)
+            if args.confirm_event is not None:
+                from django.test import RequestFactory
+                from tenders.assistant_ui import conversation_action_confirm
+                request = RequestFactory().post("/isolated-confirmation", {"accept": "yes"})
+                request.user = user
+                response = conversation_action_confirm(request, conversation.pk, args.confirm_event)
+                turn["button_event"] = args.confirm_event
+                turn["http_status"] = response.status_code
+                turn["http_body"] = json.loads(response.content)
+            else:
+                respond(conversation, user, args.message)
     except Exception as exc:
         turn["error"] = type(exc).__name__ + ": " + str(exc)
     finally:
@@ -143,10 +160,11 @@ def run(args):
         state["debug"] = serialize_debug_journal(conversation)
         state["cash_count"] = CashTransaction.objects.count()
         state["estimate_count"] = TenderEstimate.objects.count()
+        state["estimates"] = list(TenderEstimate.objects.values("id", "tender_id", "tender_number", "name"))
         save(state_path, state)
         persist()
         connection.close()
-    print(json.dumps({"attempt": args.attempt, "turn": turn, "messages": state["messages"],
+    print(json.dumps({"attempt": args.attempt, "turn": {k:v for k,v in turn.items() if k != "http_body"}, "last_message": state["messages"][-1] if state["messages"] else None,
         "cash_count": state["cash_count"], "charged_or_reserved_rub": str(budget.charged_or_reserved),
         "call_count": budget.attempt_calls.get(args.attempt, 0)}, ensure_ascii=False, indent=2))
 
@@ -155,9 +173,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=Path, required=True)
-    parser.add_argument("--attempt", required=True, choices=["A-mini", "A-nano", "A-54mini"])
+    parser.add_argument("--attempt", required=True)
     parser.add_argument("--model", required=True, choices=["openai/gpt-4.1-mini", "openai/gpt-5.4-nano", "openai/gpt-5.4-mini"])
-    parser.add_argument("--scenario", default="A", choices=["A"])
-    parser.add_argument("--message", required=True)
+    parser.add_argument("--scenario", default="A", choices=["A", "B", "C", "D"])
+    parser.add_argument("--message")
+    parser.add_argument("--confirm-event", type=int)
     parser.add_argument("--start", action="store_true")
     run(parser.parse_args())

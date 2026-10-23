@@ -1,0 +1,72 @@
+{
+  "question": "Is the failure due to a different tool calling protocol?",
+  "conclusion": "Observed calls use the expected Chat Completions function format. Failures are semantic choice/argument/recovery issues plus an actual schema-vs-backend mismatch; not evidence of an incompatible tool-call envelope.",
+  "transport_evidence": {
+    "required": true,
+    "parallel_tool_calls": false,
+    "strict_functions": true,
+    "requested_model": "openai/gpt-5.4-nano",
+    "response_model": "openai/gpt-5.4-nano",
+    "fallback_header": "0",
+    "tool_calls_delivered_and_executed_by_backend": true
+  },
+  "D": {
+    "observed_call": {
+      "function": "read_tenders_tender_estimates",
+      "plan.view": "tender_estimates_for_lines"
+    },
+    "wire_schema_view": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "backend_supported_views": [],
+    "backend_error": "Неизвестное бизнес-представление",
+    "model_recovery": "Asked user about technical name/ID instead of retrying view=null",
+    "source_schema": "tenders/assistant_read.py:161",
+    "source_backend": "tenders/assistant_read.py:713",
+    "classification": "Schema/backend contract mismatch permits unsupported string; model chooses invented value and recovers poorly",
+    "causal_limit": "This proves mechanism of rejection; not proof that tightening view alone solves D end to end"
+  },
+  "C": {
+    "observed_sequence": [
+      "assistant_plan",
+      "read_tenders_tender_estimates",
+      "assistant_ask",
+      "tender_send_to_calculation"
+    ],
+    "read_result": "No estimate for requested purchase; correct absence result does not provide source Tender primary key",
+    "missing_step": "READ actual Tender to resolve its ID before ACTION",
+    "observed_action_args": {
+      "tender_id": 0
+    },
+    "expected_id": 101,
+    "wire_schema_tender_id": {
+      "type": "integer"
+    },
+    "preview_validation": "Type/provenance validation accepts integer zero; existing executor checks target on confirmed execution",
+    "source_declaration": "tender_selection/assistant_capabilities.py:159",
+    "source_preview": "tenders/assistant_agent.py:655",
+    "classification": "Model plans insufficient lookup and invents target ID; weak ID contract permits meaningless preview",
+    "action_executed": false
+  },
+  "B": {
+    "observed": "Amount corrected 175 to 200; same task_id; other args unchanged; old card HTTP409; no cash write",
+    "failure": "Plan version changes 1 to 2 and another plan call is rejected; 5 calls instead of expected concise continuation",
+    "backend_gate": "Nonempty revision_reason is accepted; semantic adequacy of reason remains model responsibility",
+    "source": "tenders/assistant_agent.py:420",
+    "classification": "Semantic planning error; not transport mismatch"
+  },
+  "scope": "Read-only diagnosis of unchanged cc1cd264 backend; no fixes or protocol/schema modifications applied.",
+  "next_work_constraints": [
+    "No second orchestrator/classifier or phrase parser",
+    "No global ban on equal ACTION",
+    "Preserve baseline evidence before changing schemas/backend",
+    "No claim that selecting a stronger model alone resolves all failures"
+  ]
+}

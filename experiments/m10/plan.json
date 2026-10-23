@@ -24,8 +24,8 @@
     "authorization": "User explicitly allocated 50 RUB total to pilot; compatibility calls, failed attempts and both models share this budget. Do not request the same approval again.",
     "status": "Completed preliminary A pilot: baseline, Nano, conditional backup Mini",
     "result_summary": "results/pilot-20261023/summary.json",
-    "charged_or_reserved_rub": "2.027693",
-    "remaining_approved_budget_rub": "47.972307",
+    "charged_or_reserved_rub": "10.035052",
+    "remaining_approved_budget_rub": "39.964948",
     "backup_authorized": "User authorized 5.4 Mini if Nano has issues or is worse; used after redundant account question"
   },
   "primary": {
@@ -100,5 +100,13 @@
     "B": "openai/gpt-5.4-nano",
     "previous_B": "openai/gpt-4.1",
     "why": "Budget-oriented stronger-model candidate; superiority must be measured"
+  },
+  "nano_expanded": {
+    "authorization": "User requested more tests without Mini; only Nano run in this extension",
+    "attempts": 12,
+    "per_scenario_repeats": 3,
+    "status": "Saved; not full comparative A/B",
+    "result_summary": "results/nano-expanded-20261023/summary.json",
+    "diagnosis": "results/nano-expanded-20261023/diagnosis.json"
   }
 }
