@@ -913,3 +913,6 @@ L 5.4-mini после уточнения ID остаётся без полног
 | M11.5 | TODO |
 | M11.6 | TODO |
 | M11.7 | TODO |
+
+
+**TEST_VERIFIED (публикация), 2026-10-23 23:37 Asia/Tbilisi (M11.1):** после отдельного «Да» владельца опубликован только TEST, source/deployed SHA `f4543ef74d7ec219d9589c4227c7392603a20f3f`, предыдущий `6fe8476a05cfdbbd2ab591ebf486d95acc249daa`. GitHub Actions run40012738176 https://github.com/Akkormsk/psadmin/actions/runs/40012738176 success за39s; server `.twin-version` совпадает, test-web healthy, public health PASS, runtime Haiku5.5 / api.timeweb.ai/v1 / key-present подтверждены без вывода секрета. Миграций к применению нет. main остаётся92e6896, PROD не менялся. Живая приёмка ещё НЕ выполнена, M11.1 остаётся READY FOR REVIEW, не ACCEPTED; M11.2–M11.7 TODO. Платных Gateway-вызовов0, новые расходы0 ₽. Для ручной проверки в новой беседе выбранный контролируемый TEST-тендер без расчёта: (1) READ отсутствия; (2) подготовка ACTION, кнопка, повторный READ после подтверждения; (3) ещё одна проверка существования и отсутствия дубликата. Сверить один и тот же ID и ровно1 связанный расчёт в карточке/БД. Этот факт публикации сохраняется только в feature-ветке, без повторного TEST deploy ради документации.
