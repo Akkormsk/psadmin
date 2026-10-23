@@ -21,13 +21,18 @@
     "all_16_calls_at_maximum_envelope_rub": 99.247488,
     "budget_note": "50 RUB total pilot stop budget; may stop early. Live runner and compatibility must honor it, including paid failures. Full trial budget remains unapproved.",
     "approved_spend_limit_rub": 50,
-    "authorization": "User explicitly allocated 50 RUB total to pilot; compatibility calls, failed attempts and both models share this budget. Do not request the same approval again."
+    "authorization": "User explicitly allocated 50 RUB total to pilot; compatibility calls, failed attempts and both models share this budget. Do not request the same approval again.",
+    "status": "Completed preliminary A pilot: baseline, Nano, conditional backup Mini",
+    "result_summary": "results/pilot-20261023/summary.json",
+    "charged_or_reserved_rub": "2.027693",
+    "remaining_approved_budget_rub": "47.972307",
+    "backup_authorized": "User authorized 5.4 Mini if Nano has issues or is worse; used after redundant account question"
   },
   "primary": {
     "attempts": 24,
     "repeats_per_scenario_per_model": 3,
     "proposed_spend_limit_rub": 500,
-    "decision": "Reassess after 50 RUB pilot; 500 RUB is historical proposal, NOT approved",
+    "decision": "Full A/B remains pending; A pilot is saved. B/C/D and 3 repeats not yet measured; no backend fixes before complete A/B.",
     "includes_pilot_attempts": true,
     "all_192_calls_at_maximum_envelope_rub": 1190.9698560000002,
     "budget_note": "All 24 attempts at the maximum envelope: approximately 1190.97 RUB. Actual budget must be based on pilot usage; no bulk spend approved."
