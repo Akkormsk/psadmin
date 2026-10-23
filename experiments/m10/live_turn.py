@@ -31,7 +31,7 @@ def save(path, value):
 
 
 def run(args):
-    if not re.fullmatch(r"[A-D]-(?:mini|nano|54mini)(?:-[1-3])?", args.attempt):
+    if not re.fullmatch(r"[A-L]-(?:mini|nano|54mini)(?:-[1-3])?", args.attempt):
         raise ValueError("Invalid attempt name")
     if args.start and args.confirm_event is not None:
         raise ValueError("A button cannot start a conversation")
@@ -131,14 +131,21 @@ def run(args):
             entry["seconds"] = time.monotonic() - started
             persist()
 
-    if args.message is None and args.confirm_event is None:
-        args.message = json.loads((ROOT / "experiments/m10/scenarios.json").read_text())["primary"][args.scenario]["prompt"]
+    if args.message is None and args.confirm_event is None and not args.resume:
+        case_file = "scenarios.json" if args.scenario in "ABCD" else "real_task_cases.json"
+        args.message = json.loads((ROOT / "experiments/m10" / case_file).read_text())["primary"][args.scenario]["prompt"]
     started = time.monotonic()
     turn = {"input": args.message, "error": None}
     try:
         with patch("tenders.assistant_agent.urlopen", observed_transport), patch(
                 "django.utils.timezone.localdate", return_value=date(2026, 10, 23)):
-            if args.confirm_event is not None:
+            if args.resume:
+                from tenders.assistant_agent import _run
+                from tenders.assistant_conversations import add_assistant_message
+                answer = _run(conversation, user, conversation.context["agent_run"])
+                add_assistant_message(conversation, answer["text"], answer["kind"], answer["data"])
+                turn["resume_after_experiment_guard"] = True
+            elif args.confirm_event is not None:
                 from django.test import RequestFactory
                 from tenders.assistant_ui import conversation_action_confirm
                 request = RequestFactory().post("/isolated-confirmation", {"accept": "yes"})
@@ -175,8 +182,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=Path, required=True)
     parser.add_argument("--attempt", required=True)
     parser.add_argument("--model", required=True, choices=["openai/gpt-4.1-mini", "openai/gpt-5.4-nano", "openai/gpt-5.4-mini"])
-    parser.add_argument("--scenario", default="A", choices=["A", "B", "C", "D"])
+    parser.add_argument("--scenario", default="A", choices=list("ABCDEFGHIJKL"))
     parser.add_argument("--message")
     parser.add_argument("--confirm-event", type=int)
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--start", action="store_true")
     run(parser.parse_args())

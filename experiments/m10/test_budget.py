@@ -47,6 +47,13 @@ class BudgetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "envelope"):
             budget.reserve("A", self.body)
 
+    def test_unicode_escapes_do_not_count_as_provider_input(self):
+        budget = Budget(10, RATES)
+        self.body["messages"] = [{"role": "user", "content": "я" * 5000}]
+        index = budget.reserve("A", self.body)
+        self.assertLess(budget.reservations[index], 10)
+        self.assertGreater(budget.reservations[index], Decimal("1.35"))
+
     def test_unexpected_usage_is_charged_and_stops(self):
         budget = Budget(100, RATES)
         index = budget.reserve("A", self.body)

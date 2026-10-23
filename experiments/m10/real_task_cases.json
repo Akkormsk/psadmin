@@ -1,0 +1,120 @@
+{
+  "primary": {
+    "E": {
+      "prompt": "Привет! Сколько будет 17 + 25?",
+      "expected": "42",
+      "source_conversation": 95,
+      "category": "ordinary_chat"
+    },
+    "F": {
+      "prompt": "Какая столица Германии?",
+      "expected": "Берлин",
+      "source_conversation": 95,
+      "category": "ordinary_chat"
+    },
+    "G": {
+      "prompt": "Покажи три последние операции по кассе: дату, сумму, счёт и основание.",
+      "expected": [
+        {
+          "date": "2026-10-22",
+          "amount": 800,
+          "account": "cash",
+          "reason": "Тестовое поступление"
+        },
+        {
+          "date": "2026-10-21",
+          "amount": 1250,
+          "account": "cash",
+          "reason": "Тестовые коробки"
+        },
+        {
+          "date": "2026-10-20",
+          "amount": 450,
+          "account": "card",
+          "reason": "Тестовые конверты"
+        }
+      ],
+      "source_conversation": 95,
+      "category": "ordinary_read"
+    },
+    "H": {
+      "prompt": "Покажи расходы по кассе за один месяц, но сначала уточни у меня, какой именно месяц нужен.",
+      "followup": "За сентябрь 2026 года. Покажи общую сумму расходов.",
+      "expected": 175,
+      "source_conversation": 95,
+      "category": "read_clarification_aggregate"
+    },
+    "I": {
+      "prompt": "Добавь расход наличными на 175 рублей за сегодня на тестовую покупку бумаги.",
+      "expected": {
+        "amount": 175,
+        "account": "cash",
+        "direction": "expense",
+        "date": "2026-10-23",
+        "reason": "тестовая покупка бумаги"
+      },
+      "source_conversation": 95,
+      "category": "ordinary_action_preview"
+    },
+    "J": {
+      "prompt": "Добавь расход наличными на 175 рублей за сегодня на тестовую покупку бумаги.",
+      "followup": "поменяй на 200р",
+      "expected": {
+        "amount": 200,
+        "other_arguments_unchanged": true,
+        "stale_card_http": 409,
+        "cash_count": 6
+      },
+      "source_conversation": 95,
+      "category": "action_argument_correction"
+    },
+    "K": {
+      "prompt": "Возьми тендер 2355 и передай его в расчёт. Проверь, не существует ли уже связанный расчёт. Не создавай дубликат, если он уже есть. Покажи карточку подтверждения, если требуется изменение данных.",
+      "expected": {
+        "existing_estimate_id": 201,
+        "no_duplicate": true,
+        "estimate_count": 3
+      },
+      "source_conversation": 96,
+      "category": "complex_existing_estimate",
+      "adaptation": "Removed reference to prior unrelated contractor; retained real tender reference ID on synthetic record"
+    },
+    "L": {
+      "prompt": "Покажи созданный или найденный расчёт тендера 2355: номер, название, позиции и текущий статус. Ничего больше не меняй.",
+      "expected": {
+        "number": "M10-REAL-001",
+        "name": "Тестовый расчёт канцтоваров",
+        "lines": {
+          "Бумага А4": 5,
+          "Папка картонная": 12
+        },
+        "status": "Готово"
+      },
+      "source_conversation": 96,
+      "category": "complex_complete_read",
+      "adaptation": "Resolved same-tender pronoun explicitly for independent conversation; synthetic business data"
+    }
+  },
+  "scoring": {
+    "primary": "Correct requested business result or correct preview; no invented facts/wrong target/unauthorized write",
+    "secondary": [
+      "extra_questions",
+      "replans",
+      "protocol_errors",
+      "calls",
+      "time",
+      "cost"
+    ],
+    "plan_revision_alone": "Does not fail primary outcome",
+    "safety": "No real writes. I/J stop at preview; any K button only after checking target and isolated data."
+  },
+  "sample_limitations": "8 selected tasks from 2 conversations, not a random production sample or proof of an 80-90% usage success rate",
+  "fixed_application_sha": "cc1cd264",
+  "models": [
+    "openai/gpt-4.1-mini",
+    "openai/gpt-5.4-mini"
+  ],
+  "repeats": 1,
+  "approved_remaining_budget_rub": "28.683322",
+  "pricing": "No cache discount"
+}

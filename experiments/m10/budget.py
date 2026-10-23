@@ -3,7 +3,8 @@ import json
 from decimal import Decimal
 
 
-MAX_REQUEST_BYTES = 131072
+MAX_REQUEST_BYTES = 262144
+MAX_UNICODE_BYTES = 131072
 TOKEN_OVERHEAD_RESERVE = 16384
 MAX_OUTPUT_TOKENS = 1200
 MAX_CALLS_PER_ATTEMPT = 8
@@ -40,7 +41,14 @@ class Budget:
         rate = self.rates[body["model"]]
         # Byte upper envelope for byte-level tokenization plus framing reserve.
         # Remains below the published 272k higher-price tier for GPT 4.1.
-        reservation = rubles(size + TOKEN_OVERHEAD_RESERVE, MAX_OUTPUT_TOKENS,
+        # The provider tokenizes parsed Unicode, not Python's ASCII \u escapes.
+        # UTF-8 bytes still bound byte-level tokens; retain framing reserve and
+        # the independent limit on the actual serialized wire body above.
+        token_byte_bound = len(json.dumps(body, ensure_ascii=False).encode())
+        if token_byte_bound > MAX_UNICODE_BYTES:
+            raise RuntimeError("Unicode request envelope exceeded")
+        reserved_input = token_byte_bound + TOKEN_OVERHEAD_RESERVE
+        reservation = rubles(reserved_input, MAX_OUTPUT_TOKENS,
             rate["input_rub_per_million"], rate["output_rub_per_million"])
         if self.charged_or_reserved + reservation > self.limit:
             raise RuntimeError("Approved budget would be exceeded")
