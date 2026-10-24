@@ -146,3 +146,27 @@ class AssistantReadCacheTests(TestCase):
         }})
         self.assertEqual(fresh["records"][0]["status"], Tender.PUSHED)
         self.assertEqual(TenderEstimate.objects.filter(tender=self.tender).count(), 1)
+
+    def test_invalid_view_after_another_read_returns_json_and_can_be_corrected(self):
+        self.gateway.side_effect = [
+            planned_call("read:tender_selection.tenders", steps=[
+                {"id": "find", "capability_id": "read:tender_selection.tenders",
+                 "objective": "Найти тендер", "expected_result": "Тендер"},
+                {"id": "check", "capability_id": "read:tenders.tender_estimates",
+                 "objective": "Проверить расчёты", "expected_result": "Список расчётов"},
+            ]),
+            function_call("read_tender_selection_tenders", {"plan": {
+                "fields": ["id", "title"],
+                "filters": [{"field": "id", "op": "eq", "value": self.tender.pk}],
+            }}),
+            function_call("read_tenders_tender_estimates", {"plan": {"view": "incoming"}}),
+            self.read_call(),
+            function_call("assistant_finish", {"answer": "Расчётов нет, ничего не изменено"}),
+        ]
+        response = self.client.post(reverse("assistant_conversation_message", args=[self.conversation.pk]),
+            {"message": "Найди тендер и проверь расчёты"}, content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["messages"][-1]
+        self.assertEqual(result["text"], "Расчётов нет, ничего не изменено")
+        self.assertEqual(result["data"]["steps"][-1]["result"]["total_count"], 0)
+        self.assertFalse(TenderEstimate.objects.exists())

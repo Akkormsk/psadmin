@@ -8,7 +8,7 @@ from .assistant_tools import (
     AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_for_user, capability_map_text, confirmation_arguments,
     execute_tool, openai_functions, validate_tool_call,
 )
-from .assistant_read import reuse_result
+from .assistant_read import ReadPlanError, reuse_result
 from .gateway_budget import preflight
 from .services import TenderAIError
 
@@ -697,7 +697,7 @@ def _run(conversation, user, state):
                 state["steps"].append({"tool_id": identifier, "result": result, "status": "completed"})
             content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
-        except (AssistantToolError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (AssistantToolError, ReadPlanError, ValueError, TypeError, json.JSONDecodeError) as exc:
             if identifier == "assistant.plan":
                 state["capability_map_pending"] = True
                 _refresh_system_prompt(user, state)
