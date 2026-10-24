@@ -124,3 +124,78 @@ class AssistantConfirmationSafetyTests(TestCase):
         self.assertNotIn("label", schema)
         self.assertNotIn("reference", schema)
         self.assertIn("READ", schema["description"])
+
+    def test_explicit_label_precedes_model_field_and_reference_model_names(self):
+        for declaration, value, ui in [
+            ({"type": "string", "label": "Основание расхода"}, "Бумага", {"model": "cash.CashTransaction"}),
+            ({"type": "integer", "label": "Выбранная закупка",
+              "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}},
+             self.tender.pk, None),
+        ]:
+            with self.subTest(label=declaration["label"]):
+                name = "reason" if ui else "tender_id"
+                card = confirmation_arguments({"input_schema": {name: declaration}, "ui": ui}, {name: value})
+                self.assertEqual(card[0]["label"], declaration["label"])
+
+    def test_generic_choices_and_conditional_references_do_not_change_arguments(self):
+        from copy import deepcopy
+        from uuid import uuid4
+        from .models import OrderEstimate
+        from .assistant_tools import AssistantTool, register_tool
+        from . import assistant_tools
+
+        order = OrderEstimate.objects.create(owner=self.user, order_number="ORDER-001", name="Заказной расчёт")
+        tender = TenderEstimate.objects.create(owner=self.user, tender=self.tender,
+            tender_number=self.tender.purchase_number, name="Тендерный расчёт")
+        selector, identifier, choice = ["field_" + uuid4().hex for _ in range(3)]
+        tool_id = "extension." + uuid4().hex
+        register_tool(AssistantTool(tool_id, "Произвольное действие", "Тест", {
+            selector: {"type": "boolean", "label": "Выбранный вид"},
+            identifier: {"type": "integer", "label": "Объект", "reference": {
+                "model": [{"when": {selector: True}, "model": "tenders.TenderEstimate"},
+                          {"when": {selector: False}, "model": "tenders.OrderEstimate"}], "label": "name"}},
+            choice: {"type": "string", "label": "Решение", "choices": [("arbitrary-code", "Понятное решение")]},
+        }, False, True, True, lambda user, payload: payload))
+        try:
+            tool = next(t for t in available_tools(self.user) if t["id"] == tool_id)
+            for selected, instance in [(True, tender), (False, order)]:
+                with self.subTest(selected=selected):
+                    args = {selector: selected, identifier: instance.pk, choice: "arbitrary-code"}
+                    saved = deepcopy(args)
+                    validate_tool_call(tool_id, self.user, args)
+                    card = confirmation_arguments(tool, args)
+                    self.assertEqual(card[1]["items"][0]["text"], instance.name)
+                    self.assertEqual(card[2]["value"], "Понятное решение")
+                    self.assertEqual(args, saved)
+            with self.assertRaises(AssistantToolError):
+                confirmation_arguments(tool, {identifier: tender.pk})
+        finally:
+            assistant_tools._TOOLS.pop(tool_id)
+
+    def test_string_reference_is_resolved_without_converting_action_argument(self):
+        args = {"manager": str(self.user.pk)}
+        tool = {"input_schema": {"manager": {"type": "string", "label": "Менеджер",
+            "reference": {"model": "auth.User", "label": "username"}}}}
+        self.assertEqual(confirmation_arguments(tool, args)[0]["items"][0]["text"], self.user.username)
+        self.assertEqual(args, {"manager": str(self.user.pk)})
+
+    def test_presentation_metadata_does_not_change_parameter_contract(self):
+        from .assistant_tools import _function_definition
+        for kind in ["object", "object?", "array", "array?", "string", "integer?", "integer[]"]:
+            with self.subTest(kind=kind):
+                plain = _function_definition("extension.test", "Тест", {"value": kind})
+                decorated = _function_definition("extension.test", "Тест", {"value": {
+                    "type": kind.rstrip("?"), "required": not kind.endswith("?"),
+                    "label": "Человекочитаемая подпись", "choices": [("code", "Подпись")],
+                }})
+                self.assertEqual(plain, decorated)
+
+    def test_reference_object_fields_use_their_existing_choice_labels(self):
+        transaction = CashTransaction.objects.create(created_by=self.user, operation_date="2026-10-24",
+            account="card", direction="expense", amount=175, reason="Бумага")
+        args = {"operation": transaction.pk}
+        tool = {"input_schema": {"operation": {"type": "integer", "label": "Операция", "reference": {
+            "model": "cash.CashTransaction", "label": ["account", "direction", "reason"],
+        }}}}
+        self.assertEqual(confirmation_arguments(tool, args)[0]["items"][0]["text"], "Карта — Расход — Бумага")
+        self.assertEqual(args, {"operation": transaction.pk})

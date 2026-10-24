@@ -1,7 +1,10 @@
 """Published references to tender-selection executors shared with the site."""
 from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
 
+from .models import Tender
+
 from .services import (
+    RISK_LEVEL_CHOICES,
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
@@ -106,26 +109,24 @@ def _record_outcome(user, payload):
 register_tool(AssistantTool(
     "tender.discovery_settings", "Настроить поиск и отбор закупок",
     "Изменяет действующие правила поиска тем же общим исполнителем, что и настройки сайта.",
-    {"include_words": "string?", "exclude_words": "string?", "profile_triage_enabled": "boolean?",
-     "min_price": "number?", "window_days": "integer?", "okpd2_codes": "string[]?",
-     "regions": "string[]?", "laws": "string[]?"},
+    {'include_words': 'string?', 'exclude_words': 'string?', 'profile_triage_enabled': {'type': 'boolean', 'required': False, 'label': 'Помечать сомнительные тендеры'}, 'min_price': 'number?', 'window_days': 'integer?', 'okpd2_codes': 'string[]?', 'regions': 'string[]?', 'laws': {'type': 'string[]', 'required': False, 'label': 'Законы о закупках', 'choices': Tender.LAW_CHOICES}},
     False, True, True, _save_discovery_settings,
-    source="tender_selection.services.save_selection_settings",
+    ui={'model': 'tender_selection.FilterSettings'}, source="tender_selection.services.save_selection_settings",
 ))
 register_tool(AssistantTool(
     "tender.outcome_record", "Получить или сохранить результат торгов", "Проверяет протокол/контракт либо сохраняет явно выбранный итог торгов тем же общим исполнителем, что карточка тендера.",
-    {"estimate_id": "integer", "status": "won|lost|not_participated?", "actual_reduction_percent": "number?"},
+    {'estimate_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tenders.TenderEstimate', 'label': ['tender_number', 'name']}}, 'status': {'type': 'won|lost|not_participated', 'required': False, 'label': 'Результат торгов', 'choices': Tender.OUTCOME_STATUS_CHOICES}, 'actual_reduction_percent': {'type': 'number', 'required': False, 'label': 'Фактическое снижение, %'}},
     False, True, True, _record_outcome, source="tender_selection.services.record_tender_outcome",
 ))
 register_tool(AssistantTool(
     "tender.hide", "Скрыть неподходящий тендер", "Архивирует тендер тем же исполнителем, что кнопка интерфейса, и сохраняет причину для входящего тендера.",
-    {"tender_id": "integer", "reason": "string?"}, False, True, True, _hide_tender,
+    {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}, 'reason': {'type': 'string', 'required': False, 'label': 'Причина скрытия'}}, False, True, True, _hide_tender,
     source="tender_selection.services.hide_tender",
 ))
 register_tool(AssistantTool(
     "tender.restore", "Вернуть скрытый тендер",
     "Возвращает скрытый тендер в работу тем же сервисом, что кнопка восстановления в архиве.",
-    {"tender_id": {"type": "integer", "description": "Идентификатор выбранного скрытого тендера"}},
+    {'tender_id': {'type': 'integer', 'description': 'Идентификатор выбранного скрытого тендера', 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}},
     False, True, True,
     lambda user, payload: restore_hidden_tender(user, payload["tender_id"]),
     source="tender_selection.services.restore_hidden_tender",
@@ -133,7 +134,7 @@ register_tool(AssistantTool(
 register_tool(AssistantTool(
     "tender.start_evaluation", "Взять тендер в работу",
     "Точно повторяет кнопку «В работу»: переводит входящий тендер на оценку и запускает штатную фоновую оценку рисков. Не даёт произвольно менять технический статус.",
-    {"tender_id": "integer"}, False, True, True, _start_evaluation,
+    {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}}, False, True, True, _start_evaluation,
     source="tender_selection.services.update_tender_review",
 ))
 register_tool(AssistantTool(
@@ -151,7 +152,7 @@ register_tool(AssistantTool(
 ))
 register_tool(AssistantTool(
     "tender.forecast_toggle", "Включить или исключить тендер из прогноза", "Переключает существующую запись статистики тем же правилом, что архив тендеров.",
-    {"tender_id": "integer"}, False, True, True,
+    {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}}, False, True, True,
     lambda user, payload: _tender_action(change_forecast_inclusion, user, payload, "tender_id"),
     source="tender_selection.services.change_forecast_inclusion",
 ))
@@ -165,35 +166,29 @@ register_tool(AssistantTool(
 ))
 register_tool(AssistantTool(
     "tender.bid_save", "Сохранить нашу ставку по тендеру", "Сохраняет номер и сумму нашей заявки тем же сервисом, по которому система сопоставляет протокол торгов.",
-    {"estimate_id": "integer", "bid_number": "string?", "bid_price": "number?"}, False, True, True, _save_bid,
-    source="tender_selection.services.save_tender_bid",
+    {'estimate_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tenders.TenderEstimate', 'label': ['tender_number', 'name']}}, 'bid_number': 'string?', 'bid_price': 'number?'}, False, True, True, _save_bid,
+    ui={'model': 'tender_selection.Tender'}, source="tender_selection.services.save_tender_bid",
 ))
 
 register_tool(AssistantTool(
     "tender.evaluation_settings", "Сохранить правила оценки тендеров",
     "Сохраняет пороги риска, ROI, НДС и прогноз тем же валидатором, что страница настроек оценки.",
-    {"risk_warning_days": "integer", "risk_critical_days": "integer", "roi_good_percent": "number",
-     "roi_thin_percent": "number", "vat_rate": "number", "default_reduction_percent": "number",
-     "stats_target_count": "integer", "stats_min_samples": "integer", "reduction_hint_min": "integer",
-     "reduction_hint_max": "integer", "incoming_ttl_days": "integer", "level_samples_required": "low|medium|high",
-     "level_samples_impossible": "low|medium|high", "level_national_confirmation": "low|medium|high",
-     "level_national_blocked": "low|medium|high", "level_delivery_requests": "low|medium|high",
-     "level_delivery_open_ended": "low|medium|high"},
+    {'risk_warning_days': 'integer', 'risk_critical_days': 'integer', 'roi_good_percent': {'type': 'number', 'required': True, 'label': 'Хорошая рентабельность, %'}, 'roi_thin_percent': {'type': 'number', 'required': True, 'label': 'Минимальная рентабельность, %'}, 'vat_rate': {'type': 'number', 'required': True, 'label': 'НДС, %'}, 'default_reduction_percent': {'type': 'number', 'required': True, 'label': 'Снижение по умолчанию, %'}, 'stats_target_count': 'integer', 'stats_min_samples': 'integer', 'reduction_hint_min': 'integer', 'reduction_hint_max': 'integer', 'incoming_ttl_days': 'integer', 'level_samples_required': {'type': 'low|medium|high', 'required': True, 'label': 'Риск: требуются образцы', 'choices': RISK_LEVEL_CHOICES}, 'level_samples_impossible': {'type': 'low|medium|high', 'required': True, 'label': 'Риск: невозможно предоставить образцы', 'choices': RISK_LEVEL_CHOICES}, 'level_national_confirmation': {'type': 'low|medium|high', 'required': True, 'label': 'Риск: подтверждение происхождения', 'choices': RISK_LEVEL_CHOICES}, 'level_national_blocked': {'type': 'low|medium|high', 'required': True, 'label': 'Риск: ограничения происхождения', 'choices': RISK_LEVEL_CHOICES}, 'level_delivery_requests': {'type': 'low|medium|high', 'required': True, 'label': 'Риск: поставка по заявкам', 'choices': RISK_LEVEL_CHOICES}, 'level_delivery_open_ended': {'type': 'low|medium|high', 'required': True, 'label': 'Риск: неограниченные условия поставки', 'choices': RISK_LEVEL_CHOICES}},
     False, True, True, _save_evaluation_settings,
-    source="tender_selection.services.save_evaluation_settings",
+    ui={'model': 'tender_selection.FilterSettings'}, source="tender_selection.services.save_evaluation_settings",
 ))
 
 register_tool(AssistantTool(
     "tender.owner_question_answer", "Ответить на запрос уточнения по тендеру",
     "Сохраняет ответ и закрывает вопрос тем же общим исполнителем, что карточка тендера.",
-    {"tender_id": "integer", "interaction_id": "integer", "answer": "string"},
+    {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}, 'interaction_id': {'type': 'integer', 'required': True, 'label': 'Запрос уточнения', 'reference': {'model': 'tenders.OwnerInteraction', 'label': ['question']}}, 'answer': {'type': 'string', 'required': True, 'label': 'Ответ'}},
     False, True, True, _answer_owner_question,
     source="tender_selection.services.answer_tender_owner_question",
 ))
 register_tool(AssistantTool(
     "tender.document_proposals", "Принять или отклонить состав из документации",
     "Применяет к позиции тендера найденный в документации состав либо отклоняет его тем же исполнителем, что карточка тендера.",
-    {"tender_id": "integer", "parent_id": "integer", "decision": "accept|reject"},
+    {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}, 'parent_id': {'type': 'integer', 'required': True, 'label': 'Исходная позиция', 'reference': {'model': 'tenders.TenderSourceItem', 'label': ['original_text']}}, 'decision': {'type': 'accept|reject', 'required': True, 'label': 'Решение по составу', 'choices': (('accept', 'Принять'), ('reject', 'Отклонить'))}},
     False, True, True,
     lambda user, payload: _tender_action(
         decide_document_proposals, user, payload, "tender_id", "parent_id", "decision",

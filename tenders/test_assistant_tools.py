@@ -786,6 +786,9 @@ class AssistantToolRegistryTests(TestCase):
 
     def test_production_lesson_deactivation_uses_shared_service(self):
         from unittest.mock import patch
+        from .models import Lesson
+
+        Lesson.objects.create(pk=37, summary="Проверенное правило")
 
         with self.assertRaises(AssistantToolConfirmationRequired):
             execute_tool("production.lesson_deactivate", self.admin, {"lesson_id": 37})
@@ -1044,12 +1047,16 @@ class AssistantToolRegistryTests(TestCase):
             execute_tool("tender.discovery_settings", self.admin, {"min_price": -1}, confirmed=True)
 
     def test_route_knowledge_macro_needs_confirmation_and_valid_target(self):
+        from .models import Lesson
+        lesson = Lesson.objects.create(summary="Проверенный маршрут", scope="route")
         with self.assertRaises(AssistantToolConfirmationRequired):
-            execute_tool("production.route_knowledge_deactivate", self.admin, {"lesson_id": 777})
-        with self.assertRaisesRegex(Exception, "Сохранённый опыт не найден"):
+            execute_tool("production.route_knowledge_deactivate", self.admin, {"lesson_id": lesson.pk})
+        with self.assertRaisesRegex(Exception, "не найден"):
             execute_tool("production.route_knowledge_deactivate", self.admin, {
                 "lesson_id": 777
             }, confirmed=True)
+        lesson.refresh_from_db()
+        self.assertTrue(lesson.is_active)
 
     def test_production_base_counterparty_macro_reuses_proposal_service(self):
         from .models import Counterparty, Proposal

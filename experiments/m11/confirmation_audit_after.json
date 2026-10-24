@@ -1,0 +1,2034 @@
+[
+  {
+    "action": "calculator.estimate_save",
+    "arguments": {
+      "estimate_id": 1,
+      "name": "Тестовое значение",
+      "comment": "Тестовое значение",
+      "calculator_type": "sheet",
+      "product_quantity": 1,
+      "work_hours": 1,
+      "lines": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ]
+    },
+    "card": [
+      {
+        "label": "Расчёт",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Название",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Калькулятор",
+        "value": "Листовая печать"
+      },
+      {
+        "label": "Тираж конечного изделия",
+        "value": "1"
+      },
+      {
+        "label": "Рабочие часы",
+        "value": "1"
+      },
+      {
+        "label": "Позиции расчёта",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "calculator_type",
+        "value": "sheet",
+        "label": "Листовая печать"
+      },
+      {
+        "field": "calculator_type",
+        "value": "wide",
+        "label": "Плоттер Canon"
+      }
+    ]
+  },
+  {
+    "action": "calculator.estimate_duplicate",
+    "arguments": {
+      "estimate_id": 1
+    },
+    "card": [
+      {
+        "label": "Расчёт",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "calculator.estimate_delete",
+    "arguments": {
+      "estimate_id": 1
+    },
+    "card": [
+      {
+        "label": "Расчёт",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "calculator.estimate_bulk",
+    "arguments": {
+      "action": "group",
+      "estimate_ids": [
+        1
+      ],
+      "name": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Операция с расчётами",
+        "value": "Сгруппировать"
+      },
+      {
+        "label": "Сохранённые расчёты",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Название группы",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "action",
+        "value": "group",
+        "label": "Сгруппировать"
+      },
+      {
+        "field": "action",
+        "value": "ungroup",
+        "label": "Разгруппировать"
+      },
+      {
+        "field": "action",
+        "value": "delete",
+        "label": "Удалить"
+      }
+    ]
+  },
+  {
+    "action": "cash.transaction_create",
+    "arguments": {
+      "operation_date": "2026-10-24",
+      "account": "cash",
+      "direction": "income",
+      "amount": 1,
+      "reason": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Дата операции",
+        "value": "24.10.2026"
+      },
+      {
+        "label": "Счёт",
+        "value": "Наличные"
+      },
+      {
+        "label": "Тип операции",
+        "value": "Приход"
+      },
+      {
+        "label": "Сумма",
+        "value": "1"
+      },
+      {
+        "label": "Основание / № заказа",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "account",
+        "value": "cash",
+        "label": "Наличные"
+      },
+      {
+        "field": "account",
+        "value": "card",
+        "label": "Карта"
+      },
+      {
+        "field": "direction",
+        "value": "income",
+        "label": "Приход"
+      },
+      {
+        "field": "direction",
+        "value": "expense",
+        "label": "Расход"
+      }
+    ]
+  },
+  {
+    "action": "cash.transaction_update",
+    "arguments": {
+      "transaction_id": 1,
+      "operation_date": "2026-10-24",
+      "account": "cash",
+      "direction": "income",
+      "amount": 1,
+      "reason": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Операция кассы",
+        "items": [
+          {
+            "text": "2026-10-24 — Тест — 1.00",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Дата операции",
+        "value": "24.10.2026"
+      },
+      {
+        "label": "Счёт",
+        "value": "Наличные"
+      },
+      {
+        "label": "Тип операции",
+        "value": "Приход"
+      },
+      {
+        "label": "Сумма",
+        "value": "1"
+      },
+      {
+        "label": "Основание / № заказа",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "account",
+        "value": "cash",
+        "label": "Наличные"
+      },
+      {
+        "field": "account",
+        "value": "card",
+        "label": "Карта"
+      },
+      {
+        "field": "direction",
+        "value": "income",
+        "label": "Приход"
+      },
+      {
+        "field": "direction",
+        "value": "expense",
+        "label": "Расход"
+      }
+    ]
+  },
+  {
+    "action": "cash.transaction_delete",
+    "arguments": {
+      "transaction_id": 1
+    },
+    "card": [
+      {
+        "label": "Операция кассы",
+        "items": [
+          {
+            "text": "2026-10-24 — Тест — 1.00",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "cash.reconciliation_save",
+    "arguments": {
+      "effective_date": "2026-10-24",
+      "cash_balance": 1,
+      "card_balance": 1,
+      "note": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Дата сверки",
+        "value": "24.10.2026"
+      },
+      {
+        "label": "Наличные на утро",
+        "value": "1"
+      },
+      {
+        "label": "Карта на утро",
+        "value": "1"
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "cash.bank_payment_visibility_toggle",
+    "arguments": {
+      "bank_payment_id": 1
+    },
+    "card": [
+      {
+        "label": "Банковский платёж",
+        "items": [
+          {
+            "text": "Тест — Тест — 1.00",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "finance.order_record_create",
+    "arguments": {
+      "record_type": "order",
+      "order_number": "Тестовое значение",
+      "gross_profit": 1,
+      "accounting_period": "2026-10",
+      "manager": "1"
+    },
+    "card": [
+      {
+        "label": "Тип записи",
+        "value": "Заказ"
+      },
+      {
+        "label": "Номер заказа",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Валовая прибыль",
+        "value": "1"
+      },
+      {
+        "label": "Учётный период",
+        "value": "2026-10"
+      },
+      {
+        "label": "Менеджер",
+        "items": [
+          {
+            "text": "audit",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "record_type",
+        "value": "order",
+        "label": "Заказ"
+      },
+      {
+        "field": "record_type",
+        "value": "design",
+        "label": "Макет"
+      }
+    ]
+  },
+  {
+    "action": "finance.order_record_update",
+    "arguments": {
+      "order_record_id": 1,
+      "record_type": "order",
+      "order_number": "Тестовое значение",
+      "gross_profit": 1,
+      "accounting_period": "2026-10",
+      "manager": "1"
+    },
+    "card": [
+      {
+        "label": "Заказ или макет",
+        "items": [
+          {
+            "text": "Заказ — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Тип записи",
+        "value": "Заказ"
+      },
+      {
+        "label": "Номер заказа",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Валовая прибыль",
+        "value": "1"
+      },
+      {
+        "label": "Учётный период",
+        "value": "2026-10"
+      },
+      {
+        "label": "Менеджер",
+        "items": [
+          {
+            "text": "audit",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "record_type",
+        "value": "order",
+        "label": "Заказ"
+      },
+      {
+        "field": "record_type",
+        "value": "design",
+        "label": "Макет"
+      }
+    ]
+  },
+  {
+    "action": "finance.order_record_delete",
+    "arguments": {
+      "order_record_id": 1
+    },
+    "card": [
+      {
+        "label": "Заказ или макет",
+        "items": [
+          {
+            "text": "Заказ — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "finance.operating_expenses_save",
+    "arguments": {
+      "updates": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "new": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      }
+    },
+    "card": [
+      {
+        "label": "Изменения постоянных расходов",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Новый постоянный расход",
+        "value": "name: Тестовая позиция; quantity: 1"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "finance.operating_expense_delete",
+    "arguments": {
+      "expense_id": 4
+    },
+    "card": [
+      {
+        "label": "Постоянный расход",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 4"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "finance.manager_settings_save",
+    "arguments": {
+      "employee_order": [
+        1
+      ],
+      "managers": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ]
+    },
+    "card": [
+      {
+        "label": "Порядок сотрудников",
+        "items": [
+          {
+            "text": "audit",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Настройки менеджеров и KPI",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "finance.period_lock",
+    "arguments": {
+      "period": "2026-10",
+      "closed": true
+    },
+    "card": [
+      {
+        "label": "Финансовый период",
+        "value": "2026-10"
+      },
+      {
+        "label": "Закрыть период",
+        "value": "Да"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "finance.payroll_save",
+    "arguments": {
+      "period": "2026-10",
+      "updates": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ]
+    },
+    "card": [
+      {
+        "label": "Расчётный период",
+        "value": "2026-10"
+      },
+      {
+        "label": "Изменения начислений",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "provider.knowledge_confirm",
+    "arguments": {
+      "version_id": 1,
+      "note": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Версия знаний контрагента",
+        "items": [
+          {
+            "text": "Тест — 1",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Комментарий к подтверждению",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "provider.knowledge_remove",
+    "arguments": {
+      "counterparty_id": 1,
+      "knowledge_version_id": 1
+    },
+    "card": [
+      {
+        "label": "Контрагент",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Версия знаний",
+        "items": [
+          {
+            "text": "Тест — 1",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "provider.create",
+    "arguments": {
+      "name": "Тестовое значение",
+      "stage_ids": [
+        15
+      ],
+      "source_text": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Название",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Процессы маршрутов",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 15"
+          }
+        ]
+      },
+      {
+        "label": "Исходные сведения",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.feedback_decide",
+    "arguments": {
+      "batch_id": "32885bdb-5173-4625-87da-0a34db351761",
+      "accepted_ids": [
+        1
+      ]
+    },
+    "card": [
+      {
+        "label": "Набор предложений",
+        "value": "32885bdb-5173-4625-87da-0a34db351761"
+      },
+      {
+        "label": "Принимаемые изменения",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "provider.sewing_price_confirm",
+    "arguments": {
+      "version_id": 1,
+      "currency": "RUB",
+      "formula_confirmed": true
+    },
+    "card": [
+      {
+        "label": "Версия прайса",
+        "items": [
+          {
+            "text": "Тест — 1",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Валюта прайса",
+        "value": "RUB"
+      },
+      {
+        "label": "Формула проверена и подтверждена",
+        "value": "Да"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.lesson_deactivate",
+    "arguments": {
+      "lesson_id": 1
+    },
+    "card": [
+      {
+        "label": "Выученное правило",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "estimate.duplicate",
+    "arguments": {
+      "estimate_id": 1,
+      "pipeline": true
+    },
+    "card": [
+      {
+        "label": "Выбранный расчёт",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Расчёт относится к тендеру",
+        "value": "Да"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "estimate_id",
+        "when": {
+          "pipeline": true
+        },
+        "model": "tenders.TenderEstimate"
+      },
+      {
+        "field": "estimate_id",
+        "when": {
+          "pipeline": false
+        },
+        "model": "tenders.OrderEstimate"
+      }
+    ]
+  },
+  {
+    "action": "estimate.delete",
+    "arguments": {
+      "estimate_id": 1,
+      "pipeline": true
+    },
+    "card": [
+      {
+        "label": "Выбранный расчёт",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Расчёт относится к тендеру",
+        "value": "Да"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "estimate_id",
+        "when": {
+          "pipeline": true
+        },
+        "model": "tenders.TenderEstimate"
+      },
+      {
+        "field": "estimate_id",
+        "when": {
+          "pipeline": false
+        },
+        "model": "tenders.OrderEstimate"
+      }
+    ]
+  },
+  {
+    "action": "estimate.tender_status",
+    "arguments": {
+      "estimate_id": 1,
+      "status": "pending"
+    },
+    "card": [
+      {
+        "label": "Просчёт тендера",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Стадия тендерного расчёта",
+        "value": "На торгах"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "status",
+        "value": "draft",
+        "label": "Черновик"
+      },
+      {
+        "field": "status",
+        "value": "pending",
+        "label": "На торгах"
+      },
+      {
+        "field": "status",
+        "value": "not_participated",
+        "label": "Не участвовали"
+      },
+      {
+        "field": "status",
+        "value": "lost",
+        "label": "Проигран"
+      },
+      {
+        "field": "status",
+        "value": "won",
+        "label": "Выигран"
+      },
+      {
+        "field": "status",
+        "value": "published",
+        "label": "Итог опубликован"
+      }
+    ]
+  },
+  {
+    "action": "estimate.order_status",
+    "arguments": {
+      "estimate_id": 1,
+      "status": "draft"
+    },
+    "card": [
+      {
+        "label": "Расчёт заказа",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Статус",
+        "value": "Черновик"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "status",
+        "value": "draft",
+        "label": "Черновик"
+      },
+      {
+        "field": "status",
+        "value": "pending",
+        "label": "На торгах"
+      },
+      {
+        "field": "status",
+        "value": "not_participated",
+        "label": "Не участвовали"
+      },
+      {
+        "field": "status",
+        "value": "lost",
+        "label": "Проигран"
+      },
+      {
+        "field": "status",
+        "value": "won",
+        "label": "Выигран"
+      }
+    ]
+  },
+  {
+    "action": "production.route_knowledge_deactivate",
+    "arguments": {
+      "lesson_id": 1,
+      "example_id": 1
+    },
+    "card": [
+      {
+        "label": "Правило маршрута",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Пример маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "provider.production_create",
+    "arguments": {
+      "name": "Тестовое значение",
+      "notes": "Тестовое значение",
+      "stage_ids": [
+        15
+      ],
+      "source_id": 1
+    },
+    "card": [
+      {
+        "label": "Название",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Процессы маршрутов",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 15"
+          }
+        ]
+      },
+      {
+        "label": "Источник сведений",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.feedback_draft",
+    "arguments": {
+      "text": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Исправления производственной базы",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.requirement_skip_restore",
+    "arguments": {
+      "label": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Восстанавливаемое требование",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.stage_proposal_confirm",
+    "arguments": {
+      "session_id": 1,
+      "proposal_id": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Расчёт производственного маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Предлагаемый этап",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.route_reopen",
+    "arguments": {
+      "session_id": 1
+    },
+    "card": [
+      {
+        "label": "Расчёт производственного маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.catalog_product_select",
+    "arguments": {
+      "session_id": 1,
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "product_id": "Тестовое значение",
+      "step_id": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Расчёт производственного маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Позиция расчёта",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Артикул выбранного товара",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Шаг маршрута",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.route_confirm",
+    "arguments": {
+      "session_id": 1
+    },
+    "card": [
+      {
+        "label": "Расчёт производственного маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "provider.production_draft",
+    "arguments": {
+      "text": "Тестовое значение",
+      "url": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Сведения о контрагенте",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Источник сведений",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.calculation_sources_add",
+    "arguments": {
+      "session_id": 1,
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "sources": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "source_text": "Тестовое значение",
+      "source_url": "Тестовое значение",
+      "feedback": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Расчёт производственного маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Позиция расчёта",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Источники расчёта",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Текст источника",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Ссылка на источник",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Уточнения к источнику",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.route_build",
+    "arguments": {
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "start_catalog": true
+    },
+    "card": [
+      {
+        "label": "Позиция расчёта",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Начать поиск в каталоге",
+        "value": "Да"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "production.route_revise",
+    "arguments": {
+      "session_id": 1,
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "feedback": "Тестовое значение",
+      "question_answers": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "accepted_requirement_proposals": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "instructions": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "clear_ranking": true,
+      "refresh": true,
+      "scope": "route",
+      "step_id": "Тестовое значение",
+      "learn_for_similar": true
+    },
+    "card": [
+      {
+        "label": "Расчёт производственного маршрута",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Позиция расчёта",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Уточнение маршрута",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Ответы на вопросы",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Подтверждённые требования",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Указания для пересчёта",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Сбросить подбор исполнителей",
+        "value": "Да"
+      },
+      {
+        "label": "Пересчитать заново",
+        "value": "Да"
+      },
+      {
+        "label": "Область пересчёта",
+        "value": "Маршрут"
+      },
+      {
+        "label": "Шаг маршрута",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Учитывать для похожих позиций",
+        "value": "Да"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "scope",
+        "value": "route",
+        "label": "Маршрут"
+      },
+      {
+        "field": "scope",
+        "value": "requirements",
+        "label": "Требования"
+      }
+    ]
+  },
+  {
+    "action": "production.training_example_save",
+    "arguments": {
+      "production_type": "Тестовое значение",
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "features": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "routes": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "note": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Код типа производства",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Позиция расчёта",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Существенные признаки",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Производственные маршруты",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "estimate.save",
+    "arguments": {
+      "estimate_id": 1,
+      "pipeline": true,
+      "tender_number": "Тестовое значение",
+      "name": "Тестовое значение",
+      "lines": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "reduction_percent": 1,
+      "russia_delivery": 1,
+      "result_notes": "Тестовое значение",
+      "document_analysis": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "owner_id": 1
+    },
+    "card": [
+      {
+        "label": "Изменяемый расчёт",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Расчёт относится к тендеру",
+        "value": "Да"
+      },
+      {
+        "label": "Номер тендера",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Название / комментарий",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Позиции расчёта",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Снижение цены, %",
+        "value": "1"
+      },
+      {
+        "label": "Доставка по РФ",
+        "value": "1"
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Анализ документов",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Ответственный",
+        "items": [
+          {
+            "text": "audit",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "estimate_id",
+        "when": {
+          "pipeline": true
+        },
+        "model": "tenders.TenderEstimate"
+      },
+      {
+        "field": "estimate_id",
+        "when": {
+          "pipeline": false
+        },
+        "model": "tenders.OrderEstimate"
+      },
+      {
+        "field": "estimate_id",
+        "when": {},
+        "model": "tenders.TenderEstimate"
+      }
+    ]
+  },
+  {
+    "action": "tender.discovery_settings",
+    "arguments": {
+      "include_words": "Тестовое значение",
+      "exclude_words": "Тестовое значение",
+      "profile_triage_enabled": true,
+      "min_price": 1,
+      "window_days": 1,
+      "okpd2_codes": [
+        "Тестовое значение"
+      ],
+      "regions": [
+        "Тестовое значение"
+      ],
+      "laws": [
+        "fz44",
+        "fz223"
+      ]
+    },
+    "card": [
+      {
+        "label": "Плюс-слова",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Минус-слова",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Помечать сомнительные тендеры",
+        "value": "Да"
+      },
+      {
+        "label": "Минимальная НМЦК, ₽",
+        "value": "1"
+      },
+      {
+        "label": "Окно по дате публикации, дней",
+        "value": "1"
+      },
+      {
+        "label": "Категории ОКПД2",
+        "items": [
+          {
+            "text": "Тестовое значение"
+          }
+        ]
+      },
+      {
+        "label": "Регионы (коды)",
+        "items": [
+          {
+            "text": "Тестовое значение"
+          }
+        ]
+      },
+      {
+        "label": "Законы о закупках",
+        "items": [
+          {
+            "text": "44-ФЗ"
+          },
+          {
+            "text": "223-ФЗ"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "laws",
+        "value": "fz44",
+        "label": "44-ФЗ"
+      },
+      {
+        "field": "laws",
+        "value": "fz223",
+        "label": "223-ФЗ"
+      }
+    ]
+  },
+  {
+    "action": "tender.outcome_record",
+    "arguments": {
+      "estimate_id": 1,
+      "status": "won",
+      "actual_reduction_percent": 1
+    },
+    "card": [
+      {
+        "label": "Просчёт тендера",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Результат торгов",
+        "value": "Выигран"
+      },
+      {
+        "label": "Фактическое снижение, %",
+        "value": "1"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "status",
+        "value": "draft",
+        "label": "Черновик"
+      },
+      {
+        "field": "status",
+        "value": "pending",
+        "label": "На торгах"
+      },
+      {
+        "field": "status",
+        "value": "not_participated",
+        "label": "Не участвовали"
+      },
+      {
+        "field": "status",
+        "value": "lost",
+        "label": "Проигран"
+      },
+      {
+        "field": "status",
+        "value": "won",
+        "label": "Выигран"
+      },
+      {
+        "field": "status",
+        "value": "published",
+        "label": "Итог опубликован"
+      }
+    ]
+  },
+  {
+    "action": "tender.hide",
+    "arguments": {
+      "tender_id": 1,
+      "reason": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Причина скрытия",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.restore",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.start_evaluation",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.forecast_toggle",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.send_to_calculation",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.bid_save",
+    "arguments": {
+      "estimate_id": 1,
+      "bid_number": "Тестовое значение",
+      "bid_price": 1
+    },
+    "card": [
+      {
+        "label": "Просчёт тендера",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Номер нашей заявки",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Сумма нашей заявки",
+        "value": "1"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.evaluation_settings",
+    "arguments": {
+      "risk_warning_days": 1,
+      "risk_critical_days": 1,
+      "roi_good_percent": 1,
+      "roi_thin_percent": 1,
+      "vat_rate": 1,
+      "default_reduction_percent": 1,
+      "stats_target_count": 1,
+      "stats_min_samples": 1,
+      "reduction_hint_min": 1,
+      "reduction_hint_max": 1,
+      "incoming_ttl_days": 1,
+      "level_samples_required": "low",
+      "level_samples_impossible": "low",
+      "level_national_confirmation": "low",
+      "level_national_blocked": "low",
+      "level_delivery_requests": "low",
+      "level_delivery_open_ended": "low"
+    },
+    "card": [
+      {
+        "label": "Риск: короткий срок, дней",
+        "value": "1"
+      },
+      {
+        "label": "Риск: критический срок, дней",
+        "value": "1"
+      },
+      {
+        "label": "Хорошая рентабельность, %",
+        "value": "1"
+      },
+      {
+        "label": "Минимальная рентабельность, %",
+        "value": "1"
+      },
+      {
+        "label": "НДС, %",
+        "value": "1"
+      },
+      {
+        "label": "Снижение по умолчанию, %",
+        "value": "1"
+      },
+      {
+        "label": "Прогноз снижения: похожих закупок",
+        "value": "1"
+      },
+      {
+        "label": "Прогноз снижения: минимум для показа",
+        "value": "1"
+      },
+      {
+        "label": "Прогноз снижения: подсказка не меньше, %",
+        "value": "1"
+      },
+      {
+        "label": "Прогноз снижения: подсказка не больше, %",
+        "value": "1"
+      },
+      {
+        "label": "Уборка «Входящих»: дней после окончания подачи",
+        "value": "1"
+      },
+      {
+        "label": "Риск: требуются образцы",
+        "value": "низкий"
+      },
+      {
+        "label": "Риск: невозможно предоставить образцы",
+        "value": "низкий"
+      },
+      {
+        "label": "Риск: подтверждение происхождения",
+        "value": "низкий"
+      },
+      {
+        "label": "Риск: ограничения происхождения",
+        "value": "низкий"
+      },
+      {
+        "label": "Риск: поставка по заявкам",
+        "value": "низкий"
+      },
+      {
+        "label": "Риск: неограниченные условия поставки",
+        "value": "низкий"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "level_samples_required",
+        "value": "low",
+        "label": "низкий"
+      },
+      {
+        "field": "level_samples_required",
+        "value": "medium",
+        "label": "средний"
+      },
+      {
+        "field": "level_samples_required",
+        "value": "high",
+        "label": "высокий"
+      },
+      {
+        "field": "level_samples_impossible",
+        "value": "low",
+        "label": "низкий"
+      },
+      {
+        "field": "level_samples_impossible",
+        "value": "medium",
+        "label": "средний"
+      },
+      {
+        "field": "level_samples_impossible",
+        "value": "high",
+        "label": "высокий"
+      },
+      {
+        "field": "level_national_confirmation",
+        "value": "low",
+        "label": "низкий"
+      },
+      {
+        "field": "level_national_confirmation",
+        "value": "medium",
+        "label": "средний"
+      },
+      {
+        "field": "level_national_confirmation",
+        "value": "high",
+        "label": "высокий"
+      },
+      {
+        "field": "level_national_blocked",
+        "value": "low",
+        "label": "низкий"
+      },
+      {
+        "field": "level_national_blocked",
+        "value": "medium",
+        "label": "средний"
+      },
+      {
+        "field": "level_national_blocked",
+        "value": "high",
+        "label": "высокий"
+      },
+      {
+        "field": "level_delivery_requests",
+        "value": "low",
+        "label": "низкий"
+      },
+      {
+        "field": "level_delivery_requests",
+        "value": "medium",
+        "label": "средний"
+      },
+      {
+        "field": "level_delivery_requests",
+        "value": "high",
+        "label": "высокий"
+      },
+      {
+        "field": "level_delivery_open_ended",
+        "value": "low",
+        "label": "низкий"
+      },
+      {
+        "field": "level_delivery_open_ended",
+        "value": "medium",
+        "label": "средний"
+      },
+      {
+        "field": "level_delivery_open_ended",
+        "value": "high",
+        "label": "высокий"
+      }
+    ]
+  },
+  {
+    "action": "tender.owner_question_answer",
+    "arguments": {
+      "tender_id": 1,
+      "interaction_id": 1,
+      "answer": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Запрос уточнения",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Ответ",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [],
+    "variants": []
+  },
+  {
+    "action": "tender.document_proposals",
+    "arguments": {
+      "tender_id": 1,
+      "parent_id": 1,
+      "decision": "accept"
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Исходная позиция",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 1"
+          }
+        ]
+      },
+      {
+        "label": "Решение по составу",
+        "value": "Принять"
+      }
+    ],
+    "issues": [],
+    "variants": [
+      {
+        "field": "decision",
+        "value": "accept",
+        "label": "Принять"
+      },
+      {
+        "field": "decision",
+        "value": "reject",
+        "label": "Отклонить"
+      }
+    ]
+  }
+]

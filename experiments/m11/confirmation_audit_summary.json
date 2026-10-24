@@ -1,0 +1,27 @@
+{
+  "scope": "M11.2; all currently published requires_confirmation actions",
+  "actions_checked": 52,
+  "additional_choice_and_model_variants": 65,
+  "actions_with_initial_automated_findings": 49,
+  "actions_with_remaining_top_level_findings": 0,
+  "payloads_preserved": true,
+  "gateway_parameter_contracts_unchanged": 52,
+  "distinct_tests_passed": 165,
+  "django_system_check": "PASS",
+  "git_diff_check": "PASS",
+  "renderer_extension_approved_by_user": true,
+  "changes": [
+    "explicit label precedes model field and reference names",
+    "app-owned label/reference/ui.model metadata",
+    "declaration-owned choice labels",
+    "generic reference model selection from sibling arguments",
+    "lookup-only PK conversion preserves original argument types"
+  ],
+  "limitations": [
+    "Free-form object/array contents retain their original structure and keys; audit assertions cover declared field captions, choice values and object references, not arbitrary document content.",
+    "Does not execute the 52 actions or certify kanban transitions.",
+    "No new TEST or PROD deployment; live smoke test pending owner review."
+  ],
+  "gateway_calls": 0,
+  "cost_rub": 0
+}

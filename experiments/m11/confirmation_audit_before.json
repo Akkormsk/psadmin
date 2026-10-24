@@ -1,0 +1,2254 @@
+[
+  {
+    "action": "calculator.estimate_save",
+    "arguments": {
+      "estimate_id": 1,
+      "name": "Тестовое значение",
+      "comment": "Тестовое значение",
+      "calculator_type": "sheet",
+      "product_quantity": 1,
+      "work_hours": 1,
+      "lines": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ]
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Name",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Comment",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Calculator type",
+        "value": "sheet"
+      },
+      {
+        "label": "Product quantity",
+        "value": "1"
+      },
+      {
+        "label": "Work hours",
+        "value": "1"
+      },
+      {
+        "label": "Lines",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "name",
+        "kind": "technical_label"
+      },
+      {
+        "field": "comment",
+        "kind": "technical_label"
+      },
+      {
+        "field": "calculator_type",
+        "kind": "technical_label"
+      },
+      {
+        "field": "calculator_type",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "product_quantity",
+        "kind": "technical_label"
+      },
+      {
+        "field": "work_hours",
+        "kind": "technical_label"
+      },
+      {
+        "field": "lines",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "calculator.estimate_duplicate",
+    "arguments": {
+      "estimate_id": 1
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "calculator.estimate_delete",
+    "arguments": {
+      "estimate_id": 1
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "calculator.estimate_bulk",
+    "arguments": {
+      "action": "group",
+      "estimate_ids": [
+        1
+      ],
+      "name": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Action",
+        "value": "group"
+      },
+      {
+        "label": "Estimate ids",
+        "items": [
+          {
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "label": "Name",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "action",
+        "kind": "technical_label"
+      },
+      {
+        "field": "action",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "estimate_ids",
+        "kind": "technical_label"
+      },
+      {
+        "field": "name",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "cash.transaction_create",
+    "arguments": {
+      "operation_date": "Тестовое значение",
+      "account": "cash",
+      "direction": "income",
+      "amount": 1,
+      "reason": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Дата операции",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Счёт",
+        "value": "Наличные"
+      },
+      {
+        "label": "Тип операции",
+        "value": "Приход"
+      },
+      {
+        "label": "Сумма",
+        "value": "1"
+      },
+      {
+        "label": "Основание / № заказа",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": []
+  },
+  {
+    "action": "cash.transaction_update",
+    "arguments": {
+      "transaction_id": 1,
+      "operation_date": "Тестовое значение",
+      "account": "cash",
+      "direction": "income",
+      "amount": 1,
+      "reason": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Transaction id",
+        "value": "1"
+      },
+      {
+        "label": "Дата операции",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Счёт",
+        "value": "Наличные"
+      },
+      {
+        "label": "Тип операции",
+        "value": "Приход"
+      },
+      {
+        "label": "Сумма",
+        "value": "1"
+      },
+      {
+        "label": "Основание / № заказа",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "transaction_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "transaction_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "cash.transaction_delete",
+    "arguments": {
+      "transaction_id": 1
+    },
+    "card": [
+      {
+        "label": "Transaction id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "transaction_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "transaction_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "cash.reconciliation_save",
+    "arguments": {
+      "effective_date": "2026-10-24",
+      "cash_balance": 1,
+      "card_balance": 1,
+      "note": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Дата сверки",
+        "value": "24.10.2026"
+      },
+      {
+        "label": "Наличные на утро",
+        "value": "1"
+      },
+      {
+        "label": "Карта на утро",
+        "value": "1"
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": []
+  },
+  {
+    "action": "cash.bank_payment_visibility_toggle",
+    "arguments": {
+      "bank_payment_id": 1
+    },
+    "card": [
+      {
+        "label": "Bank payment id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "bank_payment_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "bank_payment_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "finance.order_record_create",
+    "arguments": {
+      "record_type": "order",
+      "order_number": "Тестовое значение",
+      "gross_profit": 1,
+      "accounting_period": "2026-10",
+      "manager": 1
+    },
+    "card": [
+      {
+        "label": "Record type",
+        "value": "order"
+      },
+      {
+        "label": "Order number",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Gross profit",
+        "value": "1"
+      },
+      {
+        "label": "Accounting period",
+        "value": "2026-10"
+      },
+      {
+        "label": "Manager",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "record_type",
+        "kind": "technical_label"
+      },
+      {
+        "field": "record_type",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "order_number",
+        "kind": "technical_label"
+      },
+      {
+        "field": "gross_profit",
+        "kind": "technical_label"
+      },
+      {
+        "field": "accounting_period",
+        "kind": "technical_label"
+      },
+      {
+        "field": "manager",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "finance.order_record_update",
+    "arguments": {
+      "order_record_id": 1,
+      "record_type": "order",
+      "order_number": "Тестовое значение",
+      "gross_profit": 1,
+      "accounting_period": "2026-10",
+      "manager": 1
+    },
+    "card": [
+      {
+        "label": "Order record id",
+        "value": "1"
+      },
+      {
+        "label": "Record type",
+        "value": "order"
+      },
+      {
+        "label": "Order number",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Gross profit",
+        "value": "1"
+      },
+      {
+        "label": "Accounting period",
+        "value": "2026-10"
+      },
+      {
+        "label": "Manager",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "order_record_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "order_record_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "record_type",
+        "kind": "technical_label"
+      },
+      {
+        "field": "record_type",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "order_number",
+        "kind": "technical_label"
+      },
+      {
+        "field": "gross_profit",
+        "kind": "technical_label"
+      },
+      {
+        "field": "accounting_period",
+        "kind": "technical_label"
+      },
+      {
+        "field": "manager",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "finance.order_record_delete",
+    "arguments": {
+      "order_record_id": 1
+    },
+    "card": [
+      {
+        "label": "Order record id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "order_record_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "order_record_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "finance.operating_expenses_save",
+    "arguments": {
+      "updates": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "new": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      }
+    },
+    "card": [
+      {
+        "label": "Updates",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "New",
+        "value": "name: Тестовая позиция; quantity: 1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "updates",
+        "kind": "technical_label"
+      },
+      {
+        "field": "new",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "finance.operating_expense_delete",
+    "arguments": {
+      "expense_id": 1
+    },
+    "card": [
+      {
+        "label": "Expense id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "expense_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "expense_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "finance.manager_settings_save",
+    "arguments": {
+      "employee_order": [
+        1
+      ],
+      "managers": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ]
+    },
+    "card": [
+      {
+        "label": "Employee order",
+        "items": [
+          {
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "label": "Managers",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      }
+    ],
+    "issues": [
+      {
+        "field": "employee_order",
+        "kind": "technical_label"
+      },
+      {
+        "field": "managers",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "finance.period_lock",
+    "arguments": {
+      "period": "2026-10",
+      "closed": true
+    },
+    "card": [
+      {
+        "label": "Period",
+        "value": "2026-10"
+      },
+      {
+        "label": "Closed",
+        "value": "Да"
+      }
+    ],
+    "issues": [
+      {
+        "field": "period",
+        "kind": "technical_label"
+      },
+      {
+        "field": "closed",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "finance.payroll_save",
+    "arguments": {
+      "period": "2026-10",
+      "updates": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ]
+    },
+    "card": [
+      {
+        "label": "Period",
+        "value": "2026-10"
+      },
+      {
+        "label": "Updates",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      }
+    ],
+    "issues": [
+      {
+        "field": "period",
+        "kind": "technical_label"
+      },
+      {
+        "field": "updates",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "provider.knowledge_confirm",
+    "arguments": {
+      "version_id": 1,
+      "note": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Version id",
+        "value": "1"
+      },
+      {
+        "label": "Note",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "version_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "version_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "note",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "provider.knowledge_remove",
+    "arguments": {
+      "counterparty_id": 1,
+      "knowledge_version_id": 1
+    },
+    "card": [
+      {
+        "label": "Counterparty id",
+        "value": "1"
+      },
+      {
+        "label": "Knowledge version id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "counterparty_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "counterparty_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "knowledge_version_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "knowledge_version_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "provider.create",
+    "arguments": {
+      "name": "Тестовое значение",
+      "stage_ids": [
+        15
+      ],
+      "source_text": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Название",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Процессы маршрутов",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 15"
+          }
+        ]
+      },
+      {
+        "label": "Source text",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "source_text",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.feedback_decide",
+    "arguments": {
+      "batch_id": "Тестовое значение",
+      "accepted_ids": [
+        1
+      ]
+    },
+    "card": [
+      {
+        "label": "Batch id",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Accepted ids",
+        "items": [
+          {
+            "text": "1"
+          }
+        ]
+      }
+    ],
+    "issues": [
+      {
+        "field": "batch_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "accepted_ids",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "provider.sewing_price_confirm",
+    "arguments": {
+      "version_id": 1,
+      "currency": "Тестовое значение",
+      "formula_confirmed": true
+    },
+    "card": [
+      {
+        "label": "Version id",
+        "value": "1"
+      },
+      {
+        "label": "Currency",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Formula confirmed",
+        "value": "Да"
+      }
+    ],
+    "issues": [
+      {
+        "field": "version_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "version_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "currency",
+        "kind": "technical_label"
+      },
+      {
+        "field": "formula_confirmed",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.lesson_deactivate",
+    "arguments": {
+      "lesson_id": 1
+    },
+    "card": [
+      {
+        "label": "Lesson id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "lesson_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "lesson_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "estimate.duplicate",
+    "arguments": {
+      "estimate_id": 1,
+      "pipeline": true
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Pipeline",
+        "value": "Да"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "pipeline",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "estimate.delete",
+    "arguments": {
+      "estimate_id": 1,
+      "pipeline": true
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Pipeline",
+        "value": "Да"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "pipeline",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "estimate.tender_status",
+    "arguments": {
+      "estimate_id": 1,
+      "status": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Status",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "status",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "estimate.order_status",
+    "arguments": {
+      "estimate_id": 1,
+      "status": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Status",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "status",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.route_knowledge_deactivate",
+    "arguments": {
+      "lesson_id": 1,
+      "example_id": 1
+    },
+    "card": [
+      {
+        "label": "Lesson id",
+        "value": "1"
+      },
+      {
+        "label": "Example id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "lesson_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "lesson_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "example_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "example_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "provider.production_create",
+    "arguments": {
+      "name": "Тестовое значение",
+      "notes": "Тестовое значение",
+      "stage_ids": [
+        15
+      ],
+      "source_id": 1
+    },
+    "card": [
+      {
+        "label": "Название",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Комментарий",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Процессы маршрутов",
+        "items": [
+          {
+            "text": "Тест",
+            "hint": "ID 15"
+          }
+        ]
+      },
+      {
+        "label": "Source id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "source_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "source_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "production.feedback_draft",
+    "arguments": {
+      "text": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Text",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "text",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.requirement_skip_restore",
+    "arguments": {
+      "label": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Label",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "label",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.stage_proposal_confirm",
+    "arguments": {
+      "session_id": 1,
+      "proposal_id": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Session id",
+        "value": "1"
+      },
+      {
+        "label": "Proposal id",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "session_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "session_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "proposal_id",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.route_reopen",
+    "arguments": {
+      "session_id": 1
+    },
+    "card": [
+      {
+        "label": "Session id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "session_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "session_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "production.catalog_product_select",
+    "arguments": {
+      "session_id": 1,
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "product_id": "Тестовое значение",
+      "step_id": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Session id",
+        "value": "1"
+      },
+      {
+        "label": "Line",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Product id",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Step id",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "session_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "session_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "line",
+        "kind": "technical_label"
+      },
+      {
+        "field": "product_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "step_id",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.route_confirm",
+    "arguments": {
+      "session_id": 1
+    },
+    "card": [
+      {
+        "label": "Session id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "session_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "session_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "provider.production_draft",
+    "arguments": {
+      "text": "Тестовое значение",
+      "url": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Text",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Url",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "text",
+        "kind": "technical_label"
+      },
+      {
+        "field": "url",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.calculation_sources_add",
+    "arguments": {
+      "session_id": 1,
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "sources": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "source_text": "Тестовое значение",
+      "source_url": "Тестовое значение",
+      "feedback": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Session id",
+        "value": "1"
+      },
+      {
+        "label": "Line",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Sources",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Source text",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Source url",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Feedback",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "session_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "session_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "line",
+        "kind": "technical_label"
+      },
+      {
+        "field": "sources",
+        "kind": "technical_label"
+      },
+      {
+        "field": "source_text",
+        "kind": "technical_label"
+      },
+      {
+        "field": "source_url",
+        "kind": "technical_label"
+      },
+      {
+        "field": "feedback",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.route_build",
+    "arguments": {
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "start_catalog": true
+    },
+    "card": [
+      {
+        "label": "Line",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Start catalog",
+        "value": "Да"
+      }
+    ],
+    "issues": [
+      {
+        "field": "line",
+        "kind": "technical_label"
+      },
+      {
+        "field": "start_catalog",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.route_revise",
+    "arguments": {
+      "session_id": 1,
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "feedback": "Тестовое значение",
+      "question_answers": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "accepted_requirement_proposals": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "instructions": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "clear_ranking": true,
+      "refresh": true,
+      "scope": "Тестовое значение",
+      "step_id": "Тестовое значение",
+      "learn_for_similar": true
+    },
+    "card": [
+      {
+        "label": "Session id",
+        "value": "1"
+      },
+      {
+        "label": "Line",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Feedback",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Question answers",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Accepted requirement proposals",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Instructions",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Clear ranking",
+        "value": "Да"
+      },
+      {
+        "label": "Refresh",
+        "value": "Да"
+      },
+      {
+        "label": "Scope",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Step id",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Learn for similar",
+        "value": "Да"
+      }
+    ],
+    "issues": [
+      {
+        "field": "session_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "session_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "line",
+        "kind": "technical_label"
+      },
+      {
+        "field": "feedback",
+        "kind": "technical_label"
+      },
+      {
+        "field": "question_answers",
+        "kind": "technical_label"
+      },
+      {
+        "field": "accepted_requirement_proposals",
+        "kind": "technical_label"
+      },
+      {
+        "field": "instructions",
+        "kind": "technical_label"
+      },
+      {
+        "field": "clear_ranking",
+        "kind": "technical_label"
+      },
+      {
+        "field": "refresh",
+        "kind": "technical_label"
+      },
+      {
+        "field": "scope",
+        "kind": "technical_label"
+      },
+      {
+        "field": "step_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "learn_for_similar",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "production.training_example_save",
+    "arguments": {
+      "production_type": "Тестовое значение",
+      "line": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "features": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "routes": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "note": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Production type",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Line",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Features",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Routes",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Note",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "production_type",
+        "kind": "technical_label"
+      },
+      {
+        "field": "line",
+        "kind": "technical_label"
+      },
+      {
+        "field": "features",
+        "kind": "technical_label"
+      },
+      {
+        "field": "routes",
+        "kind": "technical_label"
+      },
+      {
+        "field": "note",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "estimate.save",
+    "arguments": {
+      "estimate_id": 1,
+      "pipeline": true,
+      "tender_number": "Тестовое значение",
+      "name": "Тестовое значение",
+      "lines": [
+        {
+          "name": "Тестовая позиция",
+          "quantity": 1
+        }
+      ],
+      "reduction_percent": 1,
+      "russia_delivery": 1,
+      "result_notes": "Тестовое значение",
+      "document_analysis": {
+        "name": "Тестовая позиция",
+        "quantity": 1
+      },
+      "owner_id": 1
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Pipeline",
+        "value": "Да"
+      },
+      {
+        "label": "Tender number",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Name",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Lines",
+        "items": [
+          {
+            "text": "name: Тестовая позиция; quantity: 1"
+          }
+        ]
+      },
+      {
+        "label": "Reduction percent",
+        "value": "1"
+      },
+      {
+        "label": "Russia delivery",
+        "value": "1"
+      },
+      {
+        "label": "Result notes",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Document analysis",
+        "value": "name: Тестовая позиция; quantity: 1"
+      },
+      {
+        "label": "Owner id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "pipeline",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_number",
+        "kind": "technical_label"
+      },
+      {
+        "field": "name",
+        "kind": "technical_label"
+      },
+      {
+        "field": "lines",
+        "kind": "technical_label"
+      },
+      {
+        "field": "reduction_percent",
+        "kind": "technical_label"
+      },
+      {
+        "field": "russia_delivery",
+        "kind": "technical_label"
+      },
+      {
+        "field": "result_notes",
+        "kind": "technical_label"
+      },
+      {
+        "field": "document_analysis",
+        "kind": "technical_label"
+      },
+      {
+        "field": "owner_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "owner_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "tender.discovery_settings",
+    "arguments": {
+      "include_words": "Тестовое значение",
+      "exclude_words": "Тестовое значение",
+      "profile_triage_enabled": true,
+      "min_price": 1,
+      "window_days": 1,
+      "okpd2_codes": [
+        "Тестовое значение"
+      ],
+      "regions": [
+        "Тестовое значение"
+      ],
+      "laws": [
+        "Тестовое значение"
+      ]
+    },
+    "card": [
+      {
+        "label": "Include words",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Exclude words",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Profile triage enabled",
+        "value": "Да"
+      },
+      {
+        "label": "Min price",
+        "value": "1"
+      },
+      {
+        "label": "Window days",
+        "value": "1"
+      },
+      {
+        "label": "Okpd2 codes",
+        "items": [
+          {
+            "text": "Тестовое значение"
+          }
+        ]
+      },
+      {
+        "label": "Regions",
+        "items": [
+          {
+            "text": "Тестовое значение"
+          }
+        ]
+      },
+      {
+        "label": "Laws",
+        "items": [
+          {
+            "text": "Тестовое значение"
+          }
+        ]
+      }
+    ],
+    "issues": [
+      {
+        "field": "include_words",
+        "kind": "technical_label"
+      },
+      {
+        "field": "exclude_words",
+        "kind": "technical_label"
+      },
+      {
+        "field": "profile_triage_enabled",
+        "kind": "technical_label"
+      },
+      {
+        "field": "min_price",
+        "kind": "technical_label"
+      },
+      {
+        "field": "window_days",
+        "kind": "technical_label"
+      },
+      {
+        "field": "okpd2_codes",
+        "kind": "technical_label"
+      },
+      {
+        "field": "regions",
+        "kind": "technical_label"
+      },
+      {
+        "field": "laws",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "tender.outcome_record",
+    "arguments": {
+      "estimate_id": 1,
+      "status": "won",
+      "actual_reduction_percent": 1
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Status",
+        "value": "won"
+      },
+      {
+        "label": "Actual reduction percent",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "status",
+        "kind": "technical_label"
+      },
+      {
+        "field": "status",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "actual_reduction_percent",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "tender.hide",
+    "arguments": {
+      "tender_id": 1,
+      "reason": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Tender id",
+        "value": "1"
+      },
+      {
+        "label": "Reason",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "tender_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "reason",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "tender.restore",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Tender id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "tender_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "tender.start_evaluation",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Tender id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "tender_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "tender.forecast_toggle",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Tender id",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "tender_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_id",
+        "kind": "bare_object_id"
+      }
+    ]
+  },
+  {
+    "action": "tender.send_to_calculation",
+    "arguments": {
+      "tender_id": 1
+    },
+    "card": [
+      {
+        "label": "Тендер",
+        "items": [
+          {
+            "text": "Тест — Тест",
+            "hint": "ID 1"
+          }
+        ]
+      }
+    ],
+    "issues": []
+  },
+  {
+    "action": "tender.bid_save",
+    "arguments": {
+      "estimate_id": 1,
+      "bid_number": "Тестовое значение",
+      "bid_price": 1
+    },
+    "card": [
+      {
+        "label": "Estimate id",
+        "value": "1"
+      },
+      {
+        "label": "Bid number",
+        "value": "Тестовое значение"
+      },
+      {
+        "label": "Bid price",
+        "value": "1"
+      }
+    ],
+    "issues": [
+      {
+        "field": "estimate_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "estimate_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "bid_number",
+        "kind": "technical_label"
+      },
+      {
+        "field": "bid_price",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "tender.evaluation_settings",
+    "arguments": {
+      "risk_warning_days": 1,
+      "risk_critical_days": 1,
+      "roi_good_percent": 1,
+      "roi_thin_percent": 1,
+      "vat_rate": 1,
+      "default_reduction_percent": 1,
+      "stats_target_count": 1,
+      "stats_min_samples": 1,
+      "reduction_hint_min": 1,
+      "reduction_hint_max": 1,
+      "incoming_ttl_days": 1,
+      "level_samples_required": "low",
+      "level_samples_impossible": "low",
+      "level_national_confirmation": "low",
+      "level_national_blocked": "low",
+      "level_delivery_requests": "low",
+      "level_delivery_open_ended": "low"
+    },
+    "card": [
+      {
+        "label": "Risk warning days",
+        "value": "1"
+      },
+      {
+        "label": "Risk critical days",
+        "value": "1"
+      },
+      {
+        "label": "Roi good percent",
+        "value": "1"
+      },
+      {
+        "label": "Roi thin percent",
+        "value": "1"
+      },
+      {
+        "label": "Vat rate",
+        "value": "1"
+      },
+      {
+        "label": "Default reduction percent",
+        "value": "1"
+      },
+      {
+        "label": "Stats target count",
+        "value": "1"
+      },
+      {
+        "label": "Stats min samples",
+        "value": "1"
+      },
+      {
+        "label": "Reduction hint min",
+        "value": "1"
+      },
+      {
+        "label": "Reduction hint max",
+        "value": "1"
+      },
+      {
+        "label": "Incoming ttl days",
+        "value": "1"
+      },
+      {
+        "label": "Level samples required",
+        "value": "low"
+      },
+      {
+        "label": "Level samples impossible",
+        "value": "low"
+      },
+      {
+        "label": "Level national confirmation",
+        "value": "low"
+      },
+      {
+        "label": "Level national blocked",
+        "value": "low"
+      },
+      {
+        "label": "Level delivery requests",
+        "value": "low"
+      },
+      {
+        "label": "Level delivery open ended",
+        "value": "low"
+      }
+    ],
+    "issues": [
+      {
+        "field": "risk_warning_days",
+        "kind": "technical_label"
+      },
+      {
+        "field": "risk_critical_days",
+        "kind": "technical_label"
+      },
+      {
+        "field": "roi_good_percent",
+        "kind": "technical_label"
+      },
+      {
+        "field": "roi_thin_percent",
+        "kind": "technical_label"
+      },
+      {
+        "field": "vat_rate",
+        "kind": "technical_label"
+      },
+      {
+        "field": "default_reduction_percent",
+        "kind": "technical_label"
+      },
+      {
+        "field": "stats_target_count",
+        "kind": "technical_label"
+      },
+      {
+        "field": "stats_min_samples",
+        "kind": "technical_label"
+      },
+      {
+        "field": "reduction_hint_min",
+        "kind": "technical_label"
+      },
+      {
+        "field": "reduction_hint_max",
+        "kind": "technical_label"
+      },
+      {
+        "field": "incoming_ttl_days",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_samples_required",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_samples_required",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "level_samples_impossible",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_samples_impossible",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "level_national_confirmation",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_national_confirmation",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "level_national_blocked",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_national_blocked",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "level_delivery_requests",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_delivery_requests",
+        "kind": "raw_enum"
+      },
+      {
+        "field": "level_delivery_open_ended",
+        "kind": "technical_label"
+      },
+      {
+        "field": "level_delivery_open_ended",
+        "kind": "raw_enum"
+      }
+    ]
+  },
+  {
+    "action": "tender.owner_question_answer",
+    "arguments": {
+      "tender_id": 1,
+      "interaction_id": 1,
+      "answer": "Тестовое значение"
+    },
+    "card": [
+      {
+        "label": "Tender id",
+        "value": "1"
+      },
+      {
+        "label": "Interaction id",
+        "value": "1"
+      },
+      {
+        "label": "Answer",
+        "value": "Тестовое значение"
+      }
+    ],
+    "issues": [
+      {
+        "field": "tender_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "interaction_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "interaction_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "answer",
+        "kind": "technical_label"
+      }
+    ]
+  },
+  {
+    "action": "tender.document_proposals",
+    "arguments": {
+      "tender_id": 1,
+      "parent_id": 1,
+      "decision": "accept"
+    },
+    "card": [
+      {
+        "label": "Tender id",
+        "value": "1"
+      },
+      {
+        "label": "Parent id",
+        "value": "1"
+      },
+      {
+        "label": "Decision",
+        "value": "accept"
+      }
+    ],
+    "issues": [
+      {
+        "field": "tender_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "tender_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "parent_id",
+        "kind": "technical_label"
+      },
+      {
+        "field": "parent_id",
+        "kind": "bare_object_id"
+      },
+      {
+        "field": "decision",
+        "kind": "technical_label"
+      },
+      {
+        "field": "decision",
+        "kind": "raw_enum"
+      }
+    ]
+  }
+]

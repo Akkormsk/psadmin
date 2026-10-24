@@ -8,7 +8,7 @@ from django.utils.module_loading import import_string
 from typing import Any, Callable
 
 from django.apps import apps
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 
 
 from .assistant_read import input_schema as read_input_schema
@@ -221,25 +221,49 @@ def _preview_field(tool, name):
     if not model_label:
         return None
     try:
-        return apps.get_model(model_label)._meta.get_field(name)
+        field = apps.get_model(model_label)._meta.get_field(name)
+        return field if getattr(field, "concrete", False) else None
     except (LookupError, ValueError, FieldDoesNotExist):
         return None
 
 
-def _preview_label(name: str, declaration: Any, field=None) -> str:
+def _reference_model(reference, payload):
+    model_label = reference["model"]
+    if isinstance(model_label, list):
+        model_label = next((item["model"] for item in model_label
+                            if all(payload.get(key) == value for key, value in item["when"].items())), None)
+        if model_label is None:
+            raise AssistantToolError("Сначала уточните тип выбранного объекта")
+    return apps.get_model(model_label)
+
+
+def _reference_values(model, declaration, value):
+    values = value if isinstance(value, list) else [value]
+    if declaration.get("type", "").rstrip("?") in {"integer", "integer[]"} and any(type(item) is not int for item in values):
+        raise AssistantToolError("Ссылка на запись должна содержать внутренний целочисленный ID")
+    try:
+        return [model._meta.pk.to_python(item) for item in values]
+    except (ValidationError, ValueError, TypeError) as exc:
+        raise AssistantToolError("Некорректная ссылка на запись") from exc
+
+
+def _preview_label(name: str, declaration: Any, field=None, payload=None) -> str:
+    if isinstance(declaration, dict) and declaration.get("label"):
+        return str(declaration["label"])
     if field is not None:
         return str(field.verbose_name)
     reference = declaration.get("reference") if isinstance(declaration, dict) else None
     if isinstance(reference, dict):
-        model = apps.get_model(reference["model"])
+        model = _reference_model(reference, payload or {})
         plural = str(declaration.get("type", "")).endswith("[]")
         return str(model._meta.verbose_name_plural if plural else model._meta.verbose_name)
-    if isinstance(declaration, dict) and declaration.get("label"):
-        return str(declaration["label"])
     return name.replace("_", " ").capitalize()
 
 
-def _preview_value(value: Any, field=None) -> str:
+def _preview_value(value: Any, field=None, choices=()) -> str:
+    for raw, label in choices:
+        if value == raw:
+            return str(label)
     if field is not None:
         for raw, label in field.flatchoices:
             if value == raw:
@@ -258,18 +282,15 @@ def _preview_value(value: Any, field=None) -> str:
     return str(value)
 
 
-def _reference_preview_items(declaration: Any, value: Any) -> list[dict[str, str]] | None:
+def _reference_preview_items(declaration: Any, value: Any, payload=None) -> list[dict[str, str]] | None:
     if not isinstance(declaration, dict) or not isinstance(declaration.get("reference"), dict):
         return None
     reference = declaration["reference"]
-    model_label = reference.get("model")
-    if not isinstance(model_label, str):
-        return None
     try:
-        model = apps.get_model(model_label)
+        model = _reference_model(reference, payload or {})
     except (LookupError, ValueError):
         return None
-    values = value if isinstance(value, list) else [value]
+    values = _reference_values(model, declaration, value)
     objects = model._default_manager.in_bulk(values)
     label_field = reference.get("label", "name")
     items = []
@@ -279,18 +300,28 @@ def _reference_preview_items(declaration: Any, value: Any) -> list[dict[str, str
             items.append({"text": "Объект не найден", "hint": f"ID {identifier}"})
             continue
         label_fields = label_field if isinstance(label_field, list) else [label_field]
-        label = " — ".join(str(getattr(instance, field)) for field in label_fields
-                           if getattr(instance, field, None)) or str(instance)
+        parts = []
+        for name in label_fields:
+            value = getattr(instance, name, None)
+            if value is None or value == "":
+                continue
+            try:
+                field = model._meta.get_field(name)
+            except FieldDoesNotExist:
+                field = None
+            parts.append(_preview_value(value, field))
+        label = " — ".join(parts) or str(instance)
         items.append({"text": str(label), "hint": f"ID {identifier}"})
     return items
 
 
-def _preview_items(declaration: Any, value: Any) -> list[dict[str, str]] | None:
-    reference_items = _reference_preview_items(declaration, value)
+def _preview_items(declaration: Any, value: Any, payload=None, field=None) -> list[dict[str, str]] | None:
+    reference_items = _reference_preview_items(declaration, value, payload)
     if reference_items is not None:
         return reference_items
     if isinstance(value, list):
-        return [{"text": _preview_value(item)} for item in value]
+        choices = declaration.get("choices", ()) if isinstance(declaration, dict) else ()
+        return [{"text": _preview_value(item, field, choices)} for item in value]
     return None
 
 
@@ -300,12 +331,13 @@ def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> lis
     for name, declaration in tool["input_schema"].items():
         if name not in payload or payload[name] in (None, "", [], {}):
             continue
-        items = _preview_items(declaration, payload[name])
         field = _preview_field(tool, name)
-        label = _preview_label(name, declaration, field)
+        items = _preview_items(declaration, payload[name], payload, field)
+        label = _preview_label(name, declaration, field, payload)
+        choices = declaration.get("choices", ()) if isinstance(declaration, dict) else ()
         arguments.append(
             {"label": label, "items": items}
-            if items is not None else {"label": label, "value": _preview_value(payload[name], field)}
+            if items is not None else {"label": label, "value": _preview_value(payload[name], field, choices)}
         )
     return arguments
 
@@ -417,13 +449,11 @@ def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
             raise AssistantToolError(f"Поле {name} должно быть объектом")
         reference = declared.get("reference") if isinstance(declared, dict) else None
         if isinstance(reference, dict):
-            values = value if isinstance(value, list) else [value]
-            if any(type(item) is not int for item in values):
-                raise AssistantToolError("Ссылка на запись должна содержать внутренний целочисленный ID")
             try:
-                model = apps.get_model(reference["model"])
+                model = _reference_model(reference, payload)
             except (KeyError, LookupError, ValueError) as exc:
                 raise AssistantToolError("Некорректное описание ссылки на запись") from exc
+            values = _reference_values(model, declared, value)
             if model._default_manager.filter(pk__in=values).count() != len(set(values)):
                 raise AssistantToolError(
                     "Выбранная запись не найдена. Сначала найдите её через READ по номеру или названию "
@@ -454,7 +484,9 @@ def _openai_type(declared):
             if kind is None:
                 kind = "object"
                 value = {"type": kind, "properties": value, "required": True}
-            if kind == "object":
+            if kind == "object" and "properties" not in value and "additional_properties" not in value:
+                schema, _ignored, compatible = _openai_type(kind)
+            elif kind == "object":
                 properties, required, compatible = {}, [], True
                 for key, nested in value.get("properties", {}).items():
                     child, child_optional, child_compatible = _openai_type(nested)
