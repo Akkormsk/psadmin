@@ -238,10 +238,6 @@ def available_capabilities(user, area_id: str) -> list[dict[str, Any]]:
 def _preview_label(name: str, declaration: Any) -> str:
     if isinstance(declaration, dict) and declaration.get("label"):
         return str(declaration["label"])
-    if isinstance(declaration, dict) and isinstance(declaration.get("description"), str):
-        description = declaration["description"].strip()
-        if description:
-            return re.split(r":|\s+в формате\s+", description, maxsplit=1)[0]
     return _PREVIEW_LABELS.get(name, name.replace("_", " ").capitalize())
 
 

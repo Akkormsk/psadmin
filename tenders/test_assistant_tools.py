@@ -316,6 +316,50 @@ class AssistantToolRegistryTests(TestCase):
             "type": "array", "items": {"type": "integer"},
         })
 
+    def test_model_instructions_do_not_change_confirmation_for_different_actions(self):
+        from copy import deepcopy
+        from tender_selection.models import Tender
+        tender = Tender.objects.create(purchase_number="UI-001", title="Проверка карточки")
+        payloads = {
+            "cash.transaction_create": {"operation_date": "2026-10-24", "account": "cash",
+                "direction": "expense", "amount": 175, "reason": "Бумага"},
+            "provider.create": {"name": "Мастерская", "stage_ids": [self.stage.pk]},
+            "tender.send_to_calculation": {"tender_id": tender.pk},
+        }
+        tools = {tool["id"]: tool for tool in available_tools(self.admin)}
+        for identifier, payload in payloads.items():
+            with self.subTest(action=identifier):
+                tool = tools[identifier]
+                expected = confirmation_arguments(tool, payload)
+                changed = deepcopy(tool)
+                for name, declaration in changed["input_schema"].items():
+                    if not isinstance(declaration, dict):
+                        declaration = {"type": declaration}
+                        changed["input_schema"][name] = declaration
+                    declaration["description"] = "Техническая инструкция для модели: используйте READ"
+                self.assertEqual(confirmation_arguments(changed, payload), expected)
+
+    def test_new_action_confirmation_needs_no_central_field_or_action_mapping(self):
+        from uuid import uuid4
+        from . import assistant_tools
+        identifier = "extension." + uuid4().hex
+        field = "parameter_" + uuid4().hex
+        description = "Техническая инструкция, которая не должна попадать в карточку"
+        register_tool(AssistantTool(identifier, "Новое действие", "Описание действия", {
+            field: {"type": "string", "required": True, "label": "Понятное название параметра",
+                    "description": description},
+        }, False, True, True, lambda user, payload: payload))
+        try:
+            tool = next(t for t in available_tools(self.admin) if t["id"] == identifier)
+            payload = {field: "Проверенное значение"}
+            self.assertEqual(confirmation_arguments(tool, payload), [{
+                "label": "Понятное название параметра", "value": "Проверенное значение",
+            }])
+            self.assertNotIn(field, assistant_tools._PREVIEW_LABELS)
+            self.assertEqual(payload, {field: "Проверенное значение"})
+        finally:
+            assistant_tools._TOOLS.pop(identifier)
+
     def test_unplanned_turn_exposes_plan_or_explicit_chat_not_questions(self):
         definitions, names = openai_functions(self.admin, planned=False)
 

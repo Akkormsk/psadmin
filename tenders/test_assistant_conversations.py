@@ -885,8 +885,8 @@ class AssistantFunctionCallingTests(TestCase):
             {"label": "Дата операции", "value": "01.01.2026"},
             {"label": "Счёт", "value": "Наличные"},
             {"label": "Вид движения", "value": "Поступление"},
-            {"label": "Сумма операции", "value": "1"},
-            {"label": "Основание операции или номер заказа из сообщения пользователя", "value": "Тест"},
+            {"label": "Сумма", "value": "1"},
+            {"label": "Основание", "value": "Тест"},
         ])
         self.assertEqual(gateway.call_count, 4)
         response = continue_after_confirmation(self.conversation, self.user, "cash.transaction_create", {"id": 1})
