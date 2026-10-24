@@ -236,6 +236,8 @@ def available_capabilities(user, area_id: str) -> list[dict[str, Any]]:
 
 
 def _preview_label(name: str, declaration: Any) -> str:
+    if isinstance(declaration, dict) and declaration.get("label"):
+        return str(declaration["label"])
     if isinstance(declaration, dict) and isinstance(declaration.get("description"), str):
         description = declaration["description"].strip()
         if description:
@@ -280,7 +282,9 @@ def _reference_preview_items(declaration: Any, value: Any) -> list[dict[str, str
         if instance is None:
             items.append({"text": "Объект не найден", "hint": f"ID {identifier}"})
             continue
-        label = getattr(instance, label_field, None) or str(instance)
+        label_fields = label_field if isinstance(label_field, list) else [label_field]
+        label = " — ".join(str(getattr(instance, field)) for field in label_fields
+                           if getattr(instance, field, None)) or str(instance)
         items.append({"text": str(label), "hint": f"ID {identifier}"})
     return items
 

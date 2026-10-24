@@ -7,7 +7,7 @@ from django.urls import reverse
 from cash.models import CashTransaction
 from tender_selection.models import Tender
 from .assistant_conversations import create_conversation, respond
-from .assistant_tools import AssistantToolError, validate_tool_call
+from .assistant_tools import AssistantToolError, available_tools, confirmation_arguments, openai_functions, validate_tool_call
 from .models import TenderEstimate
 from .test_assistant_conversations import function_call, planned_call
 
@@ -106,3 +106,21 @@ class AssistantConfirmationSafetyTests(TestCase):
         response = self.client.post(self.url(card), {"accept": "yes"})
         self.assertEqual(response.status_code, 400)
         self.assertFalse(TenderEstimate.objects.exists())
+
+    def test_confirmation_shows_human_label_purchase_number_and_title(self):
+        tool = next(t for t in available_tools(self.user) if t["id"] == "tender.send_to_calculation")
+        arguments = {"tender_id": self.tender.pk}
+        self.assertEqual(confirmation_arguments(tool, arguments), [{
+            "label": "Тендер", "items": [{
+                "text": f"{self.tender.purchase_number} — {self.tender.title}",
+                "hint": f"ID {self.tender.pk}",
+            }],
+        }])
+        self.assertEqual(arguments, {"tender_id": self.tender.pk})
+        definitions, _ = openai_functions(self.user, area_id="tender_selection",
+                                          capability_id="tender.send_to_calculation")
+        definition = next(d for d in definitions if d["function"]["name"] == "tender_send_to_calculation")
+        schema = definition["function"]["parameters"]["properties"]["tender_id"]
+        self.assertNotIn("label", schema)
+        self.assertNotIn("reference", schema)
+        self.assertIn("READ", schema["description"])
