@@ -1,0 +1,79 @@
+{
+  "scope": "M11.3 object reference resolution only",
+  "source_before": "d52e1b137fc64ae93fe45a44662a9454c08dba55",
+  "conversation_101_plan_request": {
+    "date_utc": "2026-10-24T08:38:27.560569+00:00",
+    "tools": [
+      "assistant_plan",
+      "assistant_chat"
+    ],
+    "action_reference_metadata_visible": false,
+    "matching_read_resource_visible": true,
+    "business_values_copied": false
+  },
+  "changes": [
+    "derive reference requirements and authorized direct READ candidates from current registry declarations at Plan",
+    "general object-resolution instructions; no automatic plan construction",
+    "reference-specific validation error restores capability map for model-driven replanning"
+  ],
+  "tests": {
+    "new_reference_resolution_tests": 7,
+    "total_distinct_targeted_tests_passed": 171,
+    "django_check": "PASS",
+    "git_diff_check": "PASS",
+    "mocked_components": [
+      "Gateway",
+      "preflight"
+    ],
+    "real_components": [
+      "Django database",
+      "universal READ",
+      "registry",
+      "reference validation",
+      "conversation persistence",
+      "confirmation preview"
+    ]
+  },
+  "coverage": [
+    "number search -> actual ID -> confirmation without action execution",
+    "counterparty name -> confirmation for another action, secondary version ID already verified in memory",
+    "verified context ID without redundant READ",
+    "new cash operation without READ",
+    "empty and ambiguous READ results",
+    "invalid reference -> model replan -> READ -> corrected confirmation",
+    "bounded retries",
+    "new randomly named action and reference parameter exposed without central mappings",
+    "unauthorized action hidden from planning map"
+  ],
+  "limitations": [
+    "Autonomous Haiku tool selection on deployed TEST is NOT VERIFIED until budget and publication approval.",
+    "Direct READ candidates only include already published authorized resources; no automatic new data exposure.",
+    "Counterparty knowledge versions are not currently a standalone published resource; adding one would require proper Django field verbose_names. This was not added; the integration case uses an already verified version ID.",
+    "Page context, ordinary chat memory, cancellation behavior and kanban rules were not changed."
+  ],
+  "context_size_utf8": {
+    "map_without_references": 32916,
+    "map_with_references": 39762,
+    "reference_parameters": 51
+  },
+  "gateway_calls": 0,
+  "cost_rub": 0,
+  "live_proposal": {
+    "test_scenarios": 5,
+    "estimated_cost_rub": [
+      3,
+      6
+    ],
+    "proposed_budget_rub": 10,
+    "approved": false,
+    "business_action_confirmation_clicks": 0,
+    "business_records_to_create_or_modify": 0,
+    "price_source": "https://api.timeweb.cloud/api/v3/cloud-ai/models",
+    "price_observed_date": "2026-10-24",
+    "model": "anthropic/claude-haiku-5-5",
+    "input_rub_per_million": 13.5,
+    "output_rub_per_million": 67.5,
+    "cache_discount_applied": false
+  },
+  "publication": "NOT PERFORMED"
+}

@@ -5,7 +5,7 @@ from uuid import uuid4
 from urllib.request import Request, urlopen
 from django.utils import timezone
 from .assistant_tools import (
-    AssistantToolError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_for_user, capability_map_text, confirmation_arguments,
+    AssistantToolError, AssistantReferenceError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_for_user, capability_map_text, confirmation_arguments,
     execute_tool, openai_functions, validate_tool_call,
 )
 from .assistant_read import ReadPlanError, reuse_result
@@ -29,6 +29,12 @@ _SYSTEM_RULES = (
     "Never invent facts, fields, IDs, values, or calculations. If several business interpretations or records are equally plausible, "
     "first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
     "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
+    "The capability map lists existing object references required by actions. If the intended object has no current verified ID in the authorized conversation context, "
+    "plan permitted READ steps to resolve it from the user's identifying details before the ACTION. Never invent a placeholder ID, including zero. "
+    "Reuse a verified ID only when its object, scope and permissions still match; the backend revalidates it. Creating a new record without an existing-object reference needs no preliminary READ. "
+    "Resolve only references needed for the requested operation; omitted optional references do not require lookup. "
+    "If READ returns multiple plausible objects, ask the user to choose in business terms; report absence only from an actual adequate READ result. "
+    "A rejected object reference is not a search result. Revise the same task's plan with a concrete reason, resolve the reference using READ and continue; do not ask the user for internal IDs. "
     "Every READ/ACTION task MUST start with assistant.plan, BEFORE even a clarification question; arguments may still be unknown. "
     "Keep the same task and plan when collecting or correcting amounts, dates and other arguments. "
     "Revise the plan only for a changed goal, capability or route, with a specific revision_reason. Preserve completed work. "
@@ -698,7 +704,7 @@ def _run(conversation, user, state):
             content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
         except (AssistantToolError, ReadPlanError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            if identifier == "assistant.plan":
+            if identifier == "assistant.plan" or isinstance(exc, AssistantReferenceError):
                 state["capability_map_pending"] = True
                 _refresh_system_prompt(user, state)
             content = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)

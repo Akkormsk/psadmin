@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from copy import deepcopy
 import re
+import json
 from importlib import import_module
 from django.utils.module_loading import import_string
 from typing import Any, Callable
@@ -20,6 +21,11 @@ class AssistantToolError(Exception):
 
 
 class AssistantToolConfirmationRequired(AssistantToolError):
+    pass
+
+
+class AssistantReferenceError(AssistantToolError):
+    """An object reference needs resolution, not a claim that search failed."""
     pass
 
 
@@ -233,18 +239,18 @@ def _reference_model(reference, payload):
         model_label = next((item["model"] for item in model_label
                             if all(payload.get(key) == value for key, value in item["when"].items())), None)
         if model_label is None:
-            raise AssistantToolError("Сначала уточните тип выбранного объекта")
+            raise AssistantReferenceError("Сначала уточните тип выбранного объекта")
     return apps.get_model(model_label)
 
 
 def _reference_values(model, declaration, value):
     values = value if isinstance(value, list) else [value]
     if declaration.get("type", "").rstrip("?") in {"integer", "integer[]"} and any(type(item) is not int for item in values):
-        raise AssistantToolError("Ссылка на запись должна содержать внутренний целочисленный ID")
+        raise AssistantReferenceError("Ссылка на запись должна содержать внутренний целочисленный ID")
     try:
         return [model._meta.pk.to_python(item) for item in values]
     except (ValidationError, ValueError, TypeError) as exc:
-        raise AssistantToolError("Некорректная ссылка на запись") from exc
+        raise AssistantReferenceError("Некорректная ссылка на запись") from exc
 
 
 def _preview_label(name: str, declaration: Any, field=None, payload=None) -> str:
@@ -342,6 +348,24 @@ def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> lis
     return arguments
 
 
+def _plan_references(user, identifier):
+    tool = _TOOLS.get(identifier)
+    if tool is None:
+        return []
+    resources = available_resources(user)
+    required = required_input_names(identifier)
+    references = []
+    for name, declaration in tool.input_schema.items():
+        reference = declaration.get("reference") if isinstance(declaration, dict) else None
+        if not isinstance(reference, dict):
+            continue
+        model = reference["model"]
+        models = {model} if isinstance(model, str) else {item["model"] for item in model}
+        references.append({"parameter": name, "model": model, "required": name in required,
+                           "read": ["read:" + r["id"] for r in resources if r["entity"] in models]})
+    return references
+
+
 def available_capability_map(user) -> list[dict[str, Any]]:
     """Compact discovery view of the existing registry, grouped by area."""
     read_suffix = " Поддерживает фильтры, сортировку, группировку и агрегаты count/sum/avg/min/max по разрешённым полям."
@@ -357,6 +381,7 @@ def available_capability_map(user) -> list[dict[str, Any]]:
                         for key in ("id", "kind", "name", "description", "requires_confirmation")
                     },
                     **({"description": capability["description"] + read_suffix} if capability["kind"] == "read" else {}),
+                    **({"references": references} if (references := _plan_references(user, capability["id"])) else {}),
                 }
                 for capability in available_capabilities(user, area["id"])
             ],
@@ -381,6 +406,8 @@ def capability_map_text(capability_map: list[dict[str, Any]]) -> str:
         capabilities = "\n".join(
             f"- {item['id']} | {item['kind']} | {item['name']} — {item['description']}"
             + (" | confirmation required" if item["requires_confirmation"] else "")
+            + (" | existing references: " + json.dumps(item["references"], ensure_ascii=False, separators=(",", ":"))
+               if item.get("references") else "")
             for item in area["capabilities"]
         )
         sections.append(
@@ -455,7 +482,7 @@ def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
                 raise AssistantToolError("Некорректное описание ссылки на запись") from exc
             values = _reference_values(model, declared, value)
             if model._default_manager.filter(pk__in=values).count() != len(set(values)):
-                raise AssistantToolError(
+                raise AssistantReferenceError(
                     "Выбранная запись не найдена. Сначала найдите её через READ по номеру или названию "
                     "и используйте внутренний ID найденной записи."
                 )
