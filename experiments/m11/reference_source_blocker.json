@@ -1,0 +1,63 @@
+{
+  "scope": "M11.3 follow-up; source association blocker",
+  "observed_conversation": 102,
+  "existing_contract": {
+    "action_reference": "model/type/required, no READ-step association",
+    "plan_step": [
+      "id",
+      "capability_id",
+      "objective",
+      "expected_result"
+    ],
+    "carried_execution": "preserves executions, does not bind action arguments to one of them"
+  },
+  "counterexample": {
+    "reads": [
+      {
+        "step": "first",
+        "entity": "example.Record",
+        "ids": [
+          17
+        ]
+      },
+      {
+        "step": "second",
+        "entity": "example.Record",
+        "ids": []
+      }
+    ],
+    "action_reference_model": "example.Record",
+    "action_argument": 17,
+    "legitimate_intent": "Compare the first and second records; modify the first even if second is missing",
+    "unsafe_intent": "Find the second record for modification; incorrectly fall back to the first",
+    "latest_read_policy": "rejects both, including legitimate case",
+    "union_of_known_ids_policy": "accepts both, including unsafe case",
+    "distinguishing_information": "which READ supplies the intended ACTION reference; currently only free-text intent identifies this"
+  },
+  "minimal_proposal": {
+    "location": "optional reference_steps on assistant.plan steps, not business ACTION arguments",
+    "example": {
+      "id": "change",
+      "capability_id": "<ACTION>",
+      "objective": "Prepare action for the intended object",
+      "expected_result": "Confirmation",
+      "reference_steps": {
+        "<reference parameter>": "second"
+      }
+    },
+    "validation": [
+      "Referenced source must belong to current task/plan or a valid carried execution",
+      "Reference model and returned ID must match the selected source",
+      "Empty source cannot authorize old IDs",
+      "Multiple matches require narrowing/choice, not arbitrary first record",
+      "Previously verified context can be reused only when unambiguous; otherwise ask or obtain fresh READ"
+    ],
+    "note": "Source binding proves consistency with the declared source; it does not prove semantic correctness of every model interpretation."
+  },
+  "status": "BLOCKED pending owner decision per explicit stop condition",
+  "application_code_changed": false,
+  "business_models_services_migrations_changed": false,
+  "deploy_performed": false,
+  "paid_gateway_calls": 0,
+  "diagnostic_assertions_passed": 2
+}
