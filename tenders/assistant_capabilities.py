@@ -185,7 +185,7 @@ register_tool(AssistantTool(
 register_tool(AssistantTool(
     "provider.create", "Создать контрагента и подготовить знания", "Использует существующую форму контрагента: создаёт карточку, привязывает этапы и готовит неподтверждённый черновик знаний для проверки.",
     {"name": "string", "stage_ids": {"type": "integer[]", "required": True, "reference": {"model": "tenders.ProcessDefinition", "label": "name"}}, "source_text": "string?"}, False, True, True,
-    create_counterparty, source="tenders.provider_knowledge.create_counterparty_with_knowledge",
+    create_counterparty, ui={"model": "tenders.Counterparty"}, source="tenders.provider_knowledge.create_counterparty_with_knowledge",
 ))
 
 register_tool(AssistantTool(
@@ -288,7 +288,7 @@ register_tool(AssistantTool(
     "Создаёт или обновляет контрагента и связывает его с выбранными этапами через штатный журнал предложений; использует тот же исполнитель, что и «База производства».",
     {"name": "string", "notes": "string?", "stage_ids": {"type": "integer[]", "required": True, "reference": {"model": "tenders.ProcessDefinition", "label": "name"}}, "source_id": "integer?"},
     False, True, True, confirm_production_counterparty,
-    source="tenders.production_actions.confirm_counterparty_with_stages",
+    ui={"model": "tenders.Counterparty"}, source="tenders.production_actions.confirm_counterparty_with_stages",
 ))
 
 def prepare_production_changes(user, payload):

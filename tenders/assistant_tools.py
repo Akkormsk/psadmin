@@ -8,6 +8,7 @@ from django.utils.module_loading import import_string
 from typing import Any, Callable
 
 from django.apps import apps
+from django.core.exceptions import FieldDoesNotExist
 
 
 from .assistant_read import input_schema as read_input_schema
@@ -53,26 +54,6 @@ _TOOLS: dict[str, AssistantTool] = {}
 _RESOURCES: dict[str, AssistantResource] = {}
 _DISCOVERED = False
 _MODEL_HIDDEN_TOOLS = {"assistant.capabilities", "assistant.catalog"}
-_PREVIEW_ENUMS = {
-    "cash": "Наличные", "card": "Карта", "income": "Поступление", "expense": "Расход",
-    "true": "Да", "false": "Нет",
-}
-_PREVIEW_LABELS = {
-    "name": "Название", "notes": "Примечание", "comment": "Комментарий", "amount": "Сумма",
-    "period": "Период", "status": "Статус", "reason": "Основание", "currency": "Валюта",
-    "url": "Ссылка", "text": "Текст", "feedback": "Комментарий", "answer": "Ответ",
-    "lines": "Позиции", "updates": "Изменения", "new": "Новая запись", "managers": "Менеджеры",
-    "sources": "Источники", "parameters": "Параметры", "action": "Действие",
-    "stage_ids": "Этапы производства", "stage_id": "Этап производства",
-    "estimate_id": "Расчёт", "estimate_ids": "Расчёты", "tender_id": "Тендер",
-    "counterparty_id": "Контрагент", "operation_date": "Дата операции",
-    "transaction_id": "Операция кассы", "bank_payment_id": "Банковский платёж",
-    "order_record_id": "Закрытый заказ", "accounting_period": "Учётный период",
-    "order_number": "Номер заказа", "gross_profit": "Валовая прибыль",
-    "product_quantity": "Тираж", "work_hours": "Часы работы", "effective_date": "Дата сверки",
-    "cash_balance": "Остаток наличных", "card_balance": "Остаток на карте",
-    "closed": "Период закрыт", "direction": "Вид движения", "account": "Счёт",
-}
 
 
 def _discover_app_actions():
@@ -235,18 +216,37 @@ def available_capabilities(user, area_id: str) -> list[dict[str, Any]]:
     return sorted([*resources, *actions], key=lambda item: (item["name"], item["id"]))
 
 
-def _preview_label(name: str, declaration: Any) -> str:
+def _preview_field(tool, name):
+    model_label = (tool.get("ui") or {}).get("model")
+    if not model_label:
+        return None
+    try:
+        return apps.get_model(model_label)._meta.get_field(name)
+    except (LookupError, ValueError, FieldDoesNotExist):
+        return None
+
+
+def _preview_label(name: str, declaration: Any, field=None) -> str:
+    if field is not None:
+        return str(field.verbose_name)
+    reference = declaration.get("reference") if isinstance(declaration, dict) else None
+    if isinstance(reference, dict):
+        model = apps.get_model(reference["model"])
+        plural = str(declaration.get("type", "")).endswith("[]")
+        return str(model._meta.verbose_name_plural if plural else model._meta.verbose_name)
     if isinstance(declaration, dict) and declaration.get("label"):
         return str(declaration["label"])
-    return _PREVIEW_LABELS.get(name, name.replace("_", " ").capitalize())
+    return name.replace("_", " ").capitalize()
 
 
-def _preview_value(value: Any) -> str:
+def _preview_value(value: Any, field=None) -> str:
+    if field is not None:
+        for raw, label in field.flatchoices:
+            if value == raw:
+                return str(label)
     if isinstance(value, bool):
-        return _PREVIEW_ENUMS[str(value).lower()]
+        return "Да" if value else "Нет"
     if isinstance(value, str):
-        if value in _PREVIEW_ENUMS:
-            return _PREVIEW_ENUMS[value]
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
             year, month, day = value.split("-")
             return f"{day}.{month}.{year}"
@@ -301,9 +301,11 @@ def confirmation_arguments(tool: dict[str, Any], payload: dict[str, Any]) -> lis
         if name not in payload or payload[name] in (None, "", [], {}):
             continue
         items = _preview_items(declaration, payload[name])
+        field = _preview_field(tool, name)
+        label = _preview_label(name, declaration, field)
         arguments.append(
-            {"label": _preview_label(name, declaration), "items": items}
-            if items is not None else {"label": _preview_label(name, declaration), "value": _preview_value(payload[name])}
+            {"label": label, "items": items}
+            if items is not None else {"label": label, "value": _preview_value(payload[name], field)}
         )
     return arguments
 

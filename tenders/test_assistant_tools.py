@@ -300,7 +300,7 @@ class AssistantToolRegistryTests(TestCase):
             "name": "Атекс", "stage_ids": [self.stage.pk], "source_text": None,
         }), [
             {"label": "Название", "value": "Атекс"},
-            {"label": "Этапы производства", "items": [{"text": self.stage.name, "hint": f"ID {self.stage.pk}"}]},
+            {"label": str(ProcessDefinition._meta.verbose_name_plural), "items": [{"text": self.stage.name, "hint": f"ID {self.stage.pk}"}]},
         ])
 
     def test_reference_preview_metadata_does_not_leak_into_function_schema(self):
@@ -355,10 +355,31 @@ class AssistantToolRegistryTests(TestCase):
             self.assertEqual(confirmation_arguments(tool, payload), [{
                 "label": "Понятное название параметра", "value": "Проверенное значение",
             }])
-            self.assertNotIn(field, assistant_tools._PREVIEW_LABELS)
+            self.assertFalse(hasattr(assistant_tools, "_PREVIEW_LABELS"))
             self.assertEqual(payload, {field: "Проверенное значение"})
         finally:
             assistant_tools._TOOLS.pop(identifier)
+
+    def test_confirmation_uses_existing_model_field_labels_and_choices(self):
+        from unittest.mock import patch
+        from django.test.utils import isolate_apps
+        from uuid import uuid4
+        field_name = "state_" + uuid4().hex
+        with isolate_apps("tenders"):
+            record = type("FutureRecord", (models.Model,), {
+                "__module__": "tenders.models",
+                field_name: models.CharField("Состояние проверки", max_length=20,
+                    choices=[("new-code", "Ожидает проверки")]),
+            })
+            tool = {"ui": {"model": "tenders.FutureRecord"},
+                    "input_schema": {field_name: {"type": "string",
+                        "description": "Техническая инструкция", "enum": ["new-code"]}}}
+            with patch("tenders.assistant_tools.apps.get_model", return_value=record):
+                self.assertEqual(confirmation_arguments(tool, {field_name: "new-code"}), [{
+                    "label": "Состояние проверки", "value": "Ожидает проверки",
+                }])
+        from . import assistant_tools
+        self.assertFalse(hasattr(assistant_tools, "_PREVIEW_ENUMS"))
 
     def test_unplanned_turn_exposes_plan_or_explicit_chat_not_questions(self):
         definitions, names = openai_functions(self.admin, planned=False)
