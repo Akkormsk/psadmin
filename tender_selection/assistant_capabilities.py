@@ -157,7 +157,9 @@ register_tool(AssistantTool(
 ))
 register_tool(AssistantTool(
     "tender.send_to_calculation", "Передать тендер в расчёт", "Создаёт или возвращает существующий расчёт тендера через штатный сервис воронки.",
-    {"tender_id": "integer"}, False, True, True,
+    {"tender_id": {"type": "integer", "required": True,
+                   "reference": {"model": "tender_selection.Tender"},
+                   "description": "Внутренний ID тендера из READ, не номер закупки. По номеру или названию сначала найдите тендер через READ."}}, False, True, True,
     lambda user, payload: _tender_action(create_tender_estimate, user, payload, "tender_id"),
     source="tender_selection.services.create_tender_estimate",
 ))

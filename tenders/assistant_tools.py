@@ -413,6 +413,20 @@ def validate_tool_call(identifier: str, user, payload: dict[str, Any]) -> None:
             raise AssistantToolError(f"Поле {name} должно быть списком")
         if kind in {"object"} and not isinstance(value, dict):
             raise AssistantToolError(f"Поле {name} должно быть объектом")
+        reference = declared.get("reference") if isinstance(declared, dict) else None
+        if isinstance(reference, dict):
+            values = value if isinstance(value, list) else [value]
+            if any(type(item) is not int for item in values):
+                raise AssistantToolError("Ссылка на запись должна содержать внутренний целочисленный ID")
+            try:
+                model = apps.get_model(reference["model"])
+            except (KeyError, LookupError, ValueError) as exc:
+                raise AssistantToolError("Некорректное описание ссылки на запись") from exc
+            if model._default_manager.filter(pk__in=values).count() != len(set(values)):
+                raise AssistantToolError(
+                    "Выбранная запись не найдена. Сначала найдите её через READ по номеру или названию "
+                    "и используйте внутренний ID найденной записи."
+                )
 
 
 def _nullable(schema):
