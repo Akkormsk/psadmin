@@ -94,7 +94,7 @@
           if (workspaceContext) return workspaceContext;
           const heading = document.querySelector("main h1, .page-title h1, h1");
           const label = heading && heading.textContent.trim() ? heading.textContent.trim().replace(/\s+/g, " ").slice(0, 120) : "Текущий экран";
-          const match = location.pathname.match(/(?:tender|order)\/(\d+)\//);
+          const match = location.pathname.match(/(?:tender-selection|tender|order)\/(\d+)\//);
           return {page: location.pathname + location.search, label: label, tender_id: match ? match[1] : ""};
         }
         function renderCurrentContext() {
