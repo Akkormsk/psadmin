@@ -406,6 +406,20 @@ def _merge_memory(conversation, state):
     return _bound_memory(memory)
 
 
+def _final_answer_text(text, state):
+    """Drop only the unmatched trailing service marker, preserving user markup."""
+    marker = "</answer>"
+    body = text.rstrip()
+    if not body.endswith(marker) or "<answer" in body.lower() or any(
+        marker in str(message.get("content", ""))
+        for message in state.get("messages", []) if message.get("role") in {"user", "tool"}
+    ):
+        return text
+    while body.endswith(marker):
+        body = body[:-len(marker)].rstrip()
+    return body
+
+
 def _finish_turn(conversation, state):
     conversation.context["agent_memory"] = _merge_memory(conversation, state)
     conversation.context.pop("agent_run", None)
@@ -736,6 +750,9 @@ def _run(conversation, user, state):
                 missing = _missing_plan_steps(state)
                 if missing or state.get("waiting_confirmation"):
                     raise AgentProtocolError("Нельзя завершить задачу: не подтверждены шаги " + ", ".join(missing or ["действие"]) + ". Если READ не дал нужного объекта, продолжите поиск или диалог через assistant.ask; при смене маршрута явно пересмотрите план. Не подставляйте другой объект. Закрытие без результата требует согласия пользователя и assistant.cancel.")
+                text = _final_answer_text(text, state)
+                if not text.strip():
+                    raise AgentProtocolError("Финальный ответ не может состоять только из служебного маркера")
                 _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
                 _debug(conversation, "agent.task_finished", output={"task_id": state["task_id"]})
                 _finish_turn(conversation, state)
@@ -883,7 +900,12 @@ def continue_after_confirmation(conversation, user, tool_id, result):
     state["active_arguments"] = waiting.get("arguments")
     _record_execution(state, tool_id, result)
     _activate_next_plan_step(user, state)
-    state["messages"].append({"role": "tool", "tool_call_id": waiting["tool_call_id"], "content": json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)})
+    state["messages"].append({"role": "tool", "tool_call_id": waiting["tool_call_id"], "content": json.dumps({
+        "ok": True, "user_confirmed": True, "execution_status": "completed", "result": result,
+        "message": "The user authorized this action using the confirmation button. The executor has already completed "
+                   "this call. Report its actual result without repeating the action. An earlier preparation-only "
+                   "request applied before this confirmation; do not describe this execution as unauthorized or unperformed.",
+    }, ensure_ascii=False, default=str)})
     _save(conversation, state); return _run(conversation, user, state)
 
 

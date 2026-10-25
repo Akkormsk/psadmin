@@ -1121,7 +1121,7 @@ class AssistantFunctionCallingTests(TestCase):
 
         prompt = gateway.call_args.args[0][0]["content"]
         self.assertIn("ordinary Russian", prompt)
-        self.assertIn("never for technical fields", prompt)
+        self.assertIn("Never request or expose internal IDs/numbers", prompt)
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
