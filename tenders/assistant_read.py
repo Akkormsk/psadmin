@@ -266,6 +266,10 @@ def _base_fields(model):
         if kind == "relation" and not _safe_related_model(field.related_model):
             continue
         fields[field.name] = {"lookup": field.attname if kind == "relation" else field.name, "field": field, "kind": kind}
+    for name, field in getattr(model, "assistant_read_computed_fields", {}).items():
+        if name not in fields and not _sensitive(name) and isinstance(field, SCALAR_TYPES) and callable(getattr(model, name, None)):
+            fields[name] = {"lookup": name, "field": field, "kind": "computed",
+                            "related": getattr(model, "assistant_read_computed_related", ())}
     return fields
 
 
@@ -419,7 +423,10 @@ def _display_value(value, field):
             return str(label)
     if isinstance(field, models.DateTimeField) and isinstance(value, str):
         try:
-            return datetime.fromisoformat(value).strftime("%d.%m.%Y %H:%M")
+            parsed = datetime.fromisoformat(value)
+            if timezone.is_aware(parsed):
+                parsed = timezone.localtime(parsed)
+            return parsed.isoformat(sep=" ")
         except ValueError:
             pass
     if isinstance(field, models.DateField) and isinstance(value, str):
@@ -720,7 +727,7 @@ def validate_plan(user, plan):
         selected_names = ["id", *selected_names]
         selected = [_path(model, fields, "id"), *selected]
     search = plan.get("search")
-    searchable = [name for name, item in fields.items() if isinstance(item["field"], (models.CharField, models.TextField))]
+    searchable = [name for name, item in fields.items() if item["kind"] == "scalar" and isinstance(item["field"], (models.CharField, models.TextField))]
     if search not in (None, ""):
         if not isinstance(search, str) or not searchable:
             raise ReadPlanError("Некорректный поиск")
@@ -831,13 +838,36 @@ def execute(user, plan):
         }, model, fields, {item["name"]: item["label"] for item in groups})
     summary = {key: _value(value) for key, value in qs.aggregate(**annotations).items()} if annotations else {}
     limit = validated["limit"]
-    value_lookups = [item["lookup"] for item in selected]
+    value_lookups = [item["lookup"] for item in selected if item["kind"] != "computed"]
     order_lookups = [
         ("-" if descending else "") + descriptor["lookup"]
         for descriptor, descending in validated["order_descriptors"]
     ]
     rows = list(qs.order_by(*order_lookups).values(*value_lookups)[:limit])
-    records = [{name: _output_value(row.get(item["lookup"]), item) for name, item in zip(selected_names, selected)} for row in rows]
+    computed = [item for item in selected if item["kind"] == "computed"]
+    instances = {}
+    pk_lookup = fields["id"]["lookup"]
+    if computed and rows:
+        related = set()
+        for item in computed:
+            prefix = item["lookup"].split("__")[:-1]
+            if prefix:
+                related.add("__".join(prefix))
+            related.update("__".join([*prefix, name]) for name in item["related"])
+        object_qs = qs.select_related(*related) if related else qs
+        instances = object_qs.in_bulk([row[pk_lookup] for row in rows])
+    records = []
+    for row in rows:
+        record = {}
+        for name, item in zip(selected_names, selected):
+            value = row.get(item["lookup"])
+            if item["kind"] == "computed":
+                method = instances.get(row[pk_lookup])
+                for part in name.split("."):
+                    method = getattr(method, part, None) if method is not None else None
+                value = method() if callable(method) else None
+            record[name] = _output_value(value, item)
+        records.append(record)
     sources = [{"entity": entity, "id": row["id"]} for row in records if row.get("id") is not None]
     return _with_display({"entity": entity, "query": _query_summary(validated), "total_count": total, "returned_count": len(records), "aggregates": summary, "records": records, "sources": sources, "source_scope": "all matching records" if total == len(sources) else "returned records only; aggregates cover all matching records"}, model, fields)
 
@@ -859,6 +889,9 @@ def _cache_filter(value, operation, expected):
 def reuse_result(user, plan, cached):
     """Reuse a complete, same-conversation READ result without touching ORM."""
     validated = validate_plan(user, plan)
+    # Computed presentation may depend on fields absent from the cached rows.
+    if any(item["kind"] == "computed" for item in validated["selected"]):
+        return None
     if not isinstance(cached, dict) or cached.get("entity") != validated["entity"]:
         return None
     if cached.get("total_count") != cached.get("returned_count") or cached.get("grouped"):

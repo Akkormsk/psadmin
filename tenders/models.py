@@ -544,6 +544,11 @@ class TenderEstimate(models.Model):
             return self.tender.get_outcome_status_display()
         return "Готово" if not self.summary_snapshot.get("is_incomplete", True) else "Черновик"
 
+    assistant_read_computed_fields = {
+        "display_status": models.CharField("Статус расчёта", help_text="Статус расчёта как на сайте; не статус связанного тендера."),
+    }
+    assistant_read_computed_related = ("tender",)
+
     def is_active_task(self):
         """Расчёт ждёт действия менеджера, а не исхода: черновик и ещё не заполнен."""
         from tender_selection.models import Tender

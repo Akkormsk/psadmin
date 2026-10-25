@@ -31,7 +31,7 @@ register_resource(AssistantResource(
 ))
 register_resource(AssistantResource(
     "tenders.tender_estimates", "Расчёты тендеров",
-    "Сохранённые расчёты цены и экономики по тендерам.",
+    "Сохранённые расчёты цены и экономики по тендерам. Статус расчёта как на сайте — display_status; tender.status относится к тендеру.",
     "tenders.TenderEstimate", ("tenders",),
 ))
 register_resource(AssistantResource(
