@@ -2,6 +2,7 @@ import json
 from urllib.parse import urlencode
 
 from django.core import signing
+from django.core.paginator import Paginator
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -25,8 +26,10 @@ def console(request):
 @login_required
 def conversations(request):
     from .models import OwnerInteraction
-    items = OwnerInteraction.objects.filter(context__kind="assistant_conversation", context__owner_id=request.user.pk, status="open").order_by("-created_at")[:30]
-    return JsonResponse({"conversations": [serialize_conversation(item) for item in items]})
+    items = OwnerInteraction.objects.filter(context__kind="assistant_conversation", context__owner_id=request.user.pk, status="open").order_by("-created_at", "-pk")
+    page = Paginator(items, 30).get_page(request.GET.get("page"))
+    return JsonResponse({"conversations": [serialize_conversation(item) for item in page],
+                         "next_page": page.next_page_number() if page.has_next() else None})
 
 
 @login_required

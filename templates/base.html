@@ -52,8 +52,8 @@
         const close = document.getElementById("assistant-close"), fresh = document.getElementById("assistant-new");
         const history = document.getElementById("assistant-history"), historyToggle = document.getElementById("assistant-history-toggle"), historyExport = document.getElementById("assistant-export"), historyClear = document.getElementById("assistant-history-clear"), messages = document.getElementById("assistant-messages"), topic = document.getElementById("assistant-topic"), context = document.getElementById("assistant-context"), contextSummary = document.getElementById("assistant-context-summary"), contextMeta = document.getElementById("assistant-context-meta");
         const composer = document.getElementById("assistant-composer"), input = document.getElementById("assistant-input"), attachmentInput = document.getElementById("assistant-file"), attachmentButton = document.getElementById("assistant-attach");
-        const key = "psadmin-assistant-conversation";
         let active = null;
+        let creating = null;
         let workspaceContext = null;
         window.addEventListener("ps-workspace-context", function (event) {
           workspaceContext = event.detail || null;
@@ -108,27 +108,30 @@
           renderCurrentContext();
         }
         function load(id) {
-          return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); showContext(data.conversation); render(data.messages); });
+          return fetch("/tenders/assistant/conversations/" + id + "/").then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; showContext(data.conversation); render(data.messages); });
         }
-        function refreshHistory() {
-          return fetch("/tenders/assistant/conversations/").then(function (response) { return response.json(); }).then(function (data) {
-            history.innerHTML = data.conversations.length ? data.conversations.map(function (item) { return "<button type=\"button\" data-conversation-id=\"" + item.id + "\" title=\"" + escape(item.title) + "\">" + escape(item.title) + "</button>"; }).join("") : "<p>Сохранённых бесед пока нет.</p>";
-            const wanted = Number(localStorage.getItem(key));
-            const selected = data.conversations.find(function (item) { return item.id === wanted; }) || data.conversations[0];
-            if (selected) { return load(selected.id); }
-            return create();
+        function refreshHistory(page = 1) {
+          return fetch("/tenders/assistant/conversations/?page=" + page).then(function (response) { return response.json(); }).then(function (data) {
+            const previous = history.querySelector("[data-history-page]");
+            if (previous) previous.remove();
+            const choices = data.conversations.map(function (item) { return "<button type=\"button\" data-conversation-id=\"" + item.id + "\" title=\"" + escape(item.title) + "\">" + escape(item.title) + "</button>"; }).join("");
+            if (page === 1) history.innerHTML = choices || "<p>Сохранённых бесед пока нет.</p>";
+            else history.insertAdjacentHTML("beforeend", choices);
+            if (data.next_page) history.insertAdjacentHTML("beforeend", "<button type=\"button\" data-history-page=\"" + data.next_page + "\">Ещё беседы</button>");
           });
         }
         function create() {
+          if (creating) return creating;
           const data = pageContext(); data.title = data.label;
-          return fetch("/tenders/assistant/conversations/new/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams(data)}).then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; localStorage.setItem(key, String(active)); return refreshHistory(); });
+          creating = fetch("/tenders/assistant/conversations/new/", {method:"POST", headers:{"X-CSRFToken":csrf(), "Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams(data)}).then(function (response) { return response.json(); }).then(function (data) { active = data.conversation.id; showContext(data.conversation); render([]); return refreshHistory(); }).finally(function () { creating = null; });
+          return creating;
         }
         function hideHistory() { history.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); }
-        function open() { drawer.classList.add("is-open"); document.body.classList.add("assistant-open"); drawer.setAttribute("aria-hidden", "false"); launcher.setAttribute("aria-expanded", "true"); showContext({business_context:{}}); refreshHistory().then(function () { input.focus(); }); }
+        function open() { drawer.classList.add("is-open"); document.body.classList.add("assistant-open"); drawer.setAttribute("aria-hidden", "false"); launcher.setAttribute("aria-expanded", "true"); renderCurrentContext(); (active ? Promise.resolve() : create()).then(function () { input.focus(); }); }
         function shut(focusLauncher) { drawer.classList.remove("is-open"); document.body.classList.remove("assistant-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); hideHistory(); if (focusLauncher) launcher.focus(); }
         launcher.addEventListener("click", function () { if (drawer.classList.contains("is-open")) shut(false); else open(); }); close.addEventListener("click", function () { shut(true); }); fresh.addEventListener("click", function () { create(); hideHistory(); });
         historyToggle.addEventListener("click", function () { const hidden = history.hidden; history.hidden = !hidden; historyToggle.setAttribute("aria-expanded", String(hidden)); });
-        historyClear.addEventListener("click", function () { if (!window.confirm("Удалить все беседы, включая архивные, их сообщения, журналы и вложения? Ссылки на беседы перестанут работать. Прайсы, расчёты и сохранённые знания не будут затронуты.")) return; historyClear.disabled = true; fetch("/tenders/assistant/conversations/clear/", {method:"POST", headers:{"X-CSRFToken":csrf()}}).then(function (response) { if (!response.ok) throw new Error(); localStorage.removeItem(key); active = null; return create(); }).finally(function () { historyClear.disabled = false; }); });
+        historyClear.addEventListener("click", function () { if (!window.confirm("Удалить все беседы, включая архивные, их сообщения, журналы и вложения? Ссылки на беседы перестанут работать. Прайсы, расчёты и сохранённые знания не будут затронуты.")) return; historyClear.disabled = true; fetch("/tenders/assistant/conversations/clear/", {method:"POST", headers:{"X-CSRFToken":csrf()}}).then(function (response) { if (!response.ok) throw new Error(); active = null; return create(); }).finally(function () { historyClear.disabled = false; }); });
         historyExport.addEventListener("click", function () {
           if (!active) return;
           const conversationId = active;
@@ -146,7 +149,7 @@
             .catch(function (error) { window.alert(error.message); })
             .finally(function () { historyExport.disabled = false; });
         });
-        history.addEventListener("click", function (event) { const choice = event.target.closest("[data-conversation-id]"); if (!choice) return; active = Number(choice.dataset.conversationId); localStorage.setItem(key, String(active)); load(active); hideHistory(); });
+        history.addEventListener("click", function (event) { const more = event.target.closest("[data-history-page]"); if (more) { more.disabled = true; refreshHistory(Number(more.dataset.historyPage)).catch(function () { more.disabled = false; }); return; } const choice = event.target.closest("[data-conversation-id]"); if (!choice) return; active = Number(choice.dataset.conversationId); load(active); hideHistory(); });
         document.addEventListener("keydown", function (event) { if (event.key === "Escape" && drawer.classList.contains("is-open")) { event.preventDefault(); event.stopPropagation(); shut(true); } }, true);
         document.addEventListener("click", function (event) { if (!drawer.classList.contains("is-open") || event.target.closest("#assistant-drawer, #assistant-launcher, .tender-requirements-drawer, .tender-requirements-overlay, .custom-select")) return; event.preventDefault(); event.stopImmediatePropagation(); shut(false); }, true);
         input.addEventListener("keydown", function (event) {
