@@ -176,20 +176,19 @@ def conversation_action_confirm(request, conversation_id, event_id):
         conversation.save(update_fields=["context"])
         cancelled = request.POST.get("accept") != "yes"
         if cancelled:
-            result = None
+            continuation = continue_after_cancellation(conversation, request.user, data["tool_id"])
+            if continuation:
+                add_assistant_message(conversation, continuation["text"], continuation["kind"], continuation["data"])
+            return JsonResponse({"messages": serialize_messages(conversation)})
         else:
             try:
                 result = execute_tool(data["tool_id"], request.user, data.get("arguments", {}), confirmed=True)
             except (KeyError, AssistantToolError) as exc:
                 return JsonResponse({"detail": str(exc)}, status=400)
     try:
-        continuation = (
-            continue_after_cancellation(conversation, request.user, data["tool_id"])
-            if cancelled else continue_after_confirmation(conversation, request.user, data["tool_id"], result)
-        )
+        continuation = continue_after_confirmation(conversation, request.user, data["tool_id"], result)
     except TenderAIError as exc:
-        status = "Действие отменено" if cancelled else "Действие выполнено"
-        add_assistant_message(conversation, f"{status}, но продолжение задачи остановлено: {exc}")
+        add_assistant_message(conversation, f"Действие выполнено, но продолжение задачи остановлено: {exc}")
         continuation = None
     if continuation:
         add_assistant_message(conversation, continuation["text"], continuation["kind"], continuation["data"])

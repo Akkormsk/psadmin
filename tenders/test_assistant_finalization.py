@@ -51,12 +51,19 @@ class AssistantFinalizationTests(TestCase):
         self.assertEqual(CashTransaction.objects.count(), 1)
 
     def test_cancellation_is_not_reported_as_authorization_or_execution(self):
-        url = self.prepare(function_call("assistant_cancel", {"reason": "Пользователь нажал отмену", "answer": "Отменено", "new_task": False}))
-        self.assertEqual(self.client.post(url, {"accept": "no"}).status_code, 200)
-        receipt = self.receipt()
-        self.assertIs(receipt["cancelled"], True)
-        self.assertNotIn("user_confirmed", receipt)
-        self.assertNotEqual(receipt.get("execution_status"), "completed")
+        url = self.prepare(function_call("assistant_finish", {"answer": "Must not run"}))
+        calls = self.gateway.call_count
+        response = self.client.post(url, {"accept": "no"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.gateway.call_count, calls)
+        final = response.json()["messages"][-1]
+        execution = next(s for s in final["data"]["steps"] if s["tool_id"] == "cash.transaction_create")
+        self.assertEqual(execution["status"], "cancelled")
+        self.assertIsNone(execution["result"])
+        self.assertNotIn("user_confirmed", final["data"])
+        self.conversation.refresh_from_db()
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(self.conversation.context["agent_memory"]["active_task"]["status"], "cancelled")
         self.assertFalse(CashTransaction.objects.exists())
 
     def test_only_unmatched_trailing_service_marker_is_removed(self):

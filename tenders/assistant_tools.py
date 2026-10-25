@@ -639,7 +639,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
     for identifier, description, schema in (
         ("assistant.ask", "Continues dialogue within the active task: responds to the user, asks for clarification when needed, and waits for the next message. Does not complete the task.",
          {"question": {"type": "string", "minLength": 1}}),
-        ("assistant.cancel", "Closes the active task. Use new_task=true BEFORE answering or planning an independent request, including a self-contained question. Use false for whole-task cancellation. Argument/preview corrections continue the same task; card cancellation alone does not close it.",
+        ("assistant.cancel", "Closes the active task. Use new_task=true BEFORE answering or planning an independent request, including a self-contained question. Use false for whole-task cancellation. Argument/preview corrections before cancellation continue the same task; the Cancel button closes it in the backend.",
          {"reason": {"type": "string", "minLength": 1}, "answer": {"type": "string", "minLength": 1}, "new_task": "boolean"}),
     ):
         name, definition = _function_definition(identifier, description, schema)

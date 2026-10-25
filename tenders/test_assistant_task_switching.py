@@ -6,7 +6,6 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from cash.models import CashTransaction
-from .assistant_agent import continue_after_cancellation
 from .assistant_conversations import create_conversation, respond
 from .test_assistant_conversations import function_call, planned_call
 
@@ -23,21 +22,7 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
 
     def open_task(self, mode):
         conversation = create_conversation(self.user)
-        if mode == 'cancelled_card':
-            self.gateway.side_effect = [
-                planned_call('cash.transaction_create'),
-                function_call('cash_transaction_create', {'operation_date': '2026-10-25',
-                    'account': 'cash', 'direction': 'expense', 'amount': 260, 'reason': 'Покупка коробок'}),
-                function_call('assistant_ask', {'question': 'Что изменить?'}),
-            ]
-            card = respond(conversation, self.user, 'Подготовь расход наличными 260 рублей за покупку коробок на 25.10.2026')[-1]
-            self.assertEqual(card['kind'], 'confirmation_required')
-            original_id = conversation.context['agent_run']['task_id']
-            continue_after_cancellation(conversation, self.user, 'cash.transaction_create')
-            state = conversation.context['agent_run']
-            self.assertEqual(state['task_id'], original_id)
-            self.assertEqual(state['steps'][-1]['status'], 'cancelled')
-        elif mode == 'empty_search':
+        if mode == 'empty_search':
             self.gateway.side_effect = [
                 planned_call('read:cash.transactions', steps=[
                     {'id': 'search', 'capability_id': 'read:cash.transactions', 'objective': 'Найти операцию', 'expected_result': 'Найденные операции'},
@@ -57,7 +42,7 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
         return conversation
 
     def test_explicit_switch_starts_new_task_in_each_open_state(self):
-        for mode in ('cancelled_card', 'clarification', 'empty_search'):
+        for mode in ('clarification', 'empty_search'):
             with self.subTest(mode=mode):
                 conversation = self.open_task(mode)
                 old_id = conversation.context['agent_run']['task_id']
@@ -84,7 +69,7 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
 
     def test_missing_switch_can_be_accepted_as_replan_in_each_open_state(self):
         # A passing assertion reproduces the gap; it does not endorse this route.
-        for mode in ('cancelled_card', 'clarification', 'empty_search'):
+        for mode in ('clarification', 'empty_search'):
             with self.subTest(mode=mode):
                 conversation = self.open_task(mode)
                 old_id = conversation.context['agent_run']['task_id']
@@ -111,26 +96,66 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
                 self.assertFalse(conversation.feedback_events.filter(scope='assistant_debug', payload__stage='agent.task_cancelled').exists())
                 self.assertFalse(CashTransaction.objects.exists())
 
-    def test_cancelled_card_amount_correction_keeps_plan_and_needs_fresh_confirmation(self):
-        conversation = self.open_task('cancelled_card')
-        state = conversation.context['agent_run']
-        original_id, version = state['task_id'], state['plan']['version']
-        before_calls = self.gateway.call_count
-        self.gateway.side_effect = [function_call('cash_transaction_create', {
+    def cancel_task(self):
+        from django.urls import reverse
+        self.client.force_login(self.user)
+        conversation = create_conversation(self.user)
+        self.gateway.side_effect = [planned_call('cash.transaction_create'), function_call('cash_transaction_create', {
             'operation_date': '2026-10-25', 'account': 'cash', 'direction': 'expense',
-            'amount': 300, 'reason': 'Покупка коробок',
+            'amount': 260, 'reason': 'Покупка коробок',
         })]
-        card = respond(conversation, self.user, 'Замени сумму на 300 рублей и покажи исправленную карточку')[-1]
+        card = respond(conversation, self.user, 'Подготовь расход наличными 260 рублей за покупку коробок на 25.10.2026')[-1]
+        original_id = conversation.context['agent_run']['task_id']
+        before_calls = self.gateway.call_count
+        result = self.client.post(reverse('assistant_conversation_action_confirm', args=[conversation.pk, card['id']]), {'accept': 'no'})
+        self.assertEqual(result.status_code, 200)
+        conversation.refresh_from_db()
+        self.assertNotIn('agent_run', conversation.context)
+        self.assertEqual(self.gateway.call_count, before_calls)
+        self.assertEqual(conversation.context['agent_memory']['active_task']['status'], 'cancelled')
+        self.assertFalse(CashTransaction.objects.exists())
+        return conversation, original_id
+
+    def test_cancelled_task_amount_change_starts_new_plan_and_keeps_grounding(self):
+        conversation, original_id = self.cancel_task()
+        self.gateway.side_effect = [
+            planned_call('cash.transaction_create', goal='Подготовить расход на 600 рублей'),
+            function_call('cash_transaction_create', {'operation_date': '2026-10-25', 'account': 'cash',
+                'direction': 'expense', 'amount': 600, 'reason': 'Покупка коробок'}),
+            function_call('assistant_ask', {'question': 'Уточните основание новой операции.'}),
+        ]
+        result = respond(conversation, self.user, 'Измени сумму на 600 рублей')[-1]
         state = conversation.context['agent_run']
-        self.assertEqual((state['task_id'], state['plan']['version']), (original_id, version))
-        self.assertEqual(card['kind'], 'confirmation_required')
-        self.assertEqual(state['waiting_confirmation']['arguments']['amount'], 300)
-        self.assertEqual(self.gateway.call_count - before_calls, 1)
-        self.assertTrue(any(step.get('status') == 'cancelled' for step in state['steps']))
-        self.assertFalse(any(step['tool_id'] == 'cash.transaction_create' and step.get('status') == 'completed' for step in state['steps']))
+        self.assertNotEqual(state['task_id'], original_id)
+        self.assertEqual(state['plan']['version'], 1)
+        self.assertTrue(state['waiting_user'])
+        self.assertEqual(result['text'], 'Уточните основание новой операции.')
+        self.assertEqual([m['content'] for m in state['messages'] if m['role'] == 'user'], ['Измени сумму на 600 рублей'])
+        self.assertTrue(conversation.feedback_events.filter(scope='assistant_debug', payload__stage='function_call.tool', payload__output__ok=False).exists())
         self.assertFalse(CashTransaction.objects.exists())
 
-    def test_switch_preserves_completed_action_memory_without_repeating_it(self):
+    def test_image_after_button_cancel_has_no_old_execution_steps(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from .assistant_conversations import upload_attachment
+        from .test_assistant_attachments import document_bytes
+        conversation, _old_id = self.cancel_task()
+        image = upload_attachment(conversation, self.user, SimpleUploadedFile('image.png', document_bytes('png', '')))
+        snapshots = []
+        def gateway(messages, tools):
+            snapshots.append(json.loads(json.dumps(messages)))
+            return function_call('assistant_chat', {'answer': 'Ответ по изображению.'})
+        self.gateway.side_effect = gateway
+        result = respond(conversation, self.user, 'Что на картинке?', attachments=[image])[-1]
+        self.assertEqual(result['data']['steps'], [])
+        self.assertEqual(len(snapshots), 1)
+        self.assertFalse(any(m['role'] == 'tool' for m in snapshots[0]))
+        users = [m for m in snapshots[0] if m['role'] == 'user']
+        self.assertEqual(len(users), 1)
+        self.assertTrue(any(p['type'] == 'image_url' for p in users[0]['content']))
+        self.assertNotIn('agent_run', conversation.context)
+        self.assertFalse(CashTransaction.objects.exists())
+
+    def test_button_cancel_preserves_completed_action_without_repeating_it(self):
         from django.urls import reverse
         self.client.force_login(self.user)
         conversation = create_conversation(self.user)
@@ -143,7 +168,6 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
             ]),
             function_call('cash_transaction_create', first),
             function_call('cash_transaction_create', second),
-            function_call('assistant_ask', {'question': 'Вторая операция отменена. Что изменить?'}),
         ]
         first_card = respond(conversation, self.user, 'Запиши два расхода: 10 рублей за покупку бумаги и 20 за покупку коробок, наличные, 25.10.2026')[-1]
         url = reverse('assistant_conversation_action_confirm', args=[conversation.pk, first_card['id']])
@@ -152,14 +176,17 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
         conversation.refresh_from_db()
         second_card = response.json()['messages'][-1]
         self.assertEqual(second_card['kind'], 'confirmation_required')
+        old_id = conversation.context['agent_run']['task_id']
+        calls_before_cancel = self.gateway.call_count
         response = self.client.post(reverse('assistant_conversation_action_confirm', args=[conversation.pk, second_card['id']]), {'accept': 'no'})
         self.assertEqual(response.status_code, 200)
         conversation.refresh_from_db()
-        old_id = conversation.context['agent_run']['task_id']
+        self.assertNotIn('agent_run', conversation.context)
+        self.assertEqual(self.gateway.call_count, calls_before_cancel)
+        self.assertEqual([step['status'] for step in response.json()['messages'][-1]['data']['steps'] if step['tool_id'] == 'cash.transaction_create'], ['completed', 'cancelled'])
         self.assertEqual(CashTransaction.objects.count(), 1)
         snapshots = []
         replies = iter([
-            function_call('assistant_cancel', {'reason': 'Независимый вопрос', 'answer': 'Перехожу к вопросу.', 'new_task': True}),
             function_call('assistant_chat', {'answer': '4'}),
         ])
         def gateway(messages, tools):
@@ -173,8 +200,8 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
         actions = conversation.context['agent_memory']['recent_actions']
         self.assertEqual(len(actions), 1)
         self.assertEqual(conversation.context['agent_memory']['active_task']['status'], 'cancelled')
-        self.assertEqual([m['content'] for m in snapshots[1] if m['role'] == 'user'], ['Другой вопрос: сколько два плюс два?'])
-        self.assertFalse(any(m['role'] == 'tool' for m in snapshots[1]))
+        self.assertEqual([m['content'] for m in snapshots[0] if m['role'] == 'user'], ['Другой вопрос: сколько два плюс два?'])
+        self.assertFalse(any(m['role'] == 'tool' for m in snapshots[0]))
         self.assertEqual(conversation.feedback_events.get(scope='assistant_debug', payload__stage='agent.task_cancelled').payload['output']['task_id'], old_id)
 
     def test_same_task_clarification_preserves_plan_without_cancel(self):

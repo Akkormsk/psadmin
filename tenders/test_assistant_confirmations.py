@@ -95,7 +95,7 @@ class AssistantConfirmationSafetyTests(TestCase):
         self.client.force_login(other)
         self.assertEqual(self.client.post(self.url(card), {"accept": "yes"}).status_code, 404)
         self.client.force_login(self.user)
-        self.gateway.side_effect = [function_call("assistant_ask", {"question": "Что изменить?"})]
+        self.gateway.side_effect = AssertionError("Cancellation must not call the model")
         self.assertEqual(self.client.post(self.url(card), {"accept": "no"}).status_code, 200)
         self.assertEqual(self.client.post(self.url(card), {"accept": "yes"}).status_code, 409)
         self.assertFalse(TenderEstimate.objects.exists())

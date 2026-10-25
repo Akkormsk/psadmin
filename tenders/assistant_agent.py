@@ -42,7 +42,7 @@ _SYSTEM_RULES = (
     "Argument/preview corrections, related questions and requests to resume keep the plan. "
     "Independent actions/questions require assistant.cancel(new_task=true) BEFORE any answer or new plan. "
     "Replan only routes within the same task, with revision_reason; preserve completed work. "
-    "Card cancellation rejects that ACTION, not its plan: corrections remain possible; it is neither execution nor a request to retry. "
+    "The Cancel button ends the entire task in the backend without a model call; it neither executes pending actions nor rolls back completed ones. "
     "Cancel the whole task with new_task=false. Outside a plan use assistant.chat for self-contained questions. "
     "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
@@ -960,10 +960,7 @@ def continue_after_cancellation(conversation, user, tool_id):
     state["active_plan_step_id"] = waiting.get("plan_step_id")
     state["active_arguments"] = waiting.get("arguments")
     _record_execution(state, tool_id, None, status="cancelled", error="Действие отменено пользователем")
-    _activate_next_plan_step(user, state)
-    state["messages"].append({
-        "role": "tool", "tool_call_id": waiting["tool_call_id"],
-        "content": json.dumps({"ok": False, "cancelled": True, "error": "Действие отменено пользователем"}, ensure_ascii=False),
-    })
-    _save(conversation, state)
-    return _run(conversation, user, state)
+    state["outcome"] = "cancelled"
+    _debug(conversation, "agent.task_cancelled", output={"task_id": state["task_id"], "reason": "Пользователь отменил задачу кнопкой"})
+    _finish_turn(conversation, state)
+    return {"text": "Задача отменена.", "kind": "tool_result", "data": {"steps": state["steps"]}}

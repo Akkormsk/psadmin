@@ -204,7 +204,6 @@ class AssistantTaskLifecycleTests(TestCase):
             planned_call("cash.transaction_create"),
             function_call("cash_transaction_create", arguments, "old-preview"),
             function_call("cash_transaction_create", {**arguments, "amount": 200}, "new-preview"),
-            function_call("assistant_ask", {"question": "Действие отменено. Что изменить?"}),
         ]
         old = respond(self.conversation, self.user, "Запиши за вчера расход наличными 175 рублей на покупку бумаги")[-1]
         new = respond(self.conversation, self.user, "Нет, 200 рублей")[-1]
@@ -219,7 +218,9 @@ class AssistantTaskLifecycleTests(TestCase):
         self.assertEqual(self.client.post(new_url, {"accept": "yes"}).status_code, 409)
         self.assertFalse(CashTransaction.objects.exists())
         self.conversation.refresh_from_db()
-        self.assertEqual(self.conversation.context["agent_run"]["status"], "WAITING_USER")
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(self.conversation.context["agent_memory"]["active_task"]["status"], "cancelled")
+        self.assertEqual(gateway.call_count, 3)
         messages = gateway.call_args_list[2].args[0]
         self.assertEqual(len([m for m in messages if m.get("tool_call_id") == "old-preview"]), 1)
         self.assertIn("Нет, 200 рублей", [m.get("content") for m in messages if m["role"] == "user"])
@@ -990,7 +991,7 @@ class AssistantFunctionCallingTests(TestCase):
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
-    def test_cancelled_confirmation_keeps_the_plan_open_without_a_write(self, gateway, _preflight):
+    def test_cancelled_confirmation_closes_the_task_without_a_write_or_model_call(self, gateway, _preflight):
         from cash.models import CashTransaction
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
@@ -1007,11 +1008,11 @@ class AssistantFunctionCallingTests(TestCase):
                     "operation_date": "2026-10-20", "account": "cash", "direction": "expense", "amount": 10, "reason": "Тест",
                 }),
             }}]},
-            function_call("assistant_ask", {"question": "Действие отменено. Что изменить?"}),
         ]
 
         response = respond(self.conversation, self.user, "Запиши расход наличными 10 рублей за Тест")[-1]
         self.client.force_login(self.user)
+        calls_before_cancel = gateway.call_count
         cancelled = self.client.post(
             reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, response["id"]]), {"accept": "no"},
         )
@@ -1019,9 +1020,16 @@ class AssistantFunctionCallingTests(TestCase):
         self.assertEqual(cancelled.status_code, 200)
         self.assertFalse(CashTransaction.objects.exists())
         self.conversation.refresh_from_db()
-        run = self.conversation.context["agent_run"]
-        self.assertTrue(run["waiting_user"])
-        self.assertEqual(run["steps"][-1]["status"], "cancelled")
+        self.assertEqual(gateway.call_count, calls_before_cancel)
+        self.assertNotIn("agent_run", self.conversation.context)
+        self.assertEqual(self.conversation.context["agent_memory"]["active_task"]["status"], "cancelled")
+        result = cancelled.json()["messages"][-1]
+        self.assertEqual(result["data"]["steps"][-1]["status"], "cancelled")
+        for accept in ("yes", "no"):
+            replay = self.client.post(reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, response["id"]]), {"accept": accept})
+            self.assertEqual(replay.status_code, 409)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.assertEqual(gateway.call_count, calls_before_cancel)
 
     def test_action_text_normalisation_accepts_typos_case_spacing_and_punctuation(self):
         from .assistant_agent import _validate_action_text_sources
