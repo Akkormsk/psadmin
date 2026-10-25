@@ -115,7 +115,6 @@ class AssistantConfirmationSafetyTests(TestCase):
         self.assertEqual(confirmation_arguments(tool, arguments), [{
             "label": "Тендер", "items": [{
                 "text": f"{self.tender.purchase_number} — {self.tender.title}",
-                "hint": f"ID {self.tender.pk}",
             }],
         }])
         self.assertEqual(arguments, {"tender_id": self.tender.pk})

@@ -300,7 +300,7 @@ class AssistantToolRegistryTests(TestCase):
             "name": "Атекс", "stage_ids": [self.stage.pk], "source_text": None,
         }), [
             {"label": "Название", "value": "Атекс"},
-            {"label": str(ProcessDefinition._meta.verbose_name_plural), "items": [{"text": self.stage.name, "hint": f"ID {self.stage.pk}"}]},
+            {"label": str(ProcessDefinition._meta.verbose_name_plural), "items": [{"text": self.stage.name}]},
         ])
 
     def test_reference_preview_metadata_does_not_leak_into_function_schema(self):

@@ -303,7 +303,7 @@ def _reference_preview_items(declaration: Any, value: Any, payload=None) -> list
     for identifier in values:
         instance = objects.get(identifier)
         if instance is None:
-            items.append({"text": "Объект не найден", "hint": f"ID {identifier}"})
+            items.append({"text": "Объект не найден"})
             continue
         label_fields = label_field if isinstance(label_field, list) else [label_field]
         parts = []
@@ -317,7 +317,7 @@ def _reference_preview_items(declaration: Any, value: Any, payload=None) -> list
                 field = None
             parts.append(_preview_value(value, field))
         label = " — ".join(parts) or str(instance)
-        items.append({"text": str(label), "hint": f"ID {identifier}"})
+        items.append({"text": str(label)})
     return items
 
 
