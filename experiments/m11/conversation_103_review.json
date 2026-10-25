@@ -1,0 +1,67 @@
+{
+  "conversation": 103,
+  "reviewed_at": "2026-10-25",
+  "test_release_sha": "1fb817ef4376f6c73a650d4d9401ff61dd803798",
+  "status": "PARTIAL_LIVE_NOT_ACCEPTED",
+  "gateway_calls": 28,
+  "prompt_tokens": 420397,
+  "completion_tokens": 7167,
+  "cost": {
+    "currency": "RUB",
+    "estimated_without_cache_discount": "6.1591320",
+    "input_per_million": "13.5",
+    "output_per_million": "67.5",
+    "rates_last_verified": "2026-10-24",
+    "provider_bill_verified": false
+  },
+  "passes": [
+    "empty_READ_does_not_produce_old_object_card",
+    "dialogue_explains_actual_READ",
+    "user_correction_revises_plan_and_source",
+    "asks_between_two_known_objects",
+    "cancel_only_after_explicit_user_agreement"
+  ],
+  "findings": [
+    {
+      "code": "NARROW_SEARCH_SCOPE",
+      "evidence": "First READ used incoming view, returned zero; retry with view=null found singleton."
+    },
+    {
+      "code": "EARLY_FINISH_RECOVERED",
+      "count": 2,
+      "evidence": "Finish rejected on pending ACTION; model recovered via ask, not stale-ID ACTION."
+    },
+    {
+      "code": "SOURCE_REUSE_FRICTION",
+      "evidence": "Model used old step alias absent from replacement plan instead of retained source_id; backend rejected. Next plan call was empty. Valid revision then repeated READ."
+    },
+    {
+      "code": "LOSSY_PREVIEW",
+      "evidence": "Earlier READ contained stage/review, but _record_preview drops them. Later model reported stage unavailable."
+    },
+    {
+      "code": "FUNNEL_PRECONDITION_GAP",
+      "evidence": "Incoming object got handoff card and successful executor result; create_tender_estimate checks admin/existence/idempotency but not prior review. Model claim of no bypass is unsupported."
+    },
+    {
+      "code": "POST_CONFIRMATION_NARRATION",
+      "evidence": "First successful execution followed by model claim user did not request execution."
+    }
+  ],
+  "execution_audit": {
+    "successful_created_results": 2,
+    "user_recollection": "Only one confirmation recalled; which card is uncertain.",
+    "button_http_events_in_export": false,
+    "authorization_status": "NOT_VERIFIED",
+    "bypass_proven": false
+  },
+  "coverage_limits": [
+    "No attempted stale-ID action in live export: rejection guard itself not exercised here.",
+    "Returning to prior object used no READ but omitted prior stage.",
+    "Source reuse for repeat ACTION added redundant READ.",
+    "Small sample does not establish 9/10 semantic source accuracy."
+  ],
+  "new_paid_calls": 0,
+  "code_changed": false,
+  "new_deploy": false
+}
