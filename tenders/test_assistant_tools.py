@@ -413,7 +413,10 @@ class AssistantToolRegistryTests(TestCase):
         self.assertIn("revision_reason", schema["required"])
         self.assertFalse(schema["additionalProperties"])
         step = schema["properties"]["steps"]["items"]
-        self.assertEqual(set(step["properties"]), {"id", "capability_id", "objective", "expected_result"})
+        self.assertEqual(set(step["properties"]), {"id", "capability_id", "objective", "expected_result", "reference_sources"})
+        sources = step["properties"]["reference_sources"]["anyOf"][0]["items"]
+        self.assertEqual(set(sources["properties"]), {"parameter", "read_id"})
+        self.assertFalse(sources["additionalProperties"])
         self.assertFalse(step["additionalProperties"])
 
     def test_selected_capability_is_the_only_detailed_action_schema(self):

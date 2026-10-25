@@ -8,12 +8,11 @@ from django.test import TestCase
 from cash.models import CashTransaction
 from tender_selection.models import Tender
 from .assistant_conversations import create_conversation, respond
-from .assistant_agent import _finish_turn
 from .assistant_tools import (
     AssistantTool, available_capability_map, capability_map_text, execute_tool, register_tool,
 )
 from .models import Counterparty, CounterpartyKnowledgeVersion, TenderEstimate
-from .test_assistant_conversations import function_call, planned_call
+from .test_assistant_conversations import function_call, planned_call, remember_reference
 
 
 class AssistantReferenceResolutionTests(TestCase):
@@ -46,7 +45,8 @@ class AssistantReferenceResolutionTests(TestCase):
         if action:
             steps.append({"id": "prepare", "capability_id": "tender.send_to_calculation",
                           "objective": "Подготовить действие", "expected_result": "Карточка подтверждения"})
-        return planned_call("tender.send_to_calculation", goal, revision_reason=revision, steps=steps)
+        return planned_call("tender.send_to_calculation", goal, revision_reason=revision, steps=steps,
+                            sources={"tender_id": "find" if read else "verified"} if action else None)
 
     def read(self, search):
         return function_call("read_tender_selection_tenders", {"plan": {
@@ -54,10 +54,7 @@ class AssistantReferenceResolutionTests(TestCase):
         }})
 
     def remember(self, entity, identifier):
-        result = execute_tool("read", self.user, {"plan": {
-            "entity": entity, "filters": [{"field": "id", "op": "eq", "value": identifier}], "fields": ["id"],
-        }})
-        _finish_turn(self.conversation, {"steps": [{"tool_id": "read:verified", "result": result}]})
+        remember_reference(self.conversation, self.user, entity, identifier)
 
     def test_plan_map_includes_live_reference_metadata_for_an_unknown_action(self):
         from . import assistant_tools
@@ -95,7 +92,7 @@ class AssistantReferenceResolutionTests(TestCase):
         party = Counterparty.objects.create(name="Мастерская Тест", created_by=self.user)
         version = CounterpartyKnowledgeVersion.objects.create(counterparty=party, created_by=self.user)
         self.remember("tenders.CounterpartyKnowledgeVersion", version.pk)
-        self.answers([planned_call("provider.knowledge_remove", steps=[
+        self.answers([planned_call("provider.knowledge_remove", sources={"counterparty_id": "find", "knowledge_version_id": "verified"}, steps=[
             {"id": "find", "capability_id": "read:tenders.counterparties", "objective": "Найти контрагента",
              "expected_result": "Проверенный ID"},
             {"id": "prepare", "capability_id": "provider.knowledge_remove", "objective": "Подготовить удаление черновика",
@@ -126,8 +123,7 @@ class AssistantReferenceResolutionTests(TestCase):
 
     def test_absence_is_read_and_ambiguity_waits_for_business_choice(self):
         self.answers([self.plan(), self.read("M113-ABSENT"),
-            self.plan(revision="READ подтвердил отсутствие записи; действие невозможно", action=False),
-            function_call("assistant_finish", {"answer": "По указанным признакам записей нет"})])
+            function_call("assistant_ask", {"question": "По указанным признакам записей нет. Уточни название?"})])
         result = respond(self.conversation, self.user, "Найди закупку M113-ABSENT и подготовь передачу")[-1]
         reads = [s for s in result["data"]["steps"] if s["tool_id"].startswith("read:")]
         self.assertEqual(reads[-1]["result"]["total_count"], 0)
@@ -147,6 +143,7 @@ class AssistantReferenceResolutionTests(TestCase):
     def test_repeated_reference_errors_stop_at_the_existing_execution_limit(self):
         from .assistant_agent import MAX_TOOL_CALLS
         from .services import TenderAIError
+        self.remember("tender_selection.Tender", self.tender.pk)
         self.answers([self.plan(read=False)] + [
             function_call("tender_send_to_calculation", {"tender_id": 0}) for _ in range(MAX_TOOL_CALLS)
         ])
@@ -156,6 +153,7 @@ class AssistantReferenceResolutionTests(TestCase):
         self.assertFalse(TenderEstimate.objects.exists())
 
     def test_invalid_reference_restores_plan_metadata_and_model_revises_without_user_id(self):
+        self.remember("tender_selection.Tender", self.tender.pk)
         self.answers([self.plan(read=False), function_call("tender_send_to_calculation", {"tender_id": 0}),
             self.plan(revision="Ссылка не разрешена; нужен поиск записи"), self.read(self.tender.purchase_number),
             function_call("tender_send_to_calculation", {"tender_id": self.tender.pk})])

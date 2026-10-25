@@ -9,7 +9,7 @@ from tender_selection.models import Tender
 from .assistant_conversations import create_conversation, respond
 from .assistant_tools import AssistantToolError, available_tools, confirmation_arguments, openai_functions, validate_tool_call
 from .models import TenderEstimate
-from .test_assistant_conversations import function_call, planned_call
+from .test_assistant_conversations import function_call, planned_call, remember_reference
 
 
 class AssistantConfirmationSafetyTests(TestCase):
@@ -17,6 +17,7 @@ class AssistantConfirmationSafetyTests(TestCase):
         self.user = get_user_model().objects.create_superuser("confirm", "confirm@example.test", "password")
         self.conversation = create_conversation(self.user)
         self.tender = Tender.objects.create(purchase_number="CONFIRM-001", title="Тестовая бумага")
+        remember_reference(self.conversation, self.user, "tender_selection.Tender", self.tender.pk)
         self.client.force_login(self.user)
         gateway = patch("tenders.assistant_agent._gateway")
         self.gateway = gateway.start()
@@ -26,7 +27,8 @@ class AssistantConfirmationSafetyTests(TestCase):
         self.addCleanup(preflight.stop)
 
     def prepare(self):
-        self.gateway.side_effect = [planned_call("tender.send_to_calculation"),
+        remember_reference(self.conversation, self.user, "tender_selection.Tender", self.tender.pk)
+        self.gateway.side_effect = [planned_call("tender.send_to_calculation", sources={"tender_id": "verified"}),
             function_call("tender_send_to_calculation", {"tender_id": self.tender.pk}),
             function_call("assistant_finish", {"answer": "Готово"})]
         card = respond(self.conversation, self.user, "Передай тендер в расчёт")[-1]
@@ -42,7 +44,7 @@ class AssistantConfirmationSafetyTests(TestCase):
                 validate_tool_call("tender.send_to_calculation", self.user, {"tender_id": value})
         with self.assertRaises(AssistantToolError):
             validate_tool_call("provider.create", self.user, {"name": "Тест", "stage_ids": [999999]})
-        self.gateway.side_effect = [planned_call("tender.send_to_calculation"),
+        self.gateway.side_effect = [planned_call("tender.send_to_calculation", sources={"tender_id": "verified"}),
             function_call("tender_send_to_calculation", {"tender_id": 372200255926000168}),
             function_call("assistant_ask", {"question": "Какой тендер нужно найти?"})]
         result = respond(self.conversation, self.user, "Передай закупку в расчёт")[-1]

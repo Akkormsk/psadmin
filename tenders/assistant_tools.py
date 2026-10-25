@@ -596,12 +596,12 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
 
     name, definition = _function_definition(
         "assistant.plan",
-        "Сохраняет внутренний план выполнения задачи или его обновление. Каждый capability_id должен точно выбрать опубликованную возможность, а не ID раздела. Вызывай до первого бизнес-инструмента и только при существенном изменении маршрута.",
+        "Saves the task plan before business tools; revises it only when the route changes. Each capability_id must name a published capability, not an area.",
         {"plan": {
             "type": "object",
             "properties": {
                 "goal": {"type": "string", "minLength": 1},
-                "revision_reason": {"type": "string", "required": False, "description": "Причина существенного изменения цели или маршрута. null для первого плана. Не пересоздавай план при уточнении обычных аргументов."},
+                "revision_reason": {"type": "string", "required": False, "description": "Reason for a changed goal or route; null initially. Argument clarification alone does not require replanning."},
                 "steps": {
                     "type": "array", "minItems": 1,
                     "item": {
@@ -611,6 +611,10 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
                             "capability_id": {"type": "string", "enum": capability_ids},
                             "objective": {"type": "string", "minLength": 1},
                             "expected_result": {"type": "string", "minLength": 1},
+                            "reference_sources": {"type": "array", "required": False,
+                                "description": "Required for ACTION references, including optional ones you pass. read_id names a preceding READ step or saved source_id; changing it requires plan revision.",
+                                "item": {"type": "object", "properties": {
+                                    "parameter": "string", "read_id": "string"}, "additional_properties": False}},
                         },
                         "additional_properties": False,
                     },
@@ -633,7 +637,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
         return definitions, names
 
     for identifier, description, schema in (
-        ("assistant.ask", "Задаёт необходимый вопрос по активной задаче и ждёт ответа пользователя. Не завершает задачу.",
+        ("assistant.ask", "Continues dialogue within the active task: responds to the user, asks for clarification when needed, and waits for the next message. Does not complete the task.",
          {"question": {"type": "string", "minLength": 1}}),
         ("assistant.cancel", "Закрывает задачу как отменённую по просьбе пользователя. При переключении на независимую задачу укажи new_task=true; уточнение аргументов не является новой задачей.",
          {"reason": {"type": "string", "minLength": 1}, "answer": {"type": "string", "minLength": 1}, "new_task": "boolean"}),

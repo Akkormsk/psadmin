@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 from django.utils import timezone
 from .assistant_tools import (
     AssistantToolError, AssistantReferenceError, available_capability_map, available_areas, available_capabilities, available_resources, available_tools, capability_for_user, capability_map_text, confirmation_arguments,
-    execute_tool, openai_functions, validate_tool_call,
+    execute_tool, openai_functions, validate_tool_call, _reference_model, _reference_values, _plan_references,
 )
 from .assistant_read import ReadPlanError, reuse_result
 from .gateway_budget import preflight
@@ -27,7 +27,7 @@ _SYSTEM_RULES = (
     "After every tool result, compare it with the user's whole request and the current plan. Continue with the next required step; "
     "update the plan only if the route materially changes. Use actual tool results, and use backend aggregates for money and quantities. "
     "Never invent facts, fields, IDs, values, or calculations. If several business interpretations or records are equally plausible, "
-    "first use available data when it can resolve the ambiguity; otherwise ask one short ordinary Russian question. "
+    "first use available data when it can resolve the ambiguity; otherwise clarify the user's intent through assistant.ask. "
     "Ask for business meaning such as a period, amount, person, object or intended operation, never for technical fields, entity IDs, codes or JSON. "
     "The capability map lists existing object references required by actions. If the intended object has no current verified ID in the authorized conversation context, "
     "plan permitted READ steps to resolve it from the user's identifying details before the ACTION. Never invent a placeholder ID, including zero. "
@@ -35,7 +35,7 @@ _SYSTEM_RULES = (
     "Resolve only references needed for the requested operation; omitted optional references do not require lookup. "
     "If READ returns multiple plausible objects, ask the user to choose in business terms; report absence only from an actual adequate READ result. "
     "A rejected object reference is not a search result. Revise the same task's plan with a concrete reason, resolve the reference using READ and continue; do not ask the user for internal IDs. "
-    "Every READ/ACTION task MUST start with assistant.plan, BEFORE even a clarification question; arguments may still be unknown. "
+    "Bind each ACTION reference in plan.reference_sources to a preceding READ step or saved source_id. Change sources only by replanning. Empty READ: continue searching or use assistant.ask; cancellation requires the user's agreement. Every READ/ACTION task MUST start with assistant.plan, BEFORE even a clarification question; arguments may still be unknown. "
     "Keep the same task and plan when collecting or correcting amounts, dates and other arguments. "
     "Revise the plan only for a changed goal, capability or route, with a specific revision_reason. Preserve completed work. "
     "For ordinary conversation and self-contained elementary arithmetic without business data or actions, use assistant.chat instead of plan/finish. "
@@ -44,10 +44,10 @@ _SYSTEM_RULES = (
     "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
-    "When an action has all required values, call it immediately to prepare the confirmation card; never ask for a separate textual confirmation first. "
+    "When an action has all required values and verified reference sources, call it immediately to prepare the confirmation card; never ask for a separate textual confirmation first. "
     "READ results include raw records for backend continuity and a metadata-derived display view; use the display view's labels and values in user-facing answers, never raw choice codes. "
     "Use assistant.finish only for a final answer after the active plan's required steps have actually completed. "
-    "For a needed clarification inside a plan, call assistant.ask with one ordinary Russian question. "
+    "Use assistant.ask for ongoing task dialogue: answer questions and clarify as needed, using only available evidence. Keep the task open. "
     "Never emit a bare text response: chat, ask and finish are different explicit function calls."
 )
 
@@ -252,6 +252,7 @@ def _selection_from_result(result):
     total = result.get("total_count")
     returned = result.get("returned_count")
     return {
+        "source_id": result.get("source_id") or uuid4().hex,
         "entity": result["entity"],
         "record_ids": ids[:MAX_MEMORY_IDS],
         # ``query`` is already a validated, JSON-safe backend summary.  Keep
@@ -322,6 +323,7 @@ def _load_memory(raw, owner_id):
 def _normalise_selection(raw):
     """Bound display details without ever shortening a retained ID/filter list."""
     result = dict(raw)
+    result["source_id"] = raw.get("source_id") or uuid4().hex
     result["record_ids"] = [value for value in raw.get("record_ids", []) if isinstance(value, int)][:MAX_MEMORY_IDS]
     result["records"] = [_record_preview(item) for item in raw.get("records", [])[:MAX_MEMORY_PREVIEWS] if isinstance(item, dict)]
     result["external_ids"] = [
@@ -368,7 +370,7 @@ def _invalidate_read_selections(memory):
 
 
 def _merge_memory(conversation, state):
-    memory = _load_memory(conversation.context.get("agent_memory"), conversation.context.get("owner_id"))
+    memory = _load_memory(state.get("memory", conversation.context.get("agent_memory")), conversation.context.get("owner_id"))
     for step in state.get("steps", []):
         tool_id, result = step.get("tool_id"), step.get("result")
         if isinstance(tool_id, str) and tool_id.startswith("read:"):
@@ -410,7 +412,99 @@ def _capability_ids(user):
     }
 
 
-def _normalise_plan(value, user, previous=None):
+def _reference_results(state):
+    """One namespace for retained READ results, across plans and turns."""
+    results = {item["source_id"]: item for item in state.get("memory", {}).get("recent_selections", [])
+               if item.get("source_id")}
+    for execution in state.get("steps", []):
+        result = execution.get("result")
+        if execution.get("tool_id", "").startswith("read:") and execution.get("status", "completed") == "completed" and isinstance(result, dict) and result.get("source_id"):
+            results[result["source_id"]] = result
+    return results
+
+
+def _bind_reference_sources(steps, declarations, user, state, previous):
+    previous_steps = {item["id"]: item for item in (previous or {}).get("steps", [])}
+    results = _reference_results(state)
+    preceding = {}
+    for step, declaration in zip(steps, declarations):
+        if step["capability_id"].startswith("read:"):
+            old = previous_steps.get(step["id"], {})
+            # Keep identity only for an unchanged search step. A revised search
+            # cannot inherit the result of a different query/route.
+            same = all(old.get(key) == step.get(key) for key in ("id", "capability_id", "objective", "expected_result"))
+            step["source_id"] = old.get("source_id") if same and old.get("source_id") else uuid4().hex
+            preceding[step["id"]] = step["source_id"]
+            continue
+        references = {item["parameter"]: item for item in _plan_references(user, step["capability_id"])}
+        raw_sources = declaration.get("reference_sources") or []
+        if not isinstance(raw_sources, list) or any(not isinstance(item, dict) or set(item) != {"parameter", "read_id"} or not isinstance(item["parameter"], str) for item in raw_sources):
+            raise AssistantReferenceError("reference_sources должен быть списком parameter/read_id")
+        sources = {item["parameter"]: item["read_id"] for item in raw_sources}
+        if len(sources) != len(raw_sources) or any(key not in references for key in sources):
+            raise AssistantReferenceError("reference_sources должен содержать только параметры reference этого ACTION")
+        if any(item["required"] and name not in sources for name, item in references.items()):
+            raise AssistantReferenceError("Укажите в плане источник READ для каждого обязательного reference ACTION")
+        bound = {}
+        for name, source in sources.items():
+            if not isinstance(source, str) or not source:
+                raise AssistantReferenceError("Источник reference должен быть идентификатором READ")
+            source_id = preceding.get(source, source)
+            if source_id not in preceding.values() and source_id not in results:
+                raise AssistantReferenceError("Источник reference отсутствует: укажите предыдущий шаг READ или сохранённый source_id")
+            result = results.get(source_id)
+            models = references[name]["model"]
+            models = {models} if isinstance(models, str) else {item["model"] for item in models}
+            if result and result.get("entity") not in models:
+                raise AssistantReferenceError("Модель источника READ не соответствует reference ACTION")
+            if not result:
+                source_step = next(item for item in steps if item.get("source_id") == source_id)
+                resource = next((r for r in available_resources(user) if "read:" + r["id"] == source_step["capability_id"]), None)
+                if resource is None or resource["entity"] not in models:
+                    raise AssistantReferenceError("Модель шага READ не соответствует reference ACTION")
+            bound[name] = source_id
+        if references:
+            step["reference_sources"] = [{"parameter": name, "read_id": source} for name, source in bound.items()]
+    # An unresolved action stays pending until the user agrees to cancel.
+    # Replanning may replace its search, not silently erase the obligation.
+    for old in previous_steps.values():
+        if old["id"] in _completed_plan_steps(state):
+            continue
+        if not any(item["id"] == old["id"] and item["capability_id"] == old["capability_id"] for item in steps):
+            sources = [item["read_id"] for item in old.get("reference_sources", [])]
+            if any(source in results and results[source].get("total_count") == 0 for source in sources):
+                raise AssistantReferenceError("Пустой READ не отменяет ACTION: уточните задачу через assistant.ask; закрытие без результата — только с согласия пользователя через assistant.cancel")
+
+
+def _validate_reference_sources(tool, arguments, state):
+    step = next((item for item in state.get("plan", {}).get("steps", [])
+                 if item["id"] == state.get("active_plan_step_id")), {})
+    results = _reference_results(state)
+    for name, declaration in tool["input_schema"].items():
+        if not isinstance(declaration, dict) or not isinstance(declaration.get("reference"), dict) or arguments.get(name) is None:
+            continue
+        source_id = next((item["read_id"] for item in step.get("reference_sources", []) if item["parameter"] == name), None)
+        result = results.get(source_id)
+        if result is None:
+            raise AssistantReferenceError("Источник reference не указан в плане или READ ещё не выполнен; исправьте план и выполните READ")
+        model = _reference_model(declaration["reference"], arguments)
+        if result.get("entity", "").lower() != model._meta.label.lower():
+            raise AssistantReferenceError("Источник READ относится к другой модели")
+        ids = result.get("record_ids") if "record_ids" in result else [item.get("id") for item in result.get("sources", []) if isinstance(item, dict)]
+        wanted = _reference_values(model, declaration, arguments[name])
+        if not ids or any(str(value) not in {str(item) for item in ids} for value in wanted):
+            raise AssistantReferenceError("READ указанного источника не содержит выбранный объект. Продолжите поиск или уточните запрос через assistant.ask; не используйте другой источник без пересмотра плана")
+        if len(ids) > 1:
+            # A fresh ambiguous result needs a user reply before selection.
+            # The semantic meaning of that reply remains the model's decision.
+            messages = state.get("messages", [])
+            last_user = max((i for i, message in enumerate(messages) if message.get("role") == "user"), default=-1)
+            read_message = max((i for i, message in enumerate(messages) if message.get("role") == "tool" and source_id in str(message.get("content", ""))), default=-1)
+            if last_user <= read_message:
+                raise AssistantReferenceError("READ содержит несколько объектов: уточните выбор через assistant.ask")
+
+
+def _normalise_plan(value, user, previous=None, state=None):
     """Validate the compact plan against the same registry shown to the model."""
     if not isinstance(value, dict):
         raise AssistantToolError("План должен содержать цель и шаги")
@@ -430,6 +524,7 @@ def _normalise_plan(value, user, previous=None):
             raise AssistantToolError("План содержит недоступную или повторяющуюся возможность")
         seen.add(identifier)
         normalised.append({"id": identifier, "capability_id": capability_id, "objective": objective, "expected_result": expected_result})
+    _bind_reference_sources(normalised, steps, user, state or {}, previous)
     reason = value.get("revision_reason")
     if previous and (not isinstance(reason, str) or not reason.strip()):
         raise AgentProtocolError("Пересмотр плана требует конкретной причины изменения цели или маршрута; уточнение аргументов продолжает прежний план")
@@ -612,14 +707,14 @@ def _run(conversation, user, state):
                     raise AgentProtocolError("Нельзя завершить бизнес-задачу без действующего плана")
                 missing = _missing_plan_steps(state)
                 if missing or state.get("waiting_confirmation"):
-                    raise AgentProtocolError("Нельзя завершить задачу: не подтверждены шаги " + ", ".join(missing or ["действие"]))
+                    raise AgentProtocolError("Нельзя завершить задачу: не подтверждены шаги " + ", ".join(missing or ["действие"]) + ". Если READ не дал нужного объекта, продолжите поиск или диалог через assistant.ask; при смене маршрута явно пересмотрите план. Не подставляйте другой объект. Закрытие без результата требует согласия пользователя и assistant.cancel.")
                 _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
                 _debug(conversation, "agent.task_finished", output={"task_id": state["task_id"]})
                 _finish_turn(conversation, state)
                 return {"text": text, "kind": "tool_result", "data": {"steps": state["steps"]}}
             if identifier == "assistant.plan":
                 previous_plan = state.get("plan") if isinstance(state.get("plan"), dict) else None
-                plan = _normalise_plan(arguments.get("plan"), user, previous_plan)
+                plan = _normalise_plan(arguments.get("plan"), user, previous_plan, state)
                 if previous_plan:
                     unchanged = [item["id"] for item in plan["steps"] if item in previous_plan.get("steps", [])]
                     completed = _completed_plan_steps(state)
@@ -668,9 +763,12 @@ def _run(conversation, user, state):
                 cached = state.get("read_cache")
                 result = reuse_result(user, plan, cached) if cached else None
                 result = result if result is not None else execute_tool("read", user, {"plan": plan})
+                read_step = next(item for item in state["plan"]["steps"] if item["id"] == state["active_plan_step_id"])
+                result = {**result, "source_id": read_step["source_id"]}
                 state["last_read_result"] = result
                 state["read_cache"] = {**result, "owner_id": conversation.context.get("owner_id")}
             elif registry[identifier]["requires_confirmation"]:
+                _validate_reference_sources(registry[identifier], arguments, state)
                 validate_tool_call(identifier, user, arguments)
                 _validate_action_text_sources(registry[identifier], arguments, state)
                 state["waiting_confirmation"] = {
@@ -694,6 +792,7 @@ def _run(conversation, user, state):
                     },
                 }
             else:
+                _validate_reference_sources(registry[identifier], arguments, state)
                 result = execute_tool(identifier, user, arguments)
             if identifier.startswith("read:") or identifier in registry:
                 state["active_arguments"] = arguments

@@ -9,7 +9,12 @@ from django.urls import reverse
 from .assistant_conversations import add_assistant_message, add_debug_event, create_conversation, respond
 
 
-def planned_call(capability, goal="Выполнить задачу", *, revision_reason=None, steps=None):
+def planned_call(capability, goal="Выполнить задачу", *, revision_reason=None, steps=None, sources=None):
+    if sources:
+        steps = [dict(step) for step in steps] if steps else [{"id": "s1", "capability_id": capability, "objective": goal, "expected_result": "Результат инструмента"}]
+        for step in steps:
+            if step["capability_id"] == capability:
+                step["reference_sources"] = [{"parameter": key, "read_id": value} for key, value in sources.items()]
     return {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
         "name": "assistant_plan", "arguments": json.dumps({"plan": {
             "goal": goal, "revision_reason": revision_reason,
@@ -17,6 +22,17 @@ def planned_call(capability, goal="Выполнить задачу", *, revision
                                 "objective": goal, "expected_result": "Результат инструмента"}],
         }}),
     }}]}
+
+
+def remember_reference(conversation, user, entity, identifier, source_id="verified"):
+    from .assistant_tools import execute_tool
+    from .assistant_agent import _finish_turn
+    result = execute_tool("read", user, {"plan": {
+        "entity": entity, "filters": [{"field": "id", "op": "eq", "value": identifier}], "fields": ["id"],
+    }})
+    result["source_id"] = source_id
+    _finish_turn(conversation, {"steps": [{"tool_id": "read:verified", "result": result}]})
+    return source_id
 
 
 def function_call(name, arguments, call_id="call"):

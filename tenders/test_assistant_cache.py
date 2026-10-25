@@ -10,7 +10,7 @@ from .assistant_agent import _new_state, _record_execution, reply
 from .assistant_conversations import add_assistant_message, create_conversation
 from .assistant_tools import execute_tool
 from .models import TenderEstimate
-from .test_assistant_conversations import function_call, planned_call
+from .test_assistant_conversations import function_call, planned_call, remember_reference
 
 
 class AssistantReadCacheTests(TestCase):
@@ -35,9 +35,10 @@ class AssistantReadCacheTests(TestCase):
         }})
 
     def read_turn(self):
+        empty = not TenderEstimate.objects.filter(tender=self.tender).exists()
         self.gateway.side_effect = [planned_call("read:tenders.tender_estimates"), self.read_call(),
-                                    function_call("assistant_finish", {"answer": "Проверено"})]
-        result = reply(self.conversation, self.user, "Покажи расчёты")
+                                    function_call("assistant_cancel", {"reason": "Пользователь разрешил закрыть при отсутствии", "answer": "Проверено", "new_task": False}) if empty else function_call("assistant_finish", {"answer": "Проверено"})]
+        result = reply(self.conversation, self.user, "Покажи расчёты. Если нет, закрой задачу.")
         return result["data"]["steps"][-1]["result"]
 
     def confirm(self):
@@ -54,6 +55,8 @@ class AssistantReadCacheTests(TestCase):
                  for name, capability in [("before", "read:tenders.tender_estimates"),
                                           ("create", "tender.send_to_calculation"),
                                           ("after", "read:tenders.tender_estimates")]]
+        remember_reference(self.conversation, self.user, "tender_selection.Tender", self.tender.pk)
+        steps[1]["reference_sources"] = [{"parameter": "tender_id", "read_id": "verified"}]
         self.gateway.side_effect = [
             planned_call("read:tenders.tender_estimates", steps=steps), self.read_call(),
             function_call("tender_send_to_calculation", {"tender_id": self.tender.pk}),
@@ -79,7 +82,8 @@ class AssistantReadCacheTests(TestCase):
         focus = {"entity": "tender_selection.Tender", "id": self.tender.pk}
         self.conversation.context["agent_memory"]["active_focus"] = focus
         self.conversation.save(update_fields=["context"])
-        self.gateway.side_effect = [planned_call("tender.send_to_calculation"),
+        remember_reference(self.conversation, self.user, "tender_selection.Tender", self.tender.pk)
+        self.gateway.side_effect = [planned_call("tender.send_to_calculation", sources={"tender_id": "verified"}),
             function_call("tender_send_to_calculation", {"tender_id": self.tender.pk}),
             function_call("assistant_finish", {"answer": "Создано"})]
         card = reply(self.conversation, self.user, "Передай выбранный тендер в расчёт")
@@ -88,7 +92,8 @@ class AssistantReadCacheTests(TestCase):
 
         state = _new_state(self.conversation, self.user, "Покажи созданный расчёт", [])
         self.assertNotIn("read_cache", state)
-        self.assertEqual(state["memory"]["active_focus"], focus)
+        self.assertEqual(state["memory"]["active_focus"]["entity"], focus["entity"])
+        self.assertEqual(state["memory"]["active_focus"]["id"], focus["id"])
         self.assertEqual(state["memory"]["recent_selections"][0]["record_ids"], [])
         result = self.read_turn()
         self.assertEqual(result["records"][0]["id"], TenderEstimate.objects.get().pk)
@@ -161,7 +166,7 @@ class AssistantReadCacheTests(TestCase):
             }}),
             function_call("read_tenders_tender_estimates", {"plan": {"view": "incoming"}}),
             self.read_call(),
-            function_call("assistant_finish", {"answer": "Расчётов нет, ничего не изменено"}),
+            function_call("assistant_ask", {"question": "Расчётов нет, ничего не изменено"}),
         ]
         response = self.client.post(reverse("assistant_conversation_message", args=[self.conversation.pk]),
             {"message": "Найди тендер и проверь расчёты"}, content_type="application/json")
