@@ -263,3 +263,52 @@ class AssistantReferenceSourceTests(TestCase):
         declaration["steps"][0]["reference_sources"][0]["read_id"] = source
         plan = _normalise_plan(declaration, self.user, state=state)
         self.assertEqual(plan["steps"][0]["reference_sources"][0]["read_id"], source)
+
+    def test_empty_search_allows_renamed_action_when_user_corrects_object(self):
+        revised = self.plan(read="find_corrected", revision="Пользователь исправил номер объекта")
+        args = json.loads(revised["tool_calls"][0]["function"]["arguments"])
+        args["plan"]["steps"][-1]["id"] = "act_corrected"
+        revised["tool_calls"][0]["function"]["arguments"] = json.dumps(args)
+        self.gateway.side_effect = [self.plan(), self.read("ABSENT-777"), self.ask(),
+                                    revised, self.read(self.other.purchase_number), self.action(self.other.pk)]
+        respond(self.conversation, self.user, "Найди ABSENT-777 и подготовь передачу")
+        task_id = self.conversation.context["agent_run"]["task_id"]
+        card = respond(self.conversation, self.user, "Тогда SOURCE-002")[-1]
+        state = self.conversation.context["agent_run"]
+        self.assertEqual(state["task_id"], task_id)
+        self.assertEqual(state["plan"]["version"], 2)
+        self.assertEqual(state["plan"]["steps"][-1]["id"], "act_corrected")
+        self.assertEqual(card["kind"], "confirmation_required")
+        self.assertEqual(card["data"]["arguments"], {"tender_id": self.other.pk})
+        source = state["plan"]["steps"][-1]["reference_sources"][0]["read_id"]
+        self.assertEqual(source, state["steps"][-1]["result"]["source_id"])
+        self.assertFalse(TenderEstimate.objects.exists())
+
+    def test_replan_cannot_merge_two_unresolved_actions_into_one(self):
+        self.gateway.side_effect = [self.plan(), self.read("ABSENT-777"), self.ask()]
+        respond(self.conversation, self.user, "Найди и подготовь действия")
+        state = self.conversation.context["agent_run"]
+        from copy import deepcopy
+        second = deepcopy(state["plan"]["steps"][-1])
+        second["id"] = "act_second"
+        state["plan"]["steps"].append(second)
+        declaration = json.loads(self.plan(read=None, source="find", revision="Уточнение")["tool_calls"][0]["function"]["arguments"])["plan"]
+        with self.assertRaisesRegex(AssistantReferenceError, "Пустой READ не отменяет ACTION"):
+            _normalise_plan(declaration, self.user, state["plan"], state)
+
+    def test_completed_action_does_not_replace_unresolved_action_on_replan(self):
+        self.gateway.side_effect = [self.plan(), self.read("ABSENT-777"), self.ask()]
+        respond(self.conversation, self.user, "Найди и подготовь действие")
+        state = self.conversation.context["agent_run"]
+        from copy import deepcopy
+        done = deepcopy(state["plan"]["steps"][-1])
+        done["id"] = "already_done"
+        state["plan"]["steps"].append(done)
+        state["steps"].append({"plan_step_id": "already_done", "plan_version": state["plan"]["version"],
+                               "tool_id": done["capability_id"], "status": "completed", "result": {"created": True}})
+        declaration = {"goal": "Продолжить", "revision_reason": "Уточнение", "steps": [{
+            **done, "reference_sources": [{"parameter": "tender_id", "read_id": "find"}],
+        }]}
+        # The identical completed step is not a replacement for pending work.
+        with self.assertRaisesRegex(AssistantReferenceError, "Пустой READ не отменяет ACTION"):
+            _normalise_plan(declaration, self.user, state["plan"], state)

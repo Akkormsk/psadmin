@@ -1,6 +1,7 @@
 """Standard OpenAI Function Calling loop for PSADMIN."""
 from __future__ import annotations
 import json, os, re
+from collections import Counter
 from uuid import uuid4
 from urllib.request import Request, urlopen
 from django.utils import timezone
@@ -477,14 +478,18 @@ def _bind_reference_sources(steps, declarations, user, state, previous):
             bound[name] = source_id
         if references:
             step["reference_sources"] = [{"parameter": name, "read_id": source} for name, source in bound.items()]
-    # An unresolved action stays pending until the user agrees to cancel.
-    # Replanning may replace its search, not silently erase the obligation.
+    # Preserve the number of pending actions, not their model-chosen step names.
+    # An unchanged completed step cannot stand in for an unresolved action.
+    completed = _completed_plan_steps(state)
+    remaining = Counter(item["capability_id"] for item in steps
+                        if item["id"] not in completed or item != previous_steps.get(item["id"]))
     for old in previous_steps.values():
-        if old["id"] in _completed_plan_steps(state):
+        if old["id"] in completed:
             continue
-        if not any(item["id"] == old["id"] and item["capability_id"] == old["capability_id"] for item in steps):
-            sources = [item["read_id"] for item in old.get("reference_sources", [])]
-            if any(source in results and results[source].get("total_count") == 0 for source in sources):
+        sources = [item["read_id"] for item in old.get("reference_sources", [])]
+        if any(source in results and results[source].get("total_count") == 0 for source in sources):
+            remaining[old["capability_id"]] -= 1
+            if remaining[old["capability_id"]] < 0:
                 raise AssistantReferenceError("Пустой READ не отменяет ACTION: уточните задачу через assistant.ask; закрытие без результата — только с согласия пользователя через assistant.cancel")
 
 
