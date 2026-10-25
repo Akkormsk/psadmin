@@ -116,10 +116,13 @@ def _conversations(user):
     return OwnerInteraction.objects.filter(context__kind=CONVERSATION_KIND, context__owner_id=user.pk, status="open").order_by("-created_at")
 
 
-def archive_conversations(user):
-    conversations = _conversations(user)
-    ConversationAttachment.objects.filter(conversation__in=conversations).delete()
-    return conversations.update(status="archived")
+def clear_conversations(user):
+    conversations = OwnerInteraction.objects.filter(
+        context__kind=CONVERSATION_KIND, context__owner_id=user.pk,
+    )
+    # QuerySet.delete is atomic and cascades only to messages and attachments.
+    _total, deleted = conversations.delete()
+    return deleted.get(OwnerInteraction._meta.label, 0)
 
 
 def create_conversation(user, title="", context=None):

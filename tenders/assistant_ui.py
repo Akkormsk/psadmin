@@ -1,13 +1,19 @@
 import json
+from urllib.parse import urlencode
+
+from django.core import signing
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect
+from django.urls import reverse
+from django.utils import timezone
+from django.views.decorators.http import require_GET, require_POST
 
 from .assistant_agent import continue_after_cancellation, continue_after_confirmation
 from .assistant_tools import AssistantToolError, execute_tool
-from .assistant_conversations import add_assistant_message, archive_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_debug_journal, serialize_messages, upload_attachment
+from .assistant_conversations import add_assistant_message, clear_conversations, conversation_for_user, create_conversation, message_attachments, respond, serialize_conversation, serialize_debug_journal, serialize_messages, upload_attachment
 from .services import TenderAIError
 
 
@@ -27,7 +33,7 @@ def conversations(request):
 def conversations_clear(request):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required")
-    return JsonResponse({"archived": archive_conversations(request.user)})
+    return JsonResponse({"deleted": clear_conversations(request.user)})
 
 
 @login_required
@@ -56,6 +62,48 @@ def conversation_debug(request, conversation_id):
     if not conversation:
         return JsonResponse({"detail": "Беседа не найдена"}, status=404)
     return JsonResponse({"debug_journal": serialize_debug_journal(conversation)})
+
+
+_EXPORT_SALT = "assistant-conversation-export"
+
+
+@login_required
+@require_POST
+def conversation_link(request, conversation_id):
+    conversation = conversation_for_user(request.user, conversation_id)
+    if not conversation:
+        return JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    token = signing.dumps({"conversation_id": conversation.pk, "owner_id": request.user.pk}, salt=_EXPORT_SALT)
+    path = reverse("assistant_conversation_export", args=[conversation.pk])
+    response = JsonResponse({"url": request.build_absolute_uri(path) + "?" + urlencode({"token": token})})
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@require_GET
+def conversation_export(request, conversation_id):
+    from .models import OwnerInteraction
+    try:
+        data = signing.loads(request.GET.get("token", ""), salt=_EXPORT_SALT)
+    except signing.BadSignature:
+        data = None
+    conversation = None
+    if isinstance(data, dict) and data.get("conversation_id") == conversation_id:
+        conversation = OwnerInteraction.objects.filter(
+            pk=conversation_id, status="open", context__kind="assistant_conversation",
+            context__owner_id=data.get("owner_id"),
+        ).first()
+    if conversation is None:
+        response = JsonResponse({"detail": "Беседа не найдена"}, status=404)
+    else:
+        response = JsonResponse({
+            "exported_at": timezone.now().isoformat(), "conversation": serialize_conversation(conversation),
+            "messages": serialize_messages(conversation), "debug_journal": serialize_debug_journal(conversation),
+        }, json_dumps_params={"ensure_ascii": False})
+    response["Cache-Control"] = "no-store"
+    response["Referrer-Policy"] = "no-referrer"
+    response["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return response
 
 
 @login_required
