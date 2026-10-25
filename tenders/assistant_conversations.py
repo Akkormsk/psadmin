@@ -4,6 +4,13 @@ import base64
 import json
 from datetime import timedelta
 from pathlib import Path
+from zipfile import BadZipFile
+from xml.etree.ElementTree import ParseError
+
+from lxml.etree import XMLSyntaxError
+from openpyxl.utils.exceptions import InvalidFileException
+from pypdf.errors import PyPdfError
+from xlrd.biffh import XLRDError
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
@@ -44,8 +51,11 @@ def _attachment_text(name, content):
         return ""
     try:
         text, _truncated = extract_tender_source(SimpleUploadedFile(name, content))
-    except (TenderAIError, OSError, UnicodeError, ValueError):
-        return ""
+    except (
+        TenderAIError, OSError, UnicodeError, ValueError, BadZipFile, ParseError,
+        XMLSyntaxError, InvalidFileException, PyPdfError, XLRDError, KeyError,
+    ) as exc:
+        raise ValueError("Не удалось прочитать документ. Проверьте, что файл исправен, не защищён паролем и соответствует своему формату.") from exc
     return text[:MAX_ATTACHMENT_TEXT_CHARS]
 
 
@@ -74,8 +84,13 @@ def upload_attachment(conversation, user, uploaded):
 
 def serialize_attachment(attachment, *, include_text=False):
     result = {"id": attachment.pk, "name": attachment.name, "kind": attachment.kind}
-    if include_text and attachment.extracted_text:
-        result["text"] = attachment.extracted_text
+    if attachment.kind == "document":
+        if not attachment.extracted_text:
+            result["warning"] = "Текст из файла не извлечён. Для скана приложите страницы как изображения или файл с текстовым слоем."
+        elif len(attachment.extracted_text) >= MAX_ATTACHMENT_TEXT_CHARS:
+            result["warning"] = f"Достигнут лимит {MAX_ATTACHMENT_TEXT_CHARS} символов; содержимое может быть неполным."
+        if include_text:
+            result["text"] = attachment.extracted_text
     return result
 
 

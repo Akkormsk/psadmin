@@ -137,14 +137,14 @@ def conversation_message(request, conversation_id):
 @login_required
 def conversation_attachment(request, conversation_id):
     if request.method != "POST":
-        return HttpResponseBadRequest("POST required")
+        return JsonResponse({"detail": "POST required"}, status=400)
     conversation = conversation_for_user(request.user, conversation_id)
     if not conversation:
         return JsonResponse({"detail": "Беседа не найдена"}, status=404)
     try:
         attachment = upload_attachment(conversation, request.user, request.FILES.get("file"))
     except ValueError as exc:
-        return HttpResponseBadRequest(str(exc))
+        return JsonResponse({"detail": str(exc)}, status=400)
     return JsonResponse({"attachment": {"id": attachment.pk, "name": attachment.name, "kind": attachment.kind}}, status=201)
 
 
