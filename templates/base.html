@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261011f">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261026a">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -41,7 +41,7 @@
     {% if request.user.is_authenticated and not request.GET.workspace %}
     <button type="button" class="assistant-launcher" id="assistant-launcher" aria-controls="assistant-drawer" aria-expanded="false"><span aria-hidden="true">✦</span><span>Ассистент</span></button>
     <aside class="assistant-drawer" id="assistant-drawer" aria-label="Ассистент" aria-hidden="true">
-        <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Тема беседы</small><strong id="assistant-topic">Новая рабочая беседа</strong><details class="assistant-context" id="assistant-context"><summary id="assistant-context-summary">Контекст: текущий экран</summary><p id="assistant-context-meta">Ассистенту передаётся только открытый раздел.</p></details></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
+        <header class="assistant-drawer__header"><div><small class="assistant-drawer__eyebrow">Тема беседы</small><strong id="assistant-topic">Новая рабочая беседа</strong><details class="assistant-context" id="assistant-context"><summary id="assistant-context-summary">Контекст: текущий экран</summary><p id="assistant-context-meta">Ассистенту передаётся только открытый раздел.</p></details><div id="assistant-length-notice" class="assistant-length-notice" role="status" hidden><p>Беседа стала длинной. Для новой задачи рекомендуем начать новую беседу. Здесь можно продолжать.</p><button id="assistant-length-notice-close" type="button" aria-label="Закрыть рекомендацию">×</button></div></div><button type="button" class="modal-close" id="assistant-close" aria-label="Закрыть">×</button></header>
         <div class="assistant-drawer__history"><button type="button" class="assistant-history__new" id="assistant-new">+ Новая беседа</button><div class="assistant-history-picker"><button type="button" class="assistant-history__toggle" id="assistant-history-toggle" aria-expanded="false">История</button><div class="assistant-history__menu" id="assistant-history" hidden></div></div><button type="button" class="assistant-history__export" id="assistant-export">Ссылка</button><button type="button" class="assistant-history__clear" id="assistant-history-clear">Очистить</button></div>
         <main class="assistant-drawer__messages" id="assistant-messages" aria-live="polite"></main>
         <form class="assistant-drawer__composer" id="assistant-composer"><input id="assistant-file" type="file" hidden><button class="assistant-composer__attach" id="assistant-attach" type="button" aria-label="Прикрепить файл">📎</button><textarea id="assistant-input" rows="2" placeholder="Спросите о расчёте или прикрепите файл…"></textarea><button class="assistant-composer__send" type="submit" aria-label="Отправить">➜</button></form>
@@ -52,6 +52,9 @@
         const close = document.getElementById("assistant-close"), fresh = document.getElementById("assistant-new");
         const history = document.getElementById("assistant-history"), historyToggle = document.getElementById("assistant-history-toggle"), historyExport = document.getElementById("assistant-export"), historyClear = document.getElementById("assistant-history-clear"), messages = document.getElementById("assistant-messages"), topic = document.getElementById("assistant-topic"), context = document.getElementById("assistant-context"), contextSummary = document.getElementById("assistant-context-summary"), contextMeta = document.getElementById("assistant-context-meta");
         const composer = document.getElementById("assistant-composer"), input = document.getElementById("assistant-input"), attachmentInput = document.getElementById("assistant-file"), attachmentButton = document.getElementById("assistant-attach");
+        const lengthNotice = document.getElementById("assistant-length-notice"), lengthNoticeClose = document.getElementById("assistant-length-notice-close");
+        const lengthNoticeSeen = new Set();
+        let lengthNoticeConversation = null;
         let active = null;
         let creating = null;
         let workspaceContext = null;
@@ -72,7 +75,19 @@
           messages.scrollTop = messages.scrollHeight;
           return messages.lastElementChild;
         }
+        function updateLengthNotice(items) {
+          if (lengthNoticeConversation !== active) { lengthNotice.hidden = true; lengthNoticeConversation = null; }
+          if (!active || items.filter(function (item) { return item.role === "user"; }).length < 10 || lengthNoticeSeen.has(active)) return;
+          const noticeKey = "psadmin-assistant-length-notice:" + active;
+          try { if (localStorage.getItem(noticeKey)) { lengthNoticeSeen.add(active); return; } } catch (error) {}
+          lengthNoticeSeen.add(active);
+          try { localStorage.setItem(noticeKey, "1"); } catch (error) {}
+          lengthNoticeConversation = active;
+          lengthNotice.hidden = false;
+        }
+        lengthNoticeClose.addEventListener("click", function () { lengthNotice.hidden = true; });
         function render(items) {
+          updateLengthNotice(items);
           if (!items.length) {
             messages.innerHTML = "<section class=\"assistant-empty\"><span class=\"assistant-empty__mark\">✦</span><h2>Начните рабочую беседу</h2><p>Контекст текущего экрана сохранится.</p></section>";
             return;
@@ -128,7 +143,7 @@
         }
         function hideHistory() { history.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); }
         function open() { drawer.classList.add("is-open"); document.body.classList.add("assistant-open"); drawer.setAttribute("aria-hidden", "false"); launcher.setAttribute("aria-expanded", "true"); renderCurrentContext(); (active ? Promise.resolve() : create()).then(function () { input.focus(); }); }
-        function shut(focusLauncher) { drawer.classList.remove("is-open"); document.body.classList.remove("assistant-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); hideHistory(); if (focusLauncher) launcher.focus(); }
+        function shut(focusLauncher) { lengthNotice.hidden = true; drawer.classList.remove("is-open"); document.body.classList.remove("assistant-open"); drawer.setAttribute("aria-hidden", "true"); launcher.setAttribute("aria-expanded", "false"); hideHistory(); if (focusLauncher) launcher.focus(); }
         launcher.addEventListener("click", function () { if (drawer.classList.contains("is-open")) shut(false); else open(); }); close.addEventListener("click", function () { shut(true); }); fresh.addEventListener("click", function () { create(); hideHistory(); });
         historyToggle.addEventListener("click", function () { const hidden = history.hidden; history.hidden = !hidden; historyToggle.setAttribute("aria-expanded", String(hidden)); });
         historyClear.addEventListener("click", function () { if (!window.confirm("Удалить все беседы, включая архивные, их сообщения, журналы и вложения? Ссылки на беседы перестанут работать. Прайсы, расчёты и сохранённые знания не будут затронуты.")) return; historyClear.disabled = true; fetch("/tenders/assistant/conversations/clear/", {method:"POST", headers:{"X-CSRFToken":csrf()}}).then(function (response) { if (!response.ok) throw new Error(); active = null; return create(); }).finally(function () { historyClear.disabled = false; }); });
