@@ -596,12 +596,12 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
 
     name, definition = _function_definition(
         "assistant.plan",
-        "Saves the task plan before business tools; revises it only when the route changes. Each capability_id must name a published capability, not an area.",
+        "Saves the task plan before business tools. Revise only the route within the same task; an independent request requires assistant.cancel(new_task=true) first. Each capability_id names a published capability, not an area.",
         {"plan": {
             "type": "object",
             "properties": {
                 "goal": {"type": "string", "minLength": 1},
-                "revision_reason": {"type": "string", "required": False, "description": "Reason for a changed goal or route; null initially. Argument clarification alone does not require replanning."},
+                "revision_reason": {"type": "string", "required": False, "description": "Reason for a route change within the same task; null initially. Argument corrections keep the plan; an independent request requires assistant.cancel(new_task=true)."},
                 "steps": {
                     "type": "array", "minItems": 1,
                     "item": {
@@ -639,7 +639,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
     for identifier, description, schema in (
         ("assistant.ask", "Continues dialogue within the active task: responds to the user, asks for clarification when needed, and waits for the next message. Does not complete the task.",
          {"question": {"type": "string", "minLength": 1}}),
-        ("assistant.cancel", "Закрывает задачу как отменённую по просьбе пользователя. При переключении на независимую задачу укажи new_task=true; уточнение аргументов не является новой задачей.",
+        ("assistant.cancel", "Closes the active task. Use new_task=true BEFORE answering or planning an independent request, including a self-contained question. Use false for whole-task cancellation. Argument/preview corrections continue the same task; card cancellation alone does not close it.",
          {"reason": {"type": "string", "minLength": 1}, "answer": {"type": "string", "minLength": 1}, "new_task": "boolean"}),
     ):
         name, definition = _function_definition(identifier, description, schema)

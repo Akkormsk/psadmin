@@ -38,11 +38,12 @@ _SYSTEM_RULES = (
     "If READ returns multiple plausible objects, ask the user to choose in business terms; report absence only from an actual adequate READ result. "
     "A rejected object reference is not a search result. Revise the same task's plan with a concrete reason, resolve the reference using READ and continue; do not ask the user for internal IDs. "
     "Bind each ACTION reference in plan.reference_sources to a preceding READ step or saved source_id. Change sources only by replanning. Empty READ: continue searching or use assistant.ask; cancellation requires the user's agreement. Every READ/ACTION task MUST start with assistant.plan, BEFORE even a clarification question; arguments may still be unknown. "
-    "Keep the same task and plan when collecting or correcting amounts, dates and other arguments. "
-    "Revise the plan only for a changed goal, capability or route, with a specific revision_reason. Preserve completed work. "
-    "For ordinary conversation and self-contained elementary arithmetic without business data or actions, use assistant.chat instead of plan/finish. "
-    "If the user cancels or switches to an independent task, call assistant.cancel; set new_task=true only for switching. "
-    "Do not use replanning to replace an independent task or to pretend cancellation is success. "
+    "Route each user message by its relation to the active goal. "
+    "Argument/preview corrections, related questions and requests to resume keep the plan. "
+    "Independent actions/questions require assistant.cancel(new_task=true) BEFORE any answer or new plan. "
+    "Replan only routes within the same task, with revision_reason; preserve completed work. "
+    "Card cancellation rejects that ACTION, not its plan: corrections remain possible; it is neither execution nor a request to retry. "
+    "Cancel the whole task with new_task=false. Outside a plan use assistant.chat for self-contained questions. "
     "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
@@ -908,7 +909,7 @@ def reply(conversation, user, message, page_context=None, attachments=None, imag
         if waiting:
             state["messages"].append({"role": "tool", "tool_call_id": waiting["tool_call_id"],
                 "content": json.dumps({"ok": False, "cancelled": True,
-                    "error": "Пользователь прислал текст вместо подтверждения; прежняя карточка недействительна. Учтите уточнение и подготовьте новую карточку."}, ensure_ascii=False)})
+                    "error": "The user sent a message instead of confirming; this preview is invalid and was not executed. Apply the task-routing rules to the latest message; do not assume a correction or recreate the preview automatically."}, ensure_ascii=False)})
             state.pop("waiting_confirmation")
             # The text is never permission to execute. The next preview must
             # validate the updated arguments and obtain its own button click.
