@@ -450,6 +450,18 @@ def _bind_reference_sources(steps, declarations, user, state, previous):
             if not isinstance(source, str) or not source:
                 raise AssistantReferenceError("Источник reference должен быть идентификатором READ")
             source_id = preceding.get(source, source)
+            if source not in results and not any(item["id"] == source for item in steps):
+                # A completed READ in this task may be omitted from a revised
+                # plan. Resolve its name only when it identifies one result.
+                matches = {execution["result"]["source_id"] for execution in state.get("steps", [])
+                           if execution.get("plan_step_id") == source
+                           and execution.get("tool_id", "").startswith("read:")
+                           and execution.get("status") == "completed"
+                           and isinstance(execution.get("result"), dict)
+                           and execution["result"].get("source_id") in results}
+                if len(matches) > 1:
+                    raise AssistantReferenceError("Имя шага READ неоднозначно: укажите source_id конкретного результата")
+                source_id = next(iter(matches), source_id)
             if source_id not in preceding.values() and source_id not in results:
                 raise AssistantReferenceError("Источник reference отсутствует: укажите предыдущий шаг READ или сохранённый source_id")
             result = results.get(source_id)

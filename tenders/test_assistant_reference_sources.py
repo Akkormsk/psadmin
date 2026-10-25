@@ -196,3 +196,70 @@ class AssistantReferenceSourceTests(TestCase):
         _validate_reference_sources(tool, {}, state)
         with self.assertRaises(AssistantReferenceError):
             _validate_reference_sources(tool, {parameter: self.tender.pk}, state)
+
+    def test_revised_plan_reuses_completed_step_name_without_repeating_read(self):
+        self.gateway.side_effect = [self.plan(), self.read(self.tender.purchase_number), self.ask(),
+            self.plan(read=None, source="find", revision="Пользователь уточнил выбор; используем выполненный поиск"), self.action()]
+        respond(self.conversation, self.user, "Найди SOURCE-001 и уточни перед карточкой")
+        before = self.conversation.context["agent_run"]
+        source = next(s["result"]["source_id"] for s in before["steps"] if s["tool_id"].startswith("read:"))
+        task_id = before["task_id"]
+        card = respond(self.conversation, self.user, "Да, подготовь для найденного объекта")[-1]
+        state = self.conversation.context["agent_run"]
+        self.assertEqual(card["kind"], "confirmation_required")
+        self.assertEqual(card["data"]["arguments"], {"tender_id": self.tender.pk})
+        self.assertEqual(state["task_id"], task_id)
+        self.assertEqual(state["plan"]["version"], 2)
+        self.assertEqual(state["plan"]["steps"][0]["reference_sources"][0]["read_id"], source)
+        self.assertEqual(len([s for s in state["steps"] if s["tool_id"].startswith("read:")]), 1)
+        self.assertEqual(self.gateway.call_count, 5)
+        self.assertFalse(TenderEstimate.objects.exists())
+
+    def test_historical_step_name_is_rejected_when_results_are_ambiguous(self):
+        self.gateway.side_effect = [self.plan(), self.read(self.tender.purchase_number), self.ask()]
+        respond(self.conversation, self.user, "Найди первый объект")
+        state = self.conversation.context["agent_run"]
+        original = next(s for s in state["steps"] if s["tool_id"].startswith("read:"))
+        from copy import deepcopy
+        other = deepcopy(original)
+        other["result"]["source_id"] = uuid4().hex
+        other["plan_version"] += 1
+        state["steps"].append(other)
+        declaration = json.loads(self.plan(read=None, source="find", revision="Повторная подготовка")["tool_calls"][0]["function"]["arguments"])["plan"]
+        with self.assertRaisesRegex(AssistantReferenceError, "неоднознач"):
+            _normalise_plan(declaration, self.user, state["plan"], state)
+        # The stable identity still resolves the exact result.
+        declaration["steps"][0]["reference_sources"][0]["read_id"] = original["result"]["source_id"]
+        revised = _normalise_plan(declaration, self.user, state["plan"], state)
+        self.assertEqual(revised["steps"][0]["reference_sources"][0]["read_id"], original["result"]["source_id"])
+
+    def test_current_empty_read_takes_priority_over_same_named_old_step(self):
+        self.gateway.side_effect = [self.plan(), self.read(self.tender.purchase_number), self.ask()]
+        respond(self.conversation, self.user, "Найди первый объект")
+        # A different search objective gives the new step a new identity.
+        revision = self.plan(revision="Пользователь ищет другой объект")
+        args = json.loads(revision["tool_calls"][0]["function"]["arguments"])
+        args["plan"]["steps"][0]["objective"] = "Найти другой объект"
+        revision["tool_calls"][0]["function"]["arguments"] = json.dumps(args)
+        self.gateway.side_effect = [revision, self.read("ABSENT-777"), self.action(), self.ask()]
+        result = respond(self.conversation, self.user, "Теперь найди ABSENT-777")[-1]
+        state = self.conversation.context["agent_run"]
+        self.assertNotEqual(result["kind"], "confirmation_required")
+        self.assertNotIn("waiting_confirmation", state)
+        self.assertIn("не содержит выбранный объект", json.dumps(state["messages"], ensure_ascii=False))
+        self.assertFalse(TenderEstimate.objects.exists())
+
+    def test_previous_task_step_name_does_not_become_a_global_alias(self):
+        self.gateway.side_effect = [planned_call("read:tender_selection.tenders", steps=[{
+            "id": "find", "capability_id": "read:tender_selection.tenders", "objective": "Найти объект",
+        }]), self.read(self.tender.purchase_number), function_call("assistant_finish", {"answer": "Найдено"})]
+        respond(self.conversation, self.user, "Найди SOURCE-001")
+        state = _new_state(self.conversation, self.user, "Подготовь действие", [])
+        declaration = json.loads(self.plan(read=None, source="find")["tool_calls"][0]["function"]["arguments"])["plan"]
+        with self.assertRaisesRegex(AssistantReferenceError, "Источник reference отсутствует"):
+            _normalise_plan(declaration, self.user, state=state)
+        # Cross-task reuse still works through the retained stable identity.
+        source = state["memory"]["recent_selections"][-1]["source_id"]
+        declaration["steps"][0]["reference_sources"][0]["read_id"] = source
+        plan = _normalise_plan(declaration, self.user, state=state)
+        self.assertEqual(plan["steps"][0]["reference_sources"][0]["read_id"], source)
