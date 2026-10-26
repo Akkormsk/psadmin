@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=workspace-20261026a">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=assistant-records-20261026">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -46,6 +46,7 @@
         <main class="assistant-drawer__messages" id="assistant-messages" aria-live="polite"></main>
         <form class="assistant-drawer__composer" id="assistant-composer"><input id="assistant-file" type="file" hidden><button class="assistant-composer__attach" id="assistant-attach" type="button" aria-label="Прикрепить файл">📎</button><textarea id="assistant-input" rows="2" placeholder="Спросите о расчёте или прикрепите файл…"></textarea><button class="assistant-composer__send" type="submit" aria-label="Отправить">➜</button></form>
     </aside>
+    <script src="{% static 'core/assistant-format.js' %}?v=20261026"></script>
     <script>
       (function () {
         const launcher = document.getElementById("assistant-launcher"), drawer = document.getElementById("assistant-drawer");
@@ -97,7 +98,8 @@
             if (item.kind === "capabilities") extra = "<ul>" + item.data.tools.filter(function (tool) { return tool.available; }).map(function (tool) { return "<li><strong>" + escape(tool.name) + "</strong><br><small>" + escape(tool.description) + "</small></li>"; }).join("") + "</ul>";
             if (item.kind === "plan") extra = "<section class=\"assistant-tool-result\"><ol>" + (item.data.steps || []).map(function (step) { const missing = step.missing_inputs && step.missing_inputs.length ? " · нужны: " + escape(step.missing_inputs.join(", ")) : ""; const after = step.depends_on && step.depends_on.length ? " · после шагов " + escape(step.depends_on.join(", ")) : ""; const confirm = step.requires_confirmation ? " · потребуется подтверждение" : ""; const result = step.expected_result ? "<br><small>Ожидаемый результат: " + escape(step.expected_result) + "</small>" : ""; return "<li><strong>" + escape(step.name) + "</strong><br><small>" + escape(step.purpose) + missing + after + confirm + "</small>" + result + "</li>"; }).join("") + "</ol>" + ((item.data.gaps || []).length ? "<p><small>Ограничения: " + escape(item.data.gaps.join("; ")) + "</small></p>" : "") + "</section>";
             if (item.kind === "confirmation_required") { const action = item.data.action || {}; const details = (action.arguments || []).map(function (entry) { const value = entry.items ? "<ul class=\"assistant-card__detail-items\">" + entry.items.map(function (part) { return "<li>" + escape(part.text) + (part.hint ? "<small>" + escape(part.hint) + "</small>" : "") + "</li>"; }).join("") + "</ul>" : escape(entry.value); return "<div><dt>" + escape(entry.label) + "</dt><dd>" + value + "</dd></div>"; }).join(""); extra = "<form class=\"assistant-card\" data-action-confirm>" + (action.name ? "<strong>" + escape(action.name) + "</strong>" : "") + (details ? "<dl class=\"assistant-card__details\">" + details + "</dl>" : "") + (action.description ? "<p><small>" + escape(action.description) + "</small></p>" : "") + "<div class=\"assistant-card__actions\"><button name=\"accept\" value=\"yes\" type=\"submit\">Подтвердить</button><button name=\"accept\" value=\"no\" type=\"submit\">Отменить</button></div></form>"; }
-            return "<article data-event-id=\"" + item.id + "\" class=\"assistant-message assistant-message--" + escape(item.role) + "\"><p>" + escape(item.text) + "</p>" + extra + messageTime(item.created_at) + "</article>";
+            const body = item.role === "assistant" && window.psAssistantFormat ? window.psAssistantFormat.render(item.text) : "<p>" + escape(item.text) + "</p>";
+            return "<article data-event-id=\"" + item.id + "\" class=\"assistant-message assistant-message--" + escape(item.role) + "\">" + body + extra + messageTime(item.created_at) + "</article>";
           }).join("");
           messages.scrollTop = messages.scrollHeight;
         }
