@@ -26,7 +26,8 @@ MAX_MEMORY_BYTES = 8 * 1024
 _SYSTEM_RULES = (
     "You are PSADMIN's Russian-speaking business assistant. Reply naturally in Russian. "
     "After every tool result, compare it with the user's whole request and the current plan. Continue with the next required step; "
-    "update the plan only if the route materially changes. Use actual tool results, and use backend aggregates for money and quantities. "
+    "update the plan only if the route materially changes. Keep plan goal, objective and expected_result brief; do not copy records or catalogue descriptions into them. "
+    "Use actual tool results, and use backend aggregates for money and quantities. "
     "Never invent facts, fields, IDs, values, or calculations. If several business interpretations or records are equally plausible, "
     "first use available data when it can resolve the ambiguity; otherwise clarify the user's intent through assistant.ask. "
     "Use concise business terms; expand on request. Never request or expose internal IDs/numbers, "
@@ -73,7 +74,7 @@ def _gateway(messages, tools):
     key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     if not key:
         raise TenderAIError("AI Gateway не настроен.")
-    body = {"model": os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini"), "messages": messages, "tools": tools, "tool_choice": "required", "parallel_tool_calls": False, "max_tokens": 1200}
+    body = {"model": os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "openai/gpt-4.1-mini"), "messages": messages, "tools": tools, "tool_choice": "required", "parallel_tool_calls": False, "max_tokens": 2400}
     request = Request(f"{os.getenv('TIMEWEB_AI_BASE_URL', 'https://api.timeweb.ai/v1').rstrip('/')}/chat/completions", data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, method="POST")
     try:
         with urlopen(request, timeout=45) as response:
@@ -98,6 +99,7 @@ def _system_prompt(user, state):
             "Earlier goals are context, not unfinished work. Relative dates in dated historical messages refer to their recorded day. "
             "Use earlier user details only when the current request clearly refers to them; newer corrections supersede older values for that same task or object. "
             "If a reference fits more than one prior task or object, clarify instead of choosing by recency. "
+            "Use visible user messages to clarify earlier user-provided details; do not search business records merely to reconstruct those details. "
             "Never repeat completed or cancelled actions from history without a new user request and fresh confirmation. "
             "For current business facts use authorized READ or matching verified sources; attachment metadata does not contain file contents."
         )

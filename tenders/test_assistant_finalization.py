@@ -2,7 +2,7 @@ import json
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from cash.models import CashTransaction
@@ -114,3 +114,19 @@ class AssistantFinalizationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["messages"][-1]["text"], "Расход создан")
         self.assertEqual(CashTransaction.objects.count(), 1)
+
+
+class AssistantGatewayEnvelopeTests(SimpleTestCase):
+    def test_gateway_allows_plan_output_headroom_without_changing_tools(self):
+        from .assistant_agent import _gateway
+
+        payload = {"choices": [{"message": {"role": "assistant", "tool_calls": []}}]}
+        tools = [{"type": "function", "function": {"name": "assistant_plan"}}]
+        with patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": "local-test"}), patch("tenders.assistant_agent.urlopen") as transport:
+            transport.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+            _gateway([{"role": "user", "content": "Составь план"}], tools)
+        body = json.loads(transport.call_args.args[0].data)
+        self.assertEqual(body["max_tokens"], 2400)
+        self.assertEqual(body["tools"], tools)
+        self.assertEqual(body["tool_choice"], "required")
+        self.assertFalse(body["parallel_tool_calls"])

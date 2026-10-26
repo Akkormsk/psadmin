@@ -24,6 +24,29 @@ class AssistantReadPresentationTests(TestCase):
         tender = Tender.objects.create(purchase_number=f"DISPLAY-{Tender.objects.count()}", title="Тест", outcome_status=outcome)
         return TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="DISPLAY", name="Тест", summary_snapshot={"is_incomplete": incomplete})
 
+    def test_read_without_business_views_only_advertises_null(self):
+        from .assistant_tools import _function_definition
+        contract = plan_contract("cash.CashTransaction")
+        self.assertEqual(contract["properties"]["view"]["type"], "null")
+        _, definition = _function_definition("read", "Read", {"plan": contract})
+        view = definition["function"]["parameters"]["properties"]["plan"]["properties"]["view"]
+        from .test_assistant_tools import _schema_accepts
+        self.assertTrue(_schema_accepts(None, view))
+        self.assertFalse(_schema_accepts("list", view))
+        self.assertFalse(_schema_accepts("", view))
+
+    def test_read_with_business_views_keeps_declared_choices_and_null(self):
+        from .assistant_tools import _function_definition
+        from .test_assistant_tools import _schema_accepts
+
+        with patch("tenders.assistant_read._business_views", return_value=[{"id": "approved", "label": "Одобренные"}]):
+            contract = plan_contract("cash.CashTransaction")
+        _, definition = _function_definition("read", "Read", {"plan": contract})
+        view = definition["function"]["parameters"]["properties"]["plan"]["properties"]["view"]
+        self.assertTrue(_schema_accepts(None, view))
+        self.assertTrue(_schema_accepts("approved", view))
+        self.assertFalse(_schema_accepts("list", view))
+
     def test_datetime_display_converts_offset_and_preserves_precision_and_date(self):
         transaction = CashTransaction.objects.create(operation_date=date(2026, 10, 24), account="cash", direction="expense", amount="1.25", reason="Точная дата", created_by=self.user)
         timestamp = datetime(2026, 10, 24, 22, 10, 28, 688137, tzinfo=dt_timezone.utc)

@@ -251,7 +251,7 @@ class AssistantToolRegistryTests(TestCase):
         transaction_create = next(item for item in cash["capabilities"] if item["id"] == "cash.transaction_create")
 
         self.assertEqual(transaction_read["kind"], "read")
-        self.assertIn("count/sum/avg/min/max", transaction_read["description"])
+        self.assertEqual(transaction_read["description"], next(item for item in available_capabilities(self.admin, "cash") if item["id"] == transaction_read["id"])["description"])
         self.assertTrue(transaction_create["requires_confirmation"])
         self.assertEqual(
             set(transaction_read),
@@ -261,6 +261,10 @@ class AssistantToolRegistryTests(TestCase):
         self.assertNotIn("properties", json.dumps(capability_map, ensure_ascii=False))
         rendered = capability_map_text(capability_map)
         self.assertIn("read:cash.transactions", rendered)
+        self.assertEqual(rendered.count("count/sum/avg/min/max"), 1)
+        for area in capability_map:
+            for capability in area["capabilities"]:
+                self.assertIn(capability["description"], rendered)
         self.assertLess(len(rendered.encode()), len(json.dumps(capability_map, ensure_ascii=False).encode()))
 
     def test_capability_map_updates_from_registry_and_hides_unavailable_tools(self):

@@ -368,7 +368,6 @@ def _plan_references(user, identifier):
 
 def available_capability_map(user) -> list[dict[str, Any]]:
     """Compact discovery view of the existing registry, grouped by area."""
-    read_suffix = " Поддерживает фильтры, сортировку, группировку и агрегаты count/sum/avg/min/max по разрешённым полям."
     return [
         {
             "id": area["id"],
@@ -380,7 +379,6 @@ def available_capability_map(user) -> list[dict[str, Any]]:
                         key: capability[key]
                         for key in ("id", "kind", "name", "description", "requires_confirmation")
                     },
-                    **({"description": capability["description"] + read_suffix} if capability["kind"] == "read" else {}),
                     **({"references": references} if (references := _plan_references(user, capability["id"])) else {}),
                 }
                 for capability in available_capabilities(user, area["id"])
@@ -414,7 +412,8 @@ def capability_map_text(capability_map: list[dict[str, Any]]) -> str:
             f"[{area['id']}] {area['name']} — {area['description']}"
             + (f"\n{capabilities}" if capabilities else "\n- no available capabilities")
         )
-    return "\n".join(sections)
+    common = "Все READ поддерживают фильтры, сортировку, группировку и агрегаты count/sum/avg/min/max по разрешённым полям."
+    return common + "\n" + "\n".join(sections)
 
 
 def execute_tool(identifier: str, user, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:

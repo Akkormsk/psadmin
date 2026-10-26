@@ -158,7 +158,9 @@ def plan_contract(entity=None):
         views = [item["id"] for item in _business_views(model)]
         properties.update({
             "entity": {"type": "string", "required": True, "enum": [canonical]},
-            "view": {"type": "string", "required": False, **({"enum": views} if views else {})},
+            "view": {"type": "string" if views else "null", "required": False,
+                     **({"enum": views} if views else {}),
+                     "description": "Use a listed business view, or null for the base queryset. Never invent a view ID."},
             "fields": {"type": "string[]", "required": False, "description": f"Поля: {path_labels}", "item": {"type": "string", "enum": sorted(paths)}},
             "filters": {"type": "object[]", "required": False, "item": {"any_of": _filter_contracts(paths)}},
             "order_by": {"any_of": [

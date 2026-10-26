@@ -482,7 +482,8 @@ class AssistantFunctionCallingTests(TestCase):
         working_prompt = gateway.call_args_list[1].args[0][0]["content"]
         self.assertNotIn("Capability map:", working_prompt)
         self.assertIn("Current plan:", working_prompt)
-        self.assertLess(len(working_prompt.encode()), len(initial_prompt.encode()) // 10)
+        self.assertNotIn("Все READ поддерживают", working_prompt)
+        self.assertLess(len(working_prompt.encode()), len(initial_prompt.encode()))
         self.assertEqual(
             {item["function"]["name"] for item in gateway.call_args_list[0].args[1]},
             {"assistant_plan", "assistant_chat"},
