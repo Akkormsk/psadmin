@@ -49,7 +49,8 @@ _SYSTEM_RULES = (
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
     "When an action has all required values and verified reference sources, call it immediately to prepare the confirmation card; never ask for a separate textual confirmation first. "
-    "READ results include raw records for backend continuity and a metadata-derived display view; use the display view's labels and values in user-facing answers, never raw choice codes. "
+    "For READ answers use display.records when present, otherwise records, with labels from display.fields. "
+    "raw_values, when present, are row-aligned original values for tool arguments only; never show raw choice codes to the user. "
     "Use assistant.finish only for a final answer after the active plan's required steps have actually completed. "
     "Use assistant.ask for ongoing task dialogue: answer questions and clarify as needed, using only available evidence. Keep the task open. "
     "Never emit a bare text response: chat, ask and finish are different explicit function calls."
@@ -62,6 +63,39 @@ class AgentProtocolError(AssistantToolError):
 def _debug(conversation, stage, **payload):
     from .assistant_conversations import add_debug_event
     add_debug_event(conversation, stage, event_input=payload.get("input"), event_output=payload.get("output"), error=payload.get("error", ""))
+
+
+def _model_read_result(result):
+    """One display table for the model; backend retains the complete READ result."""
+    display = result.get("display")
+    records = result.get("records")
+    shown = display.get("records") if isinstance(display, dict) else None
+    if (not isinstance(records, list) or not isinstance(shown, list)
+            or len(records) != len(shown) or "raw_values" in result
+            or not all(isinstance(row, dict) for row in [*records, *shown])):
+        return result
+
+    if any("id" in raw and "id" in human and raw["id"] != human["id"]
+           for raw, human in zip(records, shown)):
+        return result
+
+    def same(left, right):
+        return json.dumps(left, sort_keys=True, default=str) == json.dumps(right, sort_keys=True, default=str)
+
+    raw_values = [
+        {name: value for name, value in raw.items() if name not in human or not same(value, human[name])}
+        for raw, human in zip(records, shown)
+    ]
+    compact_display = {key: value for key, value in display.items() if key != "records"}
+    if "aggregates" in display and same(display["aggregates"], result.get("aggregates")):
+        compact_display.pop("aggregates")
+    projected = {**result, "records": [dict(human) for human in shown],
+                 "display": compact_display}
+    if any(raw_values):
+        projected["raw_values"] = raw_values
+    compact_size = len(json.dumps(projected, ensure_ascii=False, default=str))
+    original_size = len(json.dumps(result, ensure_ascii=False, default=str))
+    return projected if compact_size < original_size else result
 
 
 def _request_metrics(messages, tools):
@@ -893,7 +927,8 @@ def _run(conversation, user, state):
                 _activate_next_plan_step(user, state)
             else:
                 state["steps"].append({"tool_id": identifier, "result": result, "status": "completed"})
-            content = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
+            model_result = _model_read_result(result) if identifier.startswith("read:") else result
+            content = json.dumps({"ok": True, "result": model_result}, ensure_ascii=False, default=str)
             _debug(conversation, "function_call.tool", output={"tool_id": identifier, "ok": True})
         except (AssistantToolError, ReadPlanError, ValueError, TypeError, json.JSONDecodeError) as exc:
             if identifier == "assistant.plan" or isinstance(exc, AssistantReferenceError):
