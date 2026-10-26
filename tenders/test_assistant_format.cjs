@@ -53,3 +53,31 @@ test('identical rows retain their count and empty values are not promoted', () =
   const blank = render('| А | Б |\n|---|---|\n| Один | |\n| Два | |');
   assert.ok(!blank.includes('assistant-records__common'));
 });
+
+let chromium;
+try { ({chromium} = require('playwright')); } catch (_) {}
+test('compact field labels stay whole and columns align at narrow widths', {skip: !chromium}, async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const browser = await chromium.launch({headless:true, ...(fs.existsSync('/usr/bin/chromium') ? {executablePath:'/usr/bin/chromium'} : {}), args:['--no-sandbox']});
+  try {
+    const page = await browser.newPage({viewport:{width:700,height:900}});
+    const table = '| Дата | Счёт | Тип | Сумма | Назначение |\n|---|---|---|---|---|\n' +
+      ['бумага', 'упаковка', 'Пробная печать макетов', 'Печать образца с достаточно длинным названием'].map((value, i) =>
+        `| ${26-i}.10.2026 | Наличные | Расход | ${100+i}.00 | ${value} |`
+      ).join('\n');
+    const css = fs.readFileSync(path.join(__dirname, '../static/core/index.css'), 'utf8');
+    await page.setContent('<style>' + css + '</style><article class="assistant-message" style="max-width:none">' + render(table) + '</article>');
+    for (const width of [240, 300, 400]) {
+      await page.locator('article').evaluate((el, width) => { el.style.width = width + 'px'; }, width);
+      const rows = await page.locator('.assistant-record').evaluateAll(records => records.map(record => {
+        const fields = [...record.children];
+        return {labelLines:fields[2].querySelector('dt').getClientRects().length,
+          firstY:fields[0].getBoundingClientRect().top, lastY:fields[2].getBoundingClientRect().top,
+          amountX:fields[1].getBoundingClientRect().left, overflow:record.scrollWidth>record.clientWidth};
+      }));
+      assert.ok(rows.every(row => row.labelLines===1 && row.lastY>row.firstY && !row.overflow));
+      assert.ok(rows.every(row => Math.abs(row.amountX-rows[0].amountX)<1));
+    }
+  } finally { await browser.close(); }
+});
