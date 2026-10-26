@@ -283,7 +283,10 @@ class AssistantTaskLifecycleTests(TestCase):
         respond(self.conversation, self.user, "Покажи операции")
         self.assertNotIn("agent_run", self.conversation.context)
         respond(self.conversation, self.user, "Привет")
-        self.assertEqual([m["role"] for m in gateway.call_args_list[3].args[0]], ["system", "system", "user"])
+        messages = gateway.call_args_list[3].args[0]
+        self.assertEqual([m["role"] for m in messages], ["system", "system", "user", "assistant", "user"])
+        self.assertEqual(messages[-2]["content"], "Операций нет.")
+        self.assertFalse(any(m.get("tool_calls") for m in messages))
         self.assertEqual(gateway.call_count, 4)
         self.assertNotIn("agent_run", self.conversation.context)
 
@@ -364,7 +367,8 @@ class AssistantStrictProtocolTests(TestCase):
         self.assertEqual([p.payload["output"]["plan"]["version"] for p in plans], [1, 1])
         self.assertTrue(self.conversation.feedback_events.filter(scope="assistant_debug", payload__stage="agent.task_cancelled").exists())
         messages = self.gateway.call_args_list[3].args[0]
-        self.assertEqual([m["content"] for m in messages if m["role"] == "user"], ["Отмени, вместо этого покажи операции"])
+        self.assertEqual([m["content"] for m in messages if m["role"] == "user"], ["Создай расход", "Отмени, вместо этого покажи операции"])
+        self.assertFalse(any(m.get("tool_calls") or m["role"] == "tool" for m in messages))
 
     def test_explicit_cancel_returns_idle_without_successful_finish(self):
         self.gateway.side_effect = [planned_call("cash.transaction_create"),
@@ -1254,13 +1258,14 @@ class AssistantMemoryTests(TestCase):
         self.assertIn("active_task", state["messages"][1]["content"])
         self.assertTrue(state["capability_map_pending"])
 
-    def test_new_state_uses_compact_memory_not_completed_visible_history(self):
+    def test_new_state_includes_completed_visible_history(self):
         add_assistant_message(self.conversation, "Старый длинный ответ " + "x" * 4000)
         from .assistant_agent import _new_state
 
         state = _new_state(self.conversation, self.user, "Новая задача", [])
 
-        self.assertEqual([item["role"] for item in state["messages"]], ["system", "user"])
+        self.assertEqual([item["role"] for item in state["messages"]], ["system", "assistant", "user"])
+        self.assertEqual(state["messages"][-2]["content"], "Старый длинный ответ " + "x" * 4000)
         self.assertEqual(state["messages"][-1]["content"], "Новая задача")
 
     def test_action_result_is_retained_only_after_actual_executor_result(self):

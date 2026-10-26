@@ -63,7 +63,10 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
                 plans = list(conversation.feedback_events.filter(scope='assistant_debug', payload__stage='agent.plan').order_by('pk'))
                 self.assertNotEqual(plans[-1].payload['output']['task_id'], old_id)
                 self.assertEqual(plans[-1].payload['output']['plan']['version'], 1)
-                self.assertEqual([m['content'] for m in snapshots[1] if m['role'] == 'user'], [question])
+                users = [m['content'] for m in snapshots[1] if m['role'] == 'user']
+                self.assertEqual(users[-1], question)
+                self.assertEqual(len(users), 2)
+                self.assertFalse(any(m.get('tool_calls') or m['role'] == 'tool' for m in snapshots[1]))
                 self.assertNotIn('agent_run', conversation.context)
                 self.assertFalse(CashTransaction.objects.exists())
 
@@ -116,22 +119,24 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
         self.assertFalse(CashTransaction.objects.exists())
         return conversation, original_id
 
-    def test_cancelled_task_amount_change_starts_new_plan_and_keeps_grounding(self):
+    def test_cancelled_task_amount_change_uses_user_history_but_needs_fresh_confirmation(self):
         conversation, original_id = self.cancel_task()
         self.gateway.side_effect = [
             planned_call('cash.transaction_create', goal='Подготовить расход на 600 рублей'),
             function_call('cash_transaction_create', {'operation_date': '2026-10-25', 'account': 'cash',
                 'direction': 'expense', 'amount': 600, 'reason': 'Покупка коробок'}),
-            function_call('assistant_ask', {'question': 'Уточните основание новой операции.'}),
         ]
         result = respond(conversation, self.user, 'Измени сумму на 600 рублей')[-1]
         state = conversation.context['agent_run']
         self.assertNotEqual(state['task_id'], original_id)
         self.assertEqual(state['plan']['version'], 1)
-        self.assertTrue(state['waiting_user'])
-        self.assertEqual(result['text'], 'Уточните основание новой операции.')
-        self.assertEqual([m['content'] for m in state['messages'] if m['role'] == 'user'], ['Измени сумму на 600 рублей'])
-        self.assertTrue(conversation.feedback_events.filter(scope='assistant_debug', payload__stage='function_call.tool', payload__output__ok=False).exists())
+        self.assertEqual(state['status'], 'WAITING_CONFIRMATION')
+        self.assertEqual(result['kind'], 'confirmation_required')
+        self.assertEqual(result['data']['arguments']['amount'], 600)
+        self.assertEqual(result['data']['arguments']['reason'], 'Покупка коробок')
+        self.assertEqual([m['content'] for m in state['messages'] if m['role'] == 'user'], [
+            'Подготовь расход наличными 260 рублей за покупку коробок на 25.10.2026', 'Измени сумму на 600 рублей'])
+        self.assertFalse(any(step['tool_id'] == 'cash.transaction_create' for step in state['steps']))
         self.assertFalse(CashTransaction.objects.exists())
 
     def test_image_after_button_cancel_has_no_old_execution_steps(self):
@@ -150,8 +155,8 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
         self.assertEqual(len(snapshots), 1)
         self.assertFalse(any(m['role'] == 'tool' for m in snapshots[0]))
         users = [m for m in snapshots[0] if m['role'] == 'user']
-        self.assertEqual(len(users), 1)
-        self.assertTrue(any(p['type'] == 'image_url' for p in users[0]['content']))
+        self.assertEqual(len(users), 2)
+        self.assertTrue(any(p['type'] == 'image_url' for p in users[-1]['content']))
         self.assertNotIn('agent_run', conversation.context)
         self.assertFalse(CashTransaction.objects.exists())
 
@@ -200,7 +205,9 @@ class AssistantTaskSwitchingDiagnostics(TestCase):
         actions = conversation.context['agent_memory']['recent_actions']
         self.assertEqual(len(actions), 1)
         self.assertEqual(conversation.context['agent_memory']['active_task']['status'], 'cancelled')
-        self.assertEqual([m['content'] for m in snapshots[0] if m['role'] == 'user'], ['Другой вопрос: сколько два плюс два?'])
+        self.assertEqual([m['content'] for m in snapshots[0] if m['role'] == 'user'], [
+            'Запиши два расхода: 10 рублей за покупку бумаги и 20 за покупку коробок, наличные, 25.10.2026',
+            'Другой вопрос: сколько два плюс два?'])
         self.assertFalse(any(m['role'] == 'tool' for m in snapshots[0]))
         self.assertEqual(conversation.feedback_events.get(scope='assistant_debug', payload__stage='agent.task_cancelled').payload['output']['task_id'], old_id)
 

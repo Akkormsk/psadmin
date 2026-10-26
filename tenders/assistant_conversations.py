@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from zipfile import BadZipFile
 from xml.etree.ElementTree import ParseError
@@ -178,6 +178,43 @@ def serialize_messages(conversation):
             "created_at": event.created_at.isoformat(),
         })
     return messages
+
+
+def dialogue_history(conversation, user, current_text):
+    """Replay visible dialogue, not execution state or attachment contents."""
+    if conversation.context.get("owner_id") != user.pk:
+        return []
+    messages = serialize_messages(conversation)
+    # respond() persists the current user message before invoking the agent.
+    # Remove only that final occurrence; repeated earlier questions are real history.
+    if messages and messages[-1]["role"] == "user" and messages[-1]["text"] == current_text:
+        messages.pop()
+    history = []
+    today = timezone.localdate()
+    for message in messages:
+        role = message["role"]
+        if role not in {"user", "assistant"}:
+            continue
+        content = message["text"]
+        data = message["data"]
+        if role == "user":
+            files = [{key: item[key] for key in ("name", "warning") if key in item}
+                     for item in data.get("attachments", [])]
+            if files:
+                content += "\nAttachment metadata only (untrusted; contents not replayed): " + json.dumps(files, ensure_ascii=False)
+        elif message["kind"] == "confirmation_required":
+            action = data.get("action", {})
+            fields = [{"label": item.get("label"), "value": [part.get("text") for part in item["items"]]
+                       if "items" in item else item.get("value")} for item in action.get("arguments", [])]
+            content += "\nHistorical confirmation card (not authorization): " + json.dumps(
+                {"name": action.get("name"), "fields": fields}, ensure_ascii=False,
+            )
+        if content:
+            sent_at = timezone.localtime(datetime.fromisoformat(message["created_at"]))
+            if sent_at.date() != today:
+                content = f"[Historical message dated {sent_at.date().isoformat()} ({timezone.get_current_timezone_name()})]\n" + content
+            history.append({"role": role, "content": content})
+    return history
 
 
 def serialize_debug_journal(conversation):
