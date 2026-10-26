@@ -35,3 +35,21 @@ test('multiple tables and optional edge pipes preserve every row', () => {
   assert.equal((html.match(/class="assistant-records"/g) || []).length, 2);
   assert.equal((html.match(/<dd>/g) || []).length, 4);
 });
+
+test('shared values appear once and record-specific fields stay in their rows', () => {
+  const html = render('| Дата | Счёт | Тип | Сумма | Назначение |\n|---|---|---|---|---|\n| 26.10.2026 | Наличные | Расход | 600.00 | Упаковка |\n| 25.10.2026 | Наличные | Расход | 1250.00 | Бумага |');
+  assert.ok(html.includes('assistant-records__common'));
+  assert.equal((html.match(/Наличные/g) || []).length, 1);
+  assert.equal((html.match(/Расход/g) || []).length, 1);
+  assert.equal((html.match(/class="assistant-record"/g) || []).length, 2);
+  assert.equal((html.match(/<dd>/g) || []).length, 8);
+  for (const value of ['600.00', '1250.00', 'Упаковка', 'Бумага']) assert.ok(html.includes(value));
+});
+
+test('identical rows retain their count and empty values are not promoted', () => {
+  const html = render('| Название | Статус |\n|---|---|\n| Пример | Готов |\n| Пример | Готов |');
+  assert.equal((html.match(/class="assistant-record"/g) || []).length, 2);
+  assert.equal((html.match(/Пример/g) || []).length, 2);
+  const blank = render('| А | Б |\n|---|---|\n| Один | |\n| Два | |');
+  assert.ok(!blank.includes('assistant-records__common'));
+});

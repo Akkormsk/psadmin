@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=assistant-records-20261026">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=assistant-compact-20261026">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -46,7 +46,7 @@
         <main class="assistant-drawer__messages" id="assistant-messages" aria-live="polite"></main>
         <form class="assistant-drawer__composer" id="assistant-composer"><input id="assistant-file" type="file" hidden><button class="assistant-composer__attach" id="assistant-attach" type="button" aria-label="Прикрепить файл">📎</button><textarea id="assistant-input" rows="2" placeholder="Спросите о расчёте или прикрепите файл…"></textarea><button class="assistant-composer__send" type="submit" aria-label="Отправить">➜</button></form>
     </aside>
-    <script src="{% static 'core/assistant-format.js' %}?v=20261026"></script>
+    <script src="{% static 'core/assistant-format.js' %}?v=compact-20261026"></script>
     <script>
       (function () {
         const launcher = document.getElementById("assistant-launcher"), drawer = document.getElementById("assistant-drawer");

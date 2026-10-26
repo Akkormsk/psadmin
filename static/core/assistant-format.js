@@ -55,10 +55,20 @@
         plain.push(...lines.slice(index, end));
       } else {
         flush();
-        output.push('<div class="assistant-records">' + rows.map(row =>
-          '<dl class="assistant-record">' + row.map((value, column) =>
-            '<div><dt>' + escape(headers[column]) + '</dt><dd>' + escape(value) + '</dd></div>'
-          ).join('') + '</dl>'
+        const columns = headers.map((_, column) => column);
+        const shared = rows.length > 1 ? columns.filter(column =>
+          rows[0][column] !== '' && rows.every(row => row[column] === rows[0][column])
+        ) : [];
+        // Even identical records must remain visible as separate records.
+        if (shared.length === headers.length) shared.shift();
+        const individual = columns.filter(column => !shared.includes(column));
+        function pair(row, column) {
+          return '<div><dt>' + escape(headers[column]) + '</dt><dd>' + escape(row[column]) + '</dd></div>';
+        }
+        const common = shared.length ? '<div class="assistant-records__common"><span>Для всех:</span><dl>' +
+          shared.map(column => pair(rows[0], column)).join('') + '</dl></div>' : '';
+        output.push('<div class="assistant-records">' + common + rows.map(row =>
+          '<dl class="assistant-record">' + individual.map(column => pair(row, column)).join('') + '</dl>'
         ).join('') + '</div>');
       }
       index = end - 1;
