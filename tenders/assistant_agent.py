@@ -46,6 +46,7 @@ _SYSTEM_RULES = (
     "The Cancel button ends the entire task in the backend without a model call; it neither executes pending actions nor rolls back completed ones. "
     "Cancel the whole task with new_task=false. Outside a plan use assistant.chat for self-contained questions. "
     "Compact conversation memory may contain earlier selections and objects. Treat it as verified references only: preserve a selection's saved IDs and scope when the user says ‘из них’ or returns to it; "
+    "Every READ plan step must explicitly declare reference_sources: [] for an independent query, or [{parameter: 'records', read_id: preceding READ step ID or saved source_id}] when filtering, sorting, limiting or aggregating a previously returned selection. The backend enforces that exact input set, even when empty; never replace 'из них' with a fresh global search. If the intended selection is ambiguous, ask before executing. Changing the source requires replanning. "
     "do not silently apply its filters to a new task. If a reference can name more than one saved object, ask a short ordinary Russian question. "
     "Actions require explicit user confirmation by the interface button; a text reply such as ‘да’ is not confirmation. "
     "When an action has all required values and verified reference sources, call it immediately to prepare the confirmation card; never ask for a separate textual confirmation first. "
@@ -536,21 +537,20 @@ def _bind_reference_sources(steps, declarations, user, state, previous):
     results = _reference_results(state)
     preceding = {}
     for step, declaration in zip(steps, declarations):
-        if step["capability_id"].startswith("read:"):
-            old = previous_steps.get(step["id"], {})
-            # Keep identity only for an unchanged search step. A revised search
-            # cannot inherit the result of a different query/route.
-            same = all(old.get(key) == step.get(key) for key in ("id", "capability_id", "objective", "expected_result"))
-            step["source_id"] = old.get("source_id") if same and old.get("source_id") else uuid4().hex
-            preceding[step["id"]] = step["source_id"]
-            continue
-        references = {item["parameter"]: item for item in _plan_references(user, step["capability_id"])}
-        raw_sources = declaration.get("reference_sources") or []
+        is_read = step["capability_id"].startswith("read:")
+        if is_read:
+            resource = next(r for r in available_resources(user) if "read:" + r["id"] == step["capability_id"])
+            references = {"records": {"required": False, "model": resource["entity"]}}
+            if "reference_sources" not in declaration:
+                raise AssistantReferenceError("Для READ укажите reference_sources: [] для независимого поиска или источник records для уточнения выборки")
+        else:
+            references = {item["parameter"]: item for item in _plan_references(user, step["capability_id"])}
+        raw_sources = declaration.get("reference_sources") if is_read else (declaration.get("reference_sources") or [])
         if not isinstance(raw_sources, list) or any(not isinstance(item, dict) or set(item) != {"parameter", "read_id"} or not isinstance(item["parameter"], str) for item in raw_sources):
             raise AssistantReferenceError("reference_sources должен быть списком parameter/read_id")
         sources = {item["parameter"]: item["read_id"] for item in raw_sources}
         if len(sources) != len(raw_sources) or any(key not in references for key in sources):
-            raise AssistantReferenceError("reference_sources должен содержать только параметры reference этого ACTION")
+            raise AssistantReferenceError("reference_sources содержит неизвестный или повторяющийся параметр источника")
         if any(item["required"] and name not in sources for name, item in references.items()):
             raise AssistantReferenceError("Укажите в плане источник READ для каждого обязательного reference ACTION")
         bound = {}
@@ -576,28 +576,57 @@ def _bind_reference_sources(steps, declarations, user, state, previous):
             models = references[name]["model"]
             models = {models} if isinstance(models, str) else {item["model"] for item in models}
             if result and result.get("entity") not in models:
-                raise AssistantReferenceError("Модель источника READ не соответствует reference ACTION")
+                raise AssistantReferenceError("Модель источника READ не соответствует входной ссылке")
             if not result:
                 source_step = next(item for item in steps if item.get("source_id") == source_id)
                 resource = next((r for r in available_resources(user) if "read:" + r["id"] == source_step["capability_id"]), None)
                 if resource is None or resource["entity"] not in models:
-                    raise AssistantReferenceError("Модель шага READ не соответствует reference ACTION")
+                    raise AssistantReferenceError("Модель шага READ не соответствует входной ссылке")
             bound[name] = source_id
         if references:
             step["reference_sources"] = [{"parameter": name, "read_id": source} for name, source in bound.items()]
+        if is_read:
+            old = previous_steps.get(step["id"], {})
+            same = all(old.get(key) == step.get(key) for key in ("id", "capability_id", "objective", "expected_result")) and old.get("reference_sources", []) == step["reference_sources"]
+            step["source_id"] = old.get("source_id") if same and old.get("source_id") else uuid4().hex
+            preceding[step["id"]] = step["source_id"]
     # Preserve the number of pending actions, not their model-chosen step names.
     # An unchanged completed step cannot stand in for an unresolved action.
     completed = _completed_plan_steps(state)
     remaining = Counter(item["capability_id"] for item in steps
                         if item["id"] not in completed or item != previous_steps.get(item["id"]))
     for old in previous_steps.values():
-        if old["id"] in completed:
+        if old["capability_id"].startswith("read:") or old["id"] in completed:
             continue
         sources = [item["read_id"] for item in old.get("reference_sources", [])]
         if any(source in results and results[source].get("total_count") == 0 for source in sources):
             remaining[old["capability_id"]] -= 1
             if remaining[old["capability_id"]] < 0:
                 raise AssistantReferenceError("Пустой READ не отменяет ACTION: уточните задачу через assistant.ask; закрытие без результата — только с согласия пользователя через assistant.cancel")
+
+
+def _scoped_read_plan(state, plan):
+    """Apply the plan-bound input selection before any READ execution or reuse."""
+    step = next(item for item in state["plan"]["steps"] if item["id"] == state["active_plan_step_id"])
+    sources = step.get("reference_sources", [])
+    if not sources:
+        return plan
+    source_id = sources[0]["read_id"]
+    result = _reference_results(state).get(source_id)
+    if not result or result.get("entity") != plan["entity"]:
+        raise AssistantReferenceError("Источник READ ещё не выполнен или относится к другой сущности")
+    if "record_ids" in result:
+        ids = result["record_ids"]
+        count = result.get("returned_count")
+    else:
+        ids = [item["id"] for item in result.get("sources", []) if isinstance(item, dict) and isinstance(item.get("id"), int)]
+        count = result.get("returned_count")
+    if result.get("grouped") or result.get("query", {}).get("group_by") or not isinstance(ids, list) or count != len(ids):
+        raise AssistantReferenceError("Источник READ не содержит полный набор идентификаторов возвращённых записей")
+    filters = plan.get("filters", [])
+    if not isinstance(filters, list):
+        raise ReadPlanError("filters должен быть списком")
+    return {**plan, "filters": [*filters, {"field": "id", "op": "in", "value": ids}]}
 
 
 def _validate_reference_sources(tool, arguments, state):
@@ -887,6 +916,7 @@ def _run(conversation, user, state):
                 if resource is None or state.get("active_capability") != identifier:
                     raise AssistantToolError("Сначала выберите нужную возможность раздела")
                 plan = {"entity": resource["entity"], **arguments.get("plan", {})}
+                plan = _scoped_read_plan(state, plan)
                 cached = state.get("read_cache")
                 result = reuse_result(user, plan, cached) if cached else None
                 result = result if result is not None else execute_tool("read", user, {"plan": plan})

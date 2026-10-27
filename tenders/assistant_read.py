@@ -540,8 +540,8 @@ def _filter_value(descriptor, op, value):
             raise ReadPlanError(f"Значение фильтра {name} для isnull должно быть true или false")
         return value
     if op == "in":
-        if not isinstance(value, list) or not value or len(value) > MAX_ROWS:
-            raise ReadPlanError(f"Значение фильтра {name} для in должно быть непустым списком")
+        if not isinstance(value, list) or len(value) > MAX_ROWS:
+            raise ReadPlanError(f"Значение фильтра {name} для in должно быть списком не длиннее {MAX_ROWS}")
         return [_filter_value(descriptor, "eq", item) for item in value]
     if op == "contains" and not isinstance(field, (models.CharField, models.TextField)):
         raise ReadPlanError(f"Оператор contains недоступен для поля {name}")

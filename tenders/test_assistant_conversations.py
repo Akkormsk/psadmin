@@ -15,6 +15,10 @@ def planned_call(capability, goal="Выполнить задачу", *, revision
         for step in steps:
             if step["capability_id"] == capability:
                 step["reference_sources"] = [{"parameter": key, "read_id": value} for key, value in sources.items()]
+    steps = [dict(step) for step in steps] if steps else [{"id": "s1", "capability_id": capability, "objective": goal, "expected_result": "Результат инструмента"}]
+    for step in steps:
+        if step["capability_id"].startswith("read:"):
+            step.setdefault("reference_sources", [])
     return {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
         "name": "assistant_plan", "arguments": json.dumps({"plan": {
             "goal": goal, "revision_reason": revision_reason,
@@ -160,7 +164,7 @@ class AssistantTaskLifecycleTests(TestCase):
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_read_clarification_read_finish_keeps_one_plan(self, gateway, _preflight):
-        steps = [{"id": f"s{i}", "capability_id": "read:cash.transactions", "objective": "Прочитать операции",
+        steps = [{"id": f"s{i}", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Прочитать операции",
                   "expected_result": "Список операций"} for i in (1, 2)]
         gateway.side_effect = [
             planned_call("read:cash.transactions", steps=steps),
@@ -250,7 +254,7 @@ class AssistantTaskLifecycleTests(TestCase):
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")
     def test_replan_preserves_completed_steps_but_requires_changed_steps_again(self, gateway, _preflight):
-        initial = [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции",
+        initial = [{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Найти операции",
                     "expected_result": "Список операций"},
                    {"id": "s2", "capability_id": "cash.transaction_create", "objective": "Создать расход",
                     "expected_result": "Созданная операция"}]
@@ -459,7 +463,7 @@ class AssistantFunctionCallingTests(TestCase):
     @patch("tenders.assistant_agent._gateway")
     def test_read_result_returns_through_matching_tool_call(self, gateway, _preflight):
         gateway.side_effect = [
-            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать последнюю операцию", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операцию"}]}})}}]},
+            {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {"name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать последнюю операцию", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Найти операцию"}]}})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "area", "type": "function", "function": {"name": "assistant_select_area", "arguments": json.dumps({"area": "cash"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "resource", "type": "function", "function": {"name": "assistant_select_capability", "arguments": json.dumps({"capability": "read:cash.transactions"})}}]},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "call_read", "type": "function", "function": {"name": "read_cash_transactions", "arguments": json.dumps({"plan": {"fields": ["amount"], "limit": 1}})}}]},
@@ -504,7 +508,7 @@ class AssistantFunctionCallingTests(TestCase):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
                 "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать три операции", "steps": [{
-                    "id": "s1", "capability_id": "read:cash.transactions", "objective": "Получить операции",
+                    "id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Получить операции",
                     "expected_result": "Три последние операции с датой, суммой, счётом и основанием",
                 }]}}),
             }}]},
@@ -540,7 +544,7 @@ class AssistantFunctionCallingTests(TestCase):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
                 "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать сентябрьские расходы и сумму", "steps": [{
-                    "id": "s1", "capability_id": "read:cash.transactions", "objective": "Получить расходы и сумму",
+                    "id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Получить расходы и сумму",
                     "expected_result": "Список расходов за сентябрь и общая сумма",
                 }]}}),
             }}]},
@@ -578,7 +582,7 @@ class AssistantFunctionCallingTests(TestCase):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
                 "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Сравнить три месяца", "steps": [{
-                    "id": "s1", "capability_id": "read:cash.transactions", "objective": "Получить суммы по месяцам",
+                    "id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Получить суммы по месяцам",
                     "expected_result": "Месячные суммы и их разность",
                 }]}}),
             }}]},
@@ -611,7 +615,7 @@ class AssistantFunctionCallingTests(TestCase):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
                 "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Проверить и добавить операцию", "steps": [
-                    {"id": "s1", "capability_id": "read:cash.transactions", "objective": "Проверить операции", "expected_result": "Список операций"},
+                    {"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Проверить операции", "expected_result": "Список операций"},
                     {"id": "s2", "capability_id": "cash.transaction_create", "objective": "Подготовить операцию", "expected_result": "Карточка подтверждения"},
                 ]}}),
             }}]},
@@ -698,7 +702,7 @@ class AssistantFunctionCallingTests(TestCase):
     def test_clarifying_text_keeps_the_active_plan_without_another_gateway_call(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции"}]}}),
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Найти операции"}]}}),
             }}]},
             function_call("assistant_ask", {"question": "За какой период показать операции?"}),
         ]
@@ -747,7 +751,7 @@ class AssistantFunctionCallingTests(TestCase):
             }}]},
             planned_call("read:cash.transactions", "Операций нет; сообщу результат без суммы.",
                 revision_reason="READ показал отсутствие операций; прежняя цель с суммой неприменима",
-                steps=[{"id": "s1", "capability_id": "read:cash.transactions", "objective": "1. Найду операции. 2. Покажу результат.", "expected_result": "Результат инструмента"}]),
+                steps=[{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "1. Найду операции. 2. Покажу результат.", "expected_result": "Результат инструмента"}]),
             {"role": "assistant", "tool_calls": [{"id": "finish", "type": "function", "function": {
                 "name": "assistant_finish", "arguments": json.dumps({"answer": "За выбранный период операций нет."}),
             }}]},
@@ -778,7 +782,7 @@ class AssistantFunctionCallingTests(TestCase):
     def test_finish_is_rejected_until_the_structured_plan_has_real_evidence(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции"}]}}),
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Найти операции"}]}}),
             }}]},
             {"role": "assistant", "tool_calls": [{"id": "early", "type": "function", "function": {
                 "name": "assistant_finish", "arguments": json.dumps({"answer": "Готово."}),
@@ -811,7 +815,7 @@ class AssistantFunctionCallingTests(TestCase):
     def test_text_clarification_resumes_the_same_structured_plan(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции за период", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операции"}]}}),
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Показать операции за период", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Найти операции"}]}}),
             }}]},
             function_call("assistant_ask", {"question": "За какой период показать операции?"}),
             {"role": "assistant", "tool_calls": [{"id": "area", "type": "function", "function": {
@@ -1165,7 +1169,7 @@ class AssistantFunctionCallingTests(TestCase):
     def test_completed_read_is_replaced_with_compact_memory_before_the_next_turn(self, gateway, _preflight):
         gateway.side_effect = [
             {"role": "assistant", "tool_calls": [{"id": "plan-1", "type": "function", "function": {
-                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Найти операцию", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "objective": "Найти операцию"}]}}),
+                "name": "assistant_plan", "arguments": json.dumps({"plan": {"goal": "Найти операцию", "steps": [{"id": "s1", "capability_id": "read:cash.transactions", "reference_sources": [], "objective": "Найти операцию"}]}}),
             }}]},
             {"role": "assistant", "tool_calls": [{"id": "area-1", "type": "function", "function": {
                 "name": "assistant_select_area", "arguments": json.dumps({"area": "cash"}),

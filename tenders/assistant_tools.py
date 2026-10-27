@@ -611,7 +611,7 @@ def openai_functions(user, *, area_id=None, resource_id=None, capability_id=None
                             "objective": {"type": "string", "minLength": 1},
                             "expected_result": {"type": "string", "minLength": 1},
                             "reference_sources": {"type": "array", "required": False,
-                                "description": "Required for ACTION references, including optional ones you pass. read_id names a preceding READ step or saved source_id; changing it requires plan revision.",
+                                "description": "READ: [] for new search, [{parameter: records, read_id: source}] for a prior selection. ACTION: reference sources. Use earlier READ step or saved source_id.",
                                 "item": {"type": "object", "properties": {
                                     "parameter": "string", "read_id": "string"}, "additional_properties": False}},
                         },
