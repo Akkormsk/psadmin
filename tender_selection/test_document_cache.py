@@ -205,3 +205,25 @@ class UnreadableDocumentTests(TestCase):
             {"name": "НМЦК.xlsx.zip", "kind": "Обоснование начальной (максимальной) цены контракта", "url": "d"},
         ])
         self.assertEqual({doc["url"] for doc in picked}, {"a", "b"})
+
+
+class TenderOfficePreviewTests(TenderDocumentExecutorTests):
+    def test_pdf_preview_returns_inline_pdf_without_model_calls(self):
+        self.client.force_login(self.admin)
+        with patch.object(services, "tender_document_pdf", return_value=b"%PDF-test") as render:
+            response = self.client.get(
+                reverse("tender_selection:doc_preview", args=[self.tender.pk, 1]), {"format": "pdf"},
+            )
+        render.assert_called_once_with(self.admin, self.tender.pk, 1)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertEqual(response.content, b"%PDF-test")
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+        self.assertEqual(response["X-Frame-Options"], "SAMEORIGIN")
+
+    def test_anonymous_user_cannot_render_document(self):
+        with patch.object(services, "tender_document_pdf") as render:
+            response = self.client.get(
+                reverse("tender_selection:doc_preview", args=[self.tender.pk, 1]), {"format": "pdf"},
+            )
+        self.assertEqual(response.status_code, 302)
+        render.assert_not_called()

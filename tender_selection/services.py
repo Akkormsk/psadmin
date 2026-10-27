@@ -1885,3 +1885,21 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
     else:
         TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
     return {"tender_id": tender_id, "decision": decision, "changed": len(proposals)}
+
+
+def tender_document_pdf(user, tender_id, document_index):
+    """Render the authorized original attachment, without retaining its source."""
+    import hashlib
+    from django.core.cache import cache
+    from .office import convert_office
+
+    tender, url, name = _tender_document(user, tender_id, document_index)
+    data = _fetch_doc_bytes(tender, url, name)
+    if data.startswith(b"%PDF"):
+        return data
+    key = "office-pdf:" + hashlib.sha256(data).hexdigest()
+    result = cache.get(key)
+    if result is None:
+        result = convert_office(data, name, "pdf")
+        cache.set(key, result, 3600)
+    return result

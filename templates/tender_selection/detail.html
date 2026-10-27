@@ -715,6 +715,17 @@
 
         // сеть с сервера до ЕИС теперь есть — сервер качает и разбирает сам, без
         // скачивания в браузере пользователя. Ручная загрузка — только на крайний случай.
+        if (/\.(docx?|xlsx?|pdf)$/i.test(btn.dataset.docName || "")) {
+          stopLoadingHint();
+          body.replaceChildren();
+          var frame = document.createElement("iframe");
+          frame.title = title.textContent;
+          frame.style.cssText = "width:100%;height:75vh;border:0";
+          frame.src = "{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx) + "?format=pdf";
+          body.appendChild(frame);
+          fallback.hidden = false;
+          return;
+        }
         viaServer()
           .then(showResult)
           .catch(function () {

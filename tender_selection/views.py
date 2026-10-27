@@ -7,7 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.template.loader import render_to_string
@@ -903,6 +903,17 @@ def _result_json(name, result):
 @tender_viewer_required
 def doc_preview(request, pk, idx):
     tender = get_object_or_404(Tender, pk=pk)
+    if request.GET.get("format") == "pdf":
+        from .services import tender_document_pdf
+        try:
+            content = tender_document_pdf(request.user, tender.pk, idx)
+        except (ValueError, DocumentError) as exc:
+            return HttpResponse(str(exc), status=422, content_type="text/plain; charset=utf-8")
+        response = HttpResponse(content, content_type="application/pdf")
+        response["Content-Disposition"] = 'inline; filename="document.pdf"'
+        response["Cache-Control"] = "private, no-store"
+        response["X-Frame-Options"] = "SAMEORIGIN"
+        return response
     try:
         result = preview_tender_document(request.user, tender.pk, idx, refresh=request.GET.get("refresh") == "1")
     except ValueError as exc:
