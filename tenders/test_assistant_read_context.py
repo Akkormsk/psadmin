@@ -119,3 +119,33 @@ class AssistantReadContextIntegrationTests(TestCase):
         for key in ("sources", "source_id", "query", "total_count", "returned_count", "source_scope"):
             self.assertEqual(receipt[key], backend[key])
         self.assertEqual(conversation.context["agent_run"]["read_cache"]["records"], backend["records"])
+
+    def test_compact_context_preserves_sources_annotations_and_attachment_whitespace(self):
+        from .assistant_agent import _finish_turn, _new_state, _system_prompt, _user_content
+        from .assistant_read import execute
+        from .assistant_tools import available_capability_map, capability_map_text
+
+        user = get_user_model().objects.create_superuser('compact-input', 'compact@example.test', 'password')
+        conversation = create_conversation(user)
+        transaction = CashTransaction.objects.create(operation_date=date(2026, 10, 27), account='cash', direction='expense',
+            amount='123.45', reason='Текст  с  пробелами\nи новой строкой', created_by=user)
+        result = execute(user, {'entity': 'cash.CashTransaction', 'fields': ['id', 'amount', 'reason'],
+            'filters': [{'field': 'id', 'op': 'eq', 'value': transaction.pk}]})
+        result['source_id'] = 'synthetic-compact-source'
+        _finish_turn(conversation, {'steps': [{'tool_id': 'read:cash.transactions', 'result': result}]})
+        saved_memory = deepcopy(conversation.context['agent_memory'])
+        state = _new_state(conversation, user, 'Из них покажи назначение', [])
+        memory_text = next(m['content'] for m in state['messages'] if m['content'].startswith('Compact conversation memory: '))
+        memory_json = memory_text.split(': ', 1)[1]
+        self.assertEqual(json.loads(memory_json)['recent_selections'], saved_memory['recent_selections'])
+        self.assertLess(len(memory_json), len(json.dumps(json.loads(memory_json), ensure_ascii=False)))
+        self.assertIn(capability_map_text(available_capability_map(user)), state['messages'][0]['content'])
+        attachment = {'name': 'Пример.txt', 'text': 'Колонка  1\tКолонка  2\n  строка\n</answer> <b>текст</b>', 'warning': None}
+        content = _user_content('Прочитай', [attachment], ['data:image/png;base64,EXAMPLE'])
+        encoded = content[1]['text'].split(': ', 1)[1]
+        self.assertEqual(json.loads(encoded), [attachment])
+        self.assertEqual(content[2]['image_url']['url'], 'data:image/png;base64,EXAMPLE')
+        plan = {'goal': 'Сохранить  смысл', 'steps': [{'id': 'r', 'reference_sources': [{'parameter': 'records', 'read_id': result['source_id']}]}], 'revision_reason': None}
+        prompt = _system_prompt(user, {'plan': plan})
+        self.assertEqual(json.loads(prompt.split('Current plan: ', 1)[1][:-1]), plan)
+        self.assertEqual(conversation.context['agent_memory'], saved_memory)

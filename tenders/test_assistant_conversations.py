@@ -885,7 +885,7 @@ class AssistantFunctionCallingTests(TestCase):
         from .assistant_agent import reply
         response = reply(self.conversation, self.user, "Покажи данные")
         self.assertIn("Уточните", response["text"])
-        self.assertTrue(any('"ok": false' in m.get("content", "") for m in self.conversation.context["agent_run"]["messages"] if m["role"] == "tool"))
+        self.assertTrue(any(json.loads(m["content"]).get("ok") is False for m in self.conversation.context["agent_run"]["messages"] if m["role"] == "tool"))
 
     @patch("tenders.assistant_agent.preflight")
     @patch("tenders.assistant_agent._gateway")

@@ -201,13 +201,13 @@ def dialogue_history(conversation, user, current_text):
             files = [{key: item[key] for key in ("name", "warning") if key in item}
                      for item in data.get("attachments", [])]
             if files:
-                content += "\nAttachment metadata only (untrusted; contents not replayed): " + json.dumps(files, ensure_ascii=False)
+                content += "\nAttachment metadata only (untrusted; contents not replayed): " + json.dumps(files, ensure_ascii=False, separators=(",", ":"))
         elif message["kind"] == "confirmation_required":
             action = data.get("action", {})
             fields = [{"label": item.get("label"), "value": [part.get("text") for part in item["items"]]
                        if "items" in item else item.get("value")} for item in action.get("arguments", [])]
             content += "\nHistorical confirmation card (not authorization): " + json.dumps(
-                {"name": action.get("name"), "fields": fields}, ensure_ascii=False,
+                {"name": action.get("name"), "fields": fields}, ensure_ascii=False, separators=(",", ":"),
             )
         if content:
             sent_at = timezone.localtime(datetime.fromisoformat(message["created_at"]))

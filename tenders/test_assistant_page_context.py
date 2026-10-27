@@ -43,7 +43,7 @@ class AssistantPageContextTests(TestCase):
             function_call("tender_send_to_calculation", {"tender_id": self.tender.pk})])
         context = self.context()
         card = respond(self.conversation, self.user, "Подготовь передачу этого открытого тендера", context=context)[-1]
-        self.assertIn(json.dumps(context, ensure_ascii=False), self.snapshots[0][0]["content"])
+        self.assertIn(json.dumps(context, ensure_ascii=False, separators=(",", ":")), self.snapshots[0][0]["content"])
         self.assertEqual(card["kind"], "confirmation_required")
         self.assertEqual(card["data"]["arguments"], {"tender_id": self.tender.pk})
         self.assertFalse(TenderEstimate.objects.exists())
@@ -58,7 +58,7 @@ class AssistantPageContextTests(TestCase):
         second = self.context(other.pk)
         respond(self.conversation, self.user, "Теперь открыт другой", context=second)
         self.assertEqual(self.conversation.context["agent_run"]["task_id"], task_id)
-        self.assertIn(json.dumps(second, ensure_ascii=False), self.snapshots[-1][0]["content"])
+        self.assertIn(json.dumps(second, ensure_ascii=False, separators=(",", ":")), self.snapshots[-1][0]["content"])
         self.assertNotIn(self.context()["page"], self.snapshots[-1][0]["content"])
         respond(self.conversation, self.user, "Я ушёл со страницы")
         self.assertNotIn("Current page context", self.snapshots[-1][0]["content"])
