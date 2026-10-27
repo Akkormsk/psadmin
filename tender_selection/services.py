@@ -1897,7 +1897,7 @@ def tender_document_pdf(user, tender_id, document_index):
     data = _fetch_doc_bytes(tender, url, name)
     if data.startswith(b"%PDF"):
         return data
-    key = "office-pdf:" + hashlib.sha256(data).hexdigest()
+    key = "office-pdf-v2:" + hashlib.sha256(data).hexdigest()
     result = cache.get(key)
     if result is None:
         result = convert_office(data, name, "pdf")

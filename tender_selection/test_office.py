@@ -68,3 +68,12 @@ class OfficeConversionTests(SimpleTestCase):
             result = extract_preview(b"input", "source.docx")
         convert.assert_called_once_with(b"input", "source.docx", "docx")
         self.assertEqual(result["html"], "<p>Текст</p>")
+
+    def test_excel_pdf_uses_whole_sheet_export(self):
+        def run(command, **kwargs):
+            output_format = command[command.index("--convert-to") + 1]
+            self.assertIn('"SinglePageSheets"', output_format)
+            (Path(command[-1]).parent / "output" / "document.pdf").write_bytes(b"%PDF-test")
+        with patch("tender_selection.office.shutil.which", return_value="libreoffice"), \
+                patch("tender_selection.office.subprocess.run", side_effect=run):
+            convert_office(b"excel", "table.xlsx", "pdf")

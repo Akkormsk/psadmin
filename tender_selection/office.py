@@ -33,10 +33,13 @@ def convert_office(data: bytes, filename: str, target: str) -> bytes:
             '<prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop>'
             '</item></oor:items>', encoding="utf-8",
         )
+        output_format = target
+        if target == "pdf" and extension in {"xls", "xlsx"}:
+            output_format = 'pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}'
         try:
             subprocess.run(
                 [executable, "-env:UserInstallation=" + (root / "profile").as_uri(),
-                 "--headless", "--convert-to", target, "--outdir", str(output), str(source)],
+                 "--headless", "--convert-to", output_format, "--outdir", str(output), str(source)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=60, check=True,
             )
