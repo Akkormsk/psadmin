@@ -67,7 +67,10 @@
         }
         const common = shared.length ? '<div class="assistant-records__common"><span>Для всех:</span><dl>' +
           shared.map(column => pair(rows[0], column)).join('') + '</dl></div>' : '';
-        output.push('<div class="assistant-records">' + common + rows.map(row =>
+        const summary = individual.length <= 3;
+        const heading = summary ? '<div class="assistant-records__columns" aria-hidden="true">' +
+          individual.map(column => escape(headers[column])).join(' · ') + '</div>' : '';
+        output.push('<div class="assistant-records"' + (summary ? ' data-layout="summary"' : '') + '>' + common + heading + rows.map(row =>
           '<dl class="assistant-record">' + individual.map(column => pair(row, column)).join('') + '</dl>'
         ).join('') + '</div>');
       }

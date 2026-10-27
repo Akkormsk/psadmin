@@ -81,3 +81,13 @@ test('compact field labels stay whole and columns align at narrow widths', {skip
     }
   } finally { await browser.close(); }
 });
+
+test('compact list uses column structure without business-specific names', () => {
+  const simple = render('| Объект | Показатель | Описание |\n|---|---|---|\n| Альфа | 12 | Первый |\n| Бета | 34 | Второй |');
+  assert.ok(simple.includes('data-layout="summary"'));
+  assert.ok(simple.includes('Объект · Показатель · Описание'));
+  for (const value of ['Альфа', '12', 'Первый', 'Бета', '34', 'Второй']) assert.ok(simple.includes(value));
+  const wide = render('| А | Б | В | Г |\n|---|---|---|---|\n| а1 | б1 | в1 | г1 |\n| а2 | б2 | в2 | г2 |');
+  assert.ok(!wide.includes('data-layout="summary"'));
+  assert.equal((wide.match(/<dt>/g) || []).length, 8);
+});
