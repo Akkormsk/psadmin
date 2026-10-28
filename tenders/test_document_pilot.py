@@ -37,3 +37,24 @@ class DocumentPilotTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("prepare_tender_documents", tender_number=self.tender.purchase_number, max_cost_rub=Decimal("4"), apply=True)
         self.assertFalse(TenderComputeJob.objects.exists())
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_preflight_reads_full_input_and_remaining_budget_without_mutation(self, gateway):
+        from tender_selection.models import DocumentPreview
+        from .models import TenderSourceItem
+        self.tender.notification_raw = {"source": {"attachmentsInfo": {"attachmentInfo": [{"url": "https://zakupki.gov.ru/full-source", "fileName": "spec.docx"}]}}}
+        self.tender.save(update_fields=["notification_raw"])
+        DocumentPreview.objects.create(url="https://zakupki.gov.ru/full-source", kind="docx", html="<p>" + "Полный текст. " * 2000 + "КОНЕЦ</p>")
+        TenderSourceItem.objects.create(tender=self.tender, source_key="n:1", original_text="Комплект")
+        job = TenderComputeJob.objects.create(tender=self.tender, version="v2-document-pilot", status="needs_review", total_cost=Decimal("0.414"))
+        output = io.StringIO()
+        call_command("prepare_tender_documents", tender_number=self.tender.purchase_number, max_cost_rub=Decimal("3"), max_output_tokens=6000, preflight=True, stdout=output)
+        import json
+        result = json.loads(output.getvalue())
+        self.assertEqual(Decimal(result["remaining_rub"]), Decimal("2.586"))
+        self.assertEqual(result["sources"][0]["cached_text_chars"], result["sources"][0]["sent_text_chars"])
+        self.assertGreater(result["sources"][0]["sent_text_chars"], 18000)
+        self.assertEqual(TenderComputeJob.objects.count(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, "needs_review")
+        gateway.assert_not_called()

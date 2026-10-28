@@ -166,7 +166,6 @@ class GatewayDocumentEnricher:
     # The bounded prompt and one provider attempt make Flash Lite economical.
     # One ruble is a portfolio target, tracked in diagnostics, not a reason to
     # leave an unusually rich tender without document analysis.
-    DOCUMENT_INPUT_CHAR_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_INPUT_CHAR_LIMIT", "18000"))
     DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "1200"))
     DOCUMENT_AVERAGE_COST_TARGET_RUB = 1.00
 
@@ -180,8 +179,9 @@ class GatewayDocumentEnricher:
         self.diagnostics = {}
 
     def _bounded_documents(self, documents):
-        """Bound actual document text, preserving evidence and reading gaps."""
+        """Prepare full extracted text; budget checks must reject, never clip, the request."""
         from lxml import html as html_parser
+        from tender_selection.documents import MAX_BYTES
 
         candidates = []
         for doc in documents:
@@ -192,10 +192,10 @@ class GatewayDocumentEnricher:
             html = cached.get("html") or ""
             image_present = bool(re.search(r"<img\b", html, flags=re.I))
             html = re.sub(r"<img\b[^>]*>", "", html, flags=re.I)
-            parse_limit = self.DOCUMENT_INPUT_CHAR_LIMIT * 16
-            bounded_html = html[:parse_limit]
-            root = html_parser.fragment_fromstring(bounded_html or "<div></div>", create_parent="div")
-            warning = image_present or len(html) > len(bounded_html) or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
+            if len(html.encode("utf-8")) > MAX_BYTES:
+                raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
+            root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
+            warning = image_present or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
             for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
                 node.drop_tree()
             content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
@@ -204,18 +204,15 @@ class GatewayDocumentEnricher:
                                "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning})
         if not candidates:
             return [], []
-        per_document_limit = max(1, self.DOCUMENT_INPUT_CHAR_LIMIT // len(candidates))
         available, considered = [], []
         for candidate in candidates:
-            excerpt = candidate["text"][:per_document_limit]
-            status = "unreadable" if not excerpt else "partial" if candidate["error"] or candidate["warning"] or len(candidate["text"]) > len(excerpt) else "read"
-            entry = {"url": candidate["url"], "name": candidate["name"], "text": excerpt}
-            tables = document_table_payload(candidate["html"][:per_document_limit]) if excerpt else []
-            if len(json.dumps({**entry, "tables": tables}, ensure_ascii=False, default=str)) <= per_document_limit * 2:
-                entry["tables"] = tables
+            text = candidate["text"]
+            status = "unreadable" if not text else "partial" if candidate["error"] or candidate["warning"] else "read"
+            entry = {"url": candidate["url"], "name": candidate["name"], "text": text}
+            entry["tables"] = document_table_payload(candidate["html"]) if text else []
             available.append(entry)
             considered.append({"url": candidate["url"], "name": candidate["name"],
-                               "cached_text_chars": len(candidate["text"]), "sent_text_chars": len(excerpt),
+                               "cached_text_chars": len(candidate["text"]), "sent_text_chars": len(text),
                                "table_count": len(entry.get("tables", [])), "reading_status": status,
                                "error": candidate["error"]})
         return available, considered
@@ -224,8 +221,8 @@ class GatewayDocumentEnricher:
         """Return a conservative upper estimate, or None when the tariff is unknown."""
         from .gateway_budget import spend_rub
 
-        # Two characters per token deliberately overestimates normal Russian
-        # document text and keeps the 1 ₽ promise valid before any egress.
+        # Normal diagnostic estimate; explicitly budgeted runs reserve by bytes
+        # instead, including overhead, before allowing any gateway request.
         usage = {
             "prompt_tokens": (len(prompt) + 1) // 2,
             "completion_tokens": self.DOCUMENT_OUTPUT_TOKEN_LIMIT,

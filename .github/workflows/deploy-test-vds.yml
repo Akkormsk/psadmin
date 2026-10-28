@@ -17,6 +17,12 @@ on:
         default: ""
         type: string
 
+      document_pilot_check_only:
+        description: "Prepare full document input and inspect budget without model calls"
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   contents: read
 
@@ -76,6 +82,7 @@ jobs:
         shell: bash
         env:
           DOCUMENT_PILOT_TENDER: ${{ inputs.document_pilot_tender || '' }}
+          DOCUMENT_PILOT_CHECK_ONLY: ${{ inputs.document_pilot_check_only && '1' || '0' }}
         run: |
           set -euo pipefail
           if [ -n "$DOCUMENT_PILOT_TENDER" ] && ! [[ "$DOCUMENT_PILOT_TENDER" =~ ^[0-9]{19}$ ]]; then
@@ -83,12 +90,13 @@ jobs:
           fi
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY'" <<'REMOTE'
           set -euo pipefail
 
           deploy_sha="$1"
           archive="$2"
           pilot_tender="${3:-}"
+          pilot_check_only="${4:-0}"
           root=/home/deploy
           app="$root/psadmin-test"
           rollback_root="$root/psadmin-test-rollbacks"
@@ -163,8 +171,10 @@ jobs:
           }, default=str))
           PY
           if [ -n "$pilot_tender" ]; then
+            pilot_mode=--apply
+            if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
             docker compose -f compose.test.yml exec -T test-web python manage.py prepare_tender_documents \
-              --tender-number "$pilot_tender" --max-cost-rub 3 --max-output-tokens 6000 --apply
+              --tender-number "$pilot_tender" --max-cost-rub 3 --max-output-tokens 6000 "$pilot_mode"
           fi
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \

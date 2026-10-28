@@ -128,3 +128,23 @@ class DocumentReadingInputTests(TestCase):
         payload = json.loads(gateway.call_args.args[0].split("\n", 1)[1])
         self.assertEqual([row["notification_position"] for row in payload["notification_items"]], [1, 2, 3])
         self.assertEqual([row["notification_unit_price"] for row in payload["notification_items"]], ["2410", "3700", "2770"])
+
+    def test_every_document_retains_text_beyond_old_equal_share_limit(self):
+        documents = []
+        for index in range(6):
+            url = f"https://example.test/complete-{index}"
+            text = "Подробные характеристики изделия. " * 300 + f" КОНЕЦ_{index}"
+            DocumentPreview.objects.create(url=url, kind="docx", html=f"<p>{text}</p>")
+            documents.append({"url": url, "name": f"Document {index}"})
+        available, considered = GatewayDocumentEnricher()._bounded_documents(documents)
+        self.assertGreater(sum(len(doc["text"]) for doc in available), 18000)
+        for index, (doc, diagnostic) in enumerate(zip(available, considered)):
+            self.assertTrue(doc["text"].endswith(f"КОНЕЦ_{index}"))
+            self.assertEqual(diagnostic["cached_text_chars"], diagnostic["sent_text_chars"])
+            self.assertEqual(diagnostic["reading_status"], "read")
+
+    def test_oversized_preview_is_rejected_instead_of_silently_clipped(self):
+        DocumentPreview.objects.create(url=self.documents[0]["url"], html="<p>Длинный документ</p>")
+        with patch("tender_selection.documents.MAX_BYTES", 8):
+            with self.assertRaises(ValueError):
+                GatewayDocumentEnricher()._bounded_documents(self.documents)

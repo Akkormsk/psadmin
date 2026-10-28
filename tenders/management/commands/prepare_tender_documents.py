@@ -4,11 +4,12 @@ from decimal import Decimal
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from django.urls import reverse
 
 from tender_selection.models import Tender
-from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality, enrich_suspicious_tender, ingest_source_items
+from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, active_calculation_items, assess_quality, enrich_suspicious_tender, ingest_source_items
 from tenders.models import TenderComputeJob, TenderSourceItem
 
 
@@ -20,6 +21,7 @@ class Command(BaseCommand):
         parser.add_argument("--max-cost-rub", required=True, type=Decimal)
         parser.add_argument("--max-output-tokens", type=int, default=1200)
         parser.add_argument("--apply", action="store_true")
+        parser.add_argument("--preflight", action="store_true")
 
     def handle(self, *args, **options):
         budget = options["max_cost_rub"]
@@ -30,6 +32,23 @@ class Command(BaseCommand):
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
         if tender is None:
             raise CommandError("Tender not found; nothing was called")
+        if options["preflight"]:
+            if options["apply"]:
+                raise CommandError("Preflight cannot be combined with apply")
+            spent = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2-document-pilot").aggregate(total=Sum("total_cost"))["total"] or Decimal("0")
+            enricher = GatewayDocumentEnricher(max_cost_rub=0)
+            enricher.DOCUMENT_OUTPUT_TOKEN_LIMIT = options["max_output_tokens"]
+            quality = assess_quality(tender, active_calculation_items(tender))
+            enricher.extract_tender(tender=tender, source_items=active_calculation_items(tender), documents=quality["documents"])
+            reservation = (enricher.diagnostics.get("budget") or {}).get("reserved_cost_rub")
+            self.stdout.write(json.dumps({"preflight_only": True, "model_called": False, "model": enricher.model,
+                "spent_rub": str(spent), "remaining_rub": str(budget - spent), "required_reservation_rub": reservation,
+                "fits_remaining_budget": reservation is not None and Decimal(str(reservation)) <= budget - spent,
+                "sources": [{"name": row.get("name"), "reading_status": row.get("reading_status"),
+                             "cached_text_chars": row.get("cached_text_chars"), "sent_text_chars": row.get("sent_text_chars"),
+                             "has_error": bool(row.get("error"))}
+                            for row in (enricher.diagnostics.get("documents") or {}).get("considered", [])]}, ensure_ascii=False, default=str))
+            return
         if not options["apply"]:
             self.stdout.write(json.dumps({"apply": False, "budget_rub": str(budget), "has_notification": bool(tender.notification_raw)}))
             return
