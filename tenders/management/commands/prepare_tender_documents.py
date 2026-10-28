@@ -19,7 +19,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--tender-number", required=True)
         parser.add_argument("--max-cost-rub", required=True, type=Decimal)
-        parser.add_argument("--max-output-tokens", type=int, default=8000)
+        parser.add_argument("--max-output-tokens", type=int, default=16000)
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--preflight", action="store_true")
 
@@ -27,8 +27,8 @@ class Command(BaseCommand):
         budget = options["max_cost_rub"]
         if not budget.is_finite() or not Decimal("0") < budget <= Decimal("14"):
             raise CommandError("Pilot budget must be positive and no greater than 14 RUB")
-        if not 256 <= options["max_output_tokens"] <= 12000:
-            raise CommandError("Output limit must be between 256 and 12000 tokens")
+        if not 256 <= options["max_output_tokens"] <= 16000:
+            raise CommandError("Output limit must be between 256 and 16000 tokens")
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
         if tender is None:
             raise CommandError("Tender not found; nothing was called")
@@ -52,7 +52,7 @@ class Command(BaseCommand):
         if not options["apply"]:
             self.stdout.write(json.dumps({"apply": False, "budget_rub": str(budget), "has_notification": bool(tender.notification_raw)}))
             return
-        version = "v2-document-pilot-components"
+        version = "v2-document-pilot-components-complete-response"
         with transaction.atomic():
             Tender.objects.select_for_update().get(pk=tender.pk)
             previous = TenderComputeJob.objects.filter(tender=tender, version=version).first()
@@ -118,6 +118,8 @@ class Command(BaseCommand):
         self.stdout.write(json.dumps({"status": job.status, "proposal_count": job.diagnostics.get("document_proposal_count", 0),
                                      "reading_statuses": [doc.get("reading_status") for doc in considered],
                                      "outcome": enricher.diagnostics.get("outcome"), "model": enricher.model,
+                                     "extraction": enricher.diagnostics.get("extraction"),
+                                     "failure_reason": enricher.diagnostics.get("final_failure_reason"),
                                      "cost_rub": str(job.total_cost) if enricher.usage or not enricher.diagnostics.get("provider_call_happened") else None,
                                      "usage": enricher.usage,
                                      "exception_type": job.diagnostics.get("exception_type"),

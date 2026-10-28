@@ -122,3 +122,22 @@ class DocumentComponentAcceptanceTests(TestCase):
         proposal = self.stage([self.row(self.parents[0])])["created"][0]
         self.client.post(reverse("tender_selection:document_proposal_action", args=[self.tender.pk, self.parents[0].pk]), {"action": "invalid"})
         self.assertTrue(TenderSourceItem.objects.filter(pk=proposal.pk).exists())
+
+    def test_missing_top_level_items_is_failure_not_empty_search(self):
+        with patch("tenders.services._ai_gateway_json", return_value=({"name": "Вложенная строка"}, {"prompt_tokens": 100, "completion_tokens": 100})):
+            result = enrich_suspicious_tender(self.tender, assess_quality(self.tender, self.parents), GatewayDocumentEnricher())
+        self.assertEqual(result["state"], "validation_failure")
+        self.assertEqual(result["created"], [])
+
+    def test_truncated_gateway_response_is_not_salvaged_as_inner_json(self):
+        import io
+        import json
+        from .services import TenderAIError, _ai_gateway_json
+        response = {"choices": [{"finish_reason": "length", "message": {"content": '{"items":[{"name":"Вложенная строка"},'}}],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 8000}}
+        with patch.dict("os.environ", {"TIMEWEB_AI_API_KEY": "synthetic-test-key"}), patch("tenders.services.urlopen", return_value=io.BytesIO(json.dumps(response).encode())) as request:
+            with self.assertRaises(TenderAIError) as error:
+                _ai_gateway_json("synthetic", network_attempts=1, json_attempts=1)
+        self.assertIn("лимит вывода", str(error.exception))
+        self.assertEqual(error.exception.usage["completion_tokens"], 8000)
+        self.assertEqual(request.call_count, 1)

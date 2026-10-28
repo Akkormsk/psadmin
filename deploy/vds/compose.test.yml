@@ -11,7 +11,7 @@ services:
     environment:
       TIMEWEB_AI_ASSISTANT_MODEL: anthropic/claude-haiku-5-5
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
-      CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT: "8000"
+      CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT: "16000"
       TIMEWEB_AI_BASE_URL: https://api.timeweb.ai/v1
     restart: unless-stopped
     mem_limit: 600m

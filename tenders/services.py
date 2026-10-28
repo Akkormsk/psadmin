@@ -844,6 +844,8 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
         usage = response_data.get("usage", {})
         total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
         total_usage["completion_tokens"] += usage.get("completion_tokens", 0) or 0
+        if (response_data.get("choices") or [{}])[0].get("finish_reason") in {"length", "max_tokens"}:
+            raise _ai_error("Ответ модели не завершён: исчерпан лимит вывода. Частичный результат не применён.", total_usage)
         try:
             content = response_data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:

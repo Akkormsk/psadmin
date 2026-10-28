@@ -167,7 +167,7 @@ class GatewayDocumentEnricher:
     # One provider attempt avoids paid retries. One ruble is a portfolio target,
     # tracked in diagnostics, not a reason to
     # leave an unusually rich tender without document analysis.
-    DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "8000"))
+    DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "16000"))
     DOCUMENT_AVERAGE_COST_TARGET_RUB = 1.00
 
     def __init__(self, model=None, *, max_cost_rub=None):
@@ -295,6 +295,8 @@ class GatewayDocumentEnricher:
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
         allowed_urls = {doc["url"] for doc in available if doc["text"]}
         output, rejections = [], []
+        if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
+            rejections.append({"reason": "missing_items_array"})
         for index, row in enumerate(raw.get("items", []) if isinstance(raw, dict) else []):
             if not isinstance(row, dict):
                 rejections.append({"index": index, "reason": "not_object"}); continue
