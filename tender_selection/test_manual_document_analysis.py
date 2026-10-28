@@ -48,3 +48,13 @@ class ManualDocumentAnalysisTests(TestCase):
         self.assertIsNotNone(job.completed_at)
         route.assert_not_called()
         self.assertEqual(gateway.call_args.kwargs['max_cost_rub'], Decimal('10'))
+
+    def test_ajax_start_returns_status_without_redirect(self):
+        url = reverse('tender_selection:refresh_analysis', args=[self.tender.pk])
+        response = self.client.post(url + '?workspace=1', HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['label'], 'Проверяем ТЗ…')
+        self.assertTrue(response.json()['started'])
+        duplicate = self.client.post(url, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.assertFalse(duplicate.json()['started'])
+        self.assertEqual(TenderComputeJob.objects.count(), 1)

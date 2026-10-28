@@ -29,8 +29,8 @@
           <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № {{ display_purchase_number }}</span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
-        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block">{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
-        <details id="analysis-status" class="ts-sub"><summary>{{ analysis_status.label }} · подробности</summary>
+        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh>{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
+        <details id="analysis-status" class="ts-sub"><summary><span data-analysis-status="{{ tender.pk }}">{{ analysis_status.label }}</span> · подробности</summary>
           {% if document_proposal_groups %}<p>Предложения по составу сохранены ниже и ожидают вашей проверки. Исходное извещение не изменено.</p>{% endif %}
           {% if analysis_issues %}<ul>{% for issue in analysis_issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% else %}<p>{% if analysis_status.code == "PROCESSING" %}Разбор выполняется в фоне.{% elif analysis_status.code == "NOT_CHECKED" %}Разбор документов ещё не запускался.{% else %}Ошибок чтения и обработки в последнем анализе не зафиксировано.{% endif %}</p>{% endif %}
         </details>

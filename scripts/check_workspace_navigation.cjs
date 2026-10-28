@@ -7,7 +7,7 @@ const base = fs.readFileSync('templates/base.html', 'utf8');
 const start = base.lastIndexOf('<script>', base.indexOf('const embedded ='));
 const script = base.slice(start + 8, base.indexOf('</script>', start));
 const shell = content => `<!doctype html><body ${content.embedded ? 'class="workspace-embedded"' : ''}>${content.html}<div id="app-workspace-stack"></div><script>${script}</script></body>`;
-const card = shell({embedded: true, html: `<main data-workspace-single-layer><h1>Тендер</h1>
+const card = shell({embedded: true, html: `<main data-workspace-single-layer><h1>Тендер</h1><span data-analysis-status="42">Не проверено</span><form method="post" action="/instant" data-analysis-refresh><button>Обновить анализ</button></form>
 ${['analysis', 'proposal', 'trading'].map(action => `<form method="post" action="/${action}"><button name="action" value="accept">${action}</button><button name="action" value="reject">reject</button></form>`).join('')}
 <form method="post" action="/transition" data-tender-transition><button>transition</button></form>
 <a href="/calculation" data-workspace-open>Расчёт</a></main>`});
@@ -16,14 +16,15 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('content-type', 'text/html; charset=utf-8');
   if (req.method === 'POST') {
-    assert.equal(url.searchParams.get('workspace'), '1');
+    if (url.pathname !== '/instant') assert.equal(url.searchParams.get('workspace'), '1');
     posts++;
+    if (url.pathname === "/instant") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({tender_id: 42, started: true, label: "Проверяем ТЗ…"})); return; }
     if (url.pathname === "/transition") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({lifecycle_changed: true})); return; }
     res.writeHead(302, {location: '/card?workspace=1'}); res.end(); return;
   }
   if (url.pathname === '/') {
     rootLoads++;
-    res.end(shell({html: '<a href="/card" data-workspace-open>Открыть тендер</a>'}));
+    res.end(shell({html: '<a href="/card" data-workspace-open>Открыть тендер</a><span data-analysis-status="42" hidden></span><form method="post" action="/instant" data-analysis-refresh><button>Обновить анализ</button></form>'}));
   } else res.end(card);
 });
 (async () => {
@@ -34,6 +35,18 @@ const server = http.createServer((req, res) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await page.getByRole('link', {name: 'Открыть тендер', exact: true}).click();
+    const instantFrame = page.frameLocator('.app-workspace-layer__frame');
+    await instantFrame.getByRole('button', {name: 'Обновить анализ', exact: true}).click();
+    await page.waitForFunction(() => document.querySelector('[data-analysis-status="42"]').textContent === 'Проверяем ТЗ…');
+    assert.equal(await instantFrame.locator('[data-analysis-status="42"]').textContent(), 'Проверяем ТЗ…');
+    assert.equal(await instantFrame.getByRole('button', {name: 'Проверяем ТЗ…', exact: true}).isDisabled(), true);
+    assert.equal(await page.locator('[data-analysis-status="42"]').isVisible(), true);
+    await page.locator('[data-workspace-close]').click();
+    await page.waitForTimeout(150);
+    await page.getByRole('button', {name: 'Обновить анализ', exact: true}).click();
+    await page.getByRole('button', {name: 'Проверяем ТЗ…', exact: true}).waitFor();
+    assert.equal(rootLoads, 1);
     for (const action of ['analysis', 'proposal', 'trading']) {
       await page.getByRole('link', {name: 'Открыть тендер', exact: true}).click();
       const frame = page.frameLocator('.app-workspace-layer__frame');
@@ -65,9 +78,9 @@ const server = http.createServer((req, res) => {
     ]);
     await page.waitForTimeout(150);
     assert.equal(await page.locator('.app-workspace-layer').count(), 0);
-    assert.equal(posts, 6);
+    assert.equal(posts, 8);
     assert.equal(rootLoads, 2);
     assert.equal(errors.length, 0, errors.join('\n'));
-    console.log(`PASS: analysis, three position decisions, trading POST redirects, calculation navigation Escape and AJAX stage transition; one layer, ${posts} POSTs, ${rootLoads} collection loads`);
+    console.log(`PASS: immediate AJAX status in card and collection, analysis, three position decisions, trading POST redirects, calculation navigation Escape and AJAX stage transition; one layer, ${posts} POSTs, ${rootLoads} collection loads`);
   } finally { await browser.close(); server.close(); }
 })().catch(error => {console.error(error); server.close(); process.exit(1);});

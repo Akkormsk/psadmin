@@ -352,11 +352,42 @@
         }
         document.addEventListener("click", workspaceLink);
 
+        function showAnalysisStarted(data) {
+          document.querySelectorAll('[data-analysis-status="' + Number(data.tender_id) + '"]').forEach(function (badge) {
+            badge.textContent = data.label;
+            badge.hidden = false;
+            if (badge.classList.contains("ts-v2-badge")) badge.className = "ts-v2-badge ts-v2-badge--processing";
+          });
+        }
+
         document.addEventListener("submit", function (event) {
           const submitted = event.target.closest("form");
           if (embedded && submitted && (submitted.getAttribute("method") || "get").toLowerCase() === "post") {
             const action = new URL(submitted.getAttribute("action") || location.href, location.href);
             if (action.origin === location.origin) submitted.setAttribute("action", embeddedUrl(action.href));
+          }
+          if (submitted?.hasAttribute("data-analysis-refresh") && !event.defaultPrevented) {
+            event.preventDefault();
+            const button = event.submitter || submitted.querySelector("button");
+            if (button.disabled) return;
+            const caption = button.textContent;
+            button.disabled = true;
+            button.textContent = "Запускаем…";
+            fetch(submitted.getAttribute("action"), {method: "POST", body: new FormData(submitted), headers: {"X-Requested-With": "XMLHttpRequest"}})
+              .then(async function (response) {
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Не удалось запустить анализ");
+                showAnalysisStarted(data);
+                if (embedded) window.parent.postMessage({type: "ps-analysis-started", ...data}, location.origin);
+                button.textContent = data.label;
+                submitted.closest("details.ts-menu")?.removeAttribute("open");
+              })
+              .catch(function (error) {
+                button.disabled = false;
+                button.textContent = caption;
+                window.alert(error.message || "Не удалось получить подтверждение запуска. Обновите страницу перед повторной попыткой.");
+              });
+            return;
           }
           const form = event.target.closest("form[data-tender-transition]");
           if (!form || event.defaultPrevented) return;
@@ -526,6 +557,10 @@
             const layer = layers.find(layer => layer.frame.contentWindow === event.source);
             layer.context = event.data.context;
             if (layer === layers[layers.length - 1]) renderStack();
+            return;
+          }
+          if (event.data?.type === "ps-analysis-started") {
+            showAnalysisStarted(event.data);
             return;
           }
           if (event.data?.type === "ps-workspace-open" && event.data.url) {

@@ -1424,8 +1424,12 @@ def refresh_analysis(request, pk):
     tender = get_object_or_404(Tender, pk=pk)
     try:
         result = refresh_document_analysis(request.user, tender.pk)
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"tender_id": tender.pk, "label": "Проверяем ТЗ…", **result})
         messages.info(request, result["message"])
     except ValueError as exc:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"error": str(exc)}, status=400)
         messages.error(request, str(exc))
     target = request.POST.get("next", "")
     if not target or not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
