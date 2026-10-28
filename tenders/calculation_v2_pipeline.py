@@ -176,6 +176,7 @@ class GatewayDocumentEnricher:
         self.usage = {}
         self.cost_rub = 0.0
         self.diagnostics = {}
+        self.document_images = []
 
     def _bounded_documents(self, documents):
         """Prepare full extracted text; budget checks must reject, never clip, the request."""
@@ -183,40 +184,56 @@ class GatewayDocumentEnricher:
         from tender_selection.documents import MAX_BYTES
 
         candidates = []
+        self.document_images = []
         for doc in documents:
             url = doc.get("url")
             if not url:
                 continue
             cached = DocumentPreview.objects.filter(url=url).values("html", "kind", "error").first() or {}
             html = cached.get("html") or ""
-            image_present = bool(re.search(r"<img\b", html, flags=re.I))
-            html = re.sub(r"<img\b[^>]*>", "", html, flags=re.I)
             if len(html.encode("utf-8")) > MAX_BYTES:
                 raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
             root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
-            warning = image_present or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
+            image_nodes = root.xpath(".//img")
+            image_indexes = []
+            for node in image_nodes:
+                image_url = node.get("src", "")
+                if not re.fullmatch(r"data:image/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+", image_url):
+                    continue
+                try:
+                    import base64
+                    import io
+                    from PIL import Image
+                    with Image.open(io.BytesIO(base64.b64decode(image_url.split(",", 1)[1], validate=True))) as image:
+                        image.verify()
+                except Exception:
+                    continue
+                self.document_images.append(image_url)
+                image_indexes.append(len(self.document_images))
+            missing_images = len(image_nodes) != len(image_indexes)
+            warning = missing_images or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
             warnings = [" ".join(node.itertext()).strip()[:500] for node in root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]")]
-            if image_present:
-                warnings.append("В документе есть изображения; их содержимое не извлечено как текст.")
+            if missing_images:
+                warnings.append("Некоторые изображения недоступны для визуального чтения.")
             for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-info] | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
                 node.drop_tree()
             content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
             text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
             candidates.append({"url": url, "name": doc.get("name", ""), "text": text,
-                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind")})
+                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes})
         if not candidates:
             return [], []
         available, considered = [], []
         for candidate in candidates:
             text = candidate["text"]
-            status = "unreadable" if not text else "partial" if candidate["error"] or candidate["warning"] else "read"
-            entry = {"url": candidate["url"], "name": candidate["name"], "text": text}
+            status = "unreadable" if not text and not candidate["image_indexes"] else "partial" if candidate["error"] or candidate["warning"] else "read"
+            entry = {"url": candidate["url"], "name": candidate["name"], "text": text, "image_indexes": candidate["image_indexes"]}
             entry["tables"] = document_table_payload(candidate["html"]) if text else []
             available.append(entry)
             considered.append({"url": candidate["url"], "name": candidate["name"],
                                "cached_text_chars": len(candidate["text"]), "sent_text_chars": len(text),
                                "table_count": len(entry.get("tables", [])), "reading_status": status,
-                               "error": candidate["error"], "warnings": candidate["warnings"], "cache_kind": candidate["cache_kind"]})
+                               "error": candidate["error"], "warnings": candidate["warnings"], "cache_kind": candidate["cache_kind"], "image_count": len(candidate["image_indexes"])})
         return available, considered
 
     def _preflight_cost(self, prompt):
@@ -231,6 +248,8 @@ class GatewayDocumentEnricher:
         }
         if self.max_cost_rub is not None:
             usage["prompt_tokens"] = len(prompt.encode("utf-8")) + 4096
+        # Reserve encoded image bytes as an additional conservative input allowance.
+        usage["prompt_tokens"] += sum(len(value.encode("ascii")) for value in self.document_images)
         return spend_rub(usage, self.model), usage
 
     def _record_gateway_failure(self, exc, *, usage, phase, started):
@@ -267,7 +286,7 @@ class GatewayDocumentEnricher:
         documents_html(tender, [doc for doc in documents if doc.get("url")], timeout=5, archive_timeout=5, direct_timeout=5)
         available, considered = self._bounded_documents(documents)
         incomplete = any(doc["reading_status"] != "read" for doc in considered)
-        if not any(doc["text"] for doc in available):
+        if not any(doc["text"] or doc["image_indexes"] for doc in available):
             self.diagnostics = {"outcome": "document_reading_incomplete", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         notification_rows = _notification_rows(tender)
@@ -280,7 +299,7 @@ class GatewayDocumentEnricher:
                                        "notification_position": index + 1 if isinstance(index, int) else None,
                                        "notification_unit_price": original.get("price"), "notification_total": original.get("sum")})
         payload = {"notification_items": notification_items, "documents": available}
-        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"parent_display_name\":string,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. If documentation explicitly enumerates the contents of an aggregate, you MUST return one component row per distinct documented item, linked to its original notification parent. This takes precedence over enrich: never return only a renamed aggregate or hide its contents in a name or requirements object. Do not emit the aggregate itself alongside its component rows. Set component quantity to null: the backend calculates total quantity from the parent's amount and quantity_per_parent. Supply the documented positive quantity_per_parent; never guess missing amounts. Include explicitly listed packaging. Merge repeated mentions across documents without duplicating physical items; preserve separate variants and separate parents. parent_display_name is the concise documented name of the aggregate. Each name identifies only that individual item; move procurement boilerplate, branding and technical constraints into requirements.characteristics, an array of human-readable {name,value} entries, without losing meaning. Return enrich only for an atomic item with no enumerated contents. Return split only where a document explicitly replaces an aggregate with separately quantified goods. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Read every supplied tender document and compare it with every notification item. Attached images are numbered from 1 in attachment order; document image_indexes associate each picture with its source. Read the images together with that document text. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"parent_display_name\":string,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. If documentation explicitly enumerates the contents of an aggregate, you MUST return one component row per distinct documented item, linked to its original notification parent. This takes precedence over enrich: never return only a renamed aggregate or hide its contents in a name or requirements object. Do not emit the aggregate itself alongside its component rows. Set component quantity to null: the backend calculates total quantity from the parent's amount and quantity_per_parent. Supply the documented positive quantity_per_parent; never guess missing amounts. Include explicitly listed packaging. Merge repeated mentions across documents without duplicating physical items; preserve separate variants and separate parents. parent_display_name is the concise documented name of the aggregate. Each name identifies only that individual item; move procurement boilerplate, branding and technical constraints into requirements.characteristics, an array of human-readable {name,value} entries, without losing meaning. Return enrich only for an atomic item with no enumerated contents. Return split only where a document explicitly replaces an aggregate with separately quantified goods. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         estimated_cost, estimated_usage = self._preflight_cost(prompt)
         if estimated_cost is None:
             self.diagnostics = {"outcome": "unpriced_model", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
@@ -290,13 +309,13 @@ class GatewayDocumentEnricher:
                                 "budget": {"max_cost_rub": str(self.max_cost_rub), "reserved_cost_rub": str(estimated_cost)}}
             return []
         try:
-            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1, json_attempts=1)
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1, json_attempts=1, **({"image_data_urls": self.document_images} if self.document_images else {}))
         except Exception as exc:
             self._record_gateway_failure(exc, usage={}, phase="document_analysis", started=started)
             raise
         self.usage = extract_usage
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
-        allowed_urls = {doc["url"] for doc in available if doc["text"]}
+        allowed_urls = {doc["url"] for doc in available if doc["text"] or doc["image_indexes"]}
         output, rejections = [], []
         if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
             rejections.append({"reason": "missing_items_array"})

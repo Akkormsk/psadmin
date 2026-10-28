@@ -148,3 +148,45 @@ class DocumentReadingInputTests(TestCase):
         with patch("tender_selection.documents.MAX_BYTES", 8):
             with self.assertRaises(ValueError):
                 GatewayDocumentEnricher()._bounded_documents(self.documents)
+
+
+class InlineDocumentVisionTests(TestCase):
+    def setUp(self):
+        import base64
+        from PIL import Image
+        self.tender = Tender.objects.create(purchase_number='inline-vision', notification_raw={'source': {}})
+        self.item = TenderSourceItem.objects.create(tender=self.tender, source_key='source', source_type='notification', original_text='Item', quantity=1)
+        image = io.BytesIO(); Image.new('RGB', (64, 64), 'white').save(image, format='PNG')
+        self.image_url = 'data:image/png;base64,' + base64.b64encode(image.getvalue()).decode('ascii')
+        self.documents = [{'url': 'https://example.test/vision', 'name': 'Document.docx'}]
+        DocumentPreview.objects.create(url=self.documents[0]['url'], kind='docx', html=f'<p>Text facts</p><img src="{self.image_url}">')
+
+    @patch('tenders.services._ai_gateway_json', return_value=({'items': []}, {'prompt_tokens': 100, 'completion_tokens': 10}))
+    def test_picture_is_forwarded_in_the_same_call_and_bound_to_its_document(self, gateway):
+        enricher = GatewayDocumentEnricher()
+        enricher.extract_tender(tender=self.tender, source_items=[self.item], documents=self.documents)
+        gateway.assert_called_once()
+        self.assertEqual(gateway.call_args.kwargs['image_data_urls'], [self.image_url])
+        self.assertNotIn('base64', gateway.call_args.args[0])
+        self.assertIn('"image_indexes": [1]', gateway.call_args.args[0])
+        considered = enricher.diagnostics['documents']['considered'][0]
+        self.assertEqual(considered['reading_status'], 'read')
+        self.assertEqual(considered['image_count'], 1)
+
+    @patch('tenders.services._ai_gateway_json')
+    def test_image_allowance_is_reserved_before_any_paid_call(self, gateway):
+        enricher = GatewayDocumentEnricher(max_cost_rub='0.00001')
+        enricher.extract_tender(tender=self.tender, source_items=[self.item], documents=self.documents)
+        self.assertEqual(enricher.diagnostics['outcome'], 'budget_blocked')
+        gateway.assert_not_called()
+        with_image = enricher._preflight_cost('prompt')[1]['prompt_tokens']
+        enricher.document_images = []
+        self.assertGreater(with_image, enricher._preflight_cost('prompt')[1]['prompt_tokens'])
+
+    def test_external_picture_is_never_fetched_and_remains_a_warning(self):
+        DocumentPreview.objects.filter(url=self.documents[0]['url']).update(html='<p>Facts</p><img src="https://external.test/picture">')
+        enricher = GatewayDocumentEnricher()
+        available, considered = enricher._bounded_documents(self.documents)
+        self.assertFalse(enricher.document_images)
+        self.assertEqual(considered[0]['reading_status'], 'partial')
+        self.assertTrue(considered[0]['warnings'])
