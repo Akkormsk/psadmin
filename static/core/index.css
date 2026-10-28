@@ -668,7 +668,7 @@ body.has-workspace-stack { overflow: hidden; }
   box-shadow: none;
   transform: none;
 }
-.app-workspace-layer__close { font-size: 25px; }
+.app-workspace-layer__close { font-size: 25px; line-height: 1; }
 .app-workspace-layer__trail {
   display: flex;
   min-width: 0;
@@ -2286,7 +2286,7 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
   .ts-zip-entries .ts-doc-link { font-size: 13px; }
   .ts-document-viewer { padding: 12px; }
   .ts-document-viewer .modal { width: calc(100vw - 48px); max-width: 1400px; height: calc(100dvh - 40px); max-height: none; padding: 12px; display: flex; flex-direction: column; overflow: hidden; }
-  .ts-document-viewer .modal-header { flex: 0 0 auto; margin-bottom: 8px; gap: 12px; }
+  .ts-document-viewer .modal-header { flex: 0 0 54px; display: grid; grid-template-columns: 38px minmax(0, 1fr) 38px; align-items: center; margin: -12px -12px 8px; padding: 0 12px; gap: 8px; border-bottom: 1px solid var(--separator); box-sizing: border-box; }
   .ts-document-viewer .modal-header h2 { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ts-document-viewer .ts-doc-body { flex: 1 1 auto; min-height: 0; }
   .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }

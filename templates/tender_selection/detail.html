@@ -439,11 +439,11 @@
 <div class="modal-overlay ts-document-viewer" id="ts-doc-modal">
   <div class="modal">
     <div class="modal-header">
+      <button type="button" class="app-workspace-layer__back" id="ts-doc-back" aria-label="Назад" title="К тендеру">←</button>
       <h2 id="ts-doc-title">Документ</h2>
-      <button type="button" class="modal-close" id="ts-doc-close" aria-label="Закрыть">&times;</button>
+      <button type="button" class="modal-close app-workspace-layer__close" id="ts-doc-close" aria-label="Закрыть документ">×</button>
     </div>
     <div id="ts-doc-body" class="ts-doc-body"></div>
-    <button type="button" class="ts-doc-link" id="ts-doc-back" hidden>К архиву</button>
   </div>
 </div>
 
@@ -588,6 +588,8 @@
     var backButton = document.getElementById("ts-doc-back");
     var currentIdx = null;
     var loadingTimer = null;
+    var documentHistory = [];
+    var navigationVersion = 0;
 
     var hostDocument = document;
     var workspaceLayer = null;
@@ -637,7 +639,8 @@
     function close() {
       stopLoadingHint();
       modal.classList.remove("is-open");
-      backButton.hidden = true;
+      navigationVersion++;
+      documentHistory = [];
       if (workspaceLayer) {
         workspaceLayer.classList.remove("has-document-preview");
         window.parent.removeEventListener("resize", matchWorkspaceBounds);
@@ -659,8 +662,14 @@
       if (workspaceLayer) modal.remove();
     });
     backButton.addEventListener("click", function () {
-      backButton.hidden = true;
-      viaServer().then(showResult);
+      navigationVersion++;
+      stopLoadingHint();
+      if (!documentHistory.length) { close(); return; }
+      var previous = documentHistory.pop();
+      title.textContent = previous.title;
+      body.replaceChildren.apply(body, previous.nodes);
+      body.scrollTop = previous.scrollTop;
+      backButton.title = documentHistory.length ? "К предыдущему архиву" : "К тендеру";
     });
 
     var zipEntryUrlTpl = "{% url 'tender_selection:doc_zip_entry' tender.pk 999999 'ZZZPATHZZZ' %}";
@@ -678,7 +687,9 @@
 
     function loadZipEntry(path, parents) {
       parents = parents || [];
-      backButton.hidden = false;
+      documentHistory.push({nodes: Array.from(body.childNodes), title: title.textContent, scrollTop: body.scrollTop});
+      backButton.title = "К предыдущему архиву";
+      var requestVersion = ++navigationVersion;
       var url = zipEntryUrlTpl.replace("999999", currentIdx)
         .replace("ZZZPATHZZZ", path.split("/").map(encodeURIComponent).join("/"));
       var query = new URLSearchParams();
@@ -690,8 +701,8 @@
       }
       body.textContent = "Открываю архив…";
       fetch(url).then(function (r) { return r.json(); }).then(function (data) {
-        showResult(data, /\.zip$/i.test(path) ? parents.concat(path) : parents);
-      }).catch(function () { body.textContent = "Не удалось открыть файл из архива."; });
+        if (requestVersion === navigationVersion) showResult(data, /\.zip$/i.test(path) ? parents.concat(path) : parents);
+      }).catch(function () { if (requestVersion === navigationVersion) body.textContent = "Не удалось открыть файл из архива."; });
     }
 
     function showResult(data, parents) {
@@ -730,7 +741,9 @@
         currentIdx = btn.dataset.docPreview;
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
-        backButton.hidden = true;
+        documentHistory = [];
+        backButton.title = "К тендеру";
+        var requestVersion = ++navigationVersion;
         openDocument();
         startLoadingHint();
 
@@ -739,10 +752,11 @@
           return;
         }
         viaServer()
-          .then(showResult)
+          .then(function (data) { if (requestVersion === navigationVersion) showResult(data); })
           .catch(function () {
+            if (requestVersion !== navigationVersion) return;
             stopLoadingHint();
-            body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
+            body.textContent = "Не удалось загрузить предпросмотр.";
           });
       });
     });
