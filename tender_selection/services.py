@@ -593,17 +593,20 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
 
     def fetch_one(doc):
         try:
-            return doc, _fetch_doc_bytes(tender, doc["url"], doc["name"], **fetch_kwargs)
-        except DocumentError:
-            return doc, None
+            return doc, _fetch_doc_bytes(tender, doc["url"], doc["name"], **fetch_kwargs), ""
+        except DocumentError as exc:
+            return doc, None, str(exc)
 
     if missing:
         with ThreadPoolExecutor(max_workers=len(missing)) as pool:
             fetched = list(pool.map(fetch_one, missing))
-        for doc, data in fetched:
+        for doc, data, error in fetched:
+            if error and doc["url"] in existing:
+                DocumentPreview.objects.filter(url=doc["url"]).update(error=error[:DocumentPreview._meta.get_field("error").max_length])
             if data is not None:
                 result = extract_preview(data, doc["name"], read_archive=True)
                 if doc["url"] in existing and not result.get("html"):
+                    DocumentPreview.objects.filter(url=doc["url"]).update(error=str(result.get("error") or "Не удалось обновить документ")[:DocumentPreview._meta.get_field("error").max_length])
                     continue  # Keep usable legacy evidence when conversion/download fails.
                 htmls[doc["url"]] = _save_document_preview(doc["url"], doc["name"], result).get("html", "")
     return htmls

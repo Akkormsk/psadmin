@@ -76,7 +76,7 @@ def analysis_issues(job) -> list[str]:
         for document in (entry.get("documents") or {}).get("considered", []):
             if document.get("reading_status") not in {"partial", "unreadable"}:
                 continue
-            reason = document.get("error") or ("Текст извлечён не полностью или с предупреждением; нужна проверка оригинала." if document.get("reading_status") == "partial" else "Не удалось извлечь текст.")
+            reason = document.get("error") or "; ".join(document.get("warnings") or []) or ("Текст извлечён не полностью или с предупреждением; нужна проверка оригинала." if document.get("reading_status") == "partial" else "Не удалось извлечь текст.")
             issues.append(f"{document.get('name') or 'Документ'}: {reason}")
     if not issues and _is_technical_failure(job):
         issues.append("Разбор не завершён, но подробная причина в сохранённом журнале отсутствует. Повторите анализ.")

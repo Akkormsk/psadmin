@@ -46,7 +46,7 @@ class Command(BaseCommand):
                 "fits_remaining_budget": reservation is not None and Decimal(str(reservation)) <= budget - spent,
                 "sources": [{"name": row.get("name"), "reading_status": row.get("reading_status"),
                              "cached_text_chars": row.get("cached_text_chars"), "sent_text_chars": row.get("sent_text_chars"),
-                             "has_error": bool(row.get("error")), "error": row.get("error")}
+                             "has_error": bool(row.get("error")), "error": row.get("error"), "warnings": row.get("warnings"), "cache_kind": row.get("cache_kind")}
                             for row in (enricher.diagnostics.get("documents") or {}).get("considered", [])]}, ensure_ascii=False, default=str))
             return
         if not options["apply"]:

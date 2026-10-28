@@ -195,12 +195,15 @@ class GatewayDocumentEnricher:
                 raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
             root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
             warning = image_present or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
+            warnings = [" ".join(node.itertext()).strip()[:500] for node in root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]")]
+            if image_present:
+                warnings.append("В документе есть изображения; их содержимое не извлечено как текст.")
             for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-info] | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
                 node.drop_tree()
             content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
             text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
             candidates.append({"url": url, "name": doc.get("name", ""), "text": text,
-                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning})
+                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind")})
         if not candidates:
             return [], []
         available, considered = [], []
@@ -213,7 +216,7 @@ class GatewayDocumentEnricher:
             considered.append({"url": candidate["url"], "name": candidate["name"],
                                "cached_text_chars": len(candidate["text"]), "sent_text_chars": len(text),
                                "table_count": len(entry.get("tables", [])), "reading_status": status,
-                               "error": candidate["error"]})
+                               "error": candidate["error"], "warnings": candidate["warnings"], "cache_kind": candidate["cache_kind"]})
         return available, considered
 
     def _preflight_cost(self, prompt):
