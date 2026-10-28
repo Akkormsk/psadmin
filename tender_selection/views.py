@@ -533,6 +533,7 @@ def tender_detail(request, pk):
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
     document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal"]
     document_proposal_groups = []
+    proposal_documents = {doc.get("url"): doc for doc in (card or {}).get("documents", [])}
     proposals_by_parent = {}
     for proposal in document_proposals:
         # A decision is made for the complete replacement of one notification
@@ -543,6 +544,8 @@ def tender_detail(request, pk):
             parent = proposal.parent
             group = {
                 "parent": parent,
+                "display_name": str((proposal.metadata or {}).get("parent_display_name") or (parent.original_text if parent else "Позиция из документации")),
+                "notification_position": (parent.metadata or {}).get("notification_index", -1) + 1 if parent else None,
                 "items": [],
                 "parent_quantity": parent.quantity if parent else None,
                 "parent_unit": parent.unit if parent else "",
@@ -573,6 +576,7 @@ def tender_detail(request, pk):
             "relationship": metadata.get("relationship"),
             "characteristics": characteristics,
             "provenance": proposal.provenance if isinstance(proposal.provenance, dict) else {},
+            "document": proposal_documents.get((proposal.provenance or {}).get("document_url")),
         })
     v2_lines = TenderComputeLine.objects.filter(job__tender=tender).select_related("source_item").order_by("job_id", "pk")
     v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
@@ -592,7 +596,7 @@ def tender_detail(request, pk):
         active_sources = active_calculation_items(tender) if v2_source_items else []
         from tenders.models import TenderCommercialItem
         commercial_items = list(tender.v2_commercial_items.prefetch_related("components__source_item", "source_items").filter(status="active").order_by("pk"))
-        if commercial_items:
+        if commercial_items and not any(source.source_type == "document_extraction" for source in active_sources):
             display_items = []
             for commercial in commercial_items:
                 source = commercial.source_items.order_by("pk").first()
@@ -633,6 +637,8 @@ def tender_detail(request, pk):
                     has_document_items = True
                 display_items.append({
                     "name": source.original_text,
+                    "parent_display_name": metadata.get("parent_display_name", "") if metadata.get("relationship") == "component" else "",
+                    "quantity_per_parent": metadata.get("quantity_per_parent") if metadata.get("relationship") == "component" else None,
                     "quantity": source.quantity if source.quantity is not None else notification_item.get("quantity"),
                     "unit": source.unit or notification_item.get("unit", ""),
                     "code": notification_item.get("code", "") if source.source_type == "notification" else "",
@@ -640,7 +646,7 @@ def tender_detail(request, pk):
                     "price": notification_item.get("price") if source.source_type == "notification" else None,
                     "sum": notification_item.get("sum") if source.source_type == "notification" else None,
                     "characteristics": details,
-                    "source_mark": "Уточнено по ТЗ" if source.source_type == "document_enrichment" and is_document_item else "Из ТЗ" if source.source_type == "document_extraction" and is_document_item else "",
+                    "source_mark": "Уточнено по документации" if source.source_type == "document_enrichment" and is_document_item else "Из документации" if source.source_type == "document_extraction" and is_document_item else "",
                     "source_mark_kind": "enriched",
                     "source_details": " · ".join(str(part) for part in source_bits if part),
                     "source_evidence": evidence,
@@ -851,17 +857,18 @@ def owner_interaction_answer(request, pk, interaction_pk):
 @require_POST
 def document_proposal_action(request, pk, parent_pk):
     tender = get_object_or_404(Tender, pk=pk)
-    decision = "accept" if request.POST.get("action") == "accept" else "reject"
+    detail_url = reverse("tender_selection:detail", args=[tender.pk]) + ("?workspace=1" if request.GET.get("workspace") else "")
+    decision = request.POST.get("action")
     try:
         decide_document_proposals(request.user, tender.pk, parent_pk, decision)
     except ValueError as exc:
         messages.error(request, str(exc))
-        return redirect(reverse("tender_selection:detail", args=[tender.pk]))
+        return redirect(detail_url)
     if decision == "accept":
-        messages.success(request, "Состав из документации принят. Расчёт можно запустить заново.")
+        messages.success(request, "Состав из документации принят. Перечень товаров обновлён.")
     else:
         messages.info(request, "Предложения из документации отклонены.")
-    return redirect(reverse("tender_selection:detail", args=[tender.pk]))
+    return redirect(detail_url + "#tender-items")
 
 
 @tender_viewer_required

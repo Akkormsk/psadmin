@@ -187,7 +187,7 @@ register_tool(AssistantTool(
 ))
 register_tool(AssistantTool(
     "tender.document_proposals", "Принять или отклонить состав из документации",
-    "Применяет к позиции тендера найденный в документации состав либо отклоняет его тем же исполнителем, что карточка тендера.",
+    "Применяет или отклоняет найденный состав тем же исполнителем, что карточка тендера. Для компонентов итоговое количество вычисляется из количества исходной позиции и нормы на одну единицу; исходное извещение сохраняется.",
     {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}, 'parent_id': {'type': 'integer', 'required': True, 'label': 'Исходная позиция', 'reference': {'model': 'tenders.TenderSourceItem', 'label': ['original_text']}}, 'decision': {'type': 'accept|reject', 'required': True, 'label': 'Решение по составу', 'choices': (('accept', 'Принять'), ('reject', 'Отклонить'))}},
     False, True, True,
     lambda user, payload: _tender_action(

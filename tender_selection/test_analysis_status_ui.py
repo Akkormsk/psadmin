@@ -67,7 +67,7 @@ class TenderDetailCompositionPresentationTests(TestCase):
         self.assertContains(response, "Компонент Альфа")
         self.assertContains(response, "Компонент Бета")
         self.assertContains(response, "Независимая позиция")
-        self.assertContains(response, "Из ТЗ")
+        self.assertContains(response, "Из документации")
         self.assertContains(response, "Показать исходную запись")
         self.assertContains(response, "Агрегированная позиция")
         self.assertContains(response, "Компонент Альфа")
@@ -80,7 +80,7 @@ class TenderDetailCompositionPresentationTests(TestCase):
         with patch("tender_selection.views.notification_for", return_value=payload):
             response = self.client.get(reverse("tender_selection:detail", args=[tender.pk]), secure=True)
 
-        self.assertContains(response, "Уточнено по ТЗ")
+        self.assertContains(response, "Уточнено по документации")
         self.assertContains(response, "Добавлено из ТЗ")
         self.assertContains(response, "Плотность")
         self.assertContains(response, "250 г/м²")

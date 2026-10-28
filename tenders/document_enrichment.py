@@ -38,3 +38,21 @@ def expand_table(rows):
 def document_table_payload(html):
     parser = _TableParser(); parser.feed(html or "")
     return [{"rows": rows} for rows in parser.tables[:12] if rows]
+
+
+def component_total_quantity(parent_quantity, quantity_per_parent):
+    """One quantity rule for staging and accepting documented aggregate contents."""
+    from decimal import Decimal, InvalidOperation
+
+    if parent_quantity is None or quantity_per_parent is None:
+        return None
+    try:
+        parent, per_parent = Decimal(str(parent_quantity)), Decimal(str(quantity_per_parent))
+        if not parent.is_finite() or not per_parent.is_finite() or parent <= 0 or per_parent <= 0:
+            raise ValueError("Количество должно быть положительным числом")
+        total = parent * per_parent
+        if total != total.quantize(Decimal("0.01")):
+            raise ValueError("Количество требует большей точности; уточните единицу измерения")
+        return total
+    except (InvalidOperation, TypeError) as exc:
+        raise ValueError("Не удалось определить количество компонента") from exc

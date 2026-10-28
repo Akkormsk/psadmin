@@ -19,7 +19,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--tender-number", required=True)
         parser.add_argument("--max-cost-rub", required=True, type=Decimal)
-        parser.add_argument("--max-output-tokens", type=int, default=1200)
+        parser.add_argument("--max-output-tokens", type=int, default=8000)
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--preflight", action="store_true")
 
@@ -27,8 +27,8 @@ class Command(BaseCommand):
         budget = options["max_cost_rub"]
         if not budget.is_finite() or not Decimal("0") < budget <= Decimal("14"):
             raise CommandError("Pilot budget must be positive and no greater than 14 RUB")
-        if not 256 <= options["max_output_tokens"] <= 6000:
-            raise CommandError("Output limit must be between 256 and 6000 tokens")
+        if not 256 <= options["max_output_tokens"] <= 12000:
+            raise CommandError("Output limit must be between 256 and 12000 tokens")
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
         if tender is None:
             raise CommandError("Tender not found; nothing was called")
@@ -46,13 +46,13 @@ class Command(BaseCommand):
                 "fits_remaining_budget": reservation is not None and Decimal(str(reservation)) <= budget - spent,
                 "sources": [{"name": row.get("name"), "reading_status": row.get("reading_status"),
                              "cached_text_chars": row.get("cached_text_chars"), "sent_text_chars": row.get("sent_text_chars"),
-                             "has_error": bool(row.get("error"))}
+                             "has_error": bool(row.get("error")), "error": row.get("error")}
                             for row in (enricher.diagnostics.get("documents") or {}).get("considered", [])]}, ensure_ascii=False, default=str))
             return
         if not options["apply"]:
             self.stdout.write(json.dumps({"apply": False, "budget_rub": str(budget), "has_notification": bool(tender.notification_raw)}))
             return
-        version = "v2-document-pilot-full-text"
+        version = "v2-document-pilot-components"
         with transaction.atomic():
             Tender.objects.select_for_update().get(pk=tender.pk)
             previous = TenderComputeJob.objects.filter(tender=tender, version=version).first()

@@ -42,6 +42,8 @@ RATES_RUB_PER_M: dict[str, tuple[float, float]] = {
     "anthropic/claude-fable-5": (1350, 6750),
     "anthropic/claude-fable-5-1": (1350, 6750),
     "anthropic/claude-haiku-4-5": (135, 1080),
+    # Verified via account models API 2026-10-28, ordinary input/output (no cache discount).
+    "anthropic/claude-haiku-5-5": (13.5, 67.5),
     "anthropic/claude-opus-4-6": (675, 3375),
     "anthropic/claude-opus-4-7": (675, 3375),
     "anthropic/claude-opus-4-8": (675, 3375),

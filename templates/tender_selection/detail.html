@@ -77,7 +77,7 @@
     </div>
   </section>
 
-  <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
+  <details class="panel panel--separated" {% if active_stage == "review" or document_proposal_groups %}open{% endif %}>
     <summary class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--neutral">{% if card.items %}{{ card.items|length }} позиций{% elif is_manual %}данные ЕИС не загружены{% else %}основные условия закупки{% endif %}</span></span></summary>
     {% if is_fz223 %}
     <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
@@ -123,7 +123,7 @@
 
     {% if display_items %}
     {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
-    <h3 class="settings-subtitle">Перечень товаров ({{ display_items|length }})</h3>
+    <h3 class="settings-subtitle" id="tender-items">Перечень товаров ({{ display_items|length }})</h3>
     {% if document_item_count %}<div class="ts-derived-note">{{ document_item_count }} позиц. найдено в ТЗ · <details class="ts-original-toggle"><summary>Показать исходную запись</summary><span>{{ original_source_texts|join:"; " }}</span></details></div>{% endif %}
     <div class="table-wrapper"><table class="table ts-items">
       <thead><tr><th>Наименование</th><th>ОКПД2 / КТРУ</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
@@ -131,7 +131,7 @@
         {% for item in display_items %}
         <tr>
           <td>
-            <strong>{{ item.name }}</strong>{% if item.source_mark %} <details class="ts-position-source"><summary class="ts-position-mark ts-position-mark--{{ item.source_mark_kind }}">{{ item.source_mark }}</summary><div class="ts-source-details"><strong>Источник</strong><span>{{ item.source_details }}</span>{% if item.source_evidence %}<span>{{ item.source_evidence }}</span>{% endif %}{% if item.source_changes %}<strong>Добавлено из ТЗ</strong><ul>{% for change in item.source_changes %}<li>{{ change.name }}: {{ change.value }}</li>{% endfor %}</ul>{% endif %}{% if item.original_source_text %}<strong>Исходная запись</strong><span>{{ item.original_source_text }}</span>{% endif %}</div></details>{% endif %}
+            <strong>{{ item.name }}</strong>{% if item.parent_display_name %}<div class="ts-sub">{{ item.parent_display_name }} · {{ item.quantity_per_parent|floatformat:"-4" }} {{ item.unit }} в составе</div>{% endif %}{% if item.source_mark %} <details class="ts-position-source"><summary class="ts-position-mark ts-position-mark--{{ item.source_mark_kind }}">{{ item.source_mark }}</summary><div class="ts-source-details"><strong>Источник</strong><span>{{ item.source_details }}</span>{% if item.source_evidence %}<span>{{ item.source_evidence }}</span>{% endif %}{% if item.source_changes %}<strong>Добавлено из ТЗ</strong><ul>{% for change in item.source_changes %}<li>{{ change.name }}: {{ change.value }}</li>{% endfor %}</ul>{% endif %}{% if item.original_source_text %}<strong>Исходная запись</strong><span>{{ item.original_source_text }}</span>{% endif %}</div></details>{% endif %}
             {% if item.composition_question %}<div class="ts-position-question" id="owner-question-{{ item.composition_question_id }}"><div class="ts-position-question__label"><span class="ts-position-mark ts-position-mark--review">Проверить</span><strong>Нужно уточнить</strong></div><p>{{ item.composition_question }}</p><form method="post" action="{% url 'tender_selection:owner_interaction_answer' tender.pk item.composition_question_id %}">{% csrf_token %}{% if item.composition_options %}<div class="ts-question-options">{% for option in item.composition_options %}<button type="submit" name="answer" value="{{ option }}" class="button-secondary">{{ option }}</button>{% endfor %}</div>{% endif %}<div class="ts-question-reply"><input type="text" name="answer" aria-label="Другой ответ" placeholder="Другой ответ…"><button type="submit" class="button-primary">Ответить</button></div></form></div>{% endif %}
             {% if item.components %}<ul class="ts-components">{% for component in item.components %}<li>{{ component.name }} <span>×{{ component.quantity_per_parent|floatformat:"-4" }}{% if component.unit %} {{ component.unit }}{% endif %}</span></li>{% endfor %}</ul>{% endif %}
             {% if item.characteristics %}
@@ -150,20 +150,20 @@
     {% if document_proposal_groups %}
     <section class="ts-document-proposals">
       <h3>Предложения из документации · нужна проверка</h3>
-      <p class="ts-document-proposals__lead">Проверьте, какие позиции агент нашёл в документации. При принятии исходная строка будет заменена строками из этой таблицы; до этого расчёт не запускается.</p>
+      <p class="ts-document-proposals__lead">Проверьте, какие позиции агент нашёл в документации. При принятии обновится рабочий перечень товаров. Исходное извещение сохранится без изменений.</p>
       {% for group in document_proposal_groups %}
       <article class="ts-document-proposal">
-        <header><strong>Исходная позиция:</strong> {{ group.parent.original_text }}{% if group.parent_quantity %} · {{ group.parent_quantity|floatformat:"-2" }} {{ group.parent_unit }}{% endif %}</header>
+        <header><strong>{{ group.display_name }}</strong>{% if group.notification_position %} · позиция извещения {{ group.notification_position }}{% endif %}{% if group.parent_quantity %} · {{ group.parent_quantity|floatformat:"-2" }} {{ group.parent_unit }}{% endif %}<details><summary class="ts-sub">Исходная запись</summary>{{ group.parent.original_text }}</details></header>
         <div class="table-wrapper"><table class="table ts-document-proposal__table">
-          <thead><tr><th>Найдено в документации</th><th>Кол-во в наборе</th><th>Требования</th><th>Источник</th></tr></thead>
+          <thead><tr><th>Найдено в документации</th><th>В одном</th><th>Всего</th><th>Требования</th><th>Источник</th></tr></thead>
           <tbody>{% for proposal in group.items %}<tr>
-            <td><strong>{{ proposal.name }}</strong>{% if proposal.relationship == "component" %}<span class="ts-position-mark ts-position-mark--enriched">Состав набора</span>{% endif %}</td>
-            <td class="ts-nowrap">{% if proposal.quantity_per_parent %}{{ proposal.quantity_per_parent|floatformat:"-4" }} {{ proposal.unit }} × {{ group.parent_quantity|floatformat:"-2" }}{% elif proposal.quantity %}{{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% else %}—{% endif %}</td>
+            <td><strong>{{ proposal.name }}</strong>{% if proposal.relationship == "component" %}<span class="ts-position-mark ts-position-mark--enriched">Компонент</span>{% endif %}</td>
+            <td class="ts-nowrap">{% if proposal.relationship == "component" and proposal.quantity_per_parent %}{{ proposal.quantity_per_parent|floatformat:"-4" }} {{ proposal.unit }}{% else %}—{% endif %}</td><td class="ts-nowrap">{% if proposal.quantity %}{{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% else %}Нужно уточнить{% endif %}</td>
             <td>{% if proposal.characteristics %}<ul class="ts-chars">{% for characteristic in proposal.characteristics %}<li>{% if characteristic.name %}<span class="ts-sub">{{ characteristic.name }}:</span> {% endif %}{{ characteristic.value }}</li>{% endfor %}</ul>{% else %}—{% endif %}</td>
-            <td>{% if proposal.provenance.document_url %}<a href="{{ proposal.provenance.document_url }}" target="_blank" rel="noopener">Документ</a>{% endif %}{% if proposal.provenance.page_or_section %}<br><span class="ts-sub">{{ proposal.provenance.page_or_section }}</span>{% endif %}{% if proposal.provenance.evidence %}<p class="ts-document-proposal__evidence">{{ proposal.provenance.evidence }}</p>{% endif %}</td>
+            <td>{% if proposal.document %}<button type="button" class="ts-doc-link" data-doc-preview="{{ proposal.document.index }}" data-doc-name="{{ proposal.document.name }}">{{ proposal.document.name }}</button>{% elif proposal.provenance.document_url %}<a href="{{ proposal.provenance.document_url }}" target="_blank" rel="noopener">Документ</a>{% endif %}{% if proposal.provenance.page_or_section %}<br><span class="ts-sub">{{ proposal.provenance.page_or_section }}</span>{% endif %}{% if proposal.provenance.evidence %}<p class="ts-document-proposal__evidence">{{ proposal.provenance.evidence }}</p>{% endif %}</td>
           </tr>{% endfor %}</tbody>
         </table></div>
-        <form class="ts-document-proposal__actions" method="post" action="{% url 'tender_selection:document_proposal_action' tender.pk group.parent.pk %}">{% csrf_token %}<button class="button-success" name="action" value="accept">Принять состав</button><button class="button-secondary" name="action" value="reject">Отклонить</button></form>
+        <form class="ts-document-proposal__actions" method="post" action="{% url 'tender_selection:document_proposal_action' tender.pk group.parent.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<button class="button-success" name="action" value="accept">Принять состав</button><button class="button-secondary" name="action" value="reject">Отклонить</button></form>
       </article>
       {% endfor %}
     </section>
@@ -581,6 +581,12 @@
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } .ts-stage-summary { margin-left:22px; justify-content:flex-start; text-align:left; } .tender-saved-bid { align-items:flex-start; } }
 </style>
 <script>
+  if (window.location.hash === "#tender-items") {
+    const items = document.getElementById("tender-items");
+    for (let parent = items?.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === "DETAILS") parent.open = true;
+    }
+  }
   (function () {
     var modal = document.getElementById("ts-doc-modal");
     var title = document.getElementById("ts-doc-title");

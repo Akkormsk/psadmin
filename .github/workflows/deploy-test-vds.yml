@@ -163,10 +163,11 @@ jobs:
           django.setup()
           from django.conf import settings
           from tenders.models import TenderComputeJob
+          from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
           latest_job = TenderComputeJob.objects.filter(version__startswith="v2").order_by("-pk").values("status", "updated_at", "completed_at").first()
           print("Tender analysis runtime: " + json.dumps({
               "enabled": settings.CALCULATION_V2_ENABLED,
-              "extraction_model": os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", "gemini/gemini-3.1-flash-lite"),
+              "extraction_model": GatewayDocumentEnricher().model,
               "latest_job": latest_job,
           }, default=str))
           PY
@@ -174,7 +175,7 @@ jobs:
             pilot_mode=--apply
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
             docker compose -f compose.test.yml exec -T test-web python manage.py prepare_tender_documents \
-              --tender-number "$pilot_tender" --max-cost-rub 14 --max-output-tokens 6000 "$pilot_mode" </dev/null
+              --tender-number "$pilot_tender" --max-cost-rub 14 --max-output-tokens 8000 "$pilot_mode" </dev/null
           fi
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \

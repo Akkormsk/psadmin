@@ -19,7 +19,7 @@ from tender_selection.models import DocumentPreview, FilterSettings, Tender
 from tender_selection.notification import parse_notification
 
 from .calculation_v2 import claim_next_job
-from .document_enrichment import document_table_payload
+from .document_enrichment import component_total_quantity, document_table_payload
 from .models import (
     KnowledgeRecord,
     Lesson,
@@ -67,6 +67,7 @@ class ExtractedItem:
     relationship: str = "split"
     quantity_per_parent: Decimal = Decimal("1")
     parent_source_item_id: int | None = None
+    parent_display_name: str = ""
 
 
 class ExistingKnowledgeBatchRouter:
@@ -163,16 +164,14 @@ class GatewayBatchRouter:
 class GatewayDocumentEnricher:
     """One bounded, evidence-only document analysis for the pre-routing intake stage."""
 
-    # The bounded prompt and one provider attempt make Flash Lite economical.
-    # One ruble is a portfolio target, tracked in diagnostics, not a reason to
+    # One provider attempt avoids paid retries. One ruble is a portfolio target,
+    # tracked in diagnostics, not a reason to
     # leave an unusually rich tender without document analysis.
-    DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "1200"))
+    DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "8000"))
     DOCUMENT_AVERAGE_COST_TARGET_RUB = 1.00
 
     def __init__(self, model=None, *, max_cost_rub=None):
-        # Document composition has its own deliberately inexpensive default;
-        # the general-purpose gateway model must not change it by accident.
-        self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", "gemini/gemini-3.1-flash-lite")
+        self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL") or os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "anthropic/claude-haiku-5-5")
         self.max_cost_rub = Decimal(str(max_cost_rub)) if max_cost_rub is not None else None
         self.usage = {}
         self.cost_rub = 0.0
@@ -278,7 +277,7 @@ class GatewayDocumentEnricher:
                                        "notification_position": index + 1 if isinstance(index, int) else None,
                                        "notification_unit_price": original.get("price"), "notification_total": original.get("sum")})
         payload = {"notification_items": notification_items, "documents": available}
-        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. Return enrich only for explicitly documented facts about that same notification item. Return split only where a document explicitly replaces an aggregate item with separately named goods. Return component only where contents of an aggregate are explicitly enumerated; quantity_per_parent is the documented amount in one aggregate. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"parent_display_name\":string,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. If documentation explicitly enumerates the contents of an aggregate, you MUST return one component row per distinct documented item, linked to its original notification parent. This takes precedence over enrich: never return only a renamed aggregate or hide its contents in a name or requirements object. Do not emit the aggregate itself alongside its component rows. Set component quantity to null: the backend calculates total quantity from the parent's amount and quantity_per_parent. Supply the documented positive quantity_per_parent; never guess missing amounts. Include explicitly listed packaging. Merge repeated mentions across documents without duplicating physical items; preserve separate variants and separate parents. parent_display_name is the concise documented name of the aggregate. Each name identifies only that individual item; move procurement boilerplate, branding and technical constraints into requirements.characteristics, an array of human-readable {name,value} entries, without losing meaning. Return enrich only for an atomic item with no enumerated contents. Return split only where a document explicitly replaces an aggregate with separately quantified goods. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         estimated_cost, estimated_usage = self._preflight_cost(prompt)
         if estimated_cost is None:
             self.diagnostics = {"outcome": "unpriced_model", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
@@ -307,11 +306,16 @@ class GatewayDocumentEnricher:
             confidence = _as_decimal(row.get("confidence"))
             requirements = row.get("requirements")
             relationship = str(row.get("relationship") or "").lower()
-            per_parent = _as_decimal(row.get("quantity_per_parent")) or Decimal("1")
-            if confidence is None or not Decimal("0") <= confidence <= Decimal("1") or not isinstance(requirements, dict) or relationship not in {"enrich", "split", "component"} or per_parent <= 0:
+            per_parent = _as_decimal(row.get("quantity_per_parent")) if relationship == "component" else Decimal("1")
+            if confidence is None or not Decimal("0") <= confidence <= Decimal("1") or not isinstance(requirements, dict) or relationship not in {"enrich", "split", "component"} or per_parent is None or per_parent <= 0 or (relationship == "component" and not str(row.get("unit") or "").strip()):
                 rejections.append({"index": index, "reason": "invalid_structure"}); continue
-            output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id))
-        outcome = "document_reading_incomplete" if incomplete else "success" if output else ("validation_failure" if rejections else "no_data")
+            output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id, str(row.get("parent_display_name") or "")[:300]))
+        modes = {}
+        for entry in output:
+            modes.setdefault(entry.parent_source_item_id, set()).add(entry.relationship)
+        if any("component" in values and len(values) > 1 for values in modes.values()):
+            rejections.append({"reason": "aggregate_and_components_mixed"})
+        outcome = "validation_failure" if rejections else "document_reading_incomplete" if incomplete else "success" if output else "no_data"
         self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage, "target_exceeded": self.cost_rub > self.DOCUMENT_AVERAGE_COST_TARGET_RUB}, "extraction": {"selected_urls": sorted(allowed_urls), "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
         return output
 
@@ -492,7 +496,8 @@ def _source_key(row: dict, index: int) -> str:
 
 def _as_decimal(value) -> Decimal | None:
     try:
-        return Decimal(str(value).replace(",", "."))
+        number = Decimal(str(value).replace(",", "."))
+        return number if number.is_finite() else None
     except Exception:
         return None
 
@@ -656,13 +661,18 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
             parent = parents.get(entry.parent_source_item_id)
             if parent is None:
                 continue
-            payload = {"parent": parent.pk, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)}
+            if entry.relationship == "component":
+                entry = replace(entry, quantity=component_total_quantity(parent.quantity, entry.quantity_per_parent))
+            elif entry.relationship == "enrich" and entry.quantity is None:
+                entry = replace(entry, quantity=parent.quantity)
+            payload = {"parent": parent.pk, "parent_display_name": entry.parent_display_name, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)}
             proposal, _ = TenderSourceItem.objects.get_or_create(
                 tender=tender,
                 source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
                 defaults={"source_type": "document_proposal", "original_text": entry.name, "quantity": entry.quantity,
                           "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance,
-                          "metadata": {"relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)},
+                          "metadata": {"relationship": entry.relationship, "parent_display_name": entry.parent_display_name,
+                                       **({"quantity_per_parent": str(entry.quantity_per_parent)} if entry.relationship == "component" else {})},
                           "confidence": entry.confidence, "parent": parent, "is_active": False},
             )
             proposals.append(proposal)

@@ -115,7 +115,7 @@ class GatewayDocumentEnricherBudgetTests(TestCase):
         ]
 
     @patch("tenders.services._ai_gateway_json")
-    def test_uses_one_flash_lite_call_and_considers_every_document(self, gateway):
+    def test_uses_one_selected_assistant_call_and_considers_every_document(self, gateway):
         gateway.return_value = ({"items": [{
             "parent_source_item_id": self.source.pk, "name": "T-shirt", "quantity": None,
             "unit": "piece", "requirements": {}, "confidence": 0.95,
@@ -126,13 +126,13 @@ class GatewayDocumentEnricherBudgetTests(TestCase):
         enricher = GatewayDocumentEnricher()
         result = enricher.extract_tender(tender=self.tender, source_items=[self.source], documents=self.documents)
 
-        self.assertEqual(enricher.model, "gemini/gemini-3.1-flash-lite")
+        self.assertEqual(enricher.model, "anthropic/claude-haiku-5-5")
         self.assertEqual(len(result), 1)
         self.assertEqual(gateway.call_count, 1)
         prompt = gateway.call_args.args[0]
         self.assertIn("unusual-attachment", prompt)
         self.assertIn("https://example.test/second", prompt)
-        self.assertEqual(gateway.call_args.kwargs["max_tokens"], 1200)
+        self.assertEqual(gateway.call_args.kwargs["max_tokens"], 8000)
         self.assertEqual(gateway.call_args.kwargs["network_attempts"], 1)
         self.assertEqual(gateway.call_args.kwargs["json_attempts"], 1)
         self.assertEqual(enricher.diagnostics["documents"]["considered"].__len__(), 2)

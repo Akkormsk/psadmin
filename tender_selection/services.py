@@ -1881,10 +1881,19 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
     if decision == "accept":
+        from tenders.document_enrichment import component_total_quantity
+        if not parent.is_active:
+            raise ValueError("Исходная позиция уже изменилась; обновите предложения")
+        for proposal in proposals:
+            if proposal.metadata.get("relationship") == "component":
+                total = component_total_quantity(parent.quantity, proposal.metadata.get("quantity_per_parent"))
+                if total is None:
+                    raise ValueError("Для принятия состава нужно уточнить количество исходной позиции и компонентов")
+                proposal.quantity = total
         for proposal in proposals:
             proposal.source_type = "document_extraction"
             proposal.is_active = True
-            proposal.save(update_fields=["source_type", "is_active"])
+            proposal.save(update_fields=["source_type", "is_active", "quantity"])
         parent.is_active = False
         parent.save(update_fields=["is_active"])
     else:
