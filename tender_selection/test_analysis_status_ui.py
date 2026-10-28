@@ -28,7 +28,7 @@ class IncomingAnalysisStatusTests(TestCase):
         self.assertEqual(shown.analysis_status.label, "Позиции уточнены по ТЗ")
         detail_url = reverse("tender_selection:detail", args=[tender.pk])
         self.assertContains(response, f'class="ts-row__main" href="{detail_url}"')
-        self.assertNotContains(response, f'href="{detail_url}" data-workspace-open')
+        self.assertContains(response, f'href="{detail_url}" data-workspace-open')
 
     def test_authorized_user_can_open_tender_detail(self):
         tender = Tender.objects.create(purchase_number="status-ui-detail", title="Открываемая карточка", source=Tender.MANUAL)

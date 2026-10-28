@@ -2275,3 +2275,40 @@ body.assistant-open .tender-requirements-drawer { width:min(600px,calc(100vw - m
 body.workspace-embedded .provider-detail-page { width:100%; max-width:none; min-height:calc(100vh - 72px); padding:0; }
 body.workspace-embedded .provider-detail-page__card { display:grid; min-height:calc(100vh - 72px); grid-template-rows:auto auto minmax(0,1fr); border:0; border-radius:0; box-shadow:none; }
 @media (max-width:700px) { .provider-workspace__header,.provider-workspace__content { padding-right:18px; padding-left:18px; }.provider-workspace__tabs { gap:20px; padding:0 18px; }.provider-overview { grid-template-columns:1fr; }.provider-overview dl div { grid-template-columns:1fr; gap:3px; } }
+
+/* Tender documents use the same viewport above the workspace, not inside its iframe. */
+  .ts-doc-link { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 14px; font-weight: 600;
+                 color: var(--ink); text-decoration: none; cursor: pointer; text-align: left; }
+  .ts-doc-link:hover { text-decoration: underline; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
+  .ts-doc-line .ts-sub { display: block; margin-top: 2px; }
+  .ts-doc-btn { min-height: 0; font-size: 12px; padding: 5px 12px; border-radius: 10px; flex: 0 0 auto; }
+  .ts-zip-entries { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+  .ts-zip-entries .ts-doc-link { font-size: 13px; }
+  .ts-document-viewer { padding: 12px; }
+  .ts-document-viewer .modal { width: calc(100vw - 48px); max-width: 1400px; height: calc(100dvh - 40px); max-height: none; padding: 12px; display: flex; flex-direction: column; overflow: hidden; }
+  .ts-document-viewer .modal-header { flex: 0 0 auto; margin-bottom: 8px; gap: 12px; }
+  .ts-document-viewer .modal-header h2 { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ts-document-viewer .ts-doc-body { flex: 1 1 auto; min-height: 0; }
+  .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
+  .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
+  .ts-doc-body h4 { margin: 16px 0 6px; }
+  .ts-doc-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+  .ts-doc-table td { border: 1px solid var(--border); padding: 4px 8px; vertical-align: top; }
+  .ts-doc-page { position: relative; margin: 0 0 18px; padding: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 1px 3px rgba(32,38,48,.05); overflow: auto; }
+  .ts-doc-page__number { display: block; margin: -8px 0 14px; color: var(--ink-3); font-weight: 700; }
+  .ts-doc-page p { line-height: 1.55; }
+  .ts-doc-inline-image { display: block; max-width: min(100%, 640px); max-height: 480px; margin: 8px 0; object-fit: contain; }
+  .ts-doc-loading { color: var(--ink-2); }
+
+.ts-document-viewer { z-index: 2500; }
+.app-workspace-layer.has-document-preview { visibility: hidden; }
+.ts-document-viewer.is-workspace-document .modal {
+  position: absolute;
+  left: var(--document-left);
+  top: var(--document-top);
+  width: var(--document-width);
+  height: var(--document-height);
+  max-width: none;
+  border-radius: 22px;
+  box-sizing: border-box;
+}

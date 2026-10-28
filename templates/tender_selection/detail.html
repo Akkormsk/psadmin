@@ -436,7 +436,7 @@
   {% endif %}
 </div>
 
-<div class="modal-overlay" id="ts-doc-modal">
+<div class="modal-overlay ts-document-viewer" id="ts-doc-modal">
   <div class="modal">
     <div class="modal-header">
       <h2 id="ts-doc-title">Документ</h2>
@@ -552,28 +552,6 @@
   .ts-docs li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--separator); }
   .ts-docs li:last-child { border-bottom: 0; }
   .ts-doc-line { min-width: 0; }
-  .ts-doc-link { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 14px; font-weight: 600;
-                 color: var(--ink); text-decoration: none; cursor: pointer; text-align: left; }
-  .ts-doc-link:hover { text-decoration: underline; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
-  .ts-doc-line .ts-sub { display: block; margin-top: 2px; }
-  .ts-doc-btn { min-height: 0; font-size: 12px; padding: 5px 12px; border-radius: 10px; flex: 0 0 auto; }
-  .ts-zip-entries { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
-  .ts-zip-entries .ts-doc-link { font-size: 13px; }
-  #ts-doc-modal { padding: 12px; }
-  #ts-doc-modal .modal { width: calc(100vw - 48px); max-width: 1400px; height: calc(100dvh - 40px); max-height: none; padding: 12px; display: flex; flex-direction: column; overflow: hidden; }
-  #ts-doc-modal .modal-header { flex: 0 0 auto; margin-bottom: 8px; gap: 12px; }
-  #ts-doc-modal .modal-header h2 { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #ts-doc-modal .ts-doc-body { flex: 1 1 auto; min-height: 0; }
-  .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
-  .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
-  .ts-doc-body h4 { margin: 16px 0 6px; }
-  .ts-doc-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
-  .ts-doc-table td { border: 1px solid var(--border); padding: 4px 8px; vertical-align: top; }
-  .ts-doc-page { position: relative; margin: 0 0 18px; padding: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 1px 3px rgba(32,38,48,.05); overflow: auto; }
-  .ts-doc-page__number { display: block; margin: -8px 0 14px; color: var(--ink-3); font-weight: 700; }
-  .ts-doc-page p { line-height: 1.55; }
-  .ts-doc-inline-image { display: block; max-width: min(100%, 640px); max-height: 480px; margin: 8px 0; object-fit: contain; }
-  .ts-doc-loading { color: var(--ink-2); }
   .ts-extras { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
   .ts-extras li { border-left: 2px solid var(--border); padding-left: 12px; }
   .ts-extra-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-weight: 600; font-size: 13px; }
@@ -611,6 +589,37 @@
     var currentIdx = null;
     var loadingTimer = null;
 
+    var hostDocument = document;
+    var workspaceLayer = null;
+    var returnFocus = null;
+    if (window.parent !== window && document.body.classList.contains("workspace-embedded")) {
+      hostDocument = window.parent.document;
+      workspaceLayer = window.frameElement.closest(".app-workspace-layer");
+    }
+
+    function matchWorkspaceBounds() {
+      if (!workspaceLayer) return;
+      var bounds = workspaceLayer.getBoundingClientRect();
+      modal.style.setProperty("--document-left", bounds.left + "px");
+      modal.style.setProperty("--document-top", bounds.top + "px");
+      modal.style.setProperty("--document-width", bounds.width + "px");
+      modal.style.setProperty("--document-height", bounds.height + "px");
+    }
+
+    function openDocument() {
+      returnFocus = document.activeElement;
+      if (workspaceLayer) {
+        modal.id = "ts-doc-modal-portal";
+        modal.classList.add("is-workspace-document");
+        hostDocument.body.appendChild(modal);
+        matchWorkspaceBounds();
+        workspaceLayer.classList.add("has-document-preview");
+        window.parent.addEventListener("resize", matchWorkspaceBounds);
+      }
+      modal.classList.add("is-open");
+      modal.querySelector(".modal-close").focus();
+    }
+
     // Сервер сначала пробует ЕИС SOAP (до 20с), потом прямую ссылку (до 15с) — итого
     // до ~35с тишины при обоих сбоях. Без промежуточного сообщения это выглядит как
     // зависание, а не как реальная работа сети.
@@ -629,10 +638,26 @@
       stopLoadingHint();
       modal.classList.remove("is-open");
       backButton.hidden = true;
+      if (workspaceLayer) {
+        workspaceLayer.classList.remove("has-document-preview");
+        window.parent.removeEventListener("resize", matchWorkspaceBounds);
+      }
+      if (returnFocus && returnFocus.isConnected) returnFocus.focus({preventScroll: true});
     }
     document.getElementById("ts-doc-close").addEventListener("click", close);
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
-    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+    function escapeDocument(event) {
+      if (event.key !== "Escape" || !modal.classList.contains("is-open")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+    }
+    hostDocument.addEventListener("keydown", escapeDocument, true);
+    window.addEventListener("pagehide", function () {
+      close();
+      hostDocument.removeEventListener("keydown", escapeDocument, true);
+      if (workspaceLayer) modal.remove();
+    });
     backButton.addEventListener("click", function () {
       backButton.hidden = true;
       viaServer().then(showResult);
@@ -706,7 +731,7 @@
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
         backButton.hidden = true;
-        modal.classList.add("is-open");
+        openDocument();
         startLoadingHint();
 
         if (/\.(docx?|xlsx?|pdf)$/i.test(btn.dataset.docName || "")) {
