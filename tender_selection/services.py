@@ -1888,7 +1888,7 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
 
     if decision not in {"accept", "reject"}:
         raise ValueError("Нужно выбрать: принять или отклонить предложения")
-    parent = TenderSourceItem.objects.filter(pk=parent_id, tender_id=tender_id).first()
+    parent = TenderSourceItem.objects.select_for_update().filter(pk=parent_id, tender_id=tender_id).first()
     if parent is None:
         raise ValueError("Исходная позиция тендера не найдена")
     proposals = list(TenderSourceItem.objects.filter(
@@ -1897,7 +1897,9 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
     if decision == "accept":
-        from tenders.document_enrichment import component_total_quantity
+        from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
+        if len(proposals) > 1 and any(is_item_enrichment(item) for item in proposals):
+            raise ValueError("Уточнение одного товара должно быть объединено в одно предложение; обновите анализ")
         if not parent.is_active:
             raise ValueError("Исходная позиция уже изменилась; обновите предложения")
         for proposal in proposals:
@@ -1907,9 +1909,11 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
                     raise ValueError("Для принятия состава нужно уточнить количество исходной позиции и компонентов")
                 proposal.quantity = total
         for proposal in proposals:
+            if is_item_enrichment(proposal):
+                proposal.requirements = effective_item_requirements(proposal)
             proposal.source_type = "document_extraction"
             proposal.is_active = True
-            proposal.save(update_fields=["source_type", "is_active", "quantity"])
+            proposal.save(update_fields=["source_type", "is_active", "quantity", "requirements"])
         parent.is_active = False
         parent.save(update_fields=["is_active"])
     else:

@@ -56,3 +56,86 @@ def component_total_quantity(parent_quantity, quantity_per_parent):
         return total
     except (InvalidOperation, TypeError) as exc:
         raise ValueError("Не удалось определить количество компонента") from exc
+
+
+def is_item_enrichment(item):
+    return item.source_type == "document_enrichment" or (item.metadata or {}).get("relationship") == "enrich"
+
+
+def notification_origin(item, *, same_item=False):
+    seen = set()
+    while item is not None and item.pk not in seen:
+        seen.add(item.pk)
+        if item.source_type == "notification":
+            return item
+        if same_item and not is_item_enrichment(item):
+            return None
+        item = item.parent if item.parent_id else None
+    return None
+
+
+def merge_item_requirements(baseline, additions, *, provenance=None):
+    """Keep baseline facts; append new evidence, deduplicate facts and expose conflicts."""
+    from copy import deepcopy
+    import json
+
+    def rows(requirements):
+        if not isinstance(requirements, dict):
+            return []
+        result = list(requirements.get("characteristics") or [])
+        result.extend({"name": name, "value": value} for name, value in requirements.items()
+                      if name not in {"characteristics", "document_requirements", "field_provenance"})
+        if isinstance(requirements.get("document_requirements"), dict):
+            result.extend(rows(requirements["document_requirements"]))
+        return result
+
+    merged = deepcopy(baseline) if isinstance(baseline, dict) else {}
+    facts, seen = [], set()
+    for requirements, default_source in ((baseline, "notification"), (additions, "document")):
+        for raw in rows(requirements):
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or raw.get("characteristicName") or "").strip()
+            value = raw.get("value") if raw.get("value") not in (None, "") else raw.get("characteristicValue")
+            if not name or value in (None, "", [], {}):
+                continue
+            key = (" ".join(name.casefold().split()), " ".join((str(value) if isinstance(value, (str, int, float)) else json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)).casefold().split()))
+            if key in seen:
+                continue
+            fact = {**deepcopy(raw), "name": name, "value": value, "source": (raw.get("source") or "notification") if default_source == "notification" else "document"}
+            if default_source == "document" and provenance:
+                fact["provenance"] = deepcopy(provenance)
+            for prior in facts:
+                if " ".join(prior["name"].casefold().split()) == key[0]:
+                    prior["conflict"] = fact["conflict"] = True
+            facts.append(fact); seen.add(key)
+    merged["characteristics"] = facts
+    return merged
+
+
+def effective_item_requirements(item):
+    chain, seen = [], set()
+    while item is not None and item.pk not in seen:
+        seen.add(item.pk); chain.append(item)
+        if not is_item_enrichment(item) or not item.parent_id:
+            break
+        item = item.parent
+    requirements = {}
+    for source in reversed(chain):
+        if not requirements and source.source_type == "notification":
+            requirements = merge_item_requirements(source.requirements, {})
+        else:
+            requirements = merge_item_requirements(requirements, source.requirements, provenance=source.provenance)
+    return requirements
+
+
+def notification_quote_source(item):
+    origin = notification_origin(item, same_item=True)
+    if origin is None:
+        return None
+    unit = lambda value: str(value or "").strip().casefold().rstrip(".")
+    if item.quantity is not None and item.quantity != origin.quantity:
+        return None
+    if item.unit and unit(item.unit) != unit(origin.unit):
+        return None
+    return origin

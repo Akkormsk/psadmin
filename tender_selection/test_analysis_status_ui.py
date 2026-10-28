@@ -81,7 +81,7 @@ class TenderDetailCompositionPresentationTests(TestCase):
             response = self.client.get(reverse("tender_selection:detail", args=[tender.pk]), secure=True)
 
         self.assertContains(response, "Уточнено по документации")
-        self.assertContains(response, "Добавлено из ТЗ")
+        self.assertContains(response, "Добавлено из документации")
         self.assertContains(response, "Плотность")
         self.assertContains(response, "250 г/м²")
         self.assertContains(response, "Цвет")

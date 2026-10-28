@@ -531,6 +531,9 @@ def tender_detail(request, pk):
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
     from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
+    from tenders.document_enrichment import effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
+    notification_by_index = {index: item for index, item in enumerate((card or {}).get("items", []))}
+    source_financials = []
     document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal"]
     document_proposal_groups = []
     proposal_documents = {doc.get("url"): doc for doc in (card or {}).get("documents", [])}
@@ -549,15 +552,17 @@ def tender_detail(request, pk):
                 "items": [],
                 "parent_quantity": parent.quantity if parent else None,
                 "parent_unit": parent.unit if parent else "",
+                "original_values": notification_by_index.get((notification_origin(parent).metadata or {}).get("notification_index"), {}) if parent and notification_origin(parent) else {},
             }
             proposals_by_parent[parent_key] = group
             document_proposal_groups.append(group)
-        requirements = proposal.requirements if isinstance(proposal.requirements, dict) else {}
+        requirements = effective_item_requirements(proposal)
         raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
         characteristics = [
             {
                 "name": str(row.get("name") or row.get("characteristicName") or ""),
                 "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or ""),
+                "source": row.get("source"), "conflict": row.get("conflict", False),
             }
             for row in raw_characteristics if isinstance(row, dict)
         ]
@@ -596,38 +601,57 @@ def tender_detail(request, pk):
         questions_by_source = {question.source_item_id: question for question in v2_questions if question.source_item_id}
         document_names = {document.get("url"): document.get("name", "Документация") for document in card.get("documents", [])}
         active_sources = active_calculation_items(tender) if v2_source_items else []
+        financial_parents = set()
+        for source in active_sources:
+            origin = notification_origin(source)
+            if origin and notification_quote_source(source) is None and origin.pk not in financial_parents:
+                original = notification_by_index.get((origin.metadata or {}).get("notification_index"), {})
+                source_financials.append({**original, "name": (source.metadata or {}).get("parent_display_name") or origin.original_text})
+                financial_parents.add(origin.pk)
         from tenders.models import TenderCommercialItem
         commercial_items = list(tender.v2_commercial_items.prefetch_related("components__source_item", "source_items").filter(status="active").order_by("pk"))
         if commercial_items and not any(source.source_type == "document_extraction" for source in active_sources):
             display_items = []
             for commercial in commercial_items:
-                source = commercial.source_items.order_by("pk").first()
-                requirements = commercial.requirements if isinstance(commercial.requirements, dict) else {}
+                linked_sources = list(commercial.source_items.all())
+                source = linked_sources[0] if len(linked_sources) == 1 else None
+                requirements = merge_item_requirements(effective_item_requirements(source), commercial.requirements) if source and commercial.structure == TenderCommercialItem.Structure.SIMPLE else commercial.requirements if isinstance(commercial.requirements, dict) else {}
+                original_source = notification_origin(source, same_item=True) if source else None
+                quote_source = notification_quote_source(source) if source and commercial.structure == TenderCommercialItem.Structure.SIMPLE and commercial.quantity == source.quantity and str(commercial.unit or source.unit).strip().rstrip(".") == str(source.unit).strip().rstrip(".") else None
+                notification_item = notification_by_index.get((original_source.metadata or {}).get("notification_index"), {}) if original_source else {}
+                if quote_source is None:
+                    for linked_source in linked_sources:
+                        origin = notification_origin(linked_source)
+                        if origin and origin.pk not in financial_parents:
+                            source_financials.append({**notification_by_index.get(origin.metadata.get("notification_index"), {}), "name": origin.original_text})
+                            financial_parents.add(origin.pk)
                 rows = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
                 details = [{"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or "")} for row in rows if isinstance(row, dict)]
                 components = [{"name": component.name, "quantity_per_parent": component.quantity_per_parent, "unit": component.unit} for component in commercial.components.filter(status="active").order_by("sort_order", "pk")]
                 changed = commercial.structure != TenderCommercialItem.Structure.SIMPLE or (source and source.source_type in {"document_enrichment", "document_extraction"})
-                display_items.append({"name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": "", "code_name": "", "price": None, "sum": None,
+                display_items.append({"name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
                     "characteristics": details, "components": components if commercial.structure == TenderCommercialItem.Structure.COMPOSITE else [],
                     "source_mark": "Уточнено по ТЗ" if changed else "", "source_mark_kind": "enriched", "source_details": "Документация" if changed else "", "source_evidence": "", "source_changes": [], "original_source_text": "",
                     "composition_question": "", "composition_question_id": None, "composition_options": []})
         elif active_sources:
             display_items = []
             for source in active_sources:
-                requirements = source.requirements if isinstance(source.requirements, dict) else {}
+                requirements = effective_item_requirements(source)
                 provenance = source.provenance if isinstance(source.provenance, dict) else {}
                 question = questions_by_source.get(source.pk)
                 is_document_item = source.source_type in {"document_extraction", "document_enrichment"} and document_item_has_change(source)
                 raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
                 if raw_characteristics:
                     details = [
-                        {"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or "")}
+                        {"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or ""), "source": row.get("source"), "conflict": row.get("conflict", False), "source_details": " · ".join(str(part) for part in [document_names.get((row.get("provenance") or {}).get("document_url"), "Документация"), (row.get("provenance") or {}).get("page_or_section")] if part)}
                         for row in raw_characteristics if isinstance(row, dict)
                     ]
                 else:
                     details = [{"name": str(key), "value": str(value)} for key, value in requirements.get("document_requirements", requirements).items() if value not in (None, "", [], {})]
                 metadata = source.metadata if isinstance(source.metadata, dict) else {}
-                notification_item = notification_by_index.get(metadata.get("notification_index"), {})
+                original_source = notification_origin(source, same_item=True)
+                quote_source = notification_quote_source(source)
+                notification_item = notification_by_index.get((original_source.metadata or {}).get("notification_index"), {}) if original_source else {}
                 source_name = document_names.get(provenance.get("document_url"), "Документация")
                 source_bits = [source_name, provenance.get("page_or_section")]
                 evidence = str(provenance.get("evidence") or "").strip()
@@ -643,12 +667,12 @@ def tender_detail(request, pk):
                     "quantity_per_parent": metadata.get("quantity_per_parent") if metadata.get("relationship") == "component" else None,
                     "quantity": source.quantity if source.quantity is not None else notification_item.get("quantity"),
                     "unit": source.unit or notification_item.get("unit", ""),
-                    "code": notification_item.get("code", "") if source.source_type == "notification" else "",
-                    "code_name": notification_item.get("code_name", "") if source.source_type == "notification" else "",
-                    "price": notification_item.get("price") if source.source_type == "notification" else None,
-                    "sum": notification_item.get("sum") if source.source_type == "notification" else None,
+                    "code": notification_item.get("code", "") if original_source else "",
+                    "code_name": notification_item.get("code_name", "") if original_source else "",
+                    "price": notification_item.get("price") if quote_source else None,
+                    "sum": notification_item.get("sum") if quote_source else None,
                     "characteristics": details,
-                    "source_mark": "Уточнено по документации" if source.source_type == "document_enrichment" and is_document_item else "Из документации" if source.source_type == "document_extraction" and is_document_item else "",
+                    "source_mark": "Уточнено по документации" if is_item_enrichment(source) and is_document_item else "Из документации" if source.source_type == "document_extraction" and is_document_item else "",
                     "source_mark_kind": "enriched",
                     "source_details": " · ".join(str(part) for part in source_bits if part),
                     "source_evidence": evidence,
@@ -773,6 +797,7 @@ def tender_detail(request, pk):
         "v2_job": v2_job,
         "v2_job_label": v2_job_label,
         "display_items": display_items,
+        "source_financials": source_financials,
         "has_document_items": has_document_items,
         "document_item_count": document_item_count,
         "original_source_texts": sorted({text for text in original_source_texts if text}),
