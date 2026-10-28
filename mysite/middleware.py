@@ -1,6 +1,8 @@
 from ipaddress import ip_address
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.http import HttpResponse
+from django.utils.http import url_has_allowed_host_and_scheme
 
 
 class InternalHealthCheckMiddleware:
@@ -29,4 +31,11 @@ class WorkspaceFrameOptionsMiddleware:
         response = self.get_response(request)
         if request.GET.get("workspace") == "1":
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            location = response.headers.get("Location")
+            if response.status_code in {301, 302, 303, 307, 308} and location and url_has_allowed_host_and_scheme(
+                location, allowed_hosts={request.get_host()}, require_https=request.is_secure(),
+            ):
+                target = urlsplit(location)
+                query = [(key, value) for key, value in parse_qsl(target.query, keep_blank_values=True) if key != "workspace"]
+                response.headers["Location"] = urlunsplit(target._replace(query=urlencode([*query, ("workspace", "1")])))
         return response

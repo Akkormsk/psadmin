@@ -341,6 +341,10 @@
           event.preventDefault();
           const title = link.dataset.workspaceTitle || link.textContent.trim() || "Рабочее окно";
           if (embedded) {
+            if (document.querySelector("[data-workspace-single-layer]")) {
+              window.location.replace(embeddedUrl(link.href));
+              return;
+            }
             window.parent.postMessage({type: "ps-workspace-open", url: link.href, title}, location.origin);
           } else if (workspaceApi) {
             workspaceApi.open(link.href, title);
@@ -349,6 +353,11 @@
         document.addEventListener("click", workspaceLink);
 
         document.addEventListener("submit", function (event) {
+          const submitted = event.target.closest("form");
+          if (embedded && submitted && submitted.method.toLowerCase() === "post") {
+            const action = new URL(submitted.action, location.href);
+            if (action.origin === location.origin) submitted.action = embeddedUrl(action.href);
+          }
           const form = event.target.closest("form[data-tender-transition]");
           if (!form || event.defaultPrevented) return;
           if (!embedded && !document.querySelector("[data-tender-collection]")) return;
@@ -426,8 +435,9 @@
               if (trailIndex !== index) {
                 crumb.type = "button";
                 crumb.addEventListener("click", function () {
-                  if (historyEnabled) browserHistory.go(-(layers.length - trailIndex - 1));
-                  else removeToDepth(trailIndex + 1);
+                  const distance = layers.length - trailIndex - 1;
+                  removeToDepth(trailIndex + 1);
+                  if (historyEnabled) browserHistory.go(-distance);
                 });
               }
               crumb.textContent = item.title;
@@ -497,13 +507,16 @@
           closeOne: function (refresh) {
             if (!layers.length) return;
             refreshAfterBack = Boolean(refresh);
-            if (historyEnabled) browserHistory.back();
-            else removeToDepth(layers.length - 1);
+            const reloadRoot = refreshAfterBack && layers.length === 1;
+            removeToDepth(layers.length - 1);
+            // A concurrent history traversal cancels the collection reload.
+            if (historyEnabled && !reloadRoot) browserHistory.back();
           },
           closeAll: function () {
             if (!layers.length) return;
-            if (historyEnabled) browserHistory.go(-layers.length);
-            else removeToDepth(0);
+            const distance = layers.length;
+            removeToDepth(0);
+            if (historyEnabled) browserHistory.go(-distance);
           },
           depth: function () { return layers.length; },
         };

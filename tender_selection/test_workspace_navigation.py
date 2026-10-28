@@ -17,6 +17,9 @@ class LayeredWorkspaceNavigationTests(TestCase):
     def setUp(self):
         self.admin = get_user_model().objects.create_superuser("workspace-admin", password="x")
         self.client.force_login(self.admin)
+        refresh = patch("tender_selection.views.start_extras_refresh_in_background")
+        refresh.start()
+        self.addCleanup(refresh.stop)
 
     def test_kanban_opens_tender_in_shared_workspace_layer(self):
         tender = Tender.objects.create(
@@ -138,3 +141,29 @@ class LayeredWorkspaceNavigationTests(TestCase):
 
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
         self.assertContains(response, '<body class="has-account-bar ">', html=False)
+
+
+class WorkspaceRedirectTests(TestCase):
+    def test_internal_post_redirect_keeps_embedding_query_and_fragment(self):
+        from django.http import HttpResponseRedirect
+        from django.test import RequestFactory
+        from mysite.middleware import WorkspaceFrameOptionsMiddleware
+        middleware = WorkspaceFrameOptionsMiddleware(lambda request: HttpResponseRedirect('/tender-selection/42/?from=archive#tender-items'))
+        response = middleware(RequestFactory().post('/action/?workspace=1'))
+        self.assertEqual(response['Location'], '/tender-selection/42/?from=archive&workspace=1#tender-items')
+        self.assertEqual(response['X-Frame-Options'], 'SAMEORIGIN')
+
+    def test_direct_and_external_redirects_are_not_changed(self):
+        from django.http import HttpResponseRedirect
+        from django.test import RequestFactory
+        from mysite.middleware import WorkspaceFrameOptionsMiddleware
+        for source, target in [('/action/', '/tender-selection/42/'), ('/action/?workspace=1', 'https://external.test/path')]:
+            response = WorkspaceFrameOptionsMiddleware(lambda request: HttpResponseRedirect(target))(RequestFactory().post(source))
+            self.assertEqual(response['Location'], target)
+
+    def test_existing_workspace_query_is_not_duplicated(self):
+        from django.http import HttpResponseRedirect
+        from django.test import RequestFactory
+        from mysite.middleware import WorkspaceFrameOptionsMiddleware
+        response = WorkspaceFrameOptionsMiddleware(lambda request: HttpResponseRedirect('/card/?workspace=1&filter='))(RequestFactory().post('/action/?workspace=1'))
+        self.assertEqual(response['Location'], '/card/?filter=&workspace=1')
