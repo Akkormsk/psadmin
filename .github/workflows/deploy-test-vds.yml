@@ -137,6 +137,17 @@ jobs:
           assert base_url == "https://api.timeweb.ai/v1", "Unexpected TEST Gateway URL"
           assert key_configured, "TEST Gateway key is missing"
           print(json.dumps({"assistant_model": model, "base_url": base_url, "key_configured": key_configured}))
+
+          import django
+          django.setup()
+          from django.conf import settings
+          from tenders.models import TenderComputeJob
+          latest_job = TenderComputeJob.objects.filter(version__startswith="v2").order_by("-pk").values("status", "updated_at", "completed_at").first()
+          print("Tender analysis runtime: " + json.dumps({
+              "enabled": settings.CALCULATION_V2_ENABLED,
+              "extraction_model": os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", "gemini/gemini-3.1-flash-lite"),
+              "latest_job": latest_job,
+          }, default=str))
           PY
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \
