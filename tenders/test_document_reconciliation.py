@@ -130,3 +130,20 @@ class DocumentReconciliationTests(TestCase):
         self.assertIn('индивидуальная', prompt)
         self.assertIn('notification_unit_price', prompt)
         self.assertIn('1000', prompt)
+
+    def test_operator_report_reads_saved_data_without_any_writes_or_model_calls(self):
+        from unittest.mock import patch
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from scripts.inspect_tender_analysis import collect_report
+        proposal = self.proposal()
+        decide_document_proposals(self.admin, self.tender.pk, self.parent.pk, 'accept')
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid call forbidden')), CaptureQueriesContext(connection) as queries:
+            report = collect_report(self.tender.purchase_number)
+        self.assertTrue(report['read_only'])
+        self.assertFalse(report['model_called'])
+        self.assertTrue(all(row['sql'].lstrip().upper().startswith('SELECT') for row in queries))
+        item = next(row for row in report['active_items'] if row['name'] == proposal.original_text)
+        self.assertEqual(item['relationship'], 'enrich')
+        self.assertTrue(item['same_item_quote_eligible'])
+        self.assertTrue(any(row['name'] == 'Материал корпуса' for row in item['effective_facts']))
