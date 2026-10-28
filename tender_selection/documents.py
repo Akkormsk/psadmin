@@ -349,8 +349,17 @@ def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
     """Достаём один файл из архива по имени (провал внутрь многофайлового zip)."""
     try:
         with zipfile.ZipFile(io.BytesIO(archive_data)) as zf:
-            return zf.read(path)
-    except (zipfile.BadZipFile, KeyError):
+            info = zf.getinfo(path)
+            if info.file_size > MAX_BYTES:
+                raise DocumentError("Файл внутри архива слишком большой.")
+            with zf.open(info) as source:
+                data = source.read(MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                raise DocumentError("Файл внутри архива слишком большой.")
+            return data
+    except DocumentError:
+        raise
+    except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError, OSError):
         return None
 
 
@@ -366,7 +375,7 @@ def _archive_stem(path: str) -> str:
             return stem
 
 
-def extract_preview(data: bytes, filename: str) -> dict:
+def extract_preview(data: bytes, filename: str, *, browse_archive=False) -> dict:
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
     is_zip = data[:2] == b"PK"
@@ -377,9 +386,9 @@ def extract_preview(data: bytes, filename: str) -> dict:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
                 office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "xls", "pdf")]
-                if len(office) == 1:
+                if len(office) == 1 and not browse_archive:
                     return extract_preview(zf.read(office[0]), office[0])
-                if office and len({_archive_stem(path) for path in office}) == 1:
+                if not browse_archive and office and len({_archive_stem(path) for path in office}) == 1:
                     priority = {".pdf": 0, ".docx": 1, ".xlsx": 2, ".doc": 3}
                     selected = min(office, key=lambda path: priority.get("." + path.rsplit(".", 1)[-1].lower(), 4))
                     return extract_preview(zf.read(selected), selected)
@@ -388,7 +397,7 @@ def extract_preview(data: bytes, filename: str) -> dict:
                     clickable |= {n for n in names if n.lower().endswith(".zip")}
                     listing = "".join(f"<li>{escape(n)}</li>" for n in names[:50])
                     return {"kind": "zip", "html": f"<p>Архив, файлы внутри:</p><ul>{listing}</ul>",
-                            "zip_entries": [n for n in names if n in clickable]}
+                            "zip_entries": names if browse_archive else [n for n in names if n in clickable]}
         except zipfile.BadZipFile:
             pass
 

@@ -915,7 +915,7 @@ def doc_preview(request, pk, idx):
         response["X-Frame-Options"] = "SAMEORIGIN"
         return response
     try:
-        result = preview_tender_document(request.user, tender.pk, idx, refresh=request.GET.get("refresh") == "1")
+        result = preview_tender_document(request.user, tender.pk, idx, refresh=request.GET.get("refresh") == "1", browse_archive=request.GET.get("browse") == "1")
     except ValueError as exc:
         return _result_json("", {"error": str(exc)})
     return _result_json(result["name"], result)
@@ -954,10 +954,27 @@ def doc_zip_entry(request, pk, idx, entry):
     except DocumentError as exc:
         return _result_json(entry, {"error": str(exc)})
 
-    inner = extract_zip_entry(data, entry)
-    if inner is None:
-        return _result_json(entry, {"error": "Файл не найден в архиве."})
-    return _result_json(entry, extract_preview(inner, entry))
+    try:
+        parents = request.GET.getlist("parent")
+        if len(parents) > 5:
+            raise DocumentError("Слишком много вложенных архивов.")
+        for path in parents + [entry]:
+            data = extract_zip_entry(data, path)
+            if data is None:
+                raise DocumentError("Файл не найден в архиве.")
+        if request.GET.get("format") == "pdf":
+            from .office import convert_office
+            content = data if data.startswith(b"%PDF") else convert_office(data, entry, "pdf")
+            response = HttpResponse(content, content_type="application/pdf")
+            response["Content-Disposition"] = 'inline; filename="document.pdf"'
+            response["Cache-Control"] = "private, no-store"
+            response["X-Frame-Options"] = "SAMEORIGIN"
+            return response
+        return _result_json(entry, extract_preview(data, entry, browse_archive=True))
+    except DocumentError as exc:
+        if request.GET.get("format") == "pdf":
+            return HttpResponse(str(exc), status=422, content_type="text/plain; charset=utf-8")
+        return _result_json(entry, {"error": str(exc)})
 
 
 @superuser_required

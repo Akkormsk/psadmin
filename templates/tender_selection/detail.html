@@ -443,17 +443,9 @@
       <button type="button" class="modal-close" id="ts-doc-close" aria-label="Закрыть">&times;</button>
     </div>
     <div id="ts-doc-body" class="ts-doc-body"></div>
-    <div class="ts-doc-actions">
-      <button type="button" class="btn btn-secondary ts-doc-btn" id="ts-doc-replace">Обновить из файла</button>
-    </div>
-    <div class="ts-doc-fallback" id="ts-doc-fallback" hidden>
-      <p class="ts-sub">Выберите скачанный оригинал. Он заменит сохранённый предпросмотр этого документа.</p>
-      <input type="file" id="ts-doc-upload-input" accept=".docx,.xlsx,.pdf,.doc,.zip">
-      <p class="ts-doc-upload-status ts-sub" id="ts-doc-upload-status"></p>
-    </div>
+    <button type="button" class="ts-doc-link" id="ts-doc-back" hidden>К архиву</button>
   </div>
 </div>
-<form id="ts-csrf-form" hidden>{% csrf_token %}</form>
 
 <style>
   .ts-lifecycle { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:4px; margin:0 0 16px; color:var(--ink-3); font-size:12px; }
@@ -568,12 +560,10 @@
   .ts-zip-entries { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
   .ts-zip-entries .ts-doc-link { font-size: 13px; }
   #ts-doc-modal { padding: 12px; }
-  #ts-doc-modal .modal { width: calc(100vw - 24px); max-width: 1440px; height: calc(100dvh - 24px); max-height: none; padding: 12px; display: flex; flex-direction: column; overflow: hidden; }
+  #ts-doc-modal .modal { width: calc(100vw - 48px); max-width: 1400px; height: calc(100dvh - 40px); max-height: none; padding: 12px; display: flex; flex-direction: column; overflow: hidden; }
   #ts-doc-modal .modal-header { flex: 0 0 auto; margin-bottom: 8px; gap: 12px; }
   #ts-doc-modal .modal-header h2 { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #ts-doc-modal .ts-doc-body { flex: 1 1 auto; min-height: 0; }
-  #ts-doc-modal .ts-doc-actions { flex: 0 0 auto; margin-top: 6px; }
-  #ts-doc-modal .ts-doc-fallback { flex: 0 0 auto; margin-top: 6px; padding-top: 6px; max-height: 120px; overflow: auto; }
   .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
   .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
   .ts-doc-body h4 { margin: 16px 0 6px; }
@@ -584,9 +574,6 @@
   .ts-doc-page p { line-height: 1.55; }
   .ts-doc-inline-image { display: block; max-width: min(100%, 640px); max-height: 480px; margin: 8px 0; object-fit: contain; }
   .ts-doc-loading { color: var(--ink-2); }
-  .ts-doc-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
-  .ts-doc-fallback { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
-  .ts-doc-upload-status { margin-top: 6px; }
   .ts-extras { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
   .ts-extras li { border-left: 2px solid var(--border); padding-left: 12px; }
   .ts-extra-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-weight: 600; font-size: 13px; }
@@ -620,11 +607,7 @@
     var modal = document.getElementById("ts-doc-modal");
     var title = document.getElementById("ts-doc-title");
     var body = document.getElementById("ts-doc-body");
-    var fallback = document.getElementById("ts-doc-fallback");
-    var replaceButton = document.getElementById("ts-doc-replace");
-    var uploadInput = document.getElementById("ts-doc-upload-input");
-    var uploadStatus = document.getElementById("ts-doc-upload-status");
-    var csrfToken = document.querySelector("#ts-csrf-form [name=csrfmiddlewaretoken]").value;
+    var backButton = document.getElementById("ts-doc-back");
     var currentIdx = null;
     var loadingTimer = null;
 
@@ -645,39 +628,57 @@
     function close() {
       stopLoadingHint();
       modal.classList.remove("is-open");
-      fallback.hidden = true;
-      uploadInput.value = "";
-      uploadStatus.textContent = "";
+      backButton.hidden = true;
     }
     document.getElementById("ts-doc-close").addEventListener("click", close);
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
-    replaceButton.addEventListener("click", function () {
-      fallback.hidden = false;
-      uploadInput.click();
+    backButton.addEventListener("click", function () {
+      backButton.hidden = true;
+      viaServer().then(showResult);
     });
 
     var zipEntryUrlTpl = "{% url 'tender_selection:doc_zip_entry' tender.pk 999999 'ZZZPATHZZZ' %}";
 
-    function loadZipEntry(path) {
-      body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
-      var url = zipEntryUrlTpl.replace("999999", currentIdx)
-        .replace("ZZZPATHZZZ", path.split("/").map(encodeURIComponent).join("/"));
-      fetch(url).then(function (r) { return r.json(); }).then(showResult)
-        .catch(function () { stopLoadingHint(); body.innerHTML = '<p class="ts-sub">Не удалось открыть файл из архива.</p>'; });
+    function showPdf(url, name) {
+      stopLoadingHint();
+      title.textContent = name;
+      body.replaceChildren();
+      var frame = document.createElement("iframe");
+      frame.title = name;
+      frame.style.cssText = "display:block;width:98%;height:100%;margin:0 auto;border:0";
+      frame.src = url + (url.includes("?") ? "&" : "?") + "format=pdf#view=FitH&navpanes=0";
+      body.appendChild(frame);
     }
 
-    function showResult(data) {
+    function loadZipEntry(path, parents) {
+      parents = parents || [];
+      backButton.hidden = false;
+      var url = zipEntryUrlTpl.replace("999999", currentIdx)
+        .replace("ZZZPATHZZZ", path.split("/").map(encodeURIComponent).join("/"));
+      var query = new URLSearchParams();
+      parents.forEach(function (parent) { query.append("parent", parent); });
+      url += "?" + query.toString();
+      if (/\.(docx?|xlsx?|pdf)$/i.test(path)) {
+        showPdf(url, path);
+        return;
+      }
+      body.textContent = "Открываю архив…";
+      fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+        showResult(data, /\.zip$/i.test(path) ? parents.concat(path) : parents);
+      }).catch(function () { body.textContent = "Не удалось открыть файл из архива."; });
+    }
+
+    function showResult(data, parents) {
       stopLoadingHint();
       title.textContent = data.name || "Документ";
       if (data.error) {
-        body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
-        fallback.hidden = false;
+        body.textContent = data.error;
         return;
       }
       body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
-      fallback.hidden = true;
       if (data.zip_entries && data.zip_entries.length) {
+        body.textContent = "Файлы архива:";
         var list = document.createElement("ul");
         list.className = "ts-zip-entries";
         data.zip_entries.forEach(function (path) {
@@ -686,7 +687,7 @@
           btn.type = "button";
           btn.className = "ts-doc-link";
           btn.textContent = path;
-          btn.addEventListener("click", function () { loadZipEntry(path); });
+          btn.addEventListener("click", function () { loadZipEntry(path, parents); });
           li.appendChild(btn);
           list.appendChild(li);
         });
@@ -694,17 +695,8 @@
       }
     }
 
-    function uploadBlob(blobOrFile, filename) {
-      var body2 = new FormData();
-      body2.append("csrfmiddlewaretoken", csrfToken);
-      body2.append("file", blobOrFile, filename);
-      return fetch("{% url 'tender_selection:doc_upload' tender.pk 999999 %}".replace("999999", currentIdx), {
-        method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body2,
-      }).then(function (r) { return r.json(); });
-    }
-
     function viaServer() {
-      return fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
+      return fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx) + "?browse=1")
         .then(function (r) { return r.json(); });
     }
 
@@ -713,23 +705,12 @@
         currentIdx = btn.dataset.docPreview;
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
-        fallback.hidden = true;
-        uploadInput.value = "";
-        uploadStatus.textContent = "";
+        backButton.hidden = true;
         modal.classList.add("is-open");
         startLoadingHint();
 
-        // сеть с сервера до ЕИС теперь есть — сервер качает и разбирает сам, без
-        // скачивания в браузере пользователя. Ручная загрузка — только на крайний случай.
         if (/\.(docx?|xlsx?|pdf)$/i.test(btn.dataset.docName || "")) {
-          stopLoadingHint();
-          body.replaceChildren();
-          var frame = document.createElement("iframe");
-          frame.title = title.textContent;
-          frame.style.cssText = "display:block;width:100%;height:100%;border:0";
-          frame.src = "{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx) + "?format=pdf#view=FitH&navpanes=0";
-          body.appendChild(frame);
-          fallback.hidden = true;
+          showPdf("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx), title.textContent);
           return;
         }
         viaServer()
@@ -737,22 +718,10 @@
           .catch(function () {
             stopLoadingHint();
             body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
-            fallback.hidden = false;
           });
       });
     });
 
-    uploadInput.addEventListener("change", function () {
-      var file = uploadInput.files[0];
-      if (!file || currentIdx === null) return;
-      uploadStatus.textContent = "Загружаю и разбираю…";
-      uploadBlob(file, file.name)
-        .then(function (data) {
-          uploadStatus.textContent = "";
-          showResult(data);
-        })
-        .catch(function () { uploadStatus.textContent = "Не удалось загрузить файл."; });
-    });
   })();
 
   (function () {

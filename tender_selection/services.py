@@ -530,9 +530,14 @@ def _document_result(name, result):
     }
 
 
-def preview_tender_document(user, tender_id, document_index, *, refresh=False):
+def preview_tender_document(user, tender_id, document_index, *, refresh=False, browse_archive=False):
     """Use the same fetch, parse and cache workflow as the tender document button."""
     tender, url, name = _tender_document(user, tender_id, document_index)
+    if browse_archive:
+        try:
+            return _document_result(name, extract_preview(_fetch_doc_bytes(tender, url, name), name, browse_archive=True))
+        except DocumentError as exc:
+            return _document_result(name, {"error": str(exc)})
     cached = DocumentPreview.objects.filter(url=url).first()
     if cached and not refresh:
         return _document_result(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})

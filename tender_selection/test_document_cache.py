@@ -227,3 +227,58 @@ class TenderOfficePreviewTests(TenderDocumentExecutorTests):
             )
         self.assertEqual(response.status_code, 302)
         render.assert_not_called()
+
+
+class ZipNavigationTests(TestCase):
+    setUp = TenderDocumentExecutorTests.setUp
+
+    def _archive(self, files):
+        result = io.BytesIO()
+        with zipfile.ZipFile(result, "w") as archive:
+            for name, data in files.items():
+                archive.writestr(name, data)
+        return result.getvalue()
+
+    def test_single_file_archive_can_be_browsed_without_unwrapping(self):
+        data = self._archive({"Документы/ТЗ.docx": b"docx"})
+        result = documents.extract_preview(data, "documents.zip", browse_archive=True)
+        self.assertEqual(result["kind"], "zip")
+        self.assertEqual(result["zip_entries"], ["Документы/ТЗ.docx"])
+
+    def test_cached_archive_listing_does_not_lose_buttons(self):
+        DocumentPreview.objects.create(url=CONTRACT_URL, kind="zip", html="<p>old</p>")
+        self.tender.notification_raw["source"]["attachmentsInfo"]["attachmentInfo"][1]["fileName"] = "documents.zip"
+        self.tender.save(update_fields=["notification_raw"])
+        data = self._archive({"one.pdf": b"%PDF", "two.xlsx": b"xlsx"})
+        with patch.object(services, "_fetch_doc_bytes", return_value=data):
+            result = services.preview_tender_document(self.admin, self.tender.pk, 1, browse_archive=True)
+        self.assertEqual(result["zip_entries"], ["one.pdf", "two.xlsx"])
+        self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).html, "<p>old</p>")
+
+    def test_pdf_inside_nested_archive(self):
+        self.client.force_login(self.admin)
+        data = self._archive({"внутри.zip": self._archive({"папка/документ.pdf": b"%PDF-content"})})
+        with patch("tender_selection.views._fetch_doc_bytes", return_value=data):
+            response = self.client.get(reverse("tender_selection:doc_zip_entry", args=[self.tender.pk, 1, "папка/документ.pdf"]), {"parent": "внутри.zip", "format": "pdf"})
+        self.assertEqual(response.content, b"%PDF-content")
+        self.assertEqual(response["X-Frame-Options"], "SAMEORIGIN")
+
+    def test_office_file_inside_archive_uses_pdf_converter(self):
+        self.client.force_login(self.admin)
+        data = self._archive({"ТЗ.docx": b"office"})
+        with patch("tender_selection.views._fetch_doc_bytes", return_value=data), \
+                patch("tender_selection.office.convert_office", return_value=b"%PDF-converted") as convert:
+            response = self.client.get(reverse("tender_selection:doc_zip_entry", args=[self.tender.pk, 1, "ТЗ.docx"]), {"format": "pdf"})
+        convert.assert_called_once_with(b"office", "ТЗ.docx", "pdf")
+        self.assertEqual(response.content, b"%PDF-converted")
+
+    def test_missing_entry_returns_explicit_error(self):
+        self.client.force_login(self.admin)
+        with patch("tender_selection.views._fetch_doc_bytes", return_value=self._archive({"one.pdf": b"%PDF"})):
+            response = self.client.get(reverse("tender_selection:doc_zip_entry", args=[self.tender.pk, 1, "missing.pdf"]))
+        self.assertIn("не найден", response.json()["error"])
+
+    def test_oversized_archive_entry_is_rejected(self):
+        with patch.object(documents, "MAX_BYTES", 2):
+            with self.assertRaises(documents.DocumentError):
+                documents.extract_zip_entry(self._archive({"large.txt": b"123"}), "large.txt")
