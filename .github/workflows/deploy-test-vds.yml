@@ -139,6 +139,7 @@ jobs:
           print(json.dumps({"assistant_model": model, "base_url": base_url, "key_configured": key_configured}))
 
           import django
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
           django.setup()
           from django.conf import settings
           from tenders.models import TenderComputeJob
