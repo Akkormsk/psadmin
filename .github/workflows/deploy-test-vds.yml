@@ -11,6 +11,12 @@ on:
         required: false
         type: string
 
+      document_pilot_tender:
+        description: "Optional single-tender document pilot (purchase number); empty means no AI calls"
+        required: false
+        default: ""
+        type: string
+
 permissions:
   contents: read
 
@@ -68,15 +74,21 @@ jobs:
 
       - name: Activate test release and run twin
         shell: bash
+        env:
+          DOCUMENT_PILOT_TENDER: ${{ inputs.document_pilot_tender || '' }}
         run: |
           set -euo pipefail
+          if [ -n "$DOCUMENT_PILOT_TENDER" ] && ! [[ "$DOCUMENT_PILOT_TENDER" =~ ^[0-9]{19}$ ]]; then
+            echo "Invalid pilot purchase number" >&2; exit 2
+          fi
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER'" <<'REMOTE'
           set -euo pipefail
 
           deploy_sha="$1"
           archive="$2"
+          pilot_tender="${3:-}"
           root=/home/deploy
           app="$root/psadmin-test"
           rollback_root="$root/psadmin-test-rollbacks"
@@ -150,6 +162,10 @@ jobs:
               "latest_job": latest_job,
           }, default=str))
           PY
+          if [ -n "$pilot_tender" ]; then
+            docker compose -f compose.test.yml exec -T test-web python manage.py prepare_tender_documents \
+              --tender-number "$pilot_tender" --max-cost-rub 3 --max-output-tokens 6000 --apply
+          fi
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \
             https://test.admin.psodin.ru/ > /dev/null

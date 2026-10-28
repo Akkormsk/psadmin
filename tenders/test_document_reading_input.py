@@ -107,3 +107,24 @@ class DocumentReadingInputTests(TestCase):
         cached = DocumentPreview.objects.get(url="https://example.test/error-archive")
         self.assertTrue(cached.error)
         self.assertLessEqual(len(cached.error), DocumentPreview._meta.get_field("error").max_length)
+
+    @patch("tenders.services._ai_gateway_json")
+    def test_explicit_budget_stops_before_paid_request(self, gateway):
+        DocumentPreview.objects.create(url=self.documents[0]["url"], html="<p>Блокнот</p>")
+        enricher = GatewayDocumentEnricher(max_cost_rub="0.0001")
+        enricher.extract_tender(tender=self.tender, source_items=[self.item], documents=self.documents)
+        self.assertEqual(enricher.diagnostics["outcome"], "budget_blocked")
+        gateway.assert_not_called()
+
+    @patch("tenders.services._ai_gateway_json", return_value=({"items": []}, {}))
+    def test_repeated_names_retain_notification_positions_and_prices(self, gateway):
+        from .calculation_v2_pipeline import ingest_source_items
+        rows = [{"name": "Одинаковое название", "quantity": {"value": "100"}, "price": price, "sum": str(int(price) * 100)} for price in ["2410", "3700", "2770"]]
+        self.tender.notification_raw = {"source": {"notificationInfo": {"purchaseObjectsInfo": {"notDrugPurchaseObjectsInfo": {"purchaseObject": rows}}}}}
+        self.tender.save(update_fields=["notification_raw"])
+        items = ingest_source_items(self.tender)
+        DocumentPreview.objects.create(url=self.documents[0]["url"], html="<p>Три различных состава</p>")
+        GatewayDocumentEnricher().extract_tender(tender=self.tender, source_items=items, documents=self.documents)
+        payload = json.loads(gateway.call_args.args[0].split("\n", 1)[1])
+        self.assertEqual([row["notification_position"] for row in payload["notification_items"]], [1, 2, 3])
+        self.assertEqual([row["notification_unit_price"] for row in payload["notification_items"]], ["2410", "3700", "2770"])

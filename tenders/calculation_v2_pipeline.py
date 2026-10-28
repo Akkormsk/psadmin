@@ -170,10 +170,11 @@ class GatewayDocumentEnricher:
     DOCUMENT_OUTPUT_TOKEN_LIMIT = int(os.getenv("CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT", "1200"))
     DOCUMENT_AVERAGE_COST_TARGET_RUB = 1.00
 
-    def __init__(self, model=None):
+    def __init__(self, model=None, *, max_cost_rub=None):
         # Document composition has its own deliberately inexpensive default;
         # the general-purpose gateway model must not change it by accident.
         self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL", "gemini/gemini-3.1-flash-lite")
+        self.max_cost_rub = Decimal(str(max_cost_rub)) if max_cost_rub is not None else None
         self.usage = {}
         self.cost_rub = 0.0
         self.diagnostics = {}
@@ -229,6 +230,8 @@ class GatewayDocumentEnricher:
             "prompt_tokens": (len(prompt) + 1) // 2,
             "completion_tokens": self.DOCUMENT_OUTPUT_TOKEN_LIMIT,
         }
+        if self.max_cost_rub is not None:
+            usage["prompt_tokens"] = len(prompt.encode("utf-8")) + 4096
         return spend_rub(usage, self.model), usage
 
     def _record_gateway_failure(self, exc, *, usage, phase, started):
@@ -268,14 +271,24 @@ class GatewayDocumentEnricher:
         if not any(doc["text"] for doc in available):
             self.diagnostics = {"outcome": "document_reading_incomplete", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
-        payload = {
-            "notification_items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""), "unit": item.unit, "requirements": item.requirements} for item in source_items],
-            "documents": available,
-        }
-        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. Return enrich only for explicitly documented facts about that same notification item. Return split only where a document explicitly replaces an aggregate item with separately named goods. Return component only where contents of an aggregate are explicitly enumerated; quantity_per_parent is the documented amount in one aggregate. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        notification_rows = _notification_rows(tender)
+        notification_items = []
+        for item in source_items:
+            index = (item.metadata or {}).get("notification_index")
+            original = notification_rows[index] if isinstance(index, int) and 0 <= index < len(notification_rows) else {}
+            notification_items.append({"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""),
+                                       "unit": item.unit, "requirements": item.requirements,
+                                       "notification_position": index + 1 if isinstance(index, int) else None,
+                                       "notification_unit_price": original.get("price"), "notification_total": original.get("sum")})
+        payload = {"notification_items": notification_items, "documents": available}
+        prompt = """Read every supplied tender document and compare it with every notification item. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The notification is the baseline. Return enrich only for explicitly documented facts about that same notification item. Return split only where a document explicitly replaces an aggregate item with separately named goods. Return component only where contents of an aggregate are explicitly enumerated; quantity_per_parent is the documented amount in one aggregate. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         estimated_cost, estimated_usage = self._preflight_cost(prompt)
         if estimated_cost is None:
             self.diagnostics = {"outcome": "unpriced_model", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            return []
+        if self.max_cost_rub is not None and Decimal(str(estimated_cost)) > self.max_cost_rub:
+            self.diagnostics = {"outcome": "budget_blocked", "model": self.model, "documents": {"considered": considered},
+                                "budget": {"max_cost_rub": str(self.max_cost_rub), "reserved_cost_rub": str(estimated_cost)}}
             return []
         try:
             raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=120, network_attempts=1, json_attempts=1)
