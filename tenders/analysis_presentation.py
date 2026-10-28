@@ -34,7 +34,7 @@ _ACTIVE = {
     TenderComputeJob.Status.ROUTING,
     TenderComputeJob.Status.PREPARING,
 }
-_TECHNICAL_OUTCOMES = {"system_extraction_failure", "validation_failure", "provider_failure", "retryable"}
+_TECHNICAL_OUTCOMES = {"system_extraction_failure", "validation_failure", "provider_failure", "retryable", "document_reading_incomplete"}
 
 
 def _is_technical_failure(job) -> bool:

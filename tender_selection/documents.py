@@ -179,7 +179,7 @@ def _docx_html(data: bytes) -> str:
     out, count = ["<section class='ts-doc-page'>"], 0
     for child in doc.element.body.iterchildren():
         if count > MAX_PARAGRAPHS:
-            out.append("<p>…</p>")
+            out.append('<p data-document-warning="truncated">…</p>')
             break
         if child.tag == qn("w:p"):
             if child.findall(".//" + qn("w:lastRenderedPageBreak")) or any(
@@ -221,7 +221,7 @@ def _xlsx_html(data: bytes) -> str:
         rows, row_count = [], 0
         for row in sheet.iter_rows():
             if row_count >= MAX_ROWS:
-                rows.append("<tr><td>… ещё строки</td></tr>")
+                rows.append('<tr data-document-warning="truncated"><td>… ещё строки</td></tr>')
                 break
             cells, any_value = [], False
             for cell in row:
@@ -255,9 +255,13 @@ def _pdf_html(data: bytes) -> str:
         text = (page.extract_text() or "").strip()
         if text:
             parts.append("<section class='ts-doc-page'><small class='ts-doc-page__number'>Страница " + str(page_no) + "</small><p>" + "<br>".join(escape(line) for line in text.splitlines() if line.strip()) + "</p></section>")
+        elif page.images:
+            parts.append('<p data-document-warning="unreadable-page">Страница без текстового слоя.</p>')
     if len(reader.pages) > MAX_PDF_PAGES:
-        parts.append("<p>…</p>")
-    return "\n".join(parts) or "<p class='ts-sub'>В PDF нет извлекаемого текста (возможно, скан).</p>"
+        parts.append('<p data-document-warning="truncated">…</p>')
+    if not parts:
+        raise DocumentError("В PDF нет извлекаемого текста; возможно, требуется распознавание скана.")
+    return "\n".join(parts)
 
 
 _DOC_LETTER_RE = re.compile(r"[A-Za-zА-Яа-яЁё]")
@@ -375,10 +379,51 @@ def _archive_stem(path: str) -> str:
             return stem
 
 
-def extract_preview(data: bytes, filename: str, *, browse_archive=False) -> dict:
+def _archive_content(data: bytes, *, depth=0, budget=None) -> dict:
+    budget = budget if budget is not None else {"bytes": MAX_BYTES, "files": 50}
+    if depth >= 5:
+        return {"kind": "zip-content", "html": "", "error": "Превышена глубина вложенных архивов."}
+    parts, errors = [], []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                if budget["files"] <= 0:
+                    errors.append("Превышен предел количества вложений.")
+                    break
+                budget["files"] -= 1
+                if info.file_size > budget["bytes"]:
+                    errors.append("Вложение превышает оставшийся предел размера.")
+                    continue
+                budget["bytes"] -= info.file_size
+                content = extract_zip_entry(data, info.filename)
+                if content is None:
+                    errors.append("Не удалось прочитать вложение.")
+                    continue
+                if info.filename.lower().endswith(".zip"):
+                    result = _archive_content(content, depth=depth + 1, budget=budget)
+                else:
+                    result = extract_preview(content, info.filename)
+                if result.get("kind") == "zip":
+                    errors.append("Не прочитано содержимое вложенного архива.")
+                    continue
+                if result.get("html"):
+                    parts.append("<section><h4>" + escape(info.filename) + "</h4>" + result["html"] + "</section>")
+                if result.get("error"):
+                    errors.append(str(info.filename) + ": " + result["error"])
+    except (zipfile.BadZipFile, DocumentError, RuntimeError, OSError) as exc:
+        errors.append(str(exc))
+    return {"kind": "zip-content", "html": "\n".join(parts), "error": "; ".join(errors)[:2000]}
+
+
+def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_archive=False) -> dict:
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
     is_zip = data[:2] == b"PK"
+
+    if read_archive and is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):
+        return _archive_content(data)
 
     # .zip-обёртка: достаём единственный вложенный файл
     if is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):

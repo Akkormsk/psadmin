@@ -473,10 +473,10 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
 
 def store_document_preview(url, name, data: bytes) -> dict:
     """Run the site's document parser and persist its preview cache once."""
-    result = extract_preview(data, name)
+    result = extract_preview(data, name, read_archive=True)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
-        "html": result.get("html", ""), "error": result.get("error", ""),
+        "html": result.get("html", ""), "error": str(result.get("error", ""))[:DocumentPreview._meta.get_field("error").max_length],
     })
     return result
 

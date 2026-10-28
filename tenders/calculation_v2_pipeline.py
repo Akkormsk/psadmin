@@ -179,35 +179,44 @@ class GatewayDocumentEnricher:
         self.diagnostics = {}
 
     def _bounded_documents(self, documents):
-        """Give every cached document an equal bounded excerpt; never filter by name."""
+        """Bound actual document text, preserving evidence and reading gaps."""
+        from lxml import html as html_parser
+
         candidates = []
         for doc in documents:
             url = doc.get("url")
             if not url:
                 continue
-            html = DocumentPreview.objects.filter(url=url).values_list("html", flat=True).first() or ""
-            candidates.append({"url": url, "name": doc.get("name", ""), "html": html})
+            cached = DocumentPreview.objects.filter(url=url).values("html", "kind", "error").first() or {}
+            html = cached.get("html") or ""
+            image_present = bool(re.search(r"<img\b", html, flags=re.I))
+            html = re.sub(r"<img\b[^>]*>", "", html, flags=re.I)
+            parse_limit = self.DOCUMENT_INPUT_CHAR_LIMIT * 16
+            bounded_html = html[:parse_limit]
+            root = html_parser.fragment_fromstring(bounded_html or "<div></div>", create_parent="div")
+            warning = image_present or len(html) > len(bounded_html) or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
+            for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
+                node.drop_tree()
+            content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
+            text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
+            candidates.append({"url": url, "name": doc.get("name", ""), "text": text,
+                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning})
         if not candidates:
             return [], []
-
         per_document_limit = max(1, self.DOCUMENT_INPUT_CHAR_LIMIT // len(candidates))
         available, considered = [], []
         for candidate in candidates:
-            excerpt = candidate["html"][:per_document_limit]
-            # Tables are useful when they fit.  If their structured payload is
-            # larger than this document's equal share, retain the original
-            # excerpt instead of silently starving the following documents.
+            excerpt = candidate["text"][:per_document_limit]
+            status = "unreadable" if not excerpt else "partial" if candidate["error"] or candidate["warning"] or len(candidate["text"]) > len(excerpt) else "read"
             entry = {"url": candidate["url"], "name": candidate["name"], "text": excerpt}
-            tables = document_table_payload(excerpt) if excerpt else []
-            candidate_entry = {**entry, "tables": tables}
-            if len(json.dumps(candidate_entry, ensure_ascii=False, default=str)) <= per_document_limit * 2:
+            tables = document_table_payload(candidate["html"][:per_document_limit]) if excerpt else []
+            if len(json.dumps({**entry, "tables": tables}, ensure_ascii=False, default=str)) <= per_document_limit * 2:
                 entry["tables"] = tables
             available.append(entry)
-            considered.append({
-                "url": candidate["url"], "name": candidate["name"],
-                "cached_text_chars": len(candidate["html"]), "sent_text_chars": len(excerpt),
-                "table_count": len(entry.get("tables", [])),
-            })
+            considered.append({"url": candidate["url"], "name": candidate["name"],
+                               "cached_text_chars": len(candidate["text"]), "sent_text_chars": len(excerpt),
+                               "table_count": len(entry.get("tables", [])), "reading_status": status,
+                               "error": candidate["error"]})
         return available, considered
 
     def _preflight_cost(self, prompt):
@@ -252,9 +261,12 @@ class GatewayDocumentEnricher:
         started = time.monotonic()
         self.diagnostics = {}
         allowed_source_ids = {item.pk for item in source_items}
+        from tender_selection.services import documents_html
+        documents_html(tender, [doc for doc in documents if doc.get("url")], timeout=5, archive_timeout=5, direct_timeout=5)
         available, considered = self._bounded_documents(documents)
+        incomplete = any(doc["reading_status"] != "read" for doc in considered)
         if not any(doc["text"] for doc in available):
-            self.diagnostics = {"outcome": "no_data", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
+            self.diagnostics = {"outcome": "document_reading_incomplete", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
             return []
         payload = {
             "notification_items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""), "unit": item.unit, "requirements": item.requirements} for item in source_items],
@@ -289,7 +301,7 @@ class GatewayDocumentEnricher:
             if confidence is None or not Decimal("0") <= confidence <= Decimal("1") or not isinstance(requirements, dict) or relationship not in {"enrich", "split", "component"} or per_parent <= 0:
                 rejections.append({"index": index, "reason": "invalid_structure"}); continue
             output.append(ExtractedItem(str(row["name"])[:1000], _as_decimal(row.get("quantity")), str(row.get("unit") or "")[:64], requirements, {"document_url": row["source_url"], "page_or_section": str(row.get("page_or_section") or "")[:300], "evidence": str(row.get("evidence") or "")[:1000], "extraction_model": self.model, "extraction_version": "tender-document-analysis-v2"}, confidence, relationship, per_parent, parent_id))
-        outcome = "success" if output else ("validation_failure" if rejections else "no_data")
+        outcome = "document_reading_incomplete" if incomplete else "success" if output else ("validation_failure" if rejections else "no_data")
         self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage, "target_exceeded": self.cost_rub > self.DOCUMENT_AVERAGE_COST_TARGET_RUB}, "extraction": {"selected_urls": sorted(allowed_urls), "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
         return output
 
@@ -644,7 +656,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
                           "confidence": entry.confidence, "parent": parent, "is_active": False},
             )
             proposals.append(proposal)
-        return {"created": proposals, "state": "needs_review" if proposals else "no_data", "diagnostics": [detail]}
+        return {"created": proposals, "state": "needs_review" if proposals else "document_reading_incomplete" if outcome == "document_reading_incomplete" else "no_data", "diagnostics": [detail]}
     else:
         extracted_groups = None
     groups = {}
@@ -909,7 +921,7 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
         quality = assess_quality(job.tender, source_items)
         enrichment_started = time.monotonic()
         enrichment = enrich_suspicious_tender(job.tender, quality, enricher)
-        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model"}:
+        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model", "document_reading_incomplete"}:
             job.status = TenderComputeJob.Status.PARTIAL
             job.completed_at = timezone.now()
             job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))

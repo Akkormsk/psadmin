@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from tender_selection.models import Tender
+from tender_selection.models import DocumentPreview, Tender
 from .calculation_v2_pipeline import GatewayBatchRouter, GatewayDocumentEnricher
 from .models import CalculationComponent, ProcessDefinition, TenderCommercialItem, TenderSourceItem
 
@@ -35,26 +35,22 @@ class GatewayAdapterTests(TestCase):
         omitted = GatewayBatchRouter().route(tender=self.tender, items=[self.component], processes=[self.process], knowledge=[])[0]
         self.assertTrue(omitted.needs_review)
 
-    @patch("tenders.calculation_v2_pipeline.DocumentPreview.objects.filter")
     @patch("tenders.services._ai_gateway_json")
-    def test_enricher_requires_selected_source_url(self, gateway, previews):
-        previews.return_value.values_list.return_value.first.return_value = "spec text"
+    def test_enricher_requires_selected_source_url(self, gateway):
+        DocumentPreview.objects.create(url="https://doc", html="<p>spec text</p>")
         gateway.side_effect = [({"relevant_urls": ["https://doc"]}, {}), ({"items": [{"name": "A", "quantity": 2, "source_url": "https://wrong", "confidence": 0.9}]}, {})]
         result = GatewayDocumentEnricher().extract(tender=self.tender, aggregate=self.item, documents=[{"url": "https://doc", "name": "spec"}])
         self.assertEqual(result, [])
 
-    @patch("tenders.calculation_v2_pipeline.DocumentPreview.objects.filter")
     @patch("tenders.services._ai_gateway_json")
-    def test_enricher_reads_all_items_and_documents_once(self, gateway, previews):
+    def test_enricher_reads_all_items_and_documents_once(self, gateway):
         second = TenderSourceItem.objects.create(tender=self.tender, source_key="n:2", original_text="Second source")
-        previews.return_value.values_list.return_value.first.return_value = "free document text"
-        gateway.side_effect = [
-            ({"relevant_urls": ["https://doc-a", "https://doc-b"]}, {}),
-            ({"items": [
+        DocumentPreview.objects.create(url="https://doc-a", html="<p>free document text</p>")
+        DocumentPreview.objects.create(url="https://doc-b", html="<p>free document text</p>")
+        gateway.return_value = ({"items": [
                 {"parent_source_item_id": self.item.pk, "name": "Detail A", "quantity": 2, "unit": "u", "requirements": {}, "confidence": .9, "source_url": "https://doc-a", "page_or_section": "p. 1", "evidence": "Detail A", "relationship": "split"},
                 {"parent_source_item_id": second.pk, "name": "Second source", "quantity": 3, "unit": "u", "requirements": {"Any field": "Any value"}, "confidence": .8, "source_url": "https://doc-b", "page_or_section": "p. 2", "evidence": "Any value", "relationship": "enrich"},
-            ]}, {}),
-        ]
+            ]}, {})
 
         result = GatewayDocumentEnricher().extract_tender(
             tender=self.tender,
@@ -63,8 +59,8 @@ class GatewayAdapterTests(TestCase):
         )
 
         self.assertEqual([entry.parent_source_item_id for entry in result], [self.item.pk, second.pk])
-        self.assertEqual(gateway.call_count, 2)
-        extraction_prompt = gateway.call_args_list[1].args[0]
+        self.assertEqual(gateway.call_count, 1)
+        extraction_prompt = gateway.call_args.args[0]
         self.assertIn(f'"id": {self.item.pk}', extraction_prompt)
         self.assertIn(f'"id": {second.pk}', extraction_prompt)
         self.assertIn("free document text", extraction_prompt)
