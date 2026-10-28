@@ -15,6 +15,7 @@ urlpatterns = [
     path("pull/", views.pull_now, name="pull"),
     path("<int:pk>/questions/<int:interaction_pk>/answer/", views.owner_interaction_answer, name="owner_interaction_answer"),
     path("<int:pk>/document-proposals/<int:parent_pk>/", views.document_proposal_action, name="document_proposal_action"),
+    path("<int:pk>/refresh-analysis/", views.refresh_analysis, name="refresh_analysis"),
     path("<int:pk>/", views.tender_detail, name="detail"),
     path("<int:pk>/risk/", views.risk_status, name="risk_status"),
     path("<int:pk>/doc/<int:idx>/", views.doc_preview, name="doc_preview"),

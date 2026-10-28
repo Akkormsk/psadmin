@@ -678,6 +678,9 @@ class AssistantToolRegistryTests(TestCase):
                           "description": "; ".join(f'{item["id"]}: {item["name"]} — {item["description"]}' for item in resources)}},
         )
         legacy = [finish, select_area, select_resource]
+        # Compare discovery with identical lifecycle tools on both sides.
+        legacy.extend(definition for definition in current
+                      if _names.get(definition["function"]["name"]) in {"assistant.plan", "assistant.ask", "assistant.cancel"})
         for tool in available_tools(self.admin):
             if tool["available"] and tool["id"] != "read" and "cash" in tool["areas"]:
                 _name, definition = _function_definition(tool["id"], tool["description"], deepcopy(tool["input_schema"]))

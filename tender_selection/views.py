@@ -764,6 +764,7 @@ def tender_detail(request, pk):
         "v2_source_items": v2_source_items,
         "document_proposals": document_proposals,
         "document_proposal_groups": document_proposal_groups,
+        "document_analysis_job": tender.v2_compute_jobs.filter(version="v2-document-manual").order_by("-pk").first(),
         "v2_lines": v2_lines,
         "v2_questions": v2_questions,
         "v2_job": v2_job,
@@ -1411,3 +1412,19 @@ def set_review(request, pk):
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"lifecycle_changed": True, "tender_id": tender.pk})
     return redirect(request.META.get("HTTP_REFERER") or "tender_selection:list")
+
+
+@tender_viewer_required
+@require_POST
+def refresh_analysis(request, pk):
+    from .services import refresh_document_analysis
+    tender = get_object_or_404(Tender, pk=pk)
+    try:
+        result = refresh_document_analysis(request.user, tender.pk)
+        messages.info(request, result["message"])
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    target = request.POST.get("next", "")
+    if not target or not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        target = reverse("tender_selection:detail", args=[pk]) + ("?workspace=1" if request.GET.get("workspace") else "")
+    return redirect(target)

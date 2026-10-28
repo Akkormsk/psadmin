@@ -8,7 +8,7 @@ from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
-    update_tender_review,
+    update_tender_review, refresh_document_analysis,
 )
 
 
@@ -194,4 +194,13 @@ register_tool(AssistantTool(
         decide_document_proposals, user, payload, "tender_id", "parent_id", "decision",
     ),
     source="tender_selection.services.decide_document_proposals",
+))
+
+register_tool(AssistantTool(
+    "tender.analyze", "Обновить анализ документов тендера",
+    "Запускает фоновый разбор документов одного тендера с ограничением стоимости. Не строит маршрут и не принимает предложения автоматически.",
+    {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}},
+    False, True, True,
+    lambda user, payload: _tender_action(refresh_document_analysis, user, payload, "tender_id"),
+    source="tender_selection.services.refresh_document_analysis",
 ))

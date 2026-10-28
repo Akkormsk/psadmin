@@ -1917,3 +1917,66 @@ def tender_document_pdf(user, tender_id, document_index):
         result = convert_office(data, name, "pdf")
         cache.set(key, result, 3600)
     return result
+
+
+@transaction.atomic
+def refresh_document_analysis(user, tender_id):
+    """Schedule one document-only run, shared by the card and assistant."""
+    import threading
+    from tenders.models import TenderComputeJob
+
+    _require_tender_admin(user)
+    tender = Tender.objects.select_for_update().get(pk=tender_id)
+    active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued"]).first()
+    if active:
+        return {"started": False, "job_id": active.pk, "message": "Анализ уже выполняется"}
+    job = TenderComputeJob.objects.create(tender=tender, version="v2-document-manual", trigger="manual_document_refresh", status="preparing_input",
+        diagnostics={"documents_only": True, "requested_by": user.pk})
+    transaction.on_commit(lambda: threading.Thread(target=_run_document_analysis, args=(job.pk,), daemon=True).start())
+    return {"started": True, "job_id": job.pk, "message": "Анализ запущен. Обновите карточку через минуту"}
+
+
+def _run_document_analysis(job_id):
+    import json
+    import os
+    from decimal import Decimal
+    from django.db import close_old_connections
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality, enrich_suspicious_tender, ingest_source_items
+    from tenders.models import TenderComputeJob, TenderSourceItem
+
+    close_old_connections()
+    enricher = None
+    try:
+        job = TenderComputeJob.objects.select_related("tender").get(pk=job_id)
+        # The existing extractor reserves the full request cost before its single call.
+        budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
+        if not budget.is_finite() or budget <= 0:
+            raise ValueError("Не задан положительный бюджет анализа")
+        enricher = GatewayDocumentEnricher(max_cost_rub=budget)
+        if not job.tender.notification_raw:
+            notification_for(job.tender)
+        if not job.tender.notification_raw:
+            raise ValueError("Не удалось загрузить извещение; повторите анализ позже")
+        sources = ingest_source_items(job.tender)
+        result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
+        replacement_ids = [item.pk for item in result["created"]]
+        with transaction.atomic():
+            old = TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).exclude(pk__in=replacement_ids)
+            job.diagnostics.update({"enrichment": result["diagnostics"], "enrichment_state": result["state"], "proposal_ids": replacement_ids})
+            if replacement_ids:
+                job.diagnostics["superseded_pending_proposals"] = json.loads(json.dumps(list(old.values()), default=str))
+            job.status = "needs_review" if replacement_ids else "ready" if result["state"] == "no_data" else "partial"
+            job.total_cost = Decimal(str(enricher.cost_rub or 0))
+            job.completed_at = timezone.now()
+            job.save()
+            if replacement_ids:
+                old.delete()
+    except Exception as exc:
+        logger.exception("Document analysis failed for job %s", job_id)
+        job = TenderComputeJob.objects.get(pk=job_id)
+        job.status, job.error, job.completed_at = "partial", str(exc)[:1000], timezone.now()
+        job.total_cost = Decimal(str(enricher.cost_rub or 0)) if enricher else Decimal("0")
+        job.diagnostics["enrichment"] = [enricher.diagnostics] if enricher else []
+        job.save()
+    finally:
+        close_old_connections()
