@@ -5,10 +5,11 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
+from django.urls import reverse
 
 from tender_selection.models import Tender
 from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality, enrich_suspicious_tender, ingest_source_items
-from tenders.models import TenderComputeJob
+from tenders.models import TenderComputeJob, TenderSourceItem
 
 
 class Command(BaseCommand):
@@ -37,7 +38,17 @@ class Command(BaseCommand):
             Tender.objects.select_for_update().get(pk=tender.pk)
             previous = TenderComputeJob.objects.filter(tender=tender, version=version).first()
             if previous:
-                self.stdout.write(json.dumps({"reused": True, "status": previous.status, "cost_rub": str(previous.total_cost)}))
+                details = previous.diagnostics.get("enrichment", [])
+                sources = [source for detail in details if isinstance(detail, dict) for source in (detail.get("documents") or {}).get("considered", [])]
+                proposals = TenderSourceItem.objects.filter(tender=tender, source_type="document_proposal", is_active=False).select_related("parent")
+                self.stdout.write(json.dumps({"reused": True, "status": previous.status, "cost_rub": str(previous.total_cost), "card_path": reverse("tender_selection:detail", args=[tender.pk]),
+                    "sources": [{"name": source.get("name"), "reading_status": source.get("reading_status"),
+                                 "cached_text_chars": source.get("cached_text_chars"), "sent_text_chars": source.get("sent_text_chars"),
+                                 "has_error": bool(source.get("error"))} for source in sources],
+                    "pending_proposals": [{"name": item.original_text, "quantity": item.quantity, "unit": item.unit,
+                                           "notification_position": (item.parent.metadata or {}).get("notification_index", -1) + 1 if item.parent else None,
+                                           "relationship": item.metadata.get("relationship"), "quantity_per_parent": item.metadata.get("quantity_per_parent")}
+                                          for item in proposals]}, ensure_ascii=False, default=str))
                 return
             job = TenderComputeJob.objects.create(tender=tender, version=version, trigger="operator_document_pilot", status=TenderComputeJob.Status.PREPARING_INPUT)
         enricher = GatewayDocumentEnricher(max_cost_rub=budget)
