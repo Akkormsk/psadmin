@@ -1910,7 +1910,7 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
                 proposal.quantity = total
         for proposal in proposals:
             if is_item_enrichment(proposal):
-                proposal.requirements = effective_item_requirements(proposal)
+                proposal.requirements = effective_item_requirements(proposal, strict=True)
             proposal.source_type = "document_extraction"
             proposal.is_active = True
             proposal.save(update_fields=["source_type", "is_active", "quantity", "requirements"])
@@ -2000,3 +2000,24 @@ def _run_document_analysis(job_id):
         job.save()
     finally:
         close_old_connections()
+
+
+@transaction.atomic
+def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
+    """Accept/reject exactly the reviewed proposal snapshot as one transaction."""
+    _require_tender_admin(user)
+    from tenders.models import TenderSourceItem
+    Tender.objects.select_for_update().get(pk=tender_id)
+    if not isinstance(proposal_ids, list) or not proposal_ids or any(type(value) is not int or value <= 0 for value in proposal_ids) or len(set(proposal_ids)) != len(proposal_ids):
+        raise ValueError('Нужно передать проверенный список предложений')
+    pending = list(TenderSourceItem.objects.select_for_update().filter(tender_id=tender_id, source_type='document_proposal').order_by('pk'))
+    if not pending or {item.pk for item in pending} != set(proposal_ids):
+        raise ValueError('Предложения изменились; обновите карточку перед принятием')
+    if decision not in {'accept', 'reject'}:
+        raise ValueError('Нужно выбрать: принять все правки или отклонить все')
+    parents = {item.parent_id for item in pending}
+    if None in parents:
+        raise ValueError('У предложения не указана исходная позиция')
+    for parent_id in sorted(parents):
+        decide_document_proposals(user, tender_id, parent_id, decision)
+    return {'tender_id': tender_id, 'decision': decision, 'changed': len(pending)}

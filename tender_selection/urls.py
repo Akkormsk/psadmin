@@ -14,6 +14,7 @@ urlpatterns = [
     path("profile-triage/", views.profile_triage_run, name="profile_triage_run"),
     path("pull/", views.pull_now, name="pull"),
     path("<int:pk>/questions/<int:interaction_pk>/answer/", views.owner_interaction_answer, name="owner_interaction_answer"),
+    path("<int:pk>/document-proposals/", views.all_document_proposals_action, name="all_document_proposals_action"),
     path("<int:pk>/document-proposals/<int:parent_pk>/", views.document_proposal_action, name="document_proposal_action"),
     path("<int:pk>/refresh-analysis/", views.refresh_analysis, name="refresh_analysis"),
     path("<int:pk>/", views.tender_detail, name="detail"),

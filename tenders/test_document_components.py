@@ -34,6 +34,15 @@ class DocumentComponentAcceptanceTests(TestCase):
                "requirements": {"characteristics": [{"name": "Цвет", "value": "Синий"}]}, "confidence": .95,
                "source_url": "https://zakupki.gov.ru/components", "page_or_section": "Таблица", "evidence": "Количество в составе", "relationship": "component"}
         row.update(changes)
+        if row["relationship"] == "enrich" and not row["requirements"].get("reconciled"):
+            from .document_enrichment import effective_item_requirements
+            baseline = effective_item_requirements(parent).get("characteristics", [])
+            additions = row["requirements"].get("characteristics", [])
+            row["requirements"] = {"reconciled": True, "characteristics": [{"resolution": "keep", "baseline_refs": [index]} for index in range(len(baseline))] + [{**fact, "resolution": "new", "baseline_refs": []} for fact in additions]}
+        if row["relationship"] == "enrich":
+            for fact in row["requirements"].get("characteristics", []):
+                if isinstance(fact, dict):
+                    fact.setdefault("source_url", row["source_url"])
         return row
 
     def stage(self, rows):

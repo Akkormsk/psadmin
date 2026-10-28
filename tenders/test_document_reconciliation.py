@@ -67,7 +67,7 @@ class DocumentReconciliationTests(TestCase):
         self.assertEqual({row['value'] for row in materials}, {'металл', 'пластик'})
         self.assertTrue(all(row['conflict'] for row in materials))
         card = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]))
-        self.assertContains(card, 'Различается в источниках')
+        self.assertContains(card, 'Расхождение источников')
 
     def test_enrichment_of_component_does_not_inherit_the_whole_bundle_price(self):
         component = self.stage([self.row(self.parent)])['created'][0]

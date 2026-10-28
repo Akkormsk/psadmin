@@ -8,7 +8,7 @@ from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
-    update_tender_review, refresh_document_analysis,
+    update_tender_review, refresh_document_analysis, decide_all_document_proposals,
 )
 
 
@@ -203,4 +203,13 @@ register_tool(AssistantTool(
     False, True, True,
     lambda user, payload: _tender_action(refresh_document_analysis, user, payload, "tender_id"),
     source="tender_selection.services.refresh_document_analysis",
+))
+
+register_tool(AssistantTool(
+    "tender.document_proposals_all", "Принять или отклонить все правки товаров",
+    "Одной транзакцией принимает или отклоняет весь показанный список предложений. Изменившийся список требует нового просмотра.",
+    {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "decision": {"type": "accept|reject", "required": True, "label": "Решение", "choices": (("accept", "Принять все"), ("reject", "Отклонить все"))}, "proposal_ids": {"type": "integer[]", "required": True, "label": "Проверенные предложения", "reference": {"model": "tenders.TenderSourceItem", "label": ["original_text"]}}},
+    False, True, True,
+    lambda user, payload: _tender_action(decide_all_document_proposals, user, payload, "tender_id", "decision", "proposal_ids"),
+    source="tender_selection.services.decide_all_document_proposals",
 ))

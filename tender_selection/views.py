@@ -531,7 +531,7 @@ def tender_detail(request, pk):
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
     from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
-    from tenders.document_enrichment import effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
+    from tenders.document_enrichment import characteristic_display, item_name_parts, effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
     notification_by_index = {index: item for index, item in enumerate((card or {}).get("items", []))}
     source_financials = []
     document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal"]
@@ -558,14 +558,7 @@ def tender_detail(request, pk):
             document_proposal_groups.append(group)
         requirements = effective_item_requirements(proposal)
         raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
-        characteristics = [
-            {
-                "name": str(row.get("name") or row.get("characteristicName") or ""),
-                "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or ""),
-                "source": row.get("source"), "conflict": row.get("conflict", False),
-            }
-            for row in raw_characteristics if isinstance(row, dict)
-        ]
+        characteristics = [characteristic_display(row, documents=proposal_documents) for row in raw_characteristics if isinstance(row, dict)]
         if not characteristics:
             characteristics = [
                 {"name": str(key), "value": str(value)}
@@ -575,11 +568,14 @@ def tender_detail(request, pk):
         metadata = proposal.metadata if isinstance(proposal.metadata, dict) else {}
         group["items"].append({
             "name": proposal.original_text,
+            "name_parts": item_name_parts(proposal),
             "quantity": proposal.quantity,
             "unit": proposal.unit,
             "quantity_per_parent": metadata.get("quantity_per_parent"),
             "relationship": metadata.get("relationship"),
             "characteristics": characteristics,
+            "omitted_facts": requirements.get("omitted_facts", []),
+            "review_error": requirements.get("reconciliation_error", ""),
             "provenance": proposal.provenance if isinstance(proposal.provenance, dict) else {},
             "document": proposal_documents.get((proposal.provenance or {}).get("document_url")),
         })
@@ -626,7 +622,7 @@ def tender_detail(request, pk):
                             source_financials.append({**notification_by_index.get(origin.metadata.get("notification_index"), {}), "name": origin.original_text})
                             financial_parents.add(origin.pk)
                 rows = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
-                details = [{"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or "")} for row in rows if isinstance(row, dict)]
+                details = [characteristic_display(row, documents=proposal_documents) for row in rows if isinstance(row, dict)]
                 components = [{"name": component.name, "quantity_per_parent": component.quantity_per_parent, "unit": component.unit} for component in commercial.components.filter(status="active").order_by("sort_order", "pk")]
                 changed = commercial.structure != TenderCommercialItem.Structure.SIMPLE or (source and source.source_type in {"document_enrichment", "document_extraction"})
                 display_items.append({"name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
@@ -642,10 +638,7 @@ def tender_detail(request, pk):
                 is_document_item = source.source_type in {"document_extraction", "document_enrichment"} and document_item_has_change(source)
                 raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
                 if raw_characteristics:
-                    details = [
-                        {"name": str(row.get("name") or row.get("characteristicName") or ""), "value": str(row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue") or ""), "source": row.get("source"), "conflict": row.get("conflict", False), "source_details": " · ".join(str(part) for part in [document_names.get((row.get("provenance") or {}).get("document_url"), "Документация"), (row.get("provenance") or {}).get("page_or_section")] if part)}
-                        for row in raw_characteristics if isinstance(row, dict)
-                    ]
+                    details = [characteristic_display(row, documents=proposal_documents) for row in raw_characteristics if isinstance(row, dict)]
                 else:
                     details = [{"name": str(key), "value": str(value)} for key, value in requirements.get("document_requirements", requirements).items() if value not in (None, "", [], {})]
                 metadata = source.metadata if isinstance(source.metadata, dict) else {}
@@ -663,6 +656,7 @@ def tender_detail(request, pk):
                     has_document_items = True
                 display_items.append({
                     "name": source.original_text,
+                    "name_parts": item_name_parts(source),
                     "parent_display_name": metadata.get("parent_display_name", "") if metadata.get("relationship") == "component" else "",
                     "quantity_per_parent": metadata.get("quantity_per_parent") if metadata.get("relationship") == "component" else None,
                     "quantity": source.quantity if source.quantity is not None else notification_item.get("quantity"),
@@ -672,6 +666,7 @@ def tender_detail(request, pk):
                     "price": notification_item.get("price") if quote_source else None,
                     "sum": notification_item.get("sum") if quote_source else None,
                     "characteristics": details,
+                    "omitted_facts": requirements.get("omitted_facts", []),
                     "source_mark": "Уточнено по документации" if is_item_enrichment(source) and is_document_item else "Из документации" if source.source_type == "document_extraction" and is_document_item else "",
                     "source_mark_kind": "enriched",
                     "source_details": " · ".join(str(part) for part in source_bits if part),
@@ -789,6 +784,7 @@ def tender_detail(request, pk):
         "estimate": estimate,
         "v2_source_items": v2_source_items,
         "document_proposals": document_proposals,
+        "document_proposal_ids": [item.pk for item in document_proposals],
         "document_proposal_groups": document_proposal_groups,
         "analysis_status": analysis_status,
         "analysis_issues": analysis_issues(v2_job),
@@ -1460,3 +1456,18 @@ def refresh_analysis(request, pk):
     if not target or not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
         target = reverse("tender_selection:detail", args=[pk]) + ("?workspace=1" if request.GET.get("workspace") else "")
     return redirect(target)
+
+
+@tender_viewer_required
+@require_POST
+def all_document_proposals_action(request, pk):
+    from .services import decide_all_document_proposals
+    get_object_or_404(Tender, pk=pk)
+    try:
+        ids = [int(value) for value in request.POST.get("proposal_ids", "").split(",") if value]
+        decide_all_document_proposals(request.user, pk, request.POST.get("action"), ids)
+        messages.success(request, "Все правки приняты." if request.POST.get("action") == "accept" else "Все правки отклонены.")
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    target = reverse("tender_selection:detail", args=[pk]) + ("?workspace=1" if request.GET.get("workspace") else "")
+    return redirect(target + "#tender-items")

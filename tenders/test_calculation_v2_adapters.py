@@ -49,7 +49,7 @@ class GatewayAdapterTests(TestCase):
         DocumentPreview.objects.create(url="https://doc-b", html="<p>free document text</p>")
         gateway.return_value = ({"items": [
                 {"parent_source_item_id": self.item.pk, "name": "Detail A", "quantity": 2, "unit": "u", "requirements": {}, "confidence": .9, "source_url": "https://doc-a", "page_or_section": "p. 1", "evidence": "Detail A", "relationship": "split"},
-                {"parent_source_item_id": second.pk, "name": "Second source", "quantity": 3, "unit": "u", "requirements": {"Any field": "Any value"}, "confidence": .8, "source_url": "https://doc-b", "page_or_section": "p. 2", "evidence": "Any value", "relationship": "enrich"},
+                {"parent_source_item_id": second.pk, "name": "Second source", "quantity": 3, "unit": "u", "requirements": {"reconciled": True, "characteristics": [{"name": "Any field", "value": "Any value", "resolution": "new", "baseline_refs": [], "source_url": "https://doc-b"}]}, "confidence": .8, "source_url": "https://doc-b", "page_or_section": "p. 2", "evidence": "Any value", "relationship": "enrich"},
             ]}, {})
 
         result = GatewayDocumentEnricher().extract_tender(

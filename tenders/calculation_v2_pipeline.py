@@ -296,12 +296,13 @@ class GatewayDocumentEnricher:
             index = (original_source.metadata or {}).get("notification_index") if original_source else None
             original = notification_rows[index] if isinstance(index, int) and 0 <= index < len(notification_rows) else {}
             notification_items.append({"id": item.pk, "name": item.original_text, "quantity": str(item.quantity or ""),
-                                       "unit": item.unit, "requirements": effective_item_requirements(item),
-                                       "notification_position": index + 1 if isinstance(index, int) else None,
+                                       "unit": item.unit,
+                                       "baseline_facts": [{"id": index, "name": fact["name"], "value": fact["value"]} for index, fact in enumerate(effective_item_requirements(item).get("characteristics", []))],
+                                       "notification_position": index + 1 if isinstance(index, int) else None, "original_notification_name": original.get("name"),
                                        "notification_unit_price": original.get("price") if notification_quote_source(item) else None, "notification_total": original.get("sum") if notification_quote_source(item) else None,
                                        "relationship": (item.metadata or {}).get("relationship"), "aggregate_name": (item.metadata or {}).get("parent_display_name")})
         payload = {"notification_items": notification_items, "documents": available}
-        prompt = """Read every supplied tender document and compare it with every notification item. Attached images are numbered from 1 in attachment order; document image_indexes associate each picture with its source. Read the images together with that document text. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"parent_display_name\":string,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The supplied working items and their requirements are the baseline, not disposable data. Some are already component items (relationship=component, aggregate_name identifies their group); enrich their own facts without expanding them into their sibling items again. Reconcile every item across ALL supplied sources, attribute by attribute. For enrich, return exactly ONE synthesized row per atomic notification item, combining documented additions or corrections across all sources; never omit known baseline facts in favor of a shorter description. Reuse the existing characteristic label for the same attribute; avoid repeated or synonymous labels. Preserve differing source values with evidence instead of silently choosing one. Choose the clearest specific human product name across the sources, without procurement boilerplate, repetition or loss of identifying meaning. Technical position codes identify the parent; they are not product characteristics. The backend preserves baseline facts and original quoted money for the same item. If documentation explicitly enumerates the contents of an aggregate, you MUST return one component row per distinct documented item, linked to its original notification parent. This takes precedence over enrich: never return only a renamed aggregate or hide its contents in a name or requirements object. Do not emit the aggregate itself alongside its component rows. Set component quantity to null: the backend calculates total quantity from the parent's amount and quantity_per_parent. Supply the documented positive quantity_per_parent; never guess missing amounts. Include explicitly listed packaging. Merge repeated mentions across documents without duplicating physical items; preserve separate variants and separate parents. parent_display_name is the concise documented name of the aggregate. Each name identifies the product clearly. requirements.characteristics is an array of human-readable {name,value} entries describing the product, its manufacture, branding, packaging and item-specific constraints. Do not substitute generic contract conditions or procurement wording for technical characteristics, and do not repeat global legal clauses for every product. Return enrich only for an atomic item with no enumerated contents. Return split only where a document explicitly replaces an aggregate with separately quantified goods. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Read every supplied tender document and compare it with every notification item. Attached images are numbered from 1 in attachment order; document image_indexes associate each picture with its source. Read the images together with that document text. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"parent_display_name\":string,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number}]}. The supplied working items and their requirements are the baseline, not disposable data. Some are already component items (relationship=component, aggregate_name identifies their group); enrich their own facts without expanding them into their sibling items again. Reconcile every item across ALL supplied sources, attribute by attribute. For enrich, return exactly ONE synthesized row per atomic notification item, combining documented additions or corrections across all sources; never omit known baseline facts in favor of a shorter description. Reuse the existing characteristic label for the same attribute; avoid repeated or synonymous labels. Preserve differing source values with evidence instead of silently choosing one. Choose the clearest specific human product name across the sources, without procurement boilerplate, repetition or loss of identifying meaning. Technical position codes identify the parent; they are not product characteristics. The backend preserves baseline facts and original quoted money for the same item. For enrich preserve quantity and the existing unit label unless documents explicitly change them; do not paraphrase an equivalent unit. For enrich set requirements.reconciled=true and return a COMPLETE canonical characteristics list. Each entry has name,value,resolution (keep|merge|conflict|new|omit), baseline_refs (array of baseline_facts.id), reason, and document_facts [{value,source_url,page_or_section}] when using document evidence. Each document fact cites its own supplied source_url; never attribute different documents to one shared source. merge/conflict may have no baseline_refs if supported by two or more document_facts. Reasons are concise human explanations without identifiers or technical keys. Cover EVERY baseline fact exactly once. keep may omit name/value: the backend copies the exact referenced fact; merge combines compatible general and specific statements into one informative value without losing specifics; conflict retains genuinely incompatible alternatives, never silently chooses one. new has no baseline_refs. omit requires an explicit reason (e.g. repeated technical code or generic legal boilerplate) and preserves the removed fact for visible review. For merge/conflict/omit explain the decision briefly. All original values remain in the source trail. Do not mistake compatible descriptions for contradictions. Do not use this contract to inherit aggregate facts into components. If documentation explicitly enumerates the contents of an aggregate, you MUST return one component row per distinct documented item, linked to its original notification parent. This takes precedence over enrich: never return only a renamed aggregate or hide its contents in a name or requirements object. Do not emit the aggregate itself alongside its component rows. Set component quantity to null: the backend calculates total quantity from the parent's amount and quantity_per_parent. Supply the documented positive quantity_per_parent; never guess missing amounts. Include explicitly listed packaging. Merge repeated mentions across documents without duplicating physical items; preserve separate variants and separate parents. parent_display_name is the concise documented name of the aggregate. Each name identifies the product clearly. requirements.characteristics is an array of human-readable {name,value} entries describing the product, its manufacture, branding, packaging and item-specific constraints. Do not substitute generic contract conditions or procurement wording for technical characteristics, and do not repeat global legal clauses for every product. Return enrich only for an atomic item with no enumerated contents. Return split only where a document explicitly replaces an aggregate with separately quantified goods. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         estimated_cost, estimated_usage = self._preflight_cost(prompt)
         if estimated_cost is None:
             self.diagnostics = {"outcome": "unpriced_model", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": None, "estimated_usage": estimated_usage}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
@@ -331,7 +332,32 @@ class GatewayDocumentEnricher:
                 rejections.append({"index": index, "reason": "invalid_name_or_source"}); continue
             confidence = _as_decimal(row.get("confidence"))
             requirements = row.get("requirements")
+            if isinstance(requirements, dict) and requirements.get("compiled_reconciliation"):
+                rejections.append({"index": index, "reason": "untrusted_compiled_reconciliation"}); continue
             relationship = str(row.get("relationship") or "").lower()
+            if relationship == "enrich" and (not isinstance(requirements, dict) or requirements.get("reconciled") is not True):
+                rejections.append({"index": index, "reason": "missing_fact_reconciliation"}); continue
+            invalid_fact_source = False
+            if relationship == "enrich" and isinstance(requirements.get("characteristics"), list):
+                for fact in requirements["characteristics"]:
+                    if not isinstance(fact, dict):
+                        continue
+                    fact.pop("_source_provenance", None)
+                    document_facts = fact.get("document_facts") or []
+                    if not isinstance(document_facts, list):
+                        invalid_fact_source = True; break
+                    for document_fact in document_facts:
+                        if not isinstance(document_fact, dict) or document_fact.get("source_url") not in allowed_urls:
+                            invalid_fact_source = True; break
+                        document_fact["_source_provenance"] = {"document_url": document_fact["source_url"], "page_or_section": str(document_fact.get("page_or_section") or "")[:300], "evidence": str(document_fact.get("evidence") or "")[:1000]}
+                    if invalid_fact_source:
+                        break
+                    if (fact.get("resolution") == "new" and not document_facts) or fact.get("document_value") not in (None, "", [], {}):
+                        if fact.get("source_url") not in allowed_urls:
+                            invalid_fact_source = True; break
+                        fact["_source_provenance"] = {"document_url": fact["source_url"], "page_or_section": str(fact.get("page_or_section") or "")[:300], "evidence": str(fact.get("evidence") or "")[:1000]}
+            if invalid_fact_source:
+                rejections.append({"index": index, "reason": "invalid_characteristic_source"}); continue
             per_parent = _as_decimal(row.get("quantity_per_parent")) if relationship == "component" else Decimal("1")
             if confidence is None or not Decimal("0") <= confidence <= Decimal("1") or not isinstance(requirements, dict) or relationship not in {"enrich", "split", "component"} or per_parent is None or per_parent <= 0 or (relationship == "component" and not str(row.get("unit") or "").strip()):
                 rejections.append({"index": index, "reason": "invalid_structure"}); continue
@@ -685,6 +711,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
             return {"created": [], "state": outcome, "diagnostics": [detail]}
         parents = {item.pk: item for item in active}
         proposals = []
+        prepared = []
         for entry in extracted:
             parent = parents.get(entry.parent_source_item_id)
             if parent is None:
@@ -692,18 +719,26 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
             if entry.relationship == "component":
                 entry = replace(entry, quantity=component_total_quantity(parent.quantity, entry.quantity_per_parent))
             elif entry.relationship == "enrich":
-                entry = replace(entry, quantity=entry.quantity if entry.quantity is not None else parent.quantity, unit=entry.unit or parent.unit, requirements=merge_item_requirements(effective_item_requirements(parent), entry.requirements, provenance=entry.provenance))
-            payload = {"parent": parent.pk, "parent_display_name": entry.parent_display_name, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)}
-            proposal, _ = TenderSourceItem.objects.get_or_create(
-                tender=tender,
-                source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
-                defaults={"source_type": "document_proposal", "original_text": entry.name, "quantity": entry.quantity,
-                          "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance,
-                          "metadata": {"relationship": entry.relationship, "parent_display_name": entry.parent_display_name,
-                                       **({"quantity_per_parent": str(entry.quantity_per_parent)} if entry.relationship == "component" else {})},
-                          "confidence": entry.confidence, "parent": parent, "is_active": False},
-            )
-            proposals.append(proposal)
+                try:
+                    combined = merge_item_requirements(effective_item_requirements(parent), entry.requirements, provenance=entry.provenance)
+                except ValueError as exc:
+                    detail.update(outcome="validation_failure", final_failure_reason=str(exc))
+                    return {"created": [], "state": "validation_failure", "diagnostics": [detail]}
+                entry = replace(entry, quantity=entry.quantity if entry.quantity is not None else parent.quantity, unit=entry.unit or parent.unit, requirements=combined)
+            prepared.append((entry, parent))
+        with transaction.atomic():
+            for entry, parent in prepared:
+                payload = {"parent": parent.pk, "parent_display_name": entry.parent_display_name, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent)}
+                proposal, _ = TenderSourceItem.objects.get_or_create(
+                    tender=tender,
+                    source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
+                    defaults={"source_type": "document_proposal", "original_text": entry.name, "quantity": entry.quantity,
+                              "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance,
+                              "metadata": {"relationship": entry.relationship, "parent_display_name": entry.parent_display_name,
+                                           **({"quantity_per_parent": str(entry.quantity_per_parent)} if entry.relationship == "component" else {})},
+                              "confidence": entry.confidence, "parent": parent, "is_active": False},
+                )
+                proposals.append(proposal)
         return {"created": proposals, "state": "needs_review" if proposals else "document_reading_incomplete" if outcome == "document_reading_incomplete" else "no_data", "diagnostics": [detail]}
     else:
         extracted_groups = None
