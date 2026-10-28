@@ -25,8 +25,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         budget = options["max_cost_rub"]
-        if not budget.is_finite() or not Decimal("0") < budget <= Decimal("3"):
-            raise CommandError("Pilot budget must be positive and no greater than 3 RUB")
+        if not budget.is_finite() or not Decimal("0") < budget <= Decimal("14"):
+            raise CommandError("Pilot budget must be positive and no greater than 14 RUB")
         if not 256 <= options["max_output_tokens"] <= 6000:
             raise CommandError("Output limit must be between 256 and 6000 tokens")
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
@@ -52,7 +52,7 @@ class Command(BaseCommand):
         if not options["apply"]:
             self.stdout.write(json.dumps({"apply": False, "budget_rub": str(budget), "has_notification": bool(tender.notification_raw)}))
             return
-        version = "v2-document-pilot"
+        version = "v2-document-pilot-full-text"
         with transaction.atomic():
             Tender.objects.select_for_update().get(pk=tender.pk)
             previous = TenderComputeJob.objects.filter(tender=tender, version=version).first()
@@ -69,8 +69,26 @@ class Command(BaseCommand):
                                            "relationship": item.metadata.get("relationship"), "quantity_per_parent": item.metadata.get("quantity_per_parent")}
                                           for item in proposals]}, ensure_ascii=False, default=str))
                 return
+            history = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2-document-pilot")
+            if history.filter(status__in=["preparing_input", "running", "queued"]).exists():
+                raise CommandError("Another pilot is active; nothing was called")
+            spent = history.aggregate(total=Sum("total_cost"))["total"] or Decimal("0")
+            remaining = budget - spent
+            if remaining <= 0:
+                raise CommandError("Pilot budget is exhausted; nothing was called")
+            old_proposals = set()
+            for old_job in history.filter(completed_at__isnull=False):
+                if any(detail.get("provider_call_happened") and not detail.get("usage")
+                       for detail in old_job.diagnostics.get("enrichment", []) if isinstance(detail, dict)):
+                    raise CommandError("Previous paid outcome is unknown; reconcile before another call")
+                old_proposals.update(old_job.diagnostics.get("proposal_ids", []))
+                if not old_job.diagnostics.get("proposal_ids"):
+                    old_proposals.update(TenderSourceItem.objects.filter(
+                        tender=tender, source_type="document_proposal", is_active=False,
+                        created_at__gte=old_job.created_at, created_at__lte=old_job.completed_at,
+                    ).values_list("pk", flat=True))
             job = TenderComputeJob.objects.create(tender=tender, version=version, trigger="operator_document_pilot", status=TenderComputeJob.Status.PREPARING_INPUT)
-        enricher = GatewayDocumentEnricher(max_cost_rub=budget)
+        enricher = GatewayDocumentEnricher(max_cost_rub=remaining)
         enricher.DOCUMENT_OUTPUT_TOKEN_LIMIT = options["max_output_tokens"]
         try:
             source_items = ingest_source_items(tender)
@@ -79,17 +97,32 @@ class Command(BaseCommand):
             state = result["state"]
             job.status = TenderComputeJob.Status.NEEDS_REVIEW if result["created"] else TenderComputeJob.Status.READY if state == "no_data" else TenderComputeJob.Status.PARTIAL
             job.diagnostics = {"source_item_count": len(source_items), "document_proposal_count": len(result["created"]),
-                               "enrichment_state": state, "enrichment": result["diagnostics"], "documents_only": True}
+                               "enrichment_state": state, "enrichment": result["diagnostics"], "documents_only": True,
+                               "proposal_ids": [item.pk for item in result["created"]], "pilot_limit_rub": str(budget), "spent_before_rub": str(spent)}
         except Exception as exc:
             job.status = TenderComputeJob.Status.PARTIAL
             job.error = str(exc)[:1000]
             job.diagnostics = {"enrichment": [enricher.diagnostics], "documents_only": True, "exception_type": type(exc).__name__}
         job.total_cost = Decimal(str(enricher.cost_rub or 0))
         job.completed_at = timezone.now()
-        job.save(update_fields=["status", "diagnostics", "error", "total_cost", "completed_at", "updated_at"])
+        with transaction.atomic():
+            replacement_ids = job.diagnostics.get("proposal_ids", [])
+            superseded = TenderSourceItem.objects.filter(pk__in=old_proposals - set(replacement_ids),
+                                                         tender=tender, source_type="document_proposal", is_active=False)
+            if replacement_ids:
+                job.diagnostics["superseded_pending_proposals"] = json.loads(json.dumps(list(superseded.values()), default=str))
+            job.save(update_fields=["status", "diagnostics", "error", "total_cost", "completed_at", "updated_at"])
+            if replacement_ids:
+                superseded.delete()
         considered = (enricher.diagnostics.get("documents") or {}).get("considered", [])
         self.stdout.write(json.dumps({"status": job.status, "proposal_count": job.diagnostics.get("document_proposal_count", 0),
                                      "reading_statuses": [doc.get("reading_status") for doc in considered],
                                      "outcome": enricher.diagnostics.get("outcome"), "model": enricher.model,
-                                     "cost_rub": str(job.total_cost), "usage": enricher.usage,
-                                     "exception_type": job.diagnostics.get("exception_type")}, default=str))
+                                     "cost_rub": str(job.total_cost) if enricher.usage or not enricher.diagnostics.get("provider_call_happened") else None,
+                                     "usage": enricher.usage,
+                                     "exception_type": job.diagnostics.get("exception_type"),
+                                     "cumulative_cost_rub": str(spent + job.total_cost) if enricher.usage or not enricher.diagnostics.get("provider_call_happened") else None,
+                                     "pending_proposals": [{"name": item.original_text, "quantity": item.quantity, "unit": item.unit,
+                                          "notification_position": (item.parent.metadata or {}).get("notification_index", -1) + 1 if item.parent else None,
+                                          "relationship": item.metadata.get("relationship"), "quantity_per_parent": item.metadata.get("quantity_per_parent")}
+                                         for item in TenderSourceItem.objects.filter(pk__in=job.diagnostics.get("proposal_ids", [])).select_related("parent")]}, ensure_ascii=False, default=str))
