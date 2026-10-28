@@ -393,6 +393,9 @@ def _archive_content(data: bytes, *, depth=0, budget=None) -> dict:
                     errors.append("Превышен предел количества вложений.")
                     break
                 budget["files"] -= 1
+                if info.filename.lower().endswith((".sign", ".sig", ".p7s")):
+                    parts.append('<p data-document-info="signature">Электронная подпись: ' + escape(info.filename) + '</p>')
+                    continue
                 if info.file_size > budget["bytes"]:
                     errors.append("Вложение превышает оставшийся предел размера.")
                     continue
@@ -414,7 +417,7 @@ def _archive_content(data: bytes, *, depth=0, budget=None) -> dict:
                     errors.append(str(info.filename) + ": " + result["error"])
     except (zipfile.BadZipFile, DocumentError, RuntimeError, OSError) as exc:
         errors.append(str(exc))
-    return {"kind": "zip-content", "html": "\n".join(parts), "error": "; ".join(errors)[:2000]}
+    return {"kind": "zip-content", "html": '<section data-document-archive-version="2">' + "\n".join(parts) + '</section>', "error": "; ".join(errors)[:2000]}
 
 
 def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_archive=False) -> dict:
@@ -452,6 +455,25 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
             return {"kind": "docx", "html": _docx_html(data)}
         if ext == "xlsx":
             return {"kind": "xlsx", "html": _xlsx_html(data)}
+        if ext in {"html", "htm"}:
+            from lxml import html as html_parser
+            root = html_parser.fromstring(data)
+            for node in root.xpath(".//script | .//style | .//iframe | .//object | .//noscript"):
+                node.drop_tree()
+            # Rebuild only textual structure: never serve source scripts, links or attributes.
+            def clean(node):
+                content = escape(node.text or "") + "".join(clean(child) + escape(child.tail or "") for child in node)
+                tag = node.tag.lower() if isinstance(node.tag, str) else ""
+                if tag in {"table", "thead", "tbody", "tr", "td", "th", "p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4"}:
+                    attrs = ""
+                    if tag in {"td", "th"}:
+                        for key in ("colspan", "rowspan"):
+                            value = node.get(key, "")
+                            if value.isdigit() and 0 < int(value) < 1000:
+                                attrs += f' {key}="{value}"'
+                    return f"<{tag}{attrs}>{content}</{tag}>"
+                return content
+            return {"kind": "html", "html": clean(root)}
         if ext == "pdf" or data[:4] == b"%PDF":
             return {"kind": "pdf", "html": _pdf_html(data)}
         if ext in {"doc", "xls"}:

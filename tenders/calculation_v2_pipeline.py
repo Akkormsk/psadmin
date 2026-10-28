@@ -195,7 +195,7 @@ class GatewayDocumentEnricher:
                 raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
             root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
             warning = image_present or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
-            for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
+            for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-info] | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
                 node.drop_tree()
             content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
             text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""

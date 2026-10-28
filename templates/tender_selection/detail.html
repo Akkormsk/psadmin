@@ -30,7 +30,10 @@
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block">{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
-        {% if document_analysis_job %}<p class="ts-sub">{% if document_analysis_job.status == "preparing_input" %}Анализ документов выполняется…{% elif document_analysis_job.status == "needs_review" %}Анализ завершён · проверьте предложения ниже{% elif document_analysis_job.status == "ready" %}Анализ завершён · новых позиций нет{% else %}Анализ завершён не полностью{% if document_analysis_job.error %}: {{ document_analysis_job.error }}{% endif %}{% endif %}</p>{% endif %}
+        <details id="analysis-status" class="ts-sub"><summary>{{ analysis_status.label }} · подробности</summary>
+          {% if document_proposal_groups %}<p>Предложения по составу сохранены ниже и ожидают вашей проверки. Исходное извещение не изменено.</p>{% endif %}
+          {% if analysis_issues %}<ul>{% for issue in analysis_issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% else %}<p>{% if analysis_status.code == "PROCESSING" %}Разбор выполняется в фоне.{% elif analysis_status.code == "NOT_CHECKED" %}Разбор документов ещё не запускался.{% else %}Ошибок чтения и обработки в последнем анализе не зафиксировано.{% endif %}</p>{% endif %}
+        </details>
         <p class="ts-detail__links">
           {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
           {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
@@ -583,9 +586,9 @@
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } .ts-stage-summary { margin-left:22px; justify-content:flex-start; text-align:left; } .tender-saved-bid { align-items:flex-start; } }
 </style>
 <script>
-  if (window.location.hash === "#tender-items") {
-    const items = document.getElementById("tender-items");
-    for (let parent = items?.parentElement; parent; parent = parent.parentElement) {
+  if (["#tender-items", "#analysis-status"].includes(window.location.hash)) {
+    const items = document.querySelector(window.location.hash);
+    for (let parent = items; parent; parent = parent.parentElement) {
       if (parent.tagName === "DETAILS") parent.open = true;
     }
   }

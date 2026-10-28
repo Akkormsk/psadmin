@@ -8,7 +8,7 @@ const start = base.lastIndexOf('<script>', base.indexOf('const embedded ='));
 const script = base.slice(start + 8, base.indexOf('</script>', start));
 const shell = content => `<!doctype html><body ${content.embedded ? 'class="workspace-embedded"' : ''}>${content.html}<div id="app-workspace-stack"></div><script>${script}</script></body>`;
 const card = shell({embedded: true, html: `<main data-workspace-single-layer><h1>Тендер</h1>
-${['analysis', 'proposal', 'trading'].map(action => `<form method="post" action="/${action}"><button>${action}</button></form>`).join('')}
+${['analysis', 'proposal', 'trading'].map(action => `<form method="post" action="/${action}"><button name="action" value="accept">${action}</button><button name="action" value="reject">reject</button></form>`).join('')}
 <form method="post" action="/transition" data-tender-transition><button>transition</button></form>
 <a href="/calculation" data-workspace-open>Расчёт</a></main>`});
 let posts = 0, rootLoads = 0;

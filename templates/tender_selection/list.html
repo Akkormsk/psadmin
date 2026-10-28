@@ -73,8 +73,8 @@
         <input type="checkbox" class="ts-check" data-bulk-select
                data-review-url="{% url 'tender_selection:review' tender.pk %}" data-dismiss-url="{% url 'tender_selection:dismiss' tender.pk %}"
                aria-label="Выбрать тендер {{ tender.purchase_number }}">
-        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">
-          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>{% if tender.analysis_status.code != "CHECKED_NO_CHANGES" %}<span class="ts-v2-badge ts-v2-badge--{{ tender.analysis_status.kind }}">{{ tender.analysis_status.label }}</span>{% endif %}
+        <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}{% if tender.analysis_status.code == "ANALYSIS_INCOMPLETE" %}#analysis-status{% endif %}" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">
+          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span>{% if tender.analysis_status.code != "CHECKED_NO_CHANGES" %}<span class="ts-v2-badge ts-v2-badge--{{ tender.analysis_status.kind }}" title="Нажмите, чтобы открыть подробности анализа">{{ tender.analysis_status.label }}</span>{% endif %}
           <span class="ts-row__meta">
             <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span> № {{ tender.purchase_number }}</span>
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>

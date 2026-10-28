@@ -473,7 +473,10 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
 
 def store_document_preview(url, name, data: bytes) -> dict:
     """Run the site's document parser and persist its preview cache once."""
-    result = extract_preview(data, name, read_archive=True)
+    return _save_document_preview(url, name, extract_preview(data, name, read_archive=True))
+
+
+def _save_document_preview(url, name, result):
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": str(result.get("error", ""))[:DocumentPreview._meta.get_field("error").max_length],
@@ -564,9 +567,15 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
     Скачанный, но нечитаемый файл (архив, битый .doc) тоже в кэше — с пустым HTML,
     повторно за ним не ходим. DocumentError — документ сейчас не получить."""
     cached = DocumentPreview.objects.filter(url=url).first()
-    if cached and cached.kind != "zip":
-        return cached.html
+    if cached:
+        if not _preview_needs_upgrade(cached.kind, cached.html):
+            return cached.html
+        return documents_html(tender, [{"url": url, "name": name}], **fetch_kwargs).get(url, cached.html)
     return _store_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs))
+
+
+def _preview_needs_upgrade(kind, html):
+    return kind == "zip" or (kind == "zip-content" and 'data-document-archive-version="2"' not in html) or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
 
 
 def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, str]:
@@ -577,8 +586,9 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
     htmls = {
         url: html
         for url, kind, html in DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", "kind", "html")
-        if kind != "zip"
+        if not _preview_needs_upgrade(kind, html)
     }
+    existing = set(DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", flat=True))
     missing = [doc for doc in documents if doc["url"] not in htmls]
 
     def fetch_one(doc):
@@ -592,7 +602,10 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
             fetched = list(pool.map(fetch_one, missing))
         for doc, data in fetched:
             if data is not None:
-                htmls[doc["url"]] = _store_preview(doc["url"], doc["name"], data)
+                result = extract_preview(data, doc["name"], read_archive=True)
+                if doc["url"] in existing and not result.get("html"):
+                    continue  # Keep usable legacy evidence when conversion/download fails.
+                htmls[doc["url"]] = _save_document_preview(doc["url"], doc["name"], result).get("html", "")
     return htmls
 
 

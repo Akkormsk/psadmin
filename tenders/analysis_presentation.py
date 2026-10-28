@@ -54,6 +54,35 @@ def _is_technical_failure(job) -> bool:
 
 
 
+def analysis_issues(job) -> list[str]:
+    """Explain saved diagnostics without calling a model or guessing missing evidence."""
+    if job is None:
+        return []
+    diagnostics = job.diagnostics if isinstance(job.diagnostics, dict) else {}
+    entries = diagnostics.get("enrichment", [])
+    entries = [entries] if isinstance(entries, dict) else entries
+    issues = []
+    if job.error:
+        issues.append(str(job.error))
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("final_failure_reason"):
+            issues.append(str(entry["final_failure_reason"]))
+        if (entry.get("extraction") or {}).get("rejections"):
+            issues.append("Ответ по составу не прошёл проверку; эти изменения не применены.")
+        if entry.get("outcome") == "budget_blocked":
+            issues.append("Запрос превышает установленный бюджет анализа и не был отправлен модели.")
+        for document in (entry.get("documents") or {}).get("considered", []):
+            if document.get("reading_status") not in {"partial", "unreadable"}:
+                continue
+            reason = document.get("error") or ("Текст извлечён не полностью или с предупреждением; нужна проверка оригинала." if document.get("reading_status") == "partial" else "Не удалось извлечь текст.")
+            issues.append(f"{document.get('name') or 'Документ'}: {reason}")
+    if not issues and _is_technical_failure(job):
+        issues.append("Разбор не завершён, но подробная причина в сохранённом журнале отсутствует. Повторите анализ.")
+    return list(dict.fromkeys(issues))
+
+
 def _characteristic_pairs(requirements: dict) -> set[tuple[str, str]]:
     pairs = set()
     for row in requirements.get("characteristics", []) if isinstance(requirements, dict) else []:

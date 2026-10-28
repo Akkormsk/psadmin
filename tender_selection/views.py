@@ -580,7 +580,9 @@ def tender_detail(request, pk):
         })
     v2_lines = TenderComputeLine.objects.filter(job__tender=tender).select_related("source_item").order_by("job_id", "pk")
     v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
-    v2_job = TenderComputeJob.objects.filter(tender=tender).order_by("-pk").first()
+    v2_job = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk").first()
+    from tenders.analysis_presentation import analysis_issues, resolve_tender_analysis_status
+    analysis_status = resolve_tender_analysis_status(tender)
     display_items = card.get("items", []) if card else []
     has_document_items = False
     document_item_count = 0
@@ -764,7 +766,8 @@ def tender_detail(request, pk):
         "v2_source_items": v2_source_items,
         "document_proposals": document_proposals,
         "document_proposal_groups": document_proposal_groups,
-        "document_analysis_job": tender.v2_compute_jobs.filter(version="v2-document-manual").order_by("-pk").first(),
+        "analysis_status": analysis_status,
+        "analysis_issues": analysis_issues(v2_job),
         "v2_lines": v2_lines,
         "v2_questions": v2_questions,
         "v2_job": v2_job,
