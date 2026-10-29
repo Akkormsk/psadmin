@@ -31,9 +31,26 @@ def collect_report(number):
         })
     latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').values('version', 'status', 'completed_at', 'error', 'diagnostics').first()
     if latest:
+        from types import SimpleNamespace
+        from tenders.analysis_presentation import analysis_issues
+        latest['issues'] = analysis_issues(SimpleNamespace(**latest))
         diagnostics = latest.pop('diagnostics') or {}
+        latest['rejections'] = [entry.get('extraction', {}).get('rejections', []) for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['enrichment_state'] = diagnostics.get('enrichment_state')
-    return {'tender_number': number, 'read_only': True, 'model_called': False, 'latest_job': latest,
+    from collections import Counter
+    from django.db.models import Max
+    latest_ids = TenderComputeJob.objects.filter(tender__status__in=[Tender.NEW, Tender.PUSHED], version__startswith='v2').values('tender_id').annotate(latest_id=Max('pk')).values_list('latest_id', flat=True)
+    recent = list(TenderComputeJob.objects.filter(pk__in=latest_ids).values('status', 'diagnostics', 'error'))
+    failures = Counter()
+    for row in recent:
+        details = row['diagnostics'] if isinstance(row['diagnostics'], dict) else {}
+        entries = details.get('enrichment', [])
+        entries = [entries] if isinstance(entries, dict) else entries
+        for entry in entries:
+            if isinstance(entry, dict):
+                for rejection in (entry.get('extraction') or {}).get('rejections', []):
+                    failures[str(rejection.get('reason'))] += 1
+    return {'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'read_only': True, 'model_called': False, 'latest_job': latest,
             'pending_count': tender.v2_source_items.filter(source_type='document_proposal', is_active=False).count(), 'active_items': items}
 
 
