@@ -11,6 +11,21 @@ def collect_report(number):
     from tenders.models import TenderComputeJob
 
     tender = Tender.objects.get(purchase_number=number)
+    import re
+    national_fields = []
+    def inspect_fields(value, path="$", relevant=False):
+        if len(national_fields) >= 80:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                hit = relevant or bool(re.search(r"national|origin|admission|restrict|prefer|prohib|foreign|advantage|нацреж|происхожд|огранич|запрет", key, re.I))
+                inspect_fields(child, path + "." + key, hit)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                inspect_fields(child, path + f"[{index}]", relevant)
+        elif relevant:
+            national_fields.append({"path": path, "value": str(value)[:500]})
+    inspect_fields(tender.notification_raw or {})
     notification = parse_notification(tender.notification_raw or {}).get('items', [])
     items = []
     for item in active_calculation_items(tender):
@@ -55,7 +70,7 @@ def collect_report(number):
             if isinstance(entry, dict):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
-    return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'read_only': True, 'model_called': False, 'latest_job': latest,
+    return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'national_regime_fields': national_fields, 'read_only': True, 'model_called': False, 'latest_job': latest,
             'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
