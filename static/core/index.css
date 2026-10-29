@@ -2317,3 +2317,12 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
   border-radius: 22px;
   box-sizing: border-box;
 }
+
+.tender-line { position:relative; }
+.tender-line__drag { position:absolute; left:-18px; top:18px; width:18px; padding:4px 0; border:0; background:transparent; color:var(--ink-3); cursor:grab; touch-action:none; }
+.tender-line__drag:active { cursor:grabbing; }
+.tender-line__drag:focus-visible { outline:2px solid var(--accent); border-radius:4px; }
+.tender-line.is-dragging { opacity:.55; }
+.tender-line.is-drop-before { box-shadow:0 -3px 0 var(--accent); }
+.tender-line.is-drop-after { box-shadow:0 3px 0 var(--accent); }
+@media (max-width:700px) { .tender-line__drag { left:0; top:0; } }
