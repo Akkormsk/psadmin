@@ -2,7 +2,7 @@
 {% load static tz tender_selection_extras %}
 
 {% block title %}Тендеры{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=import-field-20261029">{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -21,8 +21,8 @@
         </p>
       </div>
       <div class="ts-refresh">
-        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:import_by_number' %}" id="ts-import-form">
-          {% csrf_token %}<input name="purchase_number" aria-label="Номер закупки по 44-ФЗ" placeholder="Номер закупки · 44-ФЗ" pattern="[0-9]{19}" maxlength="19" inputmode="numeric" required style="width:210px"><button type="submit">Добавить</button>
+        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:import_by_number' %}" id="ts-import-form" class="ts-import">
+          {% csrf_token %}<input class="form-control" name="purchase_number" aria-label="Номер закупки по 44-ФЗ" placeholder="Номер закупки · 44-ФЗ" pattern="[0-9]{19}" maxlength="19" inputmode="numeric" required><button type="submit">Добавить</button>
           <span role="status" id="ts-import-status"></span>
         </form>{% endif %}
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">

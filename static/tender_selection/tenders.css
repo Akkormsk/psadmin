@@ -27,10 +27,14 @@
 .ts-head__stats span + span::before { content: "·"; margin: 0 6px; }
 
 .ts-refresh {
-  display: inline-flex; align-items: center; gap: 10px; padding: 6px 10px;
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 6px 10px;
   border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 14px; color: var(--ink-2);
 }
 .ts-refresh form { margin: 0; }
+.ts-import { display: grid; grid-template-columns: minmax(0, 210px) auto; align-items: center; gap: 6px; max-width: 100%; }
+.ts-import button { min-height: 38px; }
+.ts-import [role="status"] { grid-column: 1 / -1; font-size: 12px; }
+.ts-import [role="status"]:empty { display: none; }
 .ts-refresh button { display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
 .ts-refresh button:hover, .ts-refresh__settings:hover { background: var(--tint-neutral); color: var(--ink); }
 .ts-refresh__settings { display: inline-flex; align-items: center; padding: 6px 8px; border-radius: 8px; color: var(--ink); font-weight: 600; text-decoration: none; white-space: nowrap; }

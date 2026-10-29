@@ -464,6 +464,7 @@ h1 {
   font-weight: 500;
 }
 
+.form-control,
 .form-group input,
 .form-group select,
 .form-group textarea {
@@ -475,6 +476,7 @@ h1 {
   background: var(--field-bg);
   color: var(--ink);
 }
+.form-control:focus,
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
@@ -482,6 +484,9 @@ h1 {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
+
+.form-control { min-height: 38px; font: inherit; }
+.form-control::placeholder { color: var(--ink-3); opacity: 1; }
 
 .form-label { display: block; margin-bottom: 7px; font-weight: 600; }
 .form-group--record-type > div { display: flex; gap: 8px; }
