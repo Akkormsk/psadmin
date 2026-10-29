@@ -157,7 +157,7 @@ register_tool(AssistantTool(
     source="tender_selection.services.change_forecast_inclusion",
 ))
 register_tool(AssistantTool(
-    "tender.send_to_calculation", "Передать тендер в расчёт", "Создаёт или возвращает существующий расчёт тендера через штатный сервис воронки.",
+    "tender.send_to_calculation", "Передать тендер в расчёт", "Создаёт расчёт из принятого рабочего списка товаров с дополненным ТЗ и исходными финансовыми привязками. Существующий расчёт возвращает без перезаписи.",
     {"tender_id": {"type": "integer", "required": True,
                    "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]},
                    "description": "Внутренний ID тендера из READ, не номер закупки. По номеру или названию сначала найдите тендер через READ."}}, False, True, True,

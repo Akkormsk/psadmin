@@ -1059,8 +1059,9 @@ def start_risk_assessment_in_background(tender_id: int) -> None:
     threading.Thread(target=_job, daemon=True).start()
 
 
+@transaction.atomic
 def push_to_estimate(tender, user):
-    """Создать просчёт в «Расчёте тендеров» из позиций извещения. Возвращает id просчёта."""
+    """Create a calculation from the accepted working items and their source facts."""
     from decimal import Decimal as _D
 
     from tenders.models import TenderEstimate, TenderLine
@@ -1068,7 +1069,36 @@ def push_to_estimate(tender, user):
     from .notification import parse_notification
     from .stats import price_stats_for
 
+    tender = Tender.objects.select_for_update().get(pk=tender.pk)
+    existing = tender.estimates.order_by('pk').first()
+    if existing:
+        return existing.pk
     card = parse_notification(tender.notification_raw) if tender.notification_raw else None
+    from tenders.calculation_v2_pipeline import active_calculation_items
+    from tenders.document_enrichment import effective_item_requirements, notification_origin, notification_quote_source
+    items = (card or {}).get('items', [])
+    originals = items
+    sources = active_calculation_items(tender)
+    financials = {}
+    if sources:
+        items = []
+        for source in sources:
+            origin = notification_origin(source)
+            index = (origin.metadata or {}).get('notification_index') if origin else None
+            original = originals[index] if type(index) is int and 0 <= index < len(originals) else {}
+            quote = notification_quote_source(source)
+            requirements = effective_item_requirements(source, strict=True)
+            items.append({'name': source.original_text, 'quantity': source.quantity, 'unit': source.unit,
+                          'price': original.get('price') if quote else None,
+                          'code': original.get('code'), 'code_name': original.get('code_name'),
+                          'characteristics': requirements.get('characteristics', []),
+                          'source_item_id': source.pk, 'source_requirements': requirements,
+                          'source_provenance': source.provenance,
+                          'nmck_unit_unknown': quote is None or original.get('price') is None})
+            if origin and quote is None:
+                financials[origin.pk] = {'source_item_id': origin.pk, 'name': origin.original_text,
+                                       'quantity': str(original.get('quantity') or ''), 'unit': original.get('unit', ''),
+                                       'price': str(original.get('price') or ''), 'sum': str(original.get('sum') or '')}
     cust = (card or {}).get("customer", {})
     # tenders показывает "№ {tender_number} — {name}", поэтому name = только заказчик
     customer = (cust.get("short_name") or "").split(",")[0].strip() \
@@ -1088,7 +1118,7 @@ def push_to_estimate(tender, user):
         tender.market_forecast_sample_count = stats["count"]
         tender.market_forecast_at = timezone.now()
         tender.save(update_fields=["market_forecast_percent", "market_forecast_sample_count", "market_forecast_at"])
-    snapshot = {"is_incomplete": True}
+    snapshot = {"is_incomplete": True, "source_financials": list(financials.values()), "source_nmck_total": str(tender.max_price) if tender.max_price is not None else None}
     if stats:
         snapshot["price_stats"] = {
             "median": stats["median"],
@@ -1108,16 +1138,18 @@ def push_to_estimate(tender, user):
     )
 
     lines = []
-    for i, item in enumerate((card or {}).get("items", [])):
+    for i, item in enumerate(items):
         chars = [c for c in (item.get("characteristics") or []) if c.get("name") or c.get("value")]
         requirements = {
             "requirements": [
-                {"label": c.get("name") or "Характеристика", "value": c.get("value", ""), "source": "из извещения"}
+                {**c, "label": c.get("name") or "Характеристика", "value": c.get("value", ""), "source": "из извещения" if c.get("source", "notification") == "notification" else "из документации"}
                 for c in chars
             ],
             "missing": [],
             "questions": [],
             "source_name": item.get("name", ""),
+            "source_unit": item.get("unit", ""),
+            **{key: item[key] for key in ('source_item_id', 'source_requirements', 'source_provenance', 'nmck_unit_unknown') if key in item},
         }
         code = "; ".join(c for c in [item.get("code"), item.get("code_name")] if c)
         lines.append(TenderLine(
@@ -1126,7 +1158,7 @@ def push_to_estimate(tender, user):
             quantity=_parse_price(item.get("quantity")) or _D("0"),
             nmck_unit=_parse_price(item.get("price")) or _D("0"),
             comment=code[:500],
-            requirements=requirements if chars else {},
+            requirements=requirements if chars or item.get("source_item_id") else {},
         ))
     if not lines:
         lines.append(TenderLine(
@@ -1739,7 +1771,7 @@ def create_tender_estimate(user, tender_id):
     tender = Tender.objects.filter(pk=tender_id).first()
     if tender is None:
         raise ValueError("Тендер не найден")
-    if tender.status == Tender.PUSHED and tender.estimates.exists():
+    if tender.estimates.exists():
         return {"tender_id": tender.pk, "estimate_id": tender.estimates.order_by("pk").first().pk, "created": False}
     estimate_id = push_to_estimate(tender, user)
     return {"tender_id": tender.pk, "estimate_id": estimate_id, "created": True}
