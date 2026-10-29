@@ -76,5 +76,5 @@ class TenderAnalysisPresentationTests(TestCase):
         tender = self.tender()
         self.job(tender, TenderComputeJob.Status.RUNNING)
         result = resolve_tender_analysis_status(tender)
-        self.assertEqual(set(result.__dict__), {"tender", "code", "label", "kind", "question_count"})
+        self.assertEqual(set(result.__dict__), {"tender", "code", "label", "kind", "question_count", "pending_count", "reason", "revision", "job_id", "processing", "issues"})
         self.assertNotIn("running", result.__dict__.values())

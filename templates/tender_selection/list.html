@@ -2,7 +2,7 @@
 {% load static tz tender_selection_extras %}
 
 {% block title %}Тендеры{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=import-field-20261029">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=analysis-completion-20261029">{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -78,7 +78,8 @@
                data-review-url="{% url 'tender_selection:review' tender.pk %}" data-dismiss-url="{% url 'tender_selection:dismiss' tender.pk %}"
                aria-label="Выбрать тендер {{ tender.purchase_number }}">
         <a class="ts-row__main" href="{% url 'tender_selection:detail' tender.pk %}{% if tender.analysis_status.code == "ANALYSIS_INCOMPLETE" %}#analysis-status{% endif %}" data-workspace-open data-workspace-title="Тендер № {{ tender.purchase_number }}">
-          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span><span data-analysis-status="{{ tender.pk }}" {% if tender.analysis_status.code == "CHECKED_NO_CHANGES" %}hidden{% endif %} class="ts-v2-badge ts-v2-badge--{{ tender.analysis_status.kind }}" title="Нажмите, чтобы открыть подробности анализа">{{ tender.analysis_status.label }}</span>
+          <span class="ts-row__title" title="{{ tender.title|default:tender.object_info }}">{{ tender.title|default:tender.object_info }}</span><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ tender.analysis_status.code }}" data-analysis-revision="{{ tender.analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}" {% if tender.analysis_status.code == "CHECKED_NO_CHANGES" %}hidden{% endif %} class="ts-v2-badge ts-v2-badge--{{ tender.analysis_status.kind }}" title="{{ tender.analysis_status.reason|default:'Нажмите, чтобы открыть подробности анализа' }}">{{ tender.analysis_status.label }}</span>
+          <small data-analysis-reason="{{ tender.pk }}" class="ts-sub" {% if not tender.analysis_status.reason %}hidden{% endif %}>{{ tender.analysis_status.reason }}</small>
           <span class="ts-row__meta">
             <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.law_label }}</span> № {{ tender.purchase_number }}</span>
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
@@ -109,7 +110,7 @@
             <summary aria-label="Ещё действия">⋮</summary>
             <div class="ts-menu__list">
               <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming">Открыть тендер</a>
-              {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}" data-analysis-refresh>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit">Обновить анализ</button></form>{% endif %}
+              {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit">Обновить анализ</button></form>{% endif %}
               {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
               <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
               <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="other"><button type="submit">Скрыть по другой причине</button></form>

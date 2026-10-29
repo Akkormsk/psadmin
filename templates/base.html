@@ -352,13 +352,103 @@
         }
         document.addEventListener("click", workspaceLink);
 
+        let requestAnalysisCheck = function () {};
+        const analysisStates = new Map();
         function showAnalysisStarted(data) {
-          document.querySelectorAll('[data-analysis-status="' + Number(data.tender_id) + '"]').forEach(function (badge) {
-            badge.textContent = data.label;
-            badge.hidden = false;
+          const id = Number(data.tender_id), before = analysisStates.get(id) || {};
+          analysisStates.set(id, {...before, processing: true, job_id: Number(data.job_id || 0)});
+          document.querySelectorAll('[data-analysis-status="' + id + '"]').forEach(function (badge) {
+            badge.textContent = data.label; badge.hidden = false;
+            badge.dataset.analysisCode = "PROCESSING";
             if (badge.classList.contains("ts-v2-badge")) badge.className = "ts-v2-badge ts-v2-badge--processing";
           });
+          document.querySelectorAll('[data-analysis-reason="' + id + '"]').forEach(node => { node.textContent = ''; node.hidden = true; });
+          requestAnalysisCheck();
         }
+
+        (function setupAnalysisUpdates() {
+          const endpoint = document.querySelector('[data-analysis-url]')?.dataset.analysisUrl;
+          if (!endpoint) return;
+          document.querySelectorAll('[data-analysis-status]').forEach(node => {
+            const id = Number(node.dataset.analysisStatus);
+            if (id) analysisStates.set(id, {revision: node.dataset.analysisRevision || '', processing: node.dataset.analysisCode === 'PROCESSING', job_id: 0});
+          });
+          let timer, loading = false, again = false;
+          const fragments = new Set(), fragmentAttempts = new Map();
+          async function refreshAnalysisResult(data) {
+            const target = document.querySelector('[data-analysis-result="' + data.tender_id + '"]');
+            if (!target || target.dataset.analysisRevision === data.revision || fragments.has(data.tender_id)) return;
+            fragments.add(data.tender_id);
+            try {
+              const url = new URL(data.result_url, location.origin);
+              if (embedded) url.searchParams.set('workspace', '1');
+              const response = await fetch(url, {cache: 'no-store'});
+              if (!response.ok || response.redirected) throw new Error('Result unavailable');
+              const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
+              const replacement = parsed.querySelector('[data-analysis-result="' + data.tender_id + '"]');
+              if (!replacement || replacement.dataset.analysisRevision !== data.revision || analysisStates.get(data.tender_id)?.revision !== data.revision || analysisStates.get(data.tender_id)?.processing) { again = true; return; }
+              const edits = [...target.querySelectorAll('input:not([type="hidden"]),textarea,select')].filter(node => node.name && node.form).map(node => ({action: node.form.getAttribute('action'), name: node.name, value: node.value, checked: node.checked}));
+              const active = document.activeElement;
+              const focus = active && target.contains(active) ? {name: active.name, action: active.form?.getAttribute('action')} : null;
+              target.replaceWith(replacement);
+              replacement.querySelectorAll('input:not([type="hidden"]),textarea,select').forEach(node => {
+                const saved = edits.find(edit => edit.name === node.name && edit.action === node.form?.getAttribute('action'));
+                if (saved) { node.value = saved.value; if (node.type === 'checkbox' || node.type === 'radio') node.checked = saved.checked; }
+                if (focus && focus.name === node.name && focus.action === node.form?.getAttribute('action')) node.focus({preventScroll: true});
+              });
+            } catch (error) { const tries = (fragmentAttempts.get(data.revision) || 0) + 1; fragmentAttempts.set(data.revision, tries); again = tries < 3; }
+            finally { fragments.delete(data.tender_id); }
+          }
+          async function check() {
+            if (document.hidden) return;
+            if (loading) { again = true; return; }
+            loading = true; again = false;
+            try {
+              const url = new URL(endpoint, location.origin);
+              url.searchParams.set('ids', [...analysisStates.keys()].join(','));
+              const response = await fetch(url, {cache: 'no-store'});
+              if (!response.ok || response.redirected) throw new Error('Status unavailable');
+              const payload = await response.json();
+              for (const data of payload.statuses || []) {
+                const id = Number(data.tender_id), before = analysisStates.get(id) || {};
+                if (Number(data.job_id) < Number(before.job_id || 0)) continue;
+                analysisStates.set(id, data);
+                document.querySelectorAll('[data-analysis-status="' + id + '"]').forEach(node => {
+                  node.textContent = data.label; node.hidden = node.classList.contains('ts-v2-badge') && data.code === 'CHECKED_NO_CHANGES';
+                  node.dataset.analysisCode = data.code; node.dataset.analysisRevision = data.revision;
+                  node.title = data.reason || 'Открыть подробности анализа';
+                  if (node.classList.contains('ts-v2-badge')) node.className = 'ts-v2-badge ts-v2-badge--' + data.kind;
+                  const link = node.closest('a[data-workspace-open]');
+                  if (link) { const href = new URL(link.href); href.hash = data.code === 'ANALYSIS_INCOMPLETE' ? 'analysis-status' : ''; link.href = href; }
+                });
+                document.querySelectorAll('[data-analysis-reason="' + id + '"]').forEach(node => { node.textContent = data.reason || ''; node.hidden = !data.reason; });
+                document.querySelectorAll('[data-analysis-issues="' + id + '"]').forEach(node => {
+                  node.textContent = '';
+                  const list = document.createElement('ul');
+                  for (const issue of data.issues || []) { const item = document.createElement('li'); item.textContent = issue; list.appendChild(item); }
+                  if (list.childElementCount) node.appendChild(list);
+                  else node.textContent = data.processing ? 'Разбор выполняется в фоне.' : data.pending_count ? 'Есть предложения, ожидающие вашей проверки.' : 'Разбор завершён без ошибок.';
+                });
+                document.querySelectorAll('form[data-analysis-tender="' + id + '"] button').forEach(button => {
+                  if (!button.dataset.analysisCaption) button.dataset.analysisCaption = button.textContent;
+                  button.disabled = data.processing;
+                  button.textContent = data.processing ? 'Проверяем ТЗ…' : button.dataset.analysisCaption;
+                });
+                if (!data.processing) await refreshAnalysisResult(data);
+              }
+            } catch (error) { if ([...analysisStates.values()].some(item => item.processing)) again = true; }
+            finally {
+              loading = false;
+              if (again || [...analysisStates.values()].some(item => item.processing)) schedule(3000);
+            }
+          }
+          function schedule(delay = 0) { clearTimeout(timer); timer = setTimeout(check, delay); }
+          requestAnalysisCheck = () => schedule();
+          document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else schedule(); });
+          window.addEventListener('focus', () => schedule());
+          window.addEventListener('pagehide', () => clearTimeout(timer));
+          schedule();
+        })();
 
         document.addEventListener("submit", function (event) {
           const submitted = event.target.closest("form");
@@ -371,6 +461,7 @@
             const button = event.submitter || submitted.querySelector("button");
             if (button.disabled) return;
             const caption = button.textContent;
+            button.dataset.analysisCaption = caption;
             button.disabled = true;
             button.textContent = "Запускаем…";
             fetch(submitted.getAttribute("action"), {method: "POST", body: new FormData(submitted), headers: {"X-Requested-With": "XMLHttpRequest"}})
@@ -557,6 +648,7 @@
             const layer = layers.find(layer => layer.frame.contentWindow === event.source);
             layer.context = event.data.context;
             if (layer === layers[layers.length - 1]) renderStack();
+            requestAnalysisCheck();
             return;
           }
           if (event.data?.type === "ps-analysis-started") {

@@ -38,6 +38,8 @@ def collect_report(number):
         latest['rejections'] = [entry.get('extraction', {}).get('rejections', []) for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['enrichment_state'] = diagnostics.get('enrichment_state')
     from collections import Counter
+    from types import SimpleNamespace
+    from tenders.analysis_presentation import analysis_issues
     from django.db.models import Max
     latest_ids = TenderComputeJob.objects.filter(tender__status__in=[Tender.NEW, Tender.PUSHED], version__startswith='v2').values('tender_id').annotate(latest_id=Max('pk')).values_list('latest_id', flat=True)
     recent = list(TenderComputeJob.objects.filter(pk__in=latest_ids).values('status', 'diagnostics', 'error'))
@@ -50,7 +52,7 @@ def collect_report(number):
             if isinstance(entry, dict):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
-    return {'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'read_only': True, 'model_called': False, 'latest_job': latest,
+    return {'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'read_only': True, 'model_called': False, 'latest_job': latest,
             'pending_count': tender.v2_source_items.filter(source_type='document_proposal', is_active=False).count(), 'active_items': items}
 
 

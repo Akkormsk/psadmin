@@ -182,7 +182,9 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
         if mode not in {"keep", "merge", "conflict", "new", "omit"}:
             raise ValueError("Не указано решение по характеристике")
         if (mode == "new" and refs) or (mode in {"keep", "omit"} and not refs):
-            raise ValueError("Решение не соответствует ссылкам на исходные факты")
+            title = str(row.get("name") or "Характеристика")[:100]
+            detail = "новая характеристика ошибочно ссылается на исходные факты" if mode == "new" else "для сохранения или исключения не указан исходный факт"
+            raise ValueError(f"{title}: {detail}")
         facts = [deepcopy(base[index]) for index in refs]
         if mode in {"merge", "conflict"} and not refs and len(row.get("document_facts") or []) < 2:
             raise ValueError("Для объединения нужны исходные факты или несколько документов")

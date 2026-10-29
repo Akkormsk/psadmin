@@ -29,11 +29,12 @@
           <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № {{ display_purchase_number }}</span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
-        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh>{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
-        <details id="analysis-status" class="ts-sub"><summary><span data-analysis-status="{{ tender.pk }}">{{ analysis_status.label }}</span> · подробности</summary>
+        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
+        <details id="analysis-status" class="ts-sub"><summary><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span> · подробности</summary>
           {% if document_proposal_groups %}<p>Предложения по составу сохранены ниже и ожидают вашей проверки. Исходное извещение не изменено.</p>{% endif %}
-          {% if analysis_issues %}<ul>{% for issue in analysis_issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% else %}<p>{% if analysis_status.code == "PROCESSING" %}Разбор выполняется в фоне.{% elif analysis_status.code == "NOT_CHECKED" %}Разбор документов ещё не запускался.{% else %}Ошибок чтения и обработки в последнем анализе не зафиксировано.{% endif %}</p>{% endif %}
+          <div data-analysis-issues="{{ tender.pk }}">{% if analysis_issues %}<ul>{% for issue in analysis_issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% else %}<p>{% if analysis_status.code == "PROCESSING" %}Разбор выполняется в фоне.{% elif analysis_status.code == "NOT_CHECKED" %}Разбор документов ещё не запускался.{% elif analysis_status.pending_count %}Есть предложения, ожидающие вашей проверки.{% else %}Ошибок чтения и обработки в последнем анализе не зафиксировано.{% endif %}</p>{% endif %}</div>
         </details>
+        <p class="ts-sub" data-analysis-reason="{{ tender.pk }}" {% if not analysis_status.reason %}hidden{% endif %}>{{ analysis_status.reason }}</p>
         <p class="ts-detail__links">
           {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
           {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
@@ -126,46 +127,7 @@
       {% if is_fz223 and tender.okpd2 %}<div><dt>ОКПД2</dt><dd class="ts-sub">{{ tender.okpd2|join:", " }}</dd></div>{% endif %}
     </dl>
 
-    {% if display_items %}
-    {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
-    <h3 class="settings-subtitle" id="tender-items">Перечень товаров ({{ display_item_count }})</h3>
-    {% if document_item_count %}<div class="ts-derived-note">В извещении: {{ card.items|length }} позиц. · Сейчас: {{ display_item_count }} товаров и групп · <details class="ts-original-toggle"><summary>Показать исходную запись</summary><span>{{ original_source_texts|join:"; " }}</span></details></div>{% endif %}
-    {% if ungrouped_display_items %}{% include "tender_selection/_item_table.html" with items=ungrouped_display_items %}{% endif %}
-    {% for group in display_item_groups %}
-    <details class="ts-item-group" open>
-      <summary><span><strong>{% for part in group.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}</strong><small>{% if group.supply_kind == "kit" %}Набор{% else %}Состав исходной позиции{% endif %} · {{ group.items|length }} составляющих · {{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}</small></span><span><small>За 1 {% if group.supply_kind == "kit" %}набор{% else %}единицу поставки{% endif %}</small><strong>{{ group.original.price|rub_precise }}</strong><small>Итого{% if group.original.quantity %} за {{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}{% endif %}: {{ group.original.sum|rub_precise }}</small></span></summary>
-      <div class="ts-group-body"><details class="ts-item-audit"><summary>Извещение → разбивка</summary><p><b>Исходная группа:</b> {{ group.original.name }}</p><p><b>Полученный состав:</b> {% for item in group.items %}{{ item.name }}{% if not forloop.last %}; {% endif %}{% endfor %}</p><p>Цена за 1 единицу поставки: {{ group.original.price|rub_precise }} → {{ group.original.price|rub_precise }} · Сумма: {{ group.original.sum|rub_precise }} → {{ group.original.sum|rub_precise }}</p>{% if group.reason %}<p>{{ group.reason }}</p>{% endif %}</details>
-      {% include "tender_selection/_previous_components.html" with previous_components=group.previous_components %}
-      <p class="ts-sub">Цена группы не распределялась между составляющими.</p>
-      {% include "tender_selection/_item_table.html" with items=group.items components_only=True %}</div>
-    </details>
-    {% endfor %}
-    {% endif %}
-    {% if display_source_financials %}<section class="ts-derived-note"><strong>Стоимость исходных позиций по извещению</strong><p>Указаны исходные количества и суммы. Стоимость изменённого состава рассчитывается отдельно.</p><div class="table-wrapper"><table class="table"><thead><tr><th>Позиция</th><th>Количество</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>{% for source in display_source_financials %}<tr><td>{{ source.name }}</td><td>{{ source.quantity|floatformat:"-2" }} {{ source.unit }}</td><td>{% if source.price is not None %}{{ source.price|rub_precise }}{% else %}—{% endif %}</td><td>{% if source.sum is not None %}{{ source.sum|rub_precise }}{% else %}—{% endif %}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
-    {% if document_proposal_groups %}
-    <section class="ts-document-proposals">
-      <h3>Предложения из документации · нужна проверка</h3>
-      <p class="ts-document-proposals__lead">Проверьте, какие позиции агент нашёл в документации. При принятии обновится рабочий перечень товаров. Исходное извещение сохранится без изменений.</p>
-      {% for group in document_proposal_groups %}
-      <details class="ts-document-proposal" open>
-        <summary><strong>{{ group.display_name }}</strong>{% if group.is_kit %} · Набор / состав{% else %} · {% if group.supply_kind == "unclear" %}Неясно — предложено сохранить целиком{% else %}Один товар{% endif %}{% endif %}{% if group.notification_position %} · позиция извещения {{ group.notification_position }}{% endif %}{% if group.parent_quantity %} · {{ group.parent_quantity|floatformat:"-2" }} {{ group.parent_unit }}{% endif %}</summary><details><summary class="ts-sub">Исходная запись</summary>{{ group.parent.original_text }}{% if group.original_values.price is not None %} · Цена: {{ group.original_values.price|rub_precise }}{% endif %}{% if group.original_values.sum is not None %} · Сумма: {{ group.original_values.sum|rub_precise }}{% endif %}</details><p class="ts-sub">{% if group.is_kit %}За 1 {% if group.supply_kind == "kit" %}набор{% else %}единицу поставки{% endif %}: {{ group.original_values.price|rub_precise }}; итого за {{ group.parent_quantity|floatformat:"-2" }} {{ group.parent_unit }}: {{ group.original_values.sum|rub_precise }}. Цены составляющих не выделены.{% else %}Цена за позицию: {{ group.original_values.price|rub_precise }} → {% if group.can_keep_quote %}{{ group.original_values.price|rub_precise }}{% else %}не переносится: изменена позиция или количество{% endif %}. Исходная сумма: {{ group.original_values.sum|rub_precise }}.{% endif %}</p>{% if group.reason %}<p>{{ group.reason }}</p>{% endif %}
-        {% include "tender_selection/_previous_components.html" with previous_components=group.current_items %}
-        <div class="table-wrapper"><table class="table ts-document-proposal__table">
-          <thead><tr><th>Найдено в документации</th><th>В одном</th><th>Всего</th><th>Требования</th><th>Источник</th></tr></thead>
-          <tbody>{% for proposal in group.items %}<tr>
-            <td><strong>{% for part in proposal.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}</strong>{% if proposal.relationship == "component" %}<span class="ts-position-mark ts-position-mark--enriched">Компонент</span>{% endif %}</td>
-            <td class="ts-nowrap">{% if proposal.relationship == "component" and proposal.quantity_per_parent %}{{ proposal.quantity_per_parent|floatformat:"-4" }} {{ proposal.unit }}{% else %}—{% endif %}</td><td class="ts-nowrap">{% if proposal.quantity %}{{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}{% else %}Нужно уточнить{% endif %}</td>
-            <td>{% if proposal.review_error %}<p class="ts-fact-omitted">{{ proposal.review_error }} · Обновите анализ</p>{% endif %}{% if proposal.characteristics %}<details class="ts-item-tz"><summary>ТЗ · {{ proposal.characteristics|length }}</summary><ul class="ts-chars">{% for ch in proposal.characteristics %}<li>{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>{% else %}—{% endif %}{% if proposal.completeness %}<details class="ts-item-completeness"><summary>Комплектация · {{ proposal.completeness|length }}</summary><ul>{% for ch in proposal.completeness %}<li>{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>{% endif %}{% if proposal.omitted_facts %}<details open><summary>Не включено в итоговое описание · {{ proposal.omitted_facts|length }}</summary><ul>{% for omitted in proposal.omitted_facts %}<li>{% for fact in omitted.source_facts %}<span class="ts-fact-omitted">{{ fact.name }}: {{ fact.value }}</span>{% endfor %} — {{ omitted.reason }}</li>{% endfor %}</ul></details>{% endif %}</td>
-            <td>{% if proposal.document %}<button type="button" class="ts-doc-link" data-doc-preview="{{ proposal.document.index }}" data-doc-name="{{ proposal.document.name }}">{{ proposal.document.name }}</button>{% elif proposal.provenance.document_url %}<a href="{{ proposal.provenance.document_url }}" target="_blank" rel="noopener">Документ</a>{% endif %}{% if proposal.provenance.page_or_section %}<br><span class="ts-sub">{{ proposal.provenance.page_or_section }}</span>{% endif %}{% if proposal.provenance.evidence %}<p class="ts-document-proposal__evidence">{{ proposal.provenance.evidence }}</p>{% endif %}</td>
-          </tr>{% endfor %}</tbody>
-        </table></div>
-      </details>
-      {% endfor %}
-      {% if request.user.is_superuser %}
-      <form class="ts-document-proposal__actions" method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-success" name="action" value="accept">Принять все правки</button><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
-      {% endif %}
-    </section>
-    {% endif %}
+    {% include "tender_selection/_analysis_result.html" %}
   </details>
 
 
@@ -754,8 +716,10 @@
         .then(function (r) { return r.json(); });
     }
 
-    document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
+    document.addEventListener("click", function (event) {
+      var btn = event.target.closest("[data-doc-preview]");
+      if (!btn) return;
+      event.preventDefault();
         currentIdx = btn.dataset.docPreview;
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
@@ -776,7 +740,6 @@
             stopLoadingHint();
             body.textContent = "Не удалось загрузить предпросмотр.";
           });
-      });
     });
 
   })();

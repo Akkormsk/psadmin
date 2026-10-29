@@ -198,7 +198,7 @@ register_tool(AssistantTool(
 
 register_tool(AssistantTool(
     "tender.analyze", "Обновить анализ документов тендера",
-    "Запускает фоновый разбор документов одного тендера с ограничением стоимости. Не строит маршрут и не принимает предложения автоматически.",
+    "Запускает фоновый разбор документов одного тендера с ограничением стоимости. Подтверждает запуск, а не завершение. Не строит маршрут и не принимает предложения автоматически.",
     {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}},
     False, True, True,
     lambda user, payload: _tender_action(refresh_document_analysis, user, payload, "tender_id"),

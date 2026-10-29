@@ -13,7 +13,8 @@ from django.urls import reverse
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
+from django.views.decorators.cache import never_cache
 
 from .documents import DocumentError, extract_preview, extract_zip_entry
 from .models import ContractStat, FilterSettings, Organization, PullRun, Tender, TenderDismissalFeedback
@@ -522,14 +523,17 @@ def tender_detail(request, pk):
         else f"{reverse('tender_selection:list')}?view=kanban" if request.GET.get("return_to") == "board"
         else reverse("tender_selection:list")
     )
-    if tender.opened_at is None:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
+    analysis_snapshot = request.GET.get("analysis_snapshot") == "1"
+    if tender.opened_at is None and not analysis_snapshot:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
         tender.opened_at = timezone.now()
         tender.save(update_fields=["opened_at"])
     is_manual = tender.source == Tender.MANUAL
-    payload = None if is_manual else notification_for(tender, force=request.GET.get("refresh") == "1")
+    payload = (tender.notification_raw or None) if analysis_snapshot else None if is_manual else notification_for(tender, force=request.GET.get("refresh") == "1")
     card = parse_notification(payload) if payload else None
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
     from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
+    from tenders.analysis_presentation import analysis_issues, resolve_tender_analysis_status
+    analysis_status = resolve_tender_analysis_status(tender)
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
     from tenders.document_enrichment import characteristic_display, item_name_parts, effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
     notification_by_index = {index: item for index, item in enumerate((card or {}).get("items", []))}
@@ -586,8 +590,6 @@ def tender_detail(request, pk):
     v2_lines = TenderComputeLine.objects.filter(job__tender=tender).select_related("source_item").order_by("job_id", "pk")
     v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
     v2_job = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk").first()
-    from tenders.analysis_presentation import analysis_issues, resolve_tender_analysis_status
-    analysis_status = resolve_tender_analysis_status(tender)
     display_items = card.get("items", []) if card else []
     has_document_items = False
     document_item_count = 0
@@ -749,7 +751,7 @@ def tender_detail(request, pk):
     )
 
     org = Organization.objects.filter(inn=tender.customer_inn).first() if tender.customer_inn else None
-    if tender.law != "fz44" and org is None and tender.customer_inn:
+    if not analysis_snapshot and tender.law != "fz44" and org is None and tender.customer_inn:
         org = enrich_one_org(tender.customer_inn, tender.law)  # для 223 карточки заказчика больше неоткуда взять
 
     if is_manual:
@@ -802,7 +804,9 @@ def tender_detail(request, pk):
         risk_error = "" if risk_needs_fetch else tender.risk_error
 
     protocol = _protocol_view(tender)
-    return render(request, "tender_selection/detail.html", {
+    if analysis_snapshot and resolve_tender_analysis_status(tender).revision != analysis_status.revision:
+        return HttpResponse(status=409)
+    response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
         "display_purchase_number": (tender.raw or {}).get("display_number") or tender.purchase_number,
@@ -863,6 +867,10 @@ def tender_detail(request, pk):
         "risk_error": risk_error,
         "risk_docs": [] if risk_needs_fetch else tender.risk_assessment_docs,
     })
+
+    if analysis_snapshot:
+        response["Cache-Control"] = "no-store"
+    return response
 
 
 def _protocol_view(tender):
@@ -1533,3 +1541,26 @@ def import_by_number(request):
     if as_json:
         return JsonResponse({**result, 'url': url})
     return redirect(url)
+
+
+@login_required
+@require_GET
+@never_cache
+def analysis_status(request):
+    from tenders.analysis_presentation import resolve_tender_analysis_statuses
+    values = request.GET.get('ids', '').split(',')
+    if not values or len(values) > 200 or any(not value.isascii() or not value.isdigit() for value in values):
+        return JsonResponse({'error': 'Нужен список тендеров'}, status=400)
+    if any(len(value) > 19 or not 0 < int(value) <= 9223372036854775807 for value in values):
+        return JsonResponse({'error': 'Некорректный номер записи'}, status=400)
+    ids = list(dict.fromkeys(int(value) for value in values))
+    tenders = list(Tender.objects.filter(pk__in=ids))
+    if any(not _tender_viewable_by(request.user, tender) for tender in tenders):
+        raise PermissionDenied
+    statuses = resolve_tender_analysis_statuses(tenders)
+    return JsonResponse({'statuses': [{
+        'tender_id': tender.pk, 'code': status.code, 'label': status.label, 'kind': status.kind,
+        'reason': status.reason, 'revision': status.revision, 'pending_count': status.pending_count,
+        'processing': status.processing, 'job_id': status.job_id, 'issues': status.issues,
+        'result_url': reverse('tender_selection:detail', args=[tender.pk]) + '?analysis_snapshot=1',
+    } for tender in tenders for status in [statuses[tender.pk]]]})

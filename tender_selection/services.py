@@ -1994,7 +1994,7 @@ def refresh_document_analysis(user, tender_id):
     job = TenderComputeJob.objects.create(tender=tender, version="v2-document-manual", trigger="manual_document_refresh", status="preparing_input",
         diagnostics={"documents_only": True, "requested_by": user.pk})
     transaction.on_commit(lambda: threading.Thread(target=_run_document_analysis, args=(job.pk,), daemon=True).start())
-    return {"started": True, "job_id": job.pk, "message": "Анализ запущен. Обновите карточку через минуту"}
+    return {"started": True, "job_id": job.pk, "message": "Анализ запущен."}
 
 
 def _run_document_analysis(job_id):

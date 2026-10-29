@@ -109,6 +109,7 @@ class SupplyStructureTests(TestCase):
         self.assertEqual(result['state'], 'needs_review')
         prompt = gateway.call_args.args[0]
         self.assertIn('existing_components', prompt)
+        self.assertIn('when baseline_facts is empty', prompt)
         self.assertIn('Принадлежность', prompt)
         self.assertIn('supply_kind=finished|kit|unclear', prompt)
 

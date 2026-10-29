@@ -17,6 +17,12 @@ class TenderAnalysisStatus:
     label: str
     kind: str
     question_count: int = 0
+    pending_count: int = 0
+    reason: str = ""
+    revision: str = ""
+    job_id: int = 0
+    processing: bool = False
+    issues: tuple[str, ...] = ()
 
 
 _STATUS = {
@@ -47,20 +53,40 @@ def _is_technical_failure(job) -> bool:
     diagnostics = job.diagnostics if isinstance(job.diagnostics, dict) else {}
     if diagnostics.get("enrichment_state") in _TECHNICAL_OUTCOMES:
         return True
+    entries = diagnostics.get("enrichment") or []
+    entries = [entries] if isinstance(entries, dict) else entries if isinstance(entries, list) else []
     return any(
         isinstance(entry, dict) and entry.get("outcome") in _TECHNICAL_OUTCOMES
-        for entry in diagnostics.get("enrichment", [])
+        for entry in entries
     )
 
 
+
+_VALIDATION_MESSAGES = {
+    "Решение не соответствует ссылкам на исходные факты": "В ответе смешаны новые и исходные характеристики. Изменения не применены.",
+    "Некорректные или повторные ссылки на исходные факты": "Агент неверно связал характеристики с исходными данными. Изменения не применены.",
+    "Не все исходные факты учтены в итоговом описании": "В новом описании пропущена часть исходных характеристик. Изменения не применены.",
+}
+
+_REJECTION_MESSAGES = {
+    "invalid_parent_source_item_id": "Не удалось связать результат с исходной позицией.",
+    "invalid_name_or_source": "Не подтверждены название товара или источник сведений.",
+    "untrusted_compiled_reconciliation": "Ответ содержит неподтверждённый результат объединения.",
+    "missing_fact_reconciliation": "В ответе не учтены ссылки на исходные характеристики.",
+    "unsubstantiated_supply_structure": "Разбивка на товары не обоснована или противоречит типу поставки.",
+    "invalid_characteristic_source": "У характеристики не подтверждён документ-источник.",
+    "invalid_structure": "Не заполнены обязательные данные товара или количества.",
+    "multiple_enrichments_for_one_item": "Для одного товара получены конкурирующие варианты вместо единого описания.",
+    "aggregate_and_components_mixed": "В ответе одновременно указаны целая позиция и её составляющие.",
+}
 
 def analysis_issues(job) -> list[str]:
     """Explain saved diagnostics without calling a model or guessing missing evidence."""
     if job is None:
         return []
     diagnostics = job.diagnostics if isinstance(job.diagnostics, dict) else {}
-    entries = diagnostics.get("enrichment", [])
-    entries = [entries] if isinstance(entries, dict) else entries
+    entries = diagnostics.get("enrichment") or []
+    entries = [entries] if isinstance(entries, dict) else entries if isinstance(entries, list) else []
     issues = []
     if job.error:
         issues.append(str(job.error))
@@ -68,9 +94,10 @@ def analysis_issues(job) -> list[str]:
         if not isinstance(entry, dict):
             continue
         if entry.get("final_failure_reason"):
-            issues.append(str(entry["final_failure_reason"]))
+            issues.append(_VALIDATION_MESSAGES.get(str(entry["final_failure_reason"]), str(entry["final_failure_reason"])))
         if (entry.get("extraction") or {}).get("rejections"):
-            issues.append("Ответ по составу не прошёл проверку; эти изменения не применены.")
+            for rejection in entry["extraction"]["rejections"]:
+                issues.append(_REJECTION_MESSAGES.get(rejection.get("reason"), "Ответ по составу не прошёл проверку; изменения не применены."))
         if entry.get("outcome") == "budget_blocked":
             issues.append("Запрос превышает установленный бюджет анализа и не был отправлен модели.")
         for document in (entry.get("documents") or {}).get("considered", []):
@@ -110,21 +137,25 @@ def document_item_has_change(item: TenderSourceItem) -> bool:
             return True
     return item.quantity != item.parent.quantity or (bool(item.unit) and item.unit != item.parent.unit)
 
-def _status_for(tender, job, question_count: int, has_enriched_items: bool) -> TenderAnalysisStatus:
+def _status_for(tender, job, question_count: int, has_enriched_items: bool, pending_count: int = 0) -> TenderAnalysisStatus:
     if job is None:
         code = "NOT_CHECKED"
     elif _is_technical_failure(job):
         code = "ANALYSIS_INCOMPLETE"
-    elif question_count:
-        code = "NEEDS_OWNER_INPUT"
     elif job.status in _ACTIVE:
         code = "PROCESSING"
+    elif question_count or pending_count:
+        code = "NEEDS_OWNER_INPUT"
     else:
         code = "ENRICHED" if has_enriched_items else "CHECKED_NO_CHANGES"
     label, kind = _STATUS[code]
     if code == "NEEDS_OWNER_INPUT":
-        label = f"{label} · {question_count}"
-    return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count)
+        label = f"{label} · {question_count}" if question_count else f"Нужно проверить правки ТЗ · {pending_count}"
+    issues = tuple(analysis_issues(job))
+    reason = issues[0] if code == "ANALYSIS_INCOMPLETE" else ""
+    stamp = job.updated_at.isoformat() if job and job.updated_at else ""
+    revision = f"{job.pk if job else 0}:{stamp}:{code}:{question_count}:{pending_count}"
+    return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=bool(job and job.status in _ACTIVE), issues=issues)
 
 
 def resolve_tender_analysis_status(tender) -> TenderAnalysisStatus:
@@ -148,4 +179,5 @@ def resolve_tender_analysis_statuses(tenders) -> dict[int, TenderAnalysisStatus]
         if document_item_has_change(item)
     }
     enriched_ids.update(TenderCommercialItem.objects.filter(tender_id__in=ids, structure=TenderCommercialItem.Structure.COMPOSITE, status="active").values_list("tender_id", flat=True))
-    return {tender.pk: _status_for(tender, jobs.get(tender.pk), counts[tender.pk], tender.pk in enriched_ids) for tender in tenders}
+    pending = Counter(TenderSourceItem.objects.filter(tender_id__in=ids, source_type="document_proposal", is_active=False).values_list("tender_id", flat=True))
+    return {tender.pk: _status_for(tender, jobs.get(tender.pk), counts[tender.pk], tender.pk in enriched_ids, pending[tender.pk]) for tender in tenders}
