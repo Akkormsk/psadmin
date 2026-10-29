@@ -20,6 +20,25 @@ class DocumentReconciliationTests(TestCase):
         args.update(changes)
         return self.stage([self.row(self.parent, **args)])['created'][0]
 
+    def test_original_facts_remain_plain_before_and_after_acceptance_and_reanalysis(self):
+        proposal = self.proposal()
+        url = reverse('tender_selection:detail', args=[self.tender.pk])
+        def verify(facts):
+            original = next(row for row in facts if row['name'] == 'Материал корпуса')
+            addition = next(row for row in facts if row['name'] == 'Упаковка')
+            self.assertFalse(any(part['added'] for part in original['parts']))
+            self.assertFalse(original['name_added'])
+            self.assertTrue(all(part['added'] for part in addition['parts']))
+        response = self.client.get(url)
+        verify(response.context['document_proposal_groups'][0]['items'][0]['characteristics'])
+        decide_document_proposals(self.admin, self.tender.pk, self.parent.pk, 'accept')
+        response = self.client.get(url)
+        verify(next(row for row in response.context['display_items'] if row['name'] == proposal.original_text)['characteristics'])
+        proposal.refresh_from_db()
+        self.stage([self.row(self.parent, parent_source_item_id=proposal.pk, relationship='enrich', quantity=100, requirements={'reconciled': True, 'characteristics': [{'resolution': 'keep', 'baseline_refs': [index]} for index in range(len(proposal.requirements['characteristics']))]})])['created'][0]
+        response = self.client.get(url)
+        verify(response.context['document_proposal_groups'][0]['items'][0]['characteristics'])
+
     def test_staging_preserves_original_facts_and_removes_exact_duplicates(self):
         proposal = self.proposal()
         facts = proposal.requirements['characteristics']
