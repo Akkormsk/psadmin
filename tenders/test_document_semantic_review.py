@@ -22,8 +22,8 @@ class SemanticReviewTests(SimpleTestCase):
         fact = result['characteristics'][0]
         self.assertEqual([row['value'] for row in fact['source_facts']], ['пакет', 'индивидуальная упаковка каждого экземпляра'])
         parts = characteristic_display(fact)['parts']
-        self.assertEqual(''.join(row['text'] for row in parts if row['added']), 'индивидуальный ')
-        self.assertEqual(''.join(row['text'] for row in parts if not row['added']), 'пакет')
+        self.assertEqual(''.join(row['text'] for row in parts if row['added']), 'индивидуальный пакет')
+        self.assertEqual(''.join(row['text'] for row in parts if not row['added']), '')
         self.assertEqual(merge_item_requirements(self.base, result), result)
 
     def test_missing_duplicate_and_unknown_fact_references_are_rejected(self):

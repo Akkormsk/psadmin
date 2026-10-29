@@ -171,6 +171,10 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
         if not {key(fact) for fact in base} <= {key(fact) for fact in represented}:
             raise ValueError("Исходные факты изменились или не учтены в объединении")
         return result
+    keep_refs = result.pop("keep_refs", [])
+    if not isinstance(keep_refs, list):
+        raise ValueError("Некорректный перечень сохраняемых исходных фактов")
+    rows = [{"resolution": "keep", "baseline_refs": [index]} for index in keep_refs] + rows
     covered, output, omitted = set(), [], []
     for row in rows:
         if not isinstance(row, dict):
@@ -250,8 +254,7 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
 
 
 def characteristic_display(row, *, documents=None):
-    """Escaped text fragments: original words normal, additions blue in templates."""
-    import difflib
+    """Original rows stay black; added or changed rows are blue in templates."""
     value = str(row.get("value") if row.get("value") is not None else "")
     facts, identities = [], set()
     def collect(fact):
@@ -265,19 +268,14 @@ def characteristic_display(row, *, documents=None):
     for fact in row.get("source_facts") or []:
         collect(fact)
     facts = [{**fact, "document": (documents or {}).get((fact.get("provenance") or {}).get("document_url"))} for fact in facts]
-    original = next((fact for fact in facts if fact.get("source") == "notification"), facts[0] if facts else None)
+    name = str(row.get("name") or row.get("characteristicName") or "")
+    original_facts = [fact for fact in facts if fact.get("source") == "notification"]
+    unchanged = row.get("source") == "notification" or any(str(fact.get("name") or "") == name and str(fact.get("value") if fact.get("value") is not None else "") == value for fact in original_facts)
+    changed = not unchanged
+    parts = [{"text": value, "added": changed}]
     removed_text = ""
-    if row.get("source") == "notification":
-        parts = [{"text": value, "added": False}]
-    elif row.get("source") == "document" or original is None or not any(fact.get("source") == "notification" for fact in facts):
-        parts = [{"text": value, "added": True}]
-    else:
-        old = re.findall(r"\s+|\w+|[^\w\s]", str(original.get("value") or ""))
-        new = re.findall(r"\s+|\w+|[^\w\s]", value)
-        parts = [{"text": "".join(new[b1:b2]), "added": kind != "equal"} for kind, a1, a2, b1, b2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes() if kind != "delete"]
-        removed_text = " … ".join("".join(old[a1:a2]).strip() for kind, a1, a2, b1, b2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes() if kind in {"replace", "delete"} and "".join(old[a1:a2]).strip())
     return {"name": row.get("name") or row.get("characteristicName") or "", "value": value,
-            "scope": row.get("scope", "product"), "source": row.get("source"), "conflict": row.get("conflict", False), "parts": parts, "name_added": row.get("source") == "document",
+            "scope": row.get("scope", "product"), "source": row.get("source"), "conflict": row.get("conflict", False), "parts": parts, "name_added": changed,
             "removed_text": removed_text, "source_facts": facts, "reason": row.get("reason", ""), "show_sources": bool(facts) and (row.get("source") != "notification" or bool(row.get("conflict")))}
 
 

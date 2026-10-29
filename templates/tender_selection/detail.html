@@ -30,11 +30,10 @@
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
-        <details id="analysis-status" class="ts-sub"><summary><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span> · подробности</summary>
-          {% if document_proposal_groups %}<p>Предложения по составу сохранены ниже и ожидают вашей проверки. Исходное извещение не изменено.</p>{% endif %}
-          <div data-analysis-issues="{{ tender.pk }}">{% if analysis_issues %}<ul>{% for issue in analysis_issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% else %}<p>{% if analysis_status.code == "PROCESSING" %}Разбор выполняется в фоне.{% elif analysis_status.code == "NOT_CHECKED" %}Разбор документов ещё не запускался.{% elif analysis_status.pending_count %}Есть предложения, ожидающие вашей проверки.{% else %}Ошибок чтения и обработки в последнем анализе не зафиксировано.{% endif %}</p>{% endif %}</div>
-        </details>
-        <p class="ts-sub" data-analysis-reason="{{ tender.pk }}" {% if not analysis_status.reason %}hidden{% endif %}>{{ analysis_status.reason }}</p>
+        <div id="analysis-status" class="ts-sub"><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span>
+          <p data-analysis-reason="{{ tender.pk }}" {% if not analysis_status.reason %}hidden{% endif %}>{{ analysis_status.reason }}</p>
+          <details data-analysis-extra="{{ tender.pk }}" {% if analysis_issues|length < 2 %}hidden{% endif %}><summary>Подробности</summary><div data-analysis-issues="{{ tender.pk }}"><ul>{% for issue in analysis_issues|slice:"1:" %}<li>{{ issue }}</li>{% endfor %}</ul></div></details>
+        </div>
         <p class="ts-detail__links">
           {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
           {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}

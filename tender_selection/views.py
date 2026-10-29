@@ -578,6 +578,7 @@ def tender_detail(request, pk):
             "quantity_per_parent": metadata.get("quantity_per_parent"),
             "relationship": metadata.get("relationship"),
             "quote_eligible": notification_quote_source(proposal) is not None,
+            "tz_rows": characteristics,
             "characteristics": [row for row in characteristics if row.get("scope") != "completeness"],
             "completeness": [row for row in characteristics if row.get("scope") == "completeness"],
             "supply_kind": metadata.get("supply_kind", ""),
@@ -678,11 +679,6 @@ def tender_detail(request, pk):
                     "supply_kind": metadata.get("supply_kind", ""),
                     "structure_reason": metadata.get("structure_reason", ""),
                     "original_item": notification_by_index.get((origin.metadata or {}).get("notification_index"), {}) if origin else {},
-                    "previous_components": [{"name": child.original_text, "quantity": child.quantity, "unit": child.unit,
-                                             "facts": effective_item_requirements(child).get("characteristics", [])}
-                                            for child in v2_source_items if child.pk in metadata.get("replaces_source_ids", [])],
-                    "name_changed": bool(origin and source.original_text != origin.original_text),
-                    "name_removed": characteristic_display({"value": source.original_text, "source": "combined", "source_facts": [{"value": origin.original_text, "source": "notification"}]})["removed_text"] if origin else "",
                     "omitted_facts": requirements.get("omitted_facts", []),
                     "source_mark": "Уточнено по документации" if is_item_enrichment(source) and is_document_item else "Из документации" if source.source_type == "document_extraction" and is_document_item else "",
                     "source_mark_kind": "enriched",
@@ -709,13 +705,14 @@ def tender_detail(request, pk):
         if "completeness" not in item:
             item["completeness"] = [row for row in item.get("characteristics", []) if row.get("scope") == "completeness"]
             item["characteristics"] = [row for row in item.get("characteristics", []) if row.get("scope") != "completeness"]
+        item["tz_rows"] = item.get("characteristics", []) + item.get("completeness", [])
         key = item.get("group_key")
         if not key:
             ungrouped_display_items.append(item)
             continue
         if key not in grouped:
             grouped[key] = {"key": key, "name": item.get("parent_display_name") or item.get("original_item", {}).get("name") or "Состав исходной позиции",
-                            "original": item.get("original_item", {}), "items": [], "supply_kind": item.get("supply_kind"), "reason": item.get("structure_reason"), "previous_components": item.get("previous_components", [])}
+                            "original": item.get("original_item", {}), "items": [], "supply_kind": item.get("supply_kind"), "reason": item.get("structure_reason")}
             display_item_groups.append(grouped[key])
         grouped[key]["items"].append(item)
     for group in display_item_groups:
@@ -725,9 +722,6 @@ def tender_detail(request, pk):
         group["is_kit"] = bool(group["items"]) and all(item["relationship"] == "component" for item in group["items"])
         group["supply_kind"] = group["items"][0].get("supply_kind") if group["items"] else ""
         group["reason"] = group["items"][0].get("structure_reason") if group["items"] else ""
-        group["current_items"] = [{"name": source.original_text, "quantity": source.quantity, "unit": source.unit,
-                                   "facts": effective_item_requirements(source).get("characteristics", [])}
-                                  for source in v2_source_items if source.is_active and source.parent_id == group["parent"].pk] if group["parent"] else []
     v2_job_label = {"queued": "Обрабатывается", "running": "Обрабатывается", "preparing_input": "Собираем данные", "routing": "Определяем маршрут", "needs_review": "Нужна проверка", "ready": "Готово", "partial": "Нужна проверка", "failed": "Нужна проверка"}.get(v2_job.status, "") if v2_job else ""
 
     # Компактная сводка расчёта прямо на странице тендера (см. концепцию: блок

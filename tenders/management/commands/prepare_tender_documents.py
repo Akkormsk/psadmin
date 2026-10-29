@@ -52,7 +52,7 @@ class Command(BaseCommand):
         if not options["apply"]:
             self.stdout.write(json.dumps({"apply": False, "budget_rub": str(budget), "has_notification": bool(tender.notification_raw)}))
             return
-        version = "v2-document-pilot-components-complete-response"
+        version = "v2-document-pilot-compact-unified-specification"
         with transaction.atomic():
             Tender.objects.select_for_update().get(pk=tender.pk)
             previous = TenderComputeJob.objects.filter(tender=tender, version=version).first()
@@ -114,6 +114,19 @@ class Command(BaseCommand):
             job.save(update_fields=["status", "diagnostics", "error", "total_cost", "completed_at", "updated_at"])
             if replacement_ids:
                 superseded.delete()
+        from tenders.document_enrichment import characteristic_display, effective_item_requirements, notification_quote_source
+        from django.template.loader import render_to_string
+        specification_checks = []
+        for item in TenderSourceItem.objects.filter(pk__in=job.diagnostics.get("proposal_ids", [])).select_related("parent"):
+            requirements = effective_item_requirements(item, strict=True)
+            rows = [characteristic_display(row) for row in requirements.get("characteristics", [])]
+            html = render_to_string("tender_selection/_tz.html", {"rows": rows})
+            specification_checks.append({"name": item.original_text, "facts": len(rows),
+                "original_black_rows": sum(not row["name_added"] for row in rows),
+                "added_or_changed_blue_rows": sum(row["name_added"] for row in rows),
+                "specification_sections": html.count('class="ts-item-tz"'),
+                "compiled_reconciliation": bool(requirements.get("compiled_reconciliation")),
+                "same_item_quote_eligible": notification_quote_source(item) is not None})
         considered = (enricher.diagnostics.get("documents") or {}).get("considered", [])
         self.stdout.write(json.dumps({"status": job.status, "proposal_count": job.diagnostics.get("document_proposal_count", 0),
                                      "reading_statuses": [doc.get("reading_status") for doc in considered],
@@ -121,7 +134,7 @@ class Command(BaseCommand):
                                      "extraction": enricher.diagnostics.get("extraction"),
                                      "failure_reason": enricher.diagnostics.get("final_failure_reason"),
                                      "cost_rub": str(job.total_cost) if enricher.usage or not enricher.diagnostics.get("provider_call_happened") else None,
-                                     "usage": enricher.usage,
+                                     "usage": enricher.usage, "specification_checks": specification_checks,
                                      "exception_type": job.diagnostics.get("exception_type"),
                                      "cumulative_cost_rub": str(spent + job.total_cost) if enricher.usage or not enricher.diagnostics.get("provider_call_happened") else None,
                                      "pending_proposals": [{"name": item.original_text, "quantity": item.quantity, "unit": item.unit,
