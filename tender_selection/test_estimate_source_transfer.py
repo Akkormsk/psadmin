@@ -58,3 +58,51 @@ class EstimateSourceTransferTests(TestCase):
         references = estimate.summary_snapshot['source_financials']
         self.assertEqual(len(references), 1)
         self.assertEqual(references[0]['sum'], '100000')
+
+    def test_operator_refresh_changes_only_untouched_legacy_name_and_requirements(self):
+        from scripts.sync_test_estimate_requirements import collect_plan
+        estimate = self.create()
+        parent = self.parents[0]
+        self.stage([self.row(parent, relationship='enrich', quantity=100, name='Ручка')])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept')
+        plan = collect_plan()
+        self.assertEqual(len(plan['updates']), 1)
+        self.assertFalse(plan['skipped'])
+        for change in plan['updates']:
+            self.assertEqual(set(change['after']), {'name', 'requirements'})
+        line = estimate.lines.first()
+        line.name = 'Мой вариант'; line.save(update_fields=['name'])
+        plan = collect_plan()
+        self.assertFalse(plan['updates'])
+        self.assertEqual(plan['skipped'][0]['reason'], 'manual_name')
+
+    def test_operator_apply_is_idempotent_and_preserves_financial_fields(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+        from scripts.sync_test_estimate_requirements import collect_plan, digest, main
+        estimate = self.create()
+        parent = self.parents[0]
+        self.stage([self.row(parent, relationship='enrich', quantity=100, name='Ручка')])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept')
+        # Exercise the legacy row without provenance fields.
+        line = estimate.lines.get(sort_order=0)
+        line.requirements = {}; line.save(update_fields=['requirements'])
+        before = list(estimate.lines.values_list('pk', 'quantity', 'nmck_unit', 'material_unit', 'application_unit', 'logistics_unit', 'comment'))
+        plan = collect_plan()
+        with tempfile.TemporaryDirectory() as directory, self.settings(BASE_DIR=directory), patch.dict('os.environ', {'REFRESH_ESTIMATES_MODE': 'apply', 'REFRESH_ESTIMATES_DIGEST': digest(plan)}), redirect_stdout(io.StringIO()):
+            main()
+        self.assertEqual(before, list(estimate.lines.values_list('pk', 'quantity', 'nmck_unit', 'material_unit', 'application_unit', 'logistics_unit', 'comment')))
+        self.assertTrue(estimate.lines.filter(name='Ручка').exists())
+        self.assertFalse(collect_plan()['updates'])
+
+    def test_operator_skips_costed_or_component_replacements(self):
+        from scripts.sync_test_estimate_requirements import collect_plan
+        estimate = self.create()
+        parent = self.parents[0]
+        self.stage([self.row(parent, relationship='enrich', quantity=100, name='Ручка')])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept')
+        line = estimate.lines.first(); line.material_unit = 10; line.save(update_fields=['material_unit'])
+        plan = collect_plan()
+        self.assertFalse(plan['updates'])
+        self.assertEqual(plan['skipped'][0]['reason'], 'existing_cost_or_route')

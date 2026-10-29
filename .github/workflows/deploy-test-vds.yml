@@ -29,6 +29,17 @@ on:
         default: ""
         type: string
 
+      refresh_estimates:
+        description: "TEST maintenance: preview or apply accepted requirements to untouched legacy lines; no deployment"
+        required: false
+        default: ""
+        type: string
+      refresh_estimates_digest:
+        description: "Exact preview digest required for apply"
+        required: false
+        default: ""
+        type: string
+
 permissions:
   contents: read
 
@@ -38,7 +49,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/test-server' && !inputs.inspect_tender_number
+    if: github.ref == 'refs/heads/test-server' && !inputs.inspect_tender_number && !inputs.refresh_estimates
     runs-on: ubuntu-latest
     env:
       TEST_URL: https://test.admin.psodin.ru
@@ -236,3 +247,43 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
             "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER test-web python -" < scripts/inspect_tender_analysis.py
+
+  refresh_estimates:
+    if: github.event_name == 'workflow_dispatch' && inputs.refresh_estimates != '' && github.ref == 'refs/heads/feature/m3-agent-simple'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_USER: deploy
+      REFRESH_MODE: ${{ inputs.refresh_estimates }}
+      REFRESH_DIGEST: ${{ inputs.refresh_estimates_digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure strict SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Refresh TEST estimate requirements with reviewed plan
+        run: |
+          set -euo pipefail
+          [[ "$REFRESH_MODE" = preview || "$REFRESH_MODE" = apply ]]
+          [[ -z "$REFRESH_DIGEST" || "$REFRESH_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" "cat /home/deploy/psadmin-test/.twin-version"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e REFRESH_ESTIMATES_MODE=$REFRESH_MODE -e REFRESH_ESTIMATES_DIGEST=$REFRESH_DIGEST test-web python -" < scripts/sync_test_estimate_requirements.py
+
+          if [ "$REFRESH_MODE" = apply ]; then
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml cp test-web:/app/private_maintenance_backups /home/deploy/psadmin-test-maintenance-backups-${{ github.run_id }}"
+          fi
