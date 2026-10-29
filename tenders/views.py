@@ -1184,7 +1184,7 @@ def home(request, pk=None, pipeline=False, minimal=False):
     if posted_lines is not None:
         initial_lines = posted_lines
     elif estimate:
-        initial_lines = [{"id": line.pk, "name": line.name, "quantity": str(line.quantity), "nmck_unit": str(line.nmck_unit), "material_unit": str(line.material_unit), "application_unit": str(line.application_unit), "logistics_unit": str(line.logistics_unit), "product_url": line.product_url, "comment": line.comment, "requirements": line.requirements} for line in estimate.lines.all()]
+        initial_lines = [{"id": line.pk, "group_key": line.group_key, "group_name": line.group_name, "name": line.name, "quantity": str(line.quantity), "nmck_unit": str(line.nmck_unit), "material_unit": str(line.material_unit), "application_unit": str(line.application_unit), "logistics_unit": str(line.logistics_unit), "product_url": line.product_url, "comment": line.comment, "requirements": line.requirements} for line in estimate.lines.all()]
     initial_analysis = posted_analysis if posted_analysis is not None else (estimate.document_analysis if estimate else {})
     users = get_user_model().objects.filter(is_active=True).order_by("last_name", "first_name", "username") if request.user.is_superuser else None
     knowledge_sources = []

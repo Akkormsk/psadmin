@@ -54,6 +54,10 @@ class EstimateSourceTransferTests(TestCase):
             self.assertEqual(line.quantity, Decimal('200'))
             self.assertEqual(line.nmck_unit, 0)
             self.assertTrue(line.requirements['nmck_unit_unknown'])
+            self.assertEqual(line.group_key, f'source-{parent.pk}')
+            self.assertTrue(line.group_name)
+            self.assertEqual(line.requirements['source_group']['sum'], '100000')
+            self.assertEqual(len(line.requirements['source_group']['member_source_ids']), 2)
             self.assertEqual(line.requirements['requirements'][0]['label'], 'Цвет')
         references = estimate.summary_snapshot['source_financials']
         self.assertEqual(len(references), 1)

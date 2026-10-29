@@ -2326,3 +2326,66 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .tender-line.is-drop-before { box-shadow:0 -3px 0 var(--accent); }
 .tender-line.is-drop-after { box-shadow:0 3px 0 var(--accent); }
 @media (max-width:700px) { .tender-line__drag { left:0; top:0; } }
+
+/* Calculation list: neutral surfaces, hierarchy through spacing and separators. */
+.tender-lines { gap:0; }
+.tender-lines > .tender-line { padding:0; border:0; border-top:1px solid var(--separator); border-radius:0; background:transparent; margin-left:18px; }
+.tender-line-summary { display:flex; align-items:center; gap:12px; min-height:72px; }
+.tender-line-select { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; flex:none; }
+.tender-line-toggle { flex:1; display:grid; grid-template-columns:minmax(170px,1fr) 125px 140px 120px 14px; gap:16px; align-items:center; text-align:right; padding:14px 0; border:0; border-radius:0; background:none; color:var(--ink); font:inherit; cursor:pointer; min-width:0; }
+.tender-line-toggle > span { min-width:0; }
+.tender-line-toggle .tender-line-summary__name { text-align:left; }
+.tender-line-summary strong { font-size:14px; font-weight:600; }
+.tender-line-summary small { display:block; color:var(--ink-3); font-size:11px; margin-top:4px; }
+.tender-line-summary b { font-size:13px; font-weight:500; white-space:nowrap; }
+.tender-line-summary .is-incomplete { color:var(--ink-2); }
+.tender-line-summary .is-incomplete::before { content:'○ '; color:var(--ink-3); }
+.tender-line-summary .is-negative { color:var(--negative-ink); }
+.tender-line-disclosure { color:var(--ink-3); }
+.tender-lines .tender-line:not(.is-expanded) .tender-line__columns { display:none; }
+.tender-lines .tender-line__columns { padding:4px 0 20px 26px; gap:20px; }
+.tender-lines .tender-compact-grid--price,.tender-lines .tender-compact-grid--cost,.tender-lines .tender-compact-grid--cost.is-unfinished,.tender-lines .tender-compact-grid--cost.is-calculated,.tender-lines .tender-compact-grid--cost.has-error { background:transparent; border-radius:0; }
+.tender-lines .tender-compact-grid { position:relative; padding:20px 0 0; }
+.tender-lines .tender-compact-grid--price::before,.tender-lines .tender-compact-grid--cost::before { position:absolute; top:0; left:0; color:var(--ink-3); font-size:10px; font-weight:500; }
+.tender-lines .tender-compact-grid--price::before { content:'Цена заказчика'; }
+.tender-lines .tender-compact-grid--cost::before { content:'Затраты на производство'; left:16px; }
+.tender-lines .tender-compact-grid--cost { border-left:1px solid var(--separator); padding-left:16px; }
+.tender-lines .tender-compact-grid > span,.tender-lines .tender-compact-grid > span.is-primary { background:transparent; border-color:transparent; }
+.tender-lines .tender-line-ai.has-analysis,.tender-lines .tender-line-ai.is-unmatched,.tender-lines .tender-line-questions.has-questions,.tender-lines .tender-link-button.has-link { background:transparent; border-color:var(--separator); color:var(--ink-2); }
+.tender-lines .tender-line__drag { top:23px; }
+.tender-lines .tender-line.is-grouped { margin-left:40px; border-top-color:var(--hairline); }
+.tender-group-heading { display:flex; gap:18px; align-items:center; border-top:1px solid var(--separator); padding:18px 0 8px 12px; margin-top:10px; }
+.tender-group-toggle { display:flex; gap:10px; align-items:center; min-width:0; border:0; background:none; color:var(--ink); font:inherit; cursor:pointer; text-align:left; }
+.tender-group-toggle strong { font-size:14px; font-weight:600; }
+.tender-group-toggle small,.tender-group-toggle > span { color:var(--ink-3); font-size:12px; white-space:nowrap; }
+.tender-group-quote,.tender-group-cost { color:var(--ink-2); font-size:12px; margin-left:auto; }
+.tender-group-cost { margin-left:0; white-space:nowrap; }
+.tender-group-rename { border:0; background:none; font-size:20px; color:var(--ink-3); cursor:pointer; }
+.tender-group-message { margin:0; color:var(--ink-3); font-size:12px; }
+.tender-group-message:not(:empty) { padding:8px 0; }
+.tender-group-dialog { width:min(390px,calc(100vw - 40px)); padding:24px; box-sizing:border-box; border:1px solid var(--separator); border-radius:18px; background:var(--surface); color:var(--ink); box-shadow:0 20px 80px rgba(0,0,0,.14); }
+.tender-group-dialog::backdrop { background:rgba(0,0,0,.18); }
+.tender-group-dialog h3 { margin:0 0 18px; font-size:18px; }
+.tender-group-dialog input { width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid var(--field-border); border-radius:9px; font:inherit; background:var(--field-bg); color:var(--ink); }
+.tender-group-dialog > div { margin-top:18px; display:flex; justify-content:flex-end; gap:10px; }
+@media(max-width:800px) {
+ .tender-line-toggle { grid-template-columns:minmax(0,1fr) 80px 10px; gap:8px; }
+ .tender-line-toggle > span:nth-child(2),.tender-line-toggle > span:nth-child(4) { display:none; }
+ .tender-group-heading { flex-wrap:wrap; gap:8px 12px; }
+ .tender-group-quote { margin-left:22px; order:3; width:100%; }
+ .tender-group-cost { font-size:11px; margin-left:auto; }
+ .tender-lines .tender-compact-grid--cost { border-left:0; border-top:1px solid var(--separator); padding:26px 0 0; margin-top:4px; }
+ .tender-lines .tender-compact-grid--cost::before { top:8px; left:0; }
+ .tender-lines .tender-line__columns { padding-left:0; }
+ .tender-lines .tender-line.is-grouped { margin-left:28px; }
+}
+
+.tender-page .tender-meta__readonly { background:var(--surface-2); }
+.tender-page .tender-parameters input { background:var(--field-bg); border-color:var(--field-border); }
+.tender-page .tender-table-totals > span,.tender-page .tender-table-totals > span.is-primary,.tender-page .tender-summary__primary { background:transparent; border-color:var(--separator); }
+
+.tender-page .tender-table-totals span { background:transparent; }
+.tender-page .tender-summary > div { background:transparent !important; }
+.tender-page .panel-header:has(#group-tender-lines) > div:first-child { min-width:0; flex:1; }
+.tender-page .panel-header:has(#group-tender-lines) .panel-actions { flex:none; flex-wrap:nowrap; }
+@media(max-width:800px) { .tender-page .panel-header:has(#group-tender-lines) { flex-wrap:wrap; } .tender-page .panel-header:has(#group-tender-lines) .panel-actions { flex-wrap:wrap; } }

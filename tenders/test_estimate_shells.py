@@ -200,3 +200,27 @@ class EstimateShellTests(TestCase):
         response = self.client.get(reverse("tender_pipeline_estimate", args=[estimate.pk]))
 
         self.assertNotContains(response, "Актуальные расчёты")
+
+
+    def test_groups_survive_shared_save_and_duplicate_without_changing_money_or_tz(self):
+        import json
+        from .estimate_actions import persist_estimate, duplicate_estimate
+        from .models import TenderSettings
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=self._tender(), tender_number="1", name="Группы")
+        rows = [{"name": name, "quantity": "2", "nmck_unit": "100", "material_unit": "30", "group_key": "group-one", "group_name": "Набор", "requirements": {"requirements": [{"label": "Материал", "value": name}]}} for name in ("Первый", "Второй")]
+        saved, error, _ = persist_estimate(self.user, {"tender_number": "1", "name": "Группы", "lines_json": json.dumps(rows)}, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
+        self.assertIsNone(error)
+        copied = TenderEstimate.objects.get(pk=duplicate_estimate(self.user, saved.pk, True)["estimate_id"])
+        self.assertEqual(list(copied.lines.values("name", "group_key", "group_name", "quantity", "nmck_unit", "requirements")), list(saved.lines.values("name", "group_key", "group_name", "quantity", "nmck_unit", "requirements")))
+        self.assertEqual(saved.summary_snapshot["nmck_total"], "400.00")
+
+    def test_conflicting_group_names_are_rejected_without_replacing_saved_lines(self):
+        import json
+        from .estimate_actions import persist_estimate
+        from .models import TenderLine, TenderSettings
+        estimate = TenderEstimate.objects.create(owner=self.user, tender=self._tender(), tender_number="1", name="Группы")
+        original = TenderLine.objects.create(estimate=estimate, name="Сохранённый", quantity=1, nmck_unit=100)
+        rows = [{"name": "Товар", "quantity": 1, "nmck_unit": 100, "material_unit": 10, "group_key": "same", "group_name": name} for name in ("Первая", "Другая")]
+        _, error, _ = persist_estimate(self.user, {"tender_number": "1", "name": "Группы", "lines_json": json.dumps(rows)}, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
+        self.assertTrue(error)
+        self.assertEqual(list(estimate.lines.values_list("pk", flat=True)), [original.pk])

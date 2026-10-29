@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from decimal import Decimal, InvalidOperation
 import json
+import re
 
 from .models import Order, OrderEstimate, OrderLine, TenderEstimate, TenderLine
 from .services import calculate_tender
@@ -46,7 +47,7 @@ def duplicate_estimate(user, estimate_id, pipeline):
             quantity=line.quantity, nmck_unit=line.nmck_unit,
             material_unit=line.material_unit, application_unit=line.application_unit,
             logistics_unit=line.logistics_unit, product_url=line.product_url,
-            comment=line.comment, requirements=line.requirements,
+            comment=line.comment, requirements=line.requirements, group_key=line.group_key, group_name=line.group_name,
         )
         for line in original.lines.all()
     ])
@@ -118,9 +119,26 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
         if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
             raise ValueError
         lines = []
+        group_names = {}
+        existing_lines = {line.pk: line for line in estimate.lines.all()} if estimate and estimate.pk else {}
+        if (any(line.group_key for line in existing_lines.values()) and
+                not any(isinstance(row, dict) and ("group_key" in row or row.get("id") in existing_lines) for row in meta["posted_lines"])):
+            raise ValueError
         calculation_complete = True
         for row in meta["posted_lines"]:
-            line = {
+            if not isinstance(row, dict):
+                raise ValueError
+            existing = existing_lines.get(row.get("id"))
+            group_key = str(row.get("group_key", existing.group_key if existing else "") or "").strip()
+            group_name = str(row.get("group_name", existing.group_name if existing else "") or "").strip()
+            if (bool(group_key) != bool(group_name) or len(group_name) > 120 or
+                    (group_key and not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", group_key))):
+                raise ValueError
+            if group_key:
+                if group_key in group_names and group_names[group_key] != group_name:
+                    raise ValueError
+                group_names[group_key] = group_name
+            line = {"group_key": group_key, "group_name": group_name,
                 "name": str(row.get("name", "")).strip(),
                 "quantity": _number(row.get("quantity")),
                 "nmck_unit": _number(row.get("nmck_unit")),

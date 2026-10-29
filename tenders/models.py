@@ -570,6 +570,8 @@ class TenderLine(models.Model):
     product_url = models.URLField("Ссылка", max_length=1000, blank=True)
     comment = models.CharField("Комментарий", max_length=500, blank=True)
     requirements = models.JSONField("Требования из ООЗ/ТЗ", default=dict, blank=True)
+    group_key = models.CharField("Идентификатор группы позиций", max_length=80, blank=True, help_text="Объединяет позиции только внутри этого расчёта.")
+    group_name = models.CharField("Название группы позиций", max_length=120, blank=True)
     sort_order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
@@ -695,6 +697,8 @@ class OrderLine(models.Model):
     product_url = models.URLField("Ссылка", max_length=1000, blank=True)
     comment = models.CharField("Комментарий", max_length=500, blank=True)
     requirements = models.JSONField("Требования", default=dict, blank=True)
+    group_key = models.CharField("Идентификатор группы позиций", max_length=80, blank=True, help_text="Объединяет позиции только внутри этого расчёта.")
+    group_name = models.CharField("Название группы позиций", max_length=120, blank=True)
     sort_order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:

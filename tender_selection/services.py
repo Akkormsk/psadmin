@@ -1094,6 +1094,9 @@ def push_to_estimate(tender, user):
                           'characteristics': requirements.get('characteristics', []),
                           'source_item_id': source.pk, 'source_requirements': requirements,
                           'source_provenance': source.provenance,
+                          'group_key': f'source-{origin.pk}' if origin and source.metadata.get('relationship') == 'component' else '',
+                          'group_name': str(source.metadata.get('parent_display_name') or origin.original_text)[:120] if origin and source.metadata.get('relationship') == 'component' else '',
+                          'source_group': {'source_item_id': origin.pk, 'member_source_ids': [member.pk for member in sources if member.metadata.get('relationship') == 'component' and notification_origin(member) and notification_origin(member).pk == origin.pk], 'component_quantity': str(source.quantity), 'quantity': str(original.get('quantity') or ''), 'unit': original.get('unit', ''), 'price': str(original.get('price') or ''), 'sum': str(original.get('sum') or '')} if origin and source.metadata.get('relationship') == 'component' else {},
                           'nmck_unit_unknown': quote is None or original.get('price') is None})
             if origin and quote is None:
                 financials[origin.pk] = {'source_item_id': origin.pk, 'name': origin.original_text,
@@ -1149,11 +1152,11 @@ def push_to_estimate(tender, user):
             "questions": [],
             "source_name": item.get("name", ""),
             "source_unit": item.get("unit", ""),
-            **{key: item[key] for key in ('source_item_id', 'source_requirements', 'source_provenance', 'nmck_unit_unknown') if key in item},
+            **{key: item[key] for key in ('source_item_id', 'source_requirements', 'source_provenance', 'nmck_unit_unknown', 'source_group') if key in item},
         }
         code = "; ".join(c for c in [item.get("code"), item.get("code_name")] if c)
         lines.append(TenderLine(
-            estimate=estimate, sort_order=i,
+            estimate=estimate, sort_order=i, group_key=item.get("group_key", ""), group_name=item.get("group_name", ""),
             name=(item.get("name") or "Позиция")[:500],
             quantity=_parse_price(item.get("quantity")) or _D("0"),
             nmck_unit=_parse_price(item.get("price")) or _D("0"),
