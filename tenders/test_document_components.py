@@ -34,6 +34,8 @@ class DocumentComponentAcceptanceTests(TestCase):
                "requirements": {"characteristics": [{"name": "Цвет", "value": "Синий"}]}, "confidence": .95,
                "source_url": "https://zakupki.gov.ru/components", "page_or_section": "Таблица", "evidence": "Количество в составе", "relationship": "component"}
         row.update(changes)
+        row.setdefault("supply_kind", "kit" if row["relationship"] == "component" else "finished")
+        row.setdefault("structure_reason", "Документ перечисляет самостоятельные изделия")
         if row["relationship"] == "enrich" and not row["requirements"].get("reconciled"):
             from .document_enrichment import effective_item_requirements
             baseline = effective_item_requirements(parent).get("characteristics", [])

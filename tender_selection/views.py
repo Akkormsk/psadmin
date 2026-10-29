@@ -573,7 +573,10 @@ def tender_detail(request, pk):
             "unit": proposal.unit,
             "quantity_per_parent": metadata.get("quantity_per_parent"),
             "relationship": metadata.get("relationship"),
-            "characteristics": characteristics,
+            "characteristics": [row for row in characteristics if row.get("scope") != "completeness"],
+            "completeness": [row for row in characteristics if row.get("scope") == "completeness"],
+            "supply_kind": metadata.get("supply_kind", ""),
+            "structure_reason": metadata.get("structure_reason", ""),
             "omitted_facts": requirements.get("omitted_facts", []),
             "review_error": requirements.get("reconciliation_error", ""),
             "provenance": proposal.provenance if isinstance(proposal.provenance, dict) else {},
@@ -602,7 +605,7 @@ def tender_detail(request, pk):
             origin = notification_origin(source)
             if origin and notification_quote_source(source) is None and origin.pk not in financial_parents:
                 original = notification_by_index.get((origin.metadata or {}).get("notification_index"), {})
-                source_financials.append({**original, "name": (source.metadata or {}).get("parent_display_name") or origin.original_text})
+                source_financials.append({**original, "source_item_id": origin.pk, "name": (source.metadata or {}).get("parent_display_name") or origin.original_text})
                 financial_parents.add(origin.pk)
         from tenders.models import TenderCommercialItem
         commercial_items = list(tender.v2_commercial_items.prefetch_related("components__source_item", "source_items").filter(status="active").order_by("pk"))
@@ -632,6 +635,7 @@ def tender_detail(request, pk):
         elif active_sources:
             display_items = []
             for source in active_sources:
+                origin = notification_origin(source)
                 requirements = effective_item_requirements(source)
                 provenance = source.provenance if isinstance(source.provenance, dict) else {}
                 question = questions_by_source.get(source.pk)
@@ -665,7 +669,17 @@ def tender_detail(request, pk):
                     "code_name": notification_item.get("code_name", "") if original_source else "",
                     "price": notification_item.get("price") if quote_source else None,
                     "sum": notification_item.get("sum") if quote_source else None,
-                    "characteristics": details,
+                    "characteristics": [row for row in details if row.get("scope") != "completeness"],
+                    "completeness": [row for row in details if row.get("scope") == "completeness"],
+                    "group_key": origin.pk if origin and metadata.get("relationship") == "component" else None,
+                    "supply_kind": metadata.get("supply_kind", ""),
+                    "structure_reason": metadata.get("structure_reason", ""),
+                    "original_item": notification_by_index.get((origin.metadata or {}).get("notification_index"), {}) if origin else {},
+                    "previous_components": [{"name": child.original_text, "quantity": child.quantity, "unit": child.unit,
+                                             "facts": effective_item_requirements(child).get("characteristics", [])}
+                                            for child in v2_source_items if child.pk in metadata.get("replaces_source_ids", [])],
+                    "name_changed": bool(origin and source.original_text != origin.original_text),
+                    "name_removed": characteristic_display({"value": source.original_text, "source": "combined", "source_facts": [{"value": origin.original_text, "source": "notification"}]})["removed_text"] if origin else "",
                     "omitted_facts": requirements.get("omitted_facts", []),
                     "source_mark": "Уточнено по документации" if is_item_enrichment(source) and is_document_item else "Из документации" if source.source_type == "document_extraction" and is_document_item else "",
                     "source_mark_kind": "enriched",
@@ -686,6 +700,31 @@ def tender_detail(request, pk):
                     item["composition_question"] = question.question
                     item["composition_question_id"] = question.pk
                     item["composition_options"] = list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else []
+    display_item_groups, ungrouped_display_items = [], []
+    grouped = {}
+    for item in display_items:
+        if "completeness" not in item:
+            item["completeness"] = [row for row in item.get("characteristics", []) if row.get("scope") == "completeness"]
+            item["characteristics"] = [row for row in item.get("characteristics", []) if row.get("scope") != "completeness"]
+        key = item.get("group_key")
+        if not key:
+            ungrouped_display_items.append(item)
+            continue
+        if key not in grouped:
+            grouped[key] = {"key": key, "name": item.get("parent_display_name") or item.get("original_item", {}).get("name") or "Состав исходной позиции",
+                            "original": item.get("original_item", {}), "items": [], "supply_kind": item.get("supply_kind"), "reason": item.get("structure_reason"), "previous_components": item.get("previous_components", [])}
+            display_item_groups.append(grouped[key])
+        grouped[key]["items"].append(item)
+    for group in display_item_groups:
+        group["name_parts"] = characteristic_display({"value": group["name"], "source": "combined", "source_facts": [{"value": group["original"].get("name", ""), "source": "notification"}]})["parts"]
+    for group in document_proposal_groups:
+        group["can_keep_quote"] = len(group["items"]) == 1 and notification_quote_source(next(proposal for proposal in document_proposals if proposal.parent_id == group["parent"].pk)) is not None
+        group["is_kit"] = bool(group["items"]) and all(item["relationship"] == "component" for item in group["items"])
+        group["supply_kind"] = group["items"][0].get("supply_kind") if group["items"] else ""
+        group["reason"] = group["items"][0].get("structure_reason") if group["items"] else ""
+        group["current_items"] = [{"name": source.original_text, "quantity": source.quantity, "unit": source.unit,
+                                   "facts": effective_item_requirements(source).get("characteristics", [])}
+                                  for source in v2_source_items if source.is_active and source.parent_id == group["parent"].pk] if group["parent"] else []
     v2_job_label = {"queued": "Обрабатывается", "running": "Обрабатывается", "preparing_input": "Собираем данные", "routing": "Определяем маршрут", "needs_review": "Нужна проверка", "ready": "Готово", "partial": "Нужна проверка", "failed": "Нужна проверка"}.get(v2_job.status, "") if v2_job else ""
 
     # Компактная сводка расчёта прямо на странице тендера (см. концепцию: блок
@@ -793,7 +832,11 @@ def tender_detail(request, pk):
         "v2_job": v2_job,
         "v2_job_label": v2_job_label,
         "display_items": display_items,
+        "display_item_groups": display_item_groups,
+        "ungrouped_display_items": ungrouped_display_items,
+        "display_item_count": len(ungrouped_display_items) + len(display_item_groups),
         "source_financials": source_financials,
+        "display_source_financials": [row for row in source_financials if row.get("source_item_id") not in grouped],
         "has_document_items": has_document_items,
         "document_item_count": document_item_count,
         "original_source_texts": sorted({text for text in original_source_texts if text}),

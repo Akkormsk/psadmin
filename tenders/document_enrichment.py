@@ -224,6 +224,11 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
             if mode == "conflict" and len({key(fact) for fact in facts}) < 2:
                 raise ValueError("Для расхождения нужны разные исходные значения")
             final = {"name": name, "value": value, "source": "combined" if refs else "document", "conflict": mode == "conflict", "provenance": deepcopy(fact_provenance)}
+        scope = row.get("scope", final.get("scope", "product"))
+        if scope not in {"product", "completeness"}:
+            raise ValueError("Неизвестная область характеристики")
+        if scope == "completeness":
+            final["scope"] = scope
         final.update(source_facts=facts, reason=reason)
         output.append(final)
     if covered != set(range(len(base))):
@@ -259,6 +264,7 @@ def characteristic_display(row, *, documents=None):
         collect(fact)
     facts = [{**fact, "document": (documents or {}).get((fact.get("provenance") or {}).get("document_url"))} for fact in facts]
     original = next((fact for fact in facts if fact.get("source") == "notification"), facts[0] if facts else None)
+    removed_text = ""
     if row.get("source") == "notification":
         parts = [{"text": value, "added": False}]
     elif row.get("source") == "document" or original is None or not any(fact.get("source") == "notification" for fact in facts):
@@ -267,9 +273,10 @@ def characteristic_display(row, *, documents=None):
         old = re.findall(r"\s+|\w+|[^\w\s]", str(original.get("value") or ""))
         new = re.findall(r"\s+|\w+|[^\w\s]", value)
         parts = [{"text": "".join(new[b1:b2]), "added": kind != "equal"} for kind, a1, a2, b1, b2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes() if kind != "delete"]
+        removed_text = " … ".join("".join(old[a1:a2]).strip() for kind, a1, a2, b1, b2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes() if kind in {"replace", "delete"} and "".join(old[a1:a2]).strip())
     return {"name": row.get("name") or row.get("characteristicName") or "", "value": value,
-            "source": row.get("source"), "conflict": row.get("conflict", False), "parts": parts, "name_added": row.get("source") == "document",
-            "source_facts": facts, "reason": row.get("reason", ""), "show_sources": bool(facts) and (row.get("source") != "notification" or bool(row.get("conflict")))}
+            "scope": row.get("scope", "product"), "source": row.get("source"), "conflict": row.get("conflict", False), "parts": parts, "name_added": row.get("source") == "document",
+            "removed_text": removed_text, "source_facts": facts, "reason": row.get("reason", ""), "show_sources": bool(facts) and (row.get("source") != "notification" or bool(row.get("conflict")))}
 
 
 def item_name_parts(item):

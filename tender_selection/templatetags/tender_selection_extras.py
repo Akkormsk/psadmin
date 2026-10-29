@@ -1,4 +1,4 @@
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 import re
 
 from django import template
@@ -45,3 +45,15 @@ def group_number(value):
     separator_at = next((index for index, char in enumerate(text) if char in ".,"), len(text))
     integer, fraction = text[:separator_at], text[separator_at:]
     return re.sub(r"(?<=\d)(?=(?:\d{3})+$)", NARROW_NBSP, integer) + fraction
+
+
+@register.filter
+def rub_precise(value):
+    """Source comparisons retain kopecks instead of rounding the quoted unit price."""
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite():
+            return "—"
+        return group_number(format(number.quantize(Decimal("0.01")), ".2f").replace(".", ",")) + NBSP + "₽"
+    except (InvalidOperation, ValueError, TypeError):
+        return "—"

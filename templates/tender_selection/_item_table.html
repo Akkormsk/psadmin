@@ -1,0 +1,32 @@
+{% load tender_selection_extras %}
+    <div class="table-wrapper"><table class="table ts-items">
+      <thead><tr><th>Наименование</th><th>ОКПД2 / КТРУ</th><th>Кол-во</th>{% if not components_only %}<th>Цена</th><th>Сумма</th>{% endif %}</tr></thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>
+            <strong>{% if item.name_parts %}{% for part in item.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}{% else %}{{ item.name }}{% endif %}</strong>{% if item.parent_display_name %}<div class="ts-sub">{{ item.parent_display_name }} · {{ item.quantity_per_parent|floatformat:"-4" }} {{ item.unit }} в составе</div>{% endif %}{% if item.source_mark %} <details class="ts-position-source"><summary class="ts-position-mark ts-position-mark--{{ item.source_mark_kind }}">{{ item.source_mark }}</summary><div class="ts-source-details"><strong>Источник</strong><span>{{ item.source_details }}</span>{% if item.source_evidence %}<span>{{ item.source_evidence }}</span>{% endif %}{% if item.source_changes %}<strong>Добавлено из документации</strong><ul>{% for change in item.source_changes %}<li>{{ change.name }}: {{ change.value }}</li>{% endfor %}</ul>{% endif %}{% if item.original_source_text %}<strong>Исходная запись</strong><span>{{ item.original_source_text }}</span>{% endif %}</div></details>{% endif %}
+            {% if item.original_item %}<details class="ts-item-audit"><summary>{% if components_only %}Связь с исходной группой{% else %}Извещение → результат{% if item.name_changed %} · название изменено{% endif %}{% endif %}</summary>
+              <p><b>{% if components_only %}Группа{% else %}Было{% endif %}:</b> {{ item.original_item.name }}</p><p><b>{% if components_only %}Составляющая{% else %}Стало{% endif %}:</b> {{ item.name }}</p>{% if item.name_removed %}<p class="ts-sub">Сокращено в названии: <s>{{ item.name_removed }}</s></p>{% endif %}
+              {% if components_only %}<p>В одном наборе: {{ item.quantity_per_parent|floatformat:"-4" }} {{ item.unit }} · Всего: {{ item.quantity|floatformat:"-2" }} {{ item.unit }}</p>{% else %}<p>Количество: {{ item.original_item.quantity|floatformat:"-2" }} {{ item.original_item.unit }} → {{ item.quantity|floatformat:"-2" }} {{ item.unit }}</p>{% endif %}
+              {% if not components_only %}<p>Цена за позицию: {{ item.original_item.price|rub_precise }} → {{ item.price|rub_precise }} · Сумма: {{ item.original_item.sum|rub_precise }} → {{ item.sum|rub_precise }}</p>{% endif %}
+              {% if item.original_item.characteristics %}<details><summary>ТЗ из извещения · {{ item.original_item.characteristics|length }}</summary><ul>{% for fact in item.original_item.characteristics %}<li>{{ fact.name }}: {{ fact.value }}</li>{% endfor %}</ul></details>{% endif %}
+              {% if item.structure_reason %}<p>{{ item.structure_reason }}</p>{% endif %}
+              {% if not components_only %}{% include "tender_selection/_previous_components.html" with previous_components=item.previous_components %}{% endif %}
+            </details>{% endif %}
+            {% if item.composition_question %}<div class="ts-position-question" id="owner-question-{{ item.composition_question_id }}"><div class="ts-position-question__label"><span class="ts-position-mark ts-position-mark--review">Проверить</span><strong>Нужно уточнить</strong></div><p>{{ item.composition_question }}</p><form method="post" action="{% url 'tender_selection:owner_interaction_answer' tender.pk item.composition_question_id %}">{% csrf_token %}{% if item.composition_options %}<div class="ts-question-options">{% for option in item.composition_options %}<button type="submit" name="answer" value="{{ option }}" class="button-secondary">{{ option }}</button>{% endfor %}</div>{% endif %}<div class="ts-question-reply"><input type="text" name="answer" aria-label="Другой ответ" placeholder="Другой ответ…"><button type="submit" class="button-primary">Ответить</button></div></form></div>{% endif %}
+            {% if item.components %}<ul class="ts-components">{% for component in item.components %}<li>{{ component.name }} <span>×{{ component.quantity_per_parent|floatformat:"-4" }}{% if component.unit %} {{ component.unit }}{% endif %}</span></li>{% endfor %}</ul>{% endif %}
+            {% if item.characteristics %}
+            <details class="ts-item-tz"><summary>ТЗ · {{ item.characteristics|length }}</summary><ul class="ts-chars">{% for ch in item.characteristics %}<li>{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>
+            {% endif %}
+            {% if item.completeness %}<details class="ts-item-completeness"><summary>Комплектация · {{ item.completeness|length }}</summary><ul class="ts-chars">{% for ch in item.completeness %}<li>{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>{% endif %}
+            {% if item.omitted_facts %}<details><summary class="ts-sub">Не включено в описание · {{ item.omitted_facts|length }}</summary><ul>{% for omitted in item.omitted_facts %}<li>{% for fact in omitted.source_facts %}<span class="ts-fact-omitted">{{ fact.name }}: {{ fact.value }}</span>{% endfor %} — {{ omitted.reason }}</li>{% endfor %}</ul></details>{% endif %}
+          </td>
+          <td class="ts-sub">{{ item.code }}{% if item.code_name %}<br>{{ item.code_name }}{% endif %}</td>
+          <td class="ts-nowrap">{{ item.quantity|floatformat:"-2" }} {{ item.unit }}</td>
+          {% if not components_only %}<td class="ts-nowrap">{{ item.price|rub_precise }}</td>
+          <td class="ts-nowrap">{{ item.sum|rub_precise }}</td>{% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>

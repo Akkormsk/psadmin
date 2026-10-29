@@ -1932,7 +1932,14 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
         from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
         if len(proposals) > 1 and any(is_item_enrichment(item) for item in proposals):
             raise ValueError("Уточнение одного товара должно быть объединено в одно предложение; обновите анализ")
-        if not parent.is_active:
+        replacement_ids = (proposals[0].metadata or {}).get("replaces_source_ids", [])
+        if any((proposal.metadata or {}).get("replaces_source_ids", []) != replacement_ids for proposal in proposals):
+            raise ValueError("Предложения относятся к разным версиям состава")
+        if replacement_ids:
+            actual_ids = set(TenderSourceItem.objects.select_for_update().filter(tender_id=tender_id, parent=parent, is_active=True, metadata__relationship="component").values_list("pk", flat=True))
+            if parent.is_active or set(replacement_ids) != actual_ids:
+                raise ValueError("Прежний состав изменился; обновите предложения")
+        elif not parent.is_active:
             raise ValueError("Исходная позиция уже изменилась; обновите предложения")
         for proposal in proposals:
             if proposal.metadata.get("relationship") == "component":
@@ -1946,6 +1953,8 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
             proposal.source_type = "document_extraction"
             proposal.is_active = True
             proposal.save(update_fields=["source_type", "is_active", "quantity", "requirements"])
+        if replacement_ids:
+            TenderSourceItem.objects.filter(pk__in=replacement_ids, tender_id=tender_id).update(is_active=False)
         parent.is_active = False
         parent.save(update_fields=["is_active"])
     else:

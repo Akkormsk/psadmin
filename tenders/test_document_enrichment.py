@@ -120,7 +120,7 @@ class GatewayDocumentEnricherBudgetTests(TestCase):
             "parent_source_item_id": self.source.pk, "name": "T-shirt", "quantity": None,
             "unit": "piece", "requirements": {}, "confidence": 0.95,
             "source_url": "https://example.test/unusual-attachment", "page_or_section": "table",
-            "evidence": "T-shirt", "relationship": "component", "quantity_per_parent": 1,
+            "evidence": "T-shirt", "supply_kind": "kit", "structure_reason": "Distinct goods in a kit", "relationship": "component", "quantity_per_parent": 1,
         }]}, {"prompt_tokens": 100, "completion_tokens": 100})
 
         enricher = GatewayDocumentEnricher()
