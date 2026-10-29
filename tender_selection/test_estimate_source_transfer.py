@@ -86,8 +86,10 @@ class EstimateSourceTransferTests(TestCase):
         self.stage([self.row(parent, relationship='enrich', quantity=100, name='Ручка')])
         decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept')
         # Exercise the legacy row without provenance fields.
-        line = estimate.lines.get(sort_order=0)
-        line.requirements = {}; line.save(update_fields=['requirements'])
+        line = next(row for row in estimate.lines.all() if row.requirements.get('source_item_id') == parent.pk)
+        estimate.lines.exclude(pk=line.pk).update(sort_order=1)
+        line.sort_order = 0
+        line.requirements = {}; line.save(update_fields=['requirements', 'sort_order'])
         before = list(estimate.lines.values_list('pk', 'quantity', 'nmck_unit', 'material_unit', 'application_unit', 'logistics_unit', 'comment'))
         plan = collect_plan()
         with tempfile.TemporaryDirectory() as directory, self.settings(BASE_DIR=directory), patch.dict('os.environ', {'REFRESH_ESTIMATES_MODE': 'apply', 'REFRESH_ESTIMATES_DIGEST': digest(plan)}), redirect_stdout(io.StringIO()):
