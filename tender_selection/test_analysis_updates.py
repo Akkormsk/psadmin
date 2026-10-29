@@ -76,3 +76,11 @@ class AnalysisUpdatesTests(TestCase):
         self.job.save()
         status = self.client.get(self.url).json()['statuses'][0]
         self.assertIn('смешаны новые и исходные характеристики', status['reason'])
+
+    def test_structured_gateway_error_displays_message_not_internal_dictionary(self):
+        self.job.status = 'failed'
+        self.job.error = {'class': 'TenderAIError', 'message': 'Ответ в неожиданном формате', 'retryable': True}
+        self.job.save()
+        status = self.client.get(self.url).json()['statuses'][0]
+        self.assertEqual(status['reason'], 'Ответ в неожиданном формате')
+        self.assertNotIn('retryable', status['reason'])

@@ -65,6 +65,7 @@ def _is_technical_failure(job) -> bool:
 _VALIDATION_MESSAGES = {
     "Решение не соответствует ссылкам на исходные факты": "В ответе смешаны новые и исходные характеристики. Изменения не применены.",
     "Некорректные или повторные ссылки на исходные факты": "Агент неверно связал характеристики с исходными данными. Изменения не применены.",
+    "Сохранённый факт должен совпадать с исходным": "Агент изменил характеристику, которую отметил как неизменённую. Результат не применён.",
     "Не все исходные факты учтены в итоговом описании": "В новом описании пропущена часть исходных характеристик. Изменения не применены.",
 }
 
@@ -89,7 +90,8 @@ def analysis_issues(job) -> list[str]:
     entries = [entries] if isinstance(entries, dict) else entries if isinstance(entries, list) else []
     issues = []
     if job.error:
-        issues.append(str(job.error))
+        error = job.error.get("message") or job.error.get("detail") or "Ошибка анализа; подробности в журнале." if isinstance(job.error, dict) else job.error
+        issues.append(str(error))
     for entry in entries:
         if not isinstance(entry, dict):
             continue
