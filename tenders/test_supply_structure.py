@@ -111,3 +111,10 @@ class SupplyStructureTests(TestCase):
         self.assertIn('existing_components', prompt)
         self.assertIn('Принадлежность', prompt)
         self.assertIn('supply_kind=finished|kit|unclear', prompt)
+
+    def test_orphan_historical_proposal_stays_readable_without_claiming_a_price(self):
+        from .models import TenderSourceItem
+        TenderSourceItem.objects.create(tender=self.tender, source_key='orphan-proposal', source_type='document_proposal', original_text='Историческое предложение', is_active=False, requirements={})
+        response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['document_proposal_groups'][0]['can_keep_quote'])

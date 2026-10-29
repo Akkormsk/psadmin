@@ -573,6 +573,7 @@ def tender_detail(request, pk):
             "unit": proposal.unit,
             "quantity_per_parent": metadata.get("quantity_per_parent"),
             "relationship": metadata.get("relationship"),
+            "quote_eligible": notification_quote_source(proposal) is not None,
             "characteristics": [row for row in characteristics if row.get("scope") != "completeness"],
             "completeness": [row for row in characteristics if row.get("scope") == "completeness"],
             "supply_kind": metadata.get("supply_kind", ""),
@@ -718,7 +719,7 @@ def tender_detail(request, pk):
     for group in display_item_groups:
         group["name_parts"] = characteristic_display({"value": group["name"], "source": "combined", "source_facts": [{"value": group["original"].get("name", ""), "source": "notification"}]})["parts"]
     for group in document_proposal_groups:
-        group["can_keep_quote"] = len(group["items"]) == 1 and notification_quote_source(next(proposal for proposal in document_proposals if proposal.parent_id == group["parent"].pk)) is not None
+        group["can_keep_quote"] = len(group["items"]) == 1 and group["items"][0]["quote_eligible"]
         group["is_kit"] = bool(group["items"]) and all(item["relationship"] == "component" for item in group["items"])
         group["supply_kind"] = group["items"][0].get("supply_kind") if group["items"] else ""
         group["reason"] = group["items"][0].get("structure_reason") if group["items"] else ""
