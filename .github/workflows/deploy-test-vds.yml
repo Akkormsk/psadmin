@@ -192,7 +192,7 @@ jobs:
             pilot_mode=--apply
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
             docker compose -f compose.test.yml exec -T test-web python manage.py prepare_tender_documents \
-              --tender-number "$pilot_tender" --max-cost-rub 14 --max-output-tokens 16000 "$pilot_mode" </dev/null
+              --tender-number "$pilot_tender" --max-cost-rub 14 --max-output-tokens 32000 "$pilot_mode" </dev/null
           fi
           curl --fail --silent --show-error --max-time 20 \
             --resolve test.admin.psodin.ru:443:127.0.0.1 \

@@ -19,7 +19,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--tender-number", required=True)
         parser.add_argument("--max-cost-rub", required=True, type=Decimal)
-        parser.add_argument("--max-output-tokens", type=int, default=16000)
+        parser.add_argument("--max-output-tokens", type=int, default=32000)
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--preflight", action="store_true")
 
@@ -27,8 +27,8 @@ class Command(BaseCommand):
         budget = options["max_cost_rub"]
         if not budget.is_finite() or not Decimal("0") < budget <= Decimal("14"):
             raise CommandError("Pilot budget must be positive and no greater than 14 RUB")
-        if not 256 <= options["max_output_tokens"] <= 16000:
-            raise CommandError("Output limit must be between 256 and 16000 tokens")
+        if not 256 <= options["max_output_tokens"] <= 32000:
+            raise CommandError("Output limit must be between 256 and 32000 tokens")
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
         if tender is None:
             raise CommandError("Tender not found; nothing was called")
@@ -52,7 +52,7 @@ class Command(BaseCommand):
         if not options["apply"]:
             self.stdout.write(json.dumps({"apply": False, "budget_rub": str(budget), "has_notification": bool(tender.notification_raw)}))
             return
-        version = "v2-document-pilot-compact-unified-specification"
+        version = "v2-document-pilot-compact-complete-specification"
         with transaction.atomic():
             Tender.objects.select_for_update().get(pk=tender.pk)
             previous = TenderComputeJob.objects.filter(tender=tender, version=version).first()
