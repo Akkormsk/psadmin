@@ -21,6 +21,10 @@
         </p>
       </div>
       <div class="ts-refresh">
+        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:import_by_number' %}" id="ts-import-form">
+          {% csrf_token %}<input name="purchase_number" aria-label="Номер закупки по 44-ФЗ" placeholder="Номер закупки · 44-ФЗ" pattern="[0-9]{19}" maxlength="19" inputmode="numeric" required style="width:210px"><button type="submit">Добавить</button>
+          <span role="status" id="ts-import-status"></span>
+        </form>{% endif %}
         <form method="post" action="{% url 'tender_selection:pull' %}" id="ts-pull-form">
           {% csrf_token %}<button type="submit">↻ Обновить</button>
         </form>
@@ -220,5 +224,26 @@
       });
     });
   })();
+</script>
+<script>
+(() => {
+  const form = document.getElementById('ts-import-form');
+  if (!form) return;
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = form.querySelector('button'), status = document.getElementById('ts-import-status');
+    button.disabled = true; status.textContent = 'Ищем…';
+    try {
+      const response = await fetch(form.getAttribute('action'), {method: 'POST', body: new FormData(form), headers: {'Accept': 'application/json'}});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось добавить тендер');
+      status.textContent = data.created ? 'Добавлен. Обычные фильтры списка сохраняются.' : 'Уже есть — открываем';
+      const link = document.createElement('a');
+      link.href = data.url; link.dataset.workspaceOpen = ''; link.dataset.workspaceTitle = 'Тендер';
+      document.body.appendChild(link); link.click(); link.remove(); form.reset();
+    } catch (error) { status.textContent = error.message || 'Не удалось получить ответ. Повторите поиск по номеру.'; }
+    finally { button.disabled = false; }
+  });
+})();
 </script>
 {% endblock %}

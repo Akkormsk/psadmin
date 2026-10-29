@@ -8,7 +8,7 @@ from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
-    update_tender_review, refresh_document_analysis, decide_all_document_proposals,
+    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number,
 )
 
 
@@ -212,4 +212,14 @@ register_tool(AssistantTool(
     False, True, True,
     lambda user, payload: _tender_action(decide_all_document_proposals, user, payload, "tender_id", "decision", "proposal_ids"),
     source="tender_selection.services.decide_all_document_proposals",
+))
+
+
+register_tool(AssistantTool(
+    "tender.import_by_number", "Добавить тендер по номеру",
+    "Находит закупку по 44-ФЗ в ГосПлане и добавляет её без дубля. Существующий тендер не меняет; отсутствие данных не создаёт пустую карточку. Фильтры входящих сохраняются.",
+    {"purchase_number": {"type": "string", "required": True, "label": "Номер закупки по 44-ФЗ"}},
+    False, True, True,
+    lambda user, payload: _tender_action(import_tender_by_number, user, payload, "purchase_number"),
+    source="tender_selection.services.import_tender_by_number",
 ))

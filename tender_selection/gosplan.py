@@ -35,6 +35,10 @@ class GosplanError(RuntimeError):
     """Ошибка обращения к ГосПлан API (не-200, сеть, невалидный JSON)."""
 
 
+class GosplanNotFoundError(GosplanError):
+    """The API has no resource for the requested identifier."""
+
+
 class RateLimitError(GosplanError):
     """HTTP 429 — превышен лимит запросов бесплатного тарифа."""
 
@@ -76,6 +80,8 @@ def _get(path: str, params: dict):
         with urlopen(Request(url, headers=headers, method="GET"), timeout=30) as response:
             body = response.read().decode("utf-8")
     except HTTPError as exc:
+        if exc.code == 404:
+            raise GosplanNotFoundError("Закупка не найдена в источнике") from exc
         if exc.code == 429:
             raise RateLimitError("Сервис попросил подождать — превышен лимит запросов.") from exc
         detail = ""

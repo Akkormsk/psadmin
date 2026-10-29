@@ -2021,3 +2021,30 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
     for parent_id in sorted(parents):
         decide_document_proposals(user, tender_id, parent_id, decision)
     return {'tender_id': tender_id, 'decision': decision, 'changed': len(pending)}
+
+
+def import_tender_by_number(user, purchase_number):
+    """Import one 44-FZ purchase through the existing intake mapping; never reset it."""
+    import re
+    _require_tender_admin(user)
+    number = str(purchase_number or '').strip()
+    if not re.fullmatch(r'[0-9]{19}', number):
+        raise ValueError('Укажите номер закупки по 44-ФЗ: 19 цифр')
+    existing = Tender.objects.filter(law='fz44', purchase_number=number).first()
+    if existing:
+        return {'tender_id': existing.pk, 'created': False}
+    try:
+        record = gosplan.fetch_purchase(number)
+    except gosplan.GosplanNotFoundError as exc:
+        raise ValueError('Закупка пока не найдена в ГосПлане. Попробуйте позже.') from exc
+    except gosplan.GosplanError as exc:
+        raise ValueError('Не удалось получить закупку. Попробуйте позже.') from exc
+    if not record:
+        raise ValueError('Закупка пока не найдена в ГосПлане. Попробуйте позже.')
+    if str(record.get('purchase_number') or '').strip() != number or not str(record.get('object_info') or '').strip():
+        raise ValueError('Источник не вернул полные данные нужной закупки. Тендер не создан.')
+    tender, created = Tender.objects.get_or_create(
+        law='fz44', purchase_number=number,
+        defaults={**_record_to_fields(record, timezone.now(), 'fz44'), 'source': Tender.EIS},
+    )
+    return {'tender_id': tender.pk, 'created': created}

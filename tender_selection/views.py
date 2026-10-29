@@ -1471,3 +1471,21 @@ def all_document_proposals_action(request, pk):
         messages.error(request, str(exc))
     target = reverse("tender_selection:detail", args=[pk]) + ("?workspace=1" if request.GET.get("workspace") else "")
     return redirect(target + "#tender-items")
+
+
+@superuser_required
+@require_POST
+def import_by_number(request):
+    from .services import import_tender_by_number
+    as_json = request.headers.get('Accept') == 'application/json'
+    try:
+        result = import_tender_by_number(request.user, request.POST.get('purchase_number'))
+    except ValueError as exc:
+        if as_json:
+            return JsonResponse({'error': str(exc)}, status=400)
+        messages.error(request, str(exc))
+        return redirect('tender_selection:list')
+    url = reverse('tender_selection:detail', args=[result['tender_id']])
+    if as_json:
+        return JsonResponse({**result, 'url': url})
+    return redirect(url)
