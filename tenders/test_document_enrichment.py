@@ -132,7 +132,7 @@ class GatewayDocumentEnricherBudgetTests(TestCase):
         prompt = gateway.call_args.args[0]
         self.assertIn("unusual-attachment", prompt)
         self.assertIn("https://example.test/second", prompt)
-        self.assertEqual(gateway.call_args.kwargs["max_tokens"], 16000)
+        self.assertEqual(gateway.call_args.kwargs["max_tokens"], GatewayDocumentEnricher.DOCUMENT_OUTPUT_TOKEN_LIMIT)
         self.assertEqual(gateway.call_args.kwargs["network_attempts"], 1)
         self.assertEqual(gateway.call_args.kwargs["json_attempts"], 1)
         self.assertEqual(enricher.diagnostics["documents"]["considered"].__len__(), 2)
