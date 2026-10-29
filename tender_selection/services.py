@@ -1081,6 +1081,12 @@ def push_to_estimate(tender, user):
     sources = active_calculation_items(tender)
     financials = {}
     if sources:
+        source_group_members = {}
+        for source in sources:
+            if source.metadata.get('relationship') == 'component':
+                origin = notification_origin(source)
+                if origin:
+                    source_group_members.setdefault(origin.pk, []).append(source.pk)
         items = []
         for source in sources:
             origin = notification_origin(source)
@@ -1096,7 +1102,7 @@ def push_to_estimate(tender, user):
                           'source_provenance': source.provenance,
                           'group_key': f'source-{origin.pk}' if origin and source.metadata.get('relationship') == 'component' else '',
                           'group_name': str(source.metadata.get('parent_display_name') or origin.original_text)[:120] if origin and source.metadata.get('relationship') == 'component' else '',
-                          'source_group': {'source_item_id': origin.pk, 'member_source_ids': [member.pk for member in sources if member.metadata.get('relationship') == 'component' and notification_origin(member) and notification_origin(member).pk == origin.pk], 'component_quantity': str(source.quantity), 'quantity': str(original.get('quantity') or ''), 'unit': original.get('unit', ''), 'price': str(original.get('price') or ''), 'sum': str(original.get('sum') or '')} if origin and source.metadata.get('relationship') == 'component' else {},
+                          'source_group': {'source_item_id': origin.pk, 'member_source_ids': source_group_members.get(origin.pk, []), 'component_quantity': str(source.quantity), 'quantity': str(original.get('quantity') or ''), 'unit': original.get('unit', ''), 'price': str(original.get('price') or ''), 'sum': str(original.get('sum') or '')} if origin and source.metadata.get('relationship') == 'component' else {},
                           'nmck_unit_unknown': quote is None or original.get('price') is None})
             if origin and quote is None:
                 financials[origin.pk] = {'source_item_id': origin.pk, 'name': origin.original_text,

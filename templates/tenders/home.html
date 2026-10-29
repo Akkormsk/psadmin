@@ -548,14 +548,15 @@ document.getElementById('tender-ai-nmck-file').accept='.xlsx,.xls,.doc,.docx,.pd
     clearTimeout(timer); timer=null;
     inFlight=true; again=false;
     setStatus('Сохранение…');
-    linesInput.value=JSON.stringify(lines);
+    const submittedLines=lines.slice();
+    linesInput.value=JSON.stringify(submittedLines);
     analysisInput.value=JSON.stringify(documentAnalysis);
     try{
       const res=await fetch(pk?saveUrl:createUrl,{method:'POST',headers:{'X-CSRFToken':csrf},body:new FormData(form)});
       const out=await res.json();
       if(!res.ok) throw new Error(out.error||'Не удалось сохранить.');
       if(out.pk&&!pk){ pk=out.pk; saveUrl=out.url+'save/'; history.replaceState(null,'',out.url); }
-      if(Array.isArray(out.line_ids))out.line_ids.forEach((id,index)=>{if(lines[index])lines[index].id=id});
+      if(Array.isArray(out.line_ids))out.line_ids.forEach((id,index)=>{if(submittedLines[index])submittedLines[index].id=id});
       autosaveEnabled=true;
       if(saveBtn) saveBtn.hidden=true;
       setStatus((out.incomplete?'Черновик сохранён ':'Сохранено ')+out.saved_at,'ok');
