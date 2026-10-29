@@ -2389,3 +2389,22 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .tender-page .panel-header:has(#group-tender-lines) > div:first-child { min-width:0; flex:1; }
 .tender-page .panel-header:has(#group-tender-lines) .panel-actions { flex:none; flex-wrap:nowrap; }
 @media(max-width:800px) { .tender-page .panel-header:has(#group-tender-lines) { flex-wrap:wrap; } .tender-page .panel-header:has(#group-tender-lines) .panel-actions { flex-wrap:wrap; } }
+
+.tender-line-toggle { grid-template-columns:minmax(150px,1fr) 95px 125px 140px 120px 14px; }
+.tender-line-summary__quantity { border-left:1px solid var(--separator); padding-left:14px; }
+@media(max-width:800px) {
+ .tender-line-toggle { grid-template-columns:minmax(0,1fr) 60px 80px 10px; gap:8px; }
+ .tender-line-toggle > span:nth-child(2) { display:block; }
+ .tender-line-toggle > span:nth-child(3),.tender-line-toggle > span:nth-child(5) { display:none; }
+ .tender-line-summary__quantity { padding-left:6px; }
+}
+
+.ts-document-proposals .ts-review-changes { padding:0; border:0; background:transparent; }
+.ts-review-item { padding:14px 0; border-top:1px solid var(--separator); }
+.ts-review-item p { margin:6px 0; }
+.ts-review-facts { margin-top:8px; }
+.ts-review-facts > summary,.ts-review-source { color:var(--ink-3); font-size:12px; }
+.ts-review-source { margin-top:8px; }
+
+.ts-document-proposals { background:transparent; border:0; border-top:1px solid var(--separator); padding:18px 0; }
+@media(max-width:800px) { .tender-line-toggle > span:nth-child(4) { display:block; } }

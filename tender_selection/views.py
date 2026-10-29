@@ -538,7 +538,8 @@ def tender_detail(request, pk):
     from tenders.document_enrichment import characteristic_display, item_name_parts, effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
     notification_by_index = {index: item for index, item in enumerate((card or {}).get("items", []))}
     source_financials = []
-    document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal"]
+    from tenders.document_enrichment import document_proposal_changes
+    document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal" and document_proposal_changes(item)]
     document_proposal_groups = []
     proposal_documents = {doc.get("url"): doc for doc in (card or {}).get("documents", [])}
     proposals_by_parent = {}
@@ -560,6 +561,7 @@ def tender_detail(request, pk):
             }
             proposals_by_parent[parent_key] = group
             document_proposal_groups.append(group)
+        changes = document_proposal_changes(proposal)
         requirements = effective_item_requirements(proposal)
         raw_characteristics = requirements.get("characteristics") if isinstance(requirements.get("characteristics"), list) else []
         characteristics = [characteristic_display(row, documents=proposal_documents) for row in raw_characteristics if isinstance(row, dict)]
@@ -579,6 +581,10 @@ def tender_detail(request, pk):
             "relationship": metadata.get("relationship"),
             "quote_eligible": notification_quote_source(proposal) is not None,
             "tz_rows": characteristics,
+            "changed_rows": [characteristic_display(row, documents=proposal_documents) for row in changes.get("rows", [])],
+            "removed_rows": changes.get("removed", []),
+            "name_changed": changes.get("name"), "quantity_changed": changes.get("quantity"), "unit_changed": changes.get("unit"),
+            "structural_change": changes.get("structural"),
             "characteristics": [row for row in characteristics if row.get("scope") != "completeness"],
             "completeness": [row for row in characteristics if row.get("scope") == "completeness"],
             "supply_kind": metadata.get("supply_kind", ""),

@@ -181,5 +181,6 @@ def resolve_tender_analysis_statuses(tenders) -> dict[int, TenderAnalysisStatus]
         if document_item_has_change(item)
     }
     enriched_ids.update(TenderCommercialItem.objects.filter(tender_id__in=ids, structure=TenderCommercialItem.Structure.COMPOSITE, status="active").values_list("tender_id", flat=True))
-    pending = Counter(TenderSourceItem.objects.filter(tender_id__in=ids, source_type="document_proposal", is_active=False).values_list("tender_id", flat=True))
+    from .document_enrichment import document_proposal_changes
+    pending = Counter(item.tender_id for item in TenderSourceItem.objects.filter(tender_id__in=ids, source_type="document_proposal", is_active=False).select_related("parent") if document_proposal_changes(item))
     return {tender.pk: _status_for(tender, jobs.get(tender.pk), counts[tender.pk], tender.pk in enriched_ids, pending[tender.pk]) for tender in tenders}

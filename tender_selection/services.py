@@ -1935,6 +1935,8 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
     proposals = list(TenderSourceItem.objects.filter(
         tender_id=tender_id, parent=parent, source_type="document_proposal",
     ))
+    from tenders.document_enrichment import document_proposal_changes
+    proposals = [item for item in proposals if document_proposal_changes(item)]
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
     if decision == "accept":
@@ -2035,7 +2037,7 @@ def _run_document_analysis(job_id):
             job.diagnostics.update({"enrichment": result["diagnostics"], "enrichment_state": result["state"], "proposal_ids": replacement_ids})
             if replacement_ids:
                 job.diagnostics["superseded_pending_proposals"] = json.loads(json.dumps(list(old.values()), default=str))
-            job.status = "needs_review" if replacement_ids else "ready" if result["state"] == "no_data" else "partial"
+            job.status = "needs_review" if replacement_ids else "ready" if result["state"] in {"no_data", "no_change"} else "partial"
             job.total_cost = Decimal(str(enricher.cost_rub or 0))
             job.completed_at = timezone.now()
             job.save()
@@ -2061,6 +2063,8 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
     if not isinstance(proposal_ids, list) or not proposal_ids or any(type(value) is not int or value <= 0 for value in proposal_ids) or len(set(proposal_ids)) != len(proposal_ids):
         raise ValueError('Нужно передать проверенный список предложений')
     pending = list(TenderSourceItem.objects.select_for_update().filter(tender_id=tender_id, source_type='document_proposal').order_by('pk'))
+    from tenders.document_enrichment import document_proposal_changes
+    pending = [item for item in pending if document_proposal_changes(item)]
     if not pending or {item.pk for item in pending} != set(proposal_ids):
         raise ValueError('Предложения изменились; обновите карточку перед принятием')
     if decision not in {'accept', 'reject'}:

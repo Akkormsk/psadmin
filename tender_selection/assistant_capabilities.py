@@ -207,7 +207,7 @@ register_tool(AssistantTool(
 
 register_tool(AssistantTool(
     "tender.document_proposals_all", "Принять или отклонить все правки товаров",
-    "Одной транзакцией принимает или отклоняет весь показанный список: уточнение товара с комплектацией либо состав набора, включая пересмотр прежней разбивки. Исходные данные и общая цена сохраняются; изменившийся состав требует нового просмотра.",
+    "Одной транзакцией принимает или отклоняет весь показанный список: уточнение товара с комплектацией либо состав набора, включая пересмотр прежней разбивки. Исходные данные и общая цена сохраняются; изменившийся состав требует нового просмотра. Подтверждения без изменений не требуют согласования; список содержит только реальные правки.",
     {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "decision": {"type": "accept|reject", "required": True, "label": "Решение", "choices": (("accept", "Принять все"), ("reject", "Отклонить все"))}, "proposal_ids": {"type": "integer[]", "required": True, "label": "Проверенные предложения", "reference": {"model": "tenders.TenderSourceItem", "label": ["original_text"]}}},
     False, True, True,
     lambda user, payload: _tender_action(decide_all_document_proposals, user, payload, "tender_id", "decision", "proposal_ids"),

@@ -2,6 +2,7 @@ from django.test import TestCase
 from django.urls import reverse
 from tender_selection.services import decide_document_proposals
 from . import test_document_components as fixtures
+from .models import TenderSourceItem
 from .calculation_v2_pipeline import active_calculation_items
 
 
@@ -73,7 +74,7 @@ class SupplyStructureTests(TestCase):
         parent = self.parents[0]
         self.stage([self.row(parent, relationship='enrich', quantity=100, name='Целая позиция', supply_kind='unclear', structure_reason='Документы не определяют самостоятельность составляющих')])
         response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]))
-        self.assertContains(response, 'Неясно — предложено сохранить целиком')
+        self.assertContains(response, 'Нужно проверить состав')
         self.assertEqual(len(active_calculation_items(self.tender)), 2)
         self.assertContains(response, 'Принять все правки', count=1)
 
@@ -119,3 +120,35 @@ class SupplyStructureTests(TestCase):
         response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.context['document_proposal_groups'][0]['can_keep_quote'])
+
+
+    def test_identical_document_confirmation_does_not_create_a_review(self):
+        parent = self.parents[0]
+        parent.requirements = {"characteristics": [{"name": "Материал", "value": "бумага"}]}
+        parent.save()
+        result = self.stage([self.row(parent, relationship="enrich", name=parent.original_text, quantity=parent.quantity, unit=parent.unit, supply_kind="finished", requirements={"reconciled": True, "keep_refs": [0], "characteristics": []})])
+        self.assertEqual(result["state"], "no_change")
+        self.assertFalse(result["created"])
+        historical = TenderSourceItem.objects.create(tender=self.tender, parent=parent, source_type="document_proposal", source_key="historical-confirmation", original_text=parent.original_text, quantity=parent.quantity, unit=parent.unit, requirements=parent.requirements, metadata={"relationship": "enrich", "supply_kind": "finished"}, is_active=False)
+        from tenders.analysis_presentation import resolve_tender_analysis_status
+        from tenders.models import TenderComputeJob
+        TenderComputeJob.objects.create(tender=self.tender, version="v2-test", status="needs_review")
+        self.assertEqual(resolve_tender_analysis_status(self.tender).pending_count, 0)
+        response = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        self.assertFalse(response.context["document_proposal_groups"])
+        self.assertTrue(TenderSourceItem.objects.filter(pk=historical.pk).exists())
+
+    def test_review_shows_only_new_facts_and_accepts_real_snapshot_with_old_confirmation(self):
+        parent = self.parents[0]
+        parent.requirements = {"characteristics": [{"name": "Материал", "value": "бумага"}]}
+        parent.save()
+        TenderSourceItem.objects.create(tender=self.tender, parent=parent, source_type="document_proposal", source_key="old-confirmation", original_text=parent.original_text, quantity=parent.quantity, unit=parent.unit, requirements=parent.requirements, metadata={"relationship": "enrich"}, is_active=False)
+        proposal = self.stage([self.row(parent, relationship="enrich", name=parent.original_text, quantity=parent.quantity, unit=parent.unit, supply_kind="finished", requirements={"reconciled": True, "keep_refs": [0], "characteristics": [{"name": "Печать", "value": "двусторонняя", "resolution": "new", "baseline_refs": [], "source_url": "https://zakupki.gov.ru/components"}]})])["created"][0]
+        response = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]))
+        rows = response.context["document_proposal_groups"][0]["items"][0]
+        self.assertEqual([row["name"] for row in rows["changed_rows"]], ["Печать"])
+        self.assertFalse(rows["removed_rows"])
+        self.assertEqual(len(rows["tz_rows"]), 2)
+        from tender_selection.services import decide_all_document_proposals
+        result = decide_all_document_proposals(self.admin, self.tender.pk, "accept", [proposal.pk])
+        self.assertEqual(result["changed"], 1)

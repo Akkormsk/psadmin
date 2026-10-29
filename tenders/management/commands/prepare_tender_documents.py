@@ -95,7 +95,7 @@ class Command(BaseCommand):
             quality = assess_quality(tender, source_items)
             result = enrich_suspicious_tender(tender, quality, enricher)
             state = result["state"]
-            job.status = TenderComputeJob.Status.NEEDS_REVIEW if result["created"] else TenderComputeJob.Status.READY if state == "no_data" else TenderComputeJob.Status.PARTIAL
+            job.status = TenderComputeJob.Status.NEEDS_REVIEW if result["created"] else TenderComputeJob.Status.READY if state in {"no_data", "no_change"} else TenderComputeJob.Status.PARTIAL
             job.diagnostics = {"source_item_count": len(source_items), "document_proposal_count": len(result["created"]),
                                "enrichment_state": state, "enrichment": result["diagnostics"], "documents_only": True,
                                "proposal_ids": [item.pk for item in result["created"]], "pilot_limit_rub": str(budget), "spent_before_rub": str(spent)}

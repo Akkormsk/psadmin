@@ -743,6 +743,10 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
         with transaction.atomic():
             for entry, parent in prepared:
                 payload = {"parent": parent.pk, "parent_display_name": entry.parent_display_name, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent), "replaces_source_ids": sorted(replacement_groups.get(parent.pk, [])), "supply_kind": entry.supply_kind, "structure_reason": entry.structure_reason}
+                from .document_enrichment import document_proposal_changes
+                candidate = TenderSourceItem(source_type="document_proposal", parent=parent, provenance=entry.provenance, original_text=entry.name, quantity=entry.quantity, unit=entry.unit, requirements=entry.requirements, metadata=payload)
+                if not document_proposal_changes(candidate):
+                    continue
                 proposal, _ = TenderSourceItem.objects.get_or_create(
                     tender=tender,
                     source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
@@ -755,7 +759,7 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
                               "confidence": entry.confidence, "parent": parent, "is_active": False},
                 )
                 proposals.append(proposal)
-        return {"created": proposals, "state": "needs_review" if proposals else "document_reading_incomplete" if outcome == "document_reading_incomplete" else "no_data", "diagnostics": [detail]}
+        return {"created": proposals, "state": "needs_review" if proposals else "document_reading_incomplete" if outcome == "document_reading_incomplete" else ("no_change" if prepared else "no_data"), "diagnostics": [detail]}
     else:
         extracted_groups = None
     groups = {}

@@ -283,3 +283,44 @@ def item_name_parts(item):
     origin = notification_origin(item, same_item=True)
     original = [{"name": "", "value": origin.original_text, "source": "notification"}] if origin else []
     return characteristic_display({"value": item.original_text, "source": "notification" if item.source_type == "notification" else "combined" if origin else "document", "source_facts": original})["parts"]
+
+
+def document_proposal_changes(item):
+    """Compare usable proposed data, ignoring citations and model explanations."""
+    if item.parent_id is None:
+        return {"structural": True, "rows": [], "removed": [], "name": True, "quantity": True, "unit": True}
+    parent = item.parent
+    metadata = item.metadata or {}
+    normalize = lambda value: " ".join(str(value if value is not None else "").split()).casefold()
+    def identity(row):
+        import json
+        value = row.get("value")
+        if not isinstance(value, (str, int, float, bool, type(None))):
+            value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return normalize(row.get("name")), normalize(value), row.get("scope", "product")
+    try:
+        before = effective_item_requirements(parent, strict=True).get("characteristics", [])
+        after = effective_item_requirements(item, strict=True).get("characteristics", [])
+    except ValueError as exc:
+        return {"error": str(exc), "structural": True, "rows": [], "removed": [], "name": False, "quantity": False, "unit": False}
+    old = {identity(row) for row in before}
+    current = {identity(row) for row in after}
+    covered = set(current)
+    def source_identities(row):
+        children = row.get("source_facts") or []
+        if children:
+            for child in children:
+                source_identities(child)
+        else:
+            covered.add(identity(row))
+    for row in after:
+        source_identities(row)
+    changes = {
+        "structural": metadata.get("relationship") != "enrich" or bool(metadata.get("replaces_source_ids")) or metadata.get("supply_kind") == "unclear",
+        "name": normalize(item.original_text) != normalize(parent.original_text),
+        "quantity": item.quantity != parent.quantity,
+        "unit": normalize(item.unit).rstrip('.') != normalize(parent.unit).rstrip('.'),
+        "rows": [row for row in after if identity(row) not in old],
+        "removed": [row for row in before if identity(row) not in covered],
+    }
+    return changes if any(changes.values()) else {}

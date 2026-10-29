@@ -29,6 +29,9 @@ def collect_report(number):
             'original_name': original.get('name'), 'original_quantity': original.get('quantity'),
             'original_unit_price': original.get('price'), 'original_total': original.get('sum'),
         })
+    from tenders.document_enrichment import document_proposal_changes
+    pending = list(tender.v2_source_items.filter(source_type="document_proposal", is_active=False).select_related("parent"))
+    pending_changes = [{"name": item.original_text, "changes": bool(document_proposal_changes(item))} for item in pending]
     latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').values('version', 'status', 'completed_at', 'error', 'diagnostics').first()
     if latest:
         from types import SimpleNamespace
@@ -53,7 +56,7 @@ def collect_report(number):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
     return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'read_only': True, 'model_called': False, 'latest_job': latest,
-            'pending_count': tender.v2_source_items.filter(source_type='document_proposal', is_active=False).count(), 'active_items': items}
+            'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
 def main():
