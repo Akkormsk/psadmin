@@ -3183,13 +3183,59 @@ def _money(value):
     return Decimal(value).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
+def calculation_group_quotes(lines):
+    """Use an original set quote only for its complete, unchanged membership."""
+    groups = {}
+    for line in lines:
+        if line.get("group_key"):
+            groups.setdefault(line["group_key"], []).append(line)
+    quotes = {}
+    for key, members in groups.items():
+        source = (members[0].get("requirements") or {}).get("source_group") or {}
+        if not isinstance(source, dict):
+            continue
+        if type(source.get("source_item_id")) is not int or source["source_item_id"] <= 0:
+            continue
+        if any(not isinstance((line.get("requirements") or {}).get("source_group"), dict) for line in members):
+            continue
+        expected = source.get("member_source_ids") or []
+        actual = [(line.get("requirements") or {}).get("source_item_id") for line in members]
+        if not isinstance(expected, list) or not all(type(value) is int and value > 0 for value in expected + actual):
+            continue
+        if (key != "source-" + str(source.get("source_item_id")) or not expected or
+                len(expected) != len(members) or len(set(actual)) != len(actual) or set(expected) != set(actual)):
+            continue
+        try:
+            total = Decimal(str(source.get("sum") or "0"))
+            if not total.is_finite() or total <= 0:
+                continue
+            if any((line.get("requirements") or {}).get("source_group") != source and
+                   any((line.get("requirements") or {}).get("source_group", {}).get(field) != source.get(field)
+                       for field in ("source_item_id", "member_source_ids", "quantity", "unit", "price", "sum")) for line in members):
+                continue
+            if any(Decimal(str(line["quantity"])) != Decimal(str(line["requirements"]["source_group"]["component_quantity"])) for line in members):
+                continue
+        except (ValueError, TypeError, KeyError, ArithmeticError):
+            continue
+        quotes[key] = total
+    return quotes
+
+
 def calculate_tender(lines, reduction_percent, russia_delivery, vat_rate):
     coefficient = (Decimal("100") - reduction_percent) / Decimal("100")
     totals = {"nmck_total": Decimal("0"), "rrp_total": Decimal("0"), "purchase_total": Decimal("0"), "gross_profit": Decimal("0")}
     calculated_lines = []
+    quotes = calculation_group_quotes(lines)
+    members = {}
     for line in lines:
-        nmck_total = line["quantity"] * line["nmck_unit"]
-        rrp_unit = line["nmck_unit"] * coefficient
+        if line.get("group_key"):
+            members.setdefault(line["group_key"], []).append(line)
+    group_costs = {key: Decimal("0") for key in members}
+    group_nmck = {key: Decimal("0") for key in members}
+    for line in lines:
+        grouped = line.get("group_key") in quotes
+        nmck_total = Decimal("0") if grouped else line["quantity"] * line["nmck_unit"]
+        rrp_unit = Decimal("0") if grouped else line["nmck_unit"] * coefficient
         rrp_total = line["quantity"] * rrp_unit
         purchase_unit = line["material_unit"] + line["application_unit"] + line["logistics_unit"]
         purchase_total = line["quantity"] * purchase_unit
@@ -3199,11 +3245,33 @@ def calculate_tender(lines, reduction_percent, russia_delivery, vat_rate):
         totals["rrp_total"] += rrp_total
         totals["purchase_total"] += purchase_total
         totals["gross_profit"] += profit
+        if line.get("group_key"):
+            group_costs[line["group_key"]] += purchase_total
+            group_nmck[line["group_key"]] += nmck_total
+        if grouped:
+            calculated_lines[-1].update(nmck_total=None, rrp_unit=None, rrp_total=None, profit=None)
+    group_totals = {}
+    for key, quote in quotes.items():
+        revenue = quote * coefficient
+        totals["nmck_total"] += quote
+        totals["rrp_total"] += revenue
+        totals["gross_profit"] += revenue
+        group_nmck[key] = quote
+    for key, rows in members.items():
+        known = key in quotes or all(row["nmck_unit"] > 0 for row in rows)
+        complete = known and all(row["quantity"] > 0 and row.get("name") and any(row[field] > 0 for field in ("material_unit", "application_unit", "logistics_unit")) for row in rows)
+        revenue = group_nmck[key] * coefficient
+        group_vat = revenue * vat_rate / Decimal("100")
+        expenses = group_costs[key] + group_vat
+        net = revenue - expenses
+        group_totals[key] = {"nmck_total": str(_money(group_nmck[key])) if known else None, "rrp_total": str(_money(revenue)) if known else None, "purchase_total": str(_money(group_costs[key])), "gross_profit": str(_money(revenue - group_costs[key])) if complete else None, "net_profit": str(_money(net)) if complete else None, "roi": str((net / expenses * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if complete and expenses else None, "is_incomplete": not complete, "delivery_excluded": bool(russia_delivery)}
     vat = totals["rrp_total"] * vat_rate / Decimal("100")
     all_expenses = totals["purchase_total"] + russia_delivery + vat
     net_profit = totals["rrp_total"] - all_expenses
     roi = net_profit / all_expenses * Decimal("100") if all_expenses else Decimal("0")
     summary = {**{key: _money(value) for key, value in totals.items()}, "vat": _money(vat), "all_expenses": _money(all_expenses), "net_profit": _money(net_profit), "roi": roi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "coefficient": coefficient.quantize(Decimal("0.0001"))}
+    if group_totals:
+        summary["groups"] = group_totals
     return calculated_lines, summary
 
 

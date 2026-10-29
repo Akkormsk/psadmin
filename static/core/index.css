@@ -2417,3 +2417,7 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
  .app-workspace-layer__bar .app-workspace-close-caption { display:inline; font-size:13px; }
  .app-workspace-layer__frame { min-width:0; }
 }
+
+.tender-group-profit { color:var(--ink-2); font-size:12px; }
+.tender-group-heading { flex-wrap:wrap; }
+.tender-lines input:disabled { background:var(--surface-2); color:var(--ink-3); }

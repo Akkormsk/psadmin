@@ -7,7 +7,7 @@ import json
 import re
 
 from .models import Order, OrderEstimate, OrderLine, TenderEstimate, TenderLine
-from .services import calculate_tender
+from .services import calculate_tender, calculation_group_quotes
 
 
 class EstimateActionError(ValueError):
@@ -124,6 +124,7 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
         if (any(line.group_key for line in existing_lines.values()) and
                 not any(isinstance(row, dict) and ("group_key" in row or row.get("id") in existing_lines) for row in meta["posted_lines"])):
             raise ValueError
+        source_quotes = {line.requirements.get("source_item_id"): line.requirements.get("source_group") for line in existing_lines.values() if isinstance(line.requirements, dict) and isinstance(line.requirements.get("source_group"), dict) and line.requirements.get("source_group")}
         calculation_complete = True
         for row in meta["posted_lines"]:
             if not isinstance(row, dict):
@@ -149,10 +150,17 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
                 "comment": str(row.get("comment", "")).strip(),
                 "requirements": row.get("requirements") if isinstance(row.get("requirements"), dict) else {},
             }
+            supplied_quote = line["requirements"].get("source_group")
+            stored_quote = source_quotes.get(line["requirements"].get("source_item_id"))
+            if supplied_quote and supplied_quote != stored_quote:
+                raise ValueError
+            if stored_quote:
+                from copy import deepcopy
+                line["requirements"]["source_group"] = deepcopy(stored_quote)
             has_expense = any(line[key] > 0 for key in ("material_unit", "application_unit", "logistics_unit"))
             if min(line["quantity"], line["nmck_unit"], line["material_unit"], line["application_unit"], line["logistics_unit"]) < 0:
                 raise ValueError
-            if not line["name"] or line["quantity"] <= 0 or line["nmck_unit"] <= 0 or not has_expense:
+            if not line["name"] or line["quantity"] <= 0 or not has_expense:
                 calculation_complete = False
             lines.append(line)
         if not lines:
@@ -161,6 +169,9 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     except (ValueError, TypeError, InvalidOperation):
         return estimate, "Проверьте реквизиты тендера и товарные позиции.", meta
 
+    quotes = calculation_group_quotes(lines)
+    if any(line["nmck_unit"] <= 0 and line.get("group_key") not in quotes for line in lines):
+        calculation_complete = False
     _calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
     estimate = estimate or (TenderEstimate(owner=user) if pipeline else OrderEstimate(owner=user))
     if user.is_superuser and data.get("owner_id"):
@@ -171,7 +182,7 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     estimate.russia_delivery = russia_delivery
     estimate.result_notes = data.get("result_notes", "").strip()[:5000]
     estimate.vat_rate_snapshot = settings.vat_rate
-    estimate.summary_snapshot = {key: str(value) for key, value in summary.items()}
+    estimate.summary_snapshot = {key: value if key == "groups" else str(value) for key, value in summary.items()}
     estimate.summary_snapshot["is_incomplete"] = not calculation_complete
     estimate.document_analysis = meta["posted_analysis"] or {}
     if not pipeline and not estimate.order_id:

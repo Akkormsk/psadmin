@@ -224,3 +224,72 @@ class EstimateShellTests(TestCase):
         _, error, _ = persist_estimate(self.user, {"tender_number": "1", "name": "Группы", "lines_json": json.dumps(rows)}, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
         self.assertTrue(error)
         self.assertEqual(list(estimate.lines.values_list("pk", flat=True)), [original.pk])
+
+
+class GroupEconomicsTests(TestCase):
+    def setUp(self):
+        from decimal import Decimal
+        self.D = Decimal
+        source = {"source_item_id": 50, "member_source_ids": [51, 52], "quantity": "100", "unit": "набор", "price": "1000", "sum": "100000", "component_quantity": "100"}
+        self.rows = [{"name": name, "group_key": "source-50", "group_name": "Набор", "quantity": Decimal("100"), "nmck_unit": Decimal("0"), "material_unit": Decimal(cost), "application_unit": Decimal("0"), "logistics_unit": Decimal("0"), "requirements": {"source_item_id": index, "source_group": dict(source)}} for name, cost, index in [("Первый", "200", 51), ("Второй", "300", 52)]]
+
+    def test_set_quote_counted_once_with_no_invented_child_money_and_delivery_once(self):
+        from .services import calculate_tender
+        calculated, result = calculate_tender(self.rows, self.D("30"), self.D("1000"), self.D("5"))
+        self.assertEqual(result["nmck_total"], self.D("100000"))
+        self.assertEqual(result["purchase_total"], self.D("50000"))
+        self.assertEqual(result["net_profit"], self.D("15500"))
+        self.assertEqual(result["roi"], self.D("28.44"))
+        group = result["groups"]["source-50"]
+        self.assertEqual(group["net_profit"], "16500.00")
+        self.assertEqual(group["roi"], "30.84")
+        self.assertTrue(group["delivery_excluded"])
+        self.assertFalse(group["is_incomplete"])
+        self.assertTrue(all(row["profit"] is None and row["nmck_total"] is None for row in calculated))
+        from copy import deepcopy
+        quoted_children = deepcopy(self.rows)
+        for row in quoted_children:
+            row["nmck_unit"] = self.D("999")
+        _, unchanged = calculate_tender(quoted_children, self.D("30"), self.D("1000"), self.D("5"))
+        self.assertEqual(unchanged["nmck_total"], self.D("100000"))
+
+
+    def test_changed_quantity_missing_member_or_duplicate_does_not_reuse_set_quote(self):
+        from copy import deepcopy
+        from .services import calculation_group_quotes
+        changed = deepcopy(self.rows); changed[0]["quantity"] = self.D("99")
+        for rows in [changed, self.rows[:1], self.rows + [self.rows[0]]]:
+            self.assertFalse(calculation_group_quotes(rows))
+
+    def test_save_preserves_complete_group_and_zero_child_quotes(self):
+        import json
+        from .estimate_actions import persist_estimate
+        from .models import TenderSettings
+        user = get_user_model().objects.create_user(username="group-finance")
+        data = {"tender_number": "synthetic", "name": "Набор", "reduction_percent": "30", "russia_delivery": "1000", "lines_json": json.dumps(self.rows, default=str)}
+        from .models import TenderLine
+        estimate = TenderEstimate.objects.create(owner=user, tender_number="synthetic", name="Набор")
+        for index, row in enumerate(self.rows):
+            TenderLine.objects.create(estimate=estimate, sort_order=index, **row)
+        estimate, error, _ = persist_estimate(user, data, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
+        self.assertIsNone(error)
+        self.assertFalse(estimate.summary_snapshot["is_incomplete"])
+        self.assertEqual(estimate.summary_snapshot["nmck_total"], "100000.00")
+        self.assertIsInstance(estimate.summary_snapshot["groups"], dict)
+        self.assertEqual(list(estimate.lines.values_list("nmck_unit", flat=True)), [self.D("0"), self.D("0")])
+        self.rows[0]["material_unit"] = self.D("0")
+        data["lines_json"] = json.dumps(self.rows, default=str)
+        estimate, error, _ = persist_estimate(user, data, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
+        self.assertIsNone(error)
+        self.assertTrue(estimate.summary_snapshot["is_incomplete"])
+        self.assertIsNone(estimate.summary_snapshot["groups"]["source-50"]["roi"])
+
+
+    def test_caller_cannot_forge_an_original_set_quote(self):
+        import json
+        from .estimate_actions import persist_estimate
+        from .models import TenderSettings
+        user = get_user_model().objects.create_user(username="untrusted-group-quote")
+        estimate, error, _ = persist_estimate(user, {"tender_number": "synthetic", "name": "Набор", "lines_json": json.dumps(self.rows, default=str)}, None, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
+        self.assertTrue(error)
+        self.assertIsNone(estimate)
