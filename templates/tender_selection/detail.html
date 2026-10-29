@@ -6,11 +6,14 @@
 
 {% block content %}
 <div class="container ts-detail ts-detail--document" data-workspace-single-layer>
+
   {% if request.user.is_superuser %}
   <a href="{% if back_to_archive %}{% url 'tender_selection:archive' %}{% else %}{% url 'tender_selection:list' %}{% endif %}" class="back-link">← {% if back_to_archive %}к архиву{% else %}к списку{% endif %}</a>
   {% elif pushed_estimate_id %}
   <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}" class="back-link">← назад к просчёту</a>
   {% endif %}
+  <div class="ts-mobile-close-row" id="ts-mobile-close-row" hidden><span>Тендер № {{ tender.purchase_number }}</span><a href="{% if not request.user.is_superuser and pushed_estimate_id %}{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% else %}{{ return_url }}{% endif %}" aria-label="Закрыть тендер">Закрыть <span aria-hidden="true">×</span></a></div>
+  <script>if(window.parent===window)document.getElementById('ts-mobile-close-row').hidden=false;</script>
   <h1>Тендеры</h1>
   {% if request.user.is_superuser %}{% if estimate or tender.review != "unreviewed" %}{% include "tender_selection/_nav.html" with active="board" %}{% else %}{% include "tender_selection/_nav.html" with active="incoming" %}{% endif %}{% endif %}
   {% if is_archived %}
