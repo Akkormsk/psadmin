@@ -139,6 +139,7 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
                 if group_key in group_names and group_names[group_key] != group_name:
                     raise ValueError
                 group_names[group_key] = group_name
+            requirements = row.get("requirements", existing.requirements if existing else {})
             line = {"group_key": group_key, "group_name": group_name,
                 "name": str(row.get("name", "")).strip(),
                 "quantity": _number(row.get("quantity")),
@@ -148,7 +149,7 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
                 "logistics_unit": _number(row.get("logistics_unit")),
                 "product_url": str(row.get("product_url", "")).strip(),
                 "comment": str(row.get("comment", "")).strip(),
-                "requirements": row.get("requirements") if isinstance(row.get("requirements"), dict) else {},
+                "requirements": requirements if isinstance(requirements, dict) else {},
             }
             supplied_quote = line["requirements"].get("source_group")
             stored_quote = source_quotes.get(line["requirements"].get("source_item_id"))

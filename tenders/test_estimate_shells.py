@@ -277,6 +277,13 @@ class GroupEconomicsTests(TestCase):
         self.assertEqual(estimate.summary_snapshot["nmck_total"], "100000.00")
         self.assertIsInstance(estimate.summary_snapshot["groups"], dict)
         self.assertEqual(list(estimate.lines.values_list("nmck_unit", flat=True)), [self.D("0"), self.D("0")])
+        concise_rows = [{"id": line.pk, "name": line.name, "quantity": str(line.quantity), "nmck_unit": "0", "material_unit": str(line.material_unit)} for line in estimate.lines.all()]
+        data["lines_json"] = json.dumps(concise_rows)
+        estimate, error, _ = persist_estimate(user, data, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
+        self.assertIsNone(error)
+        self.assertFalse(estimate.summary_snapshot["is_incomplete"])
+        self.assertEqual(estimate.summary_snapshot["nmck_total"], "100000.00")
+        self.assertTrue(all(line.requirements.get("source_group") for line in estimate.lines.all()))
         self.rows[0]["material_unit"] = self.D("0")
         data["lines_json"] = json.dumps(self.rows, default=str)
         estimate, error, _ = persist_estimate(user, data, estimate, TenderSettings.objects.get_or_create(pk=1)[0], pipeline=True)
