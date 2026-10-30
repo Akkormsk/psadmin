@@ -26,6 +26,7 @@ def structured_item(raw, path, source_url=""):
     if not isinstance(restrictions, dict):
         return annotation()
     flags, basis = {}, []
+    captions = {"ban": "Запрет на иностранные товары", "restriction": "Ограничение допуска иностранных товаров", "advantage": "Преимущество российским товарам"}
     for field, status in FIELDS.items():
         value = restrictions.get(field)
         text = str(value).casefold()
@@ -34,12 +35,13 @@ def structured_item(raw, path, source_url=""):
         flags[status] = text == "true"
         basis.append({"kind": "notification", "path": path + ".restrictionsInfo." + field,
                       "value": value, "quote": field + " = " + json.dumps(value, ensure_ascii=False),
-                      "source_url": source_url if source_url.startswith("https://zakupki.gov.ru/") else ""})
+                      "human_text": captions[status] + (": да" if text == "true" else ": нет"),
+                      "source_url": source_url if isinstance(source_url, str) and source_url.startswith("https://zakupki.gov.ru/") else ""})
     if flags.get("ban"):
         status = "ban"
     elif flags.get("restriction"):
         status = "restriction"
-    elif flags == {"ban": False, "restriction": False, "advantage": True}:
+    elif flags.get("advantage"):
         status = "advantage"
     elif flags == {"ban": False, "restriction": False, "advantage": False} and not any(str(value).casefold() not in {"false", "none", "", "[]", "{}"} for key, value in restrictions.items() if key not in FIELDS):
         status = "none"

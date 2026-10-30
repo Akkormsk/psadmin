@@ -14,6 +14,7 @@ class ItemEvidenceTests(SimpleTestCase):
         cases = [(dict(isProhibitionForeignPurchaseObjects="true"), "red"),
                  (dict(isRestrictForeignPurchaseObjects="true"), "yellow"),
                  (dict(isProhibitionForeignPurchaseObjects="false", isRestrictForeignPurchaseObjects="false", isPreferenseRFPurchaseObjects="true"), "green"),
+                 (dict(isPreferenseRFPurchaseObjects="true"), "green"),
                  ({}, "gray")]
         for flags, color in cases:
             result = structured_item(self.raw(**flags), "$.position[2]")
@@ -139,7 +140,9 @@ class NationalReviewTests(TestCase):
         response = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]), {"workspace": 1}, secure=True)
         self.assertContains(response, "ts-national-dot--red")
         self.assertContains(response, "ts-national-dot--yellow")
-        self.assertContains(response, "isProhibitionForeignPurchaseObjects")
+        self.assertContains(response, "Запрет на иностранные товары: да")
+        self.assertNotContains(response, "isProhibitionForeignPurchaseObjects")
+        self.assertNotContains(response, "$.source.notificationInfo")
         self.assertContains(response, "Товары и основания")
 
     def test_assistant_read_uses_same_item_evidence_service(self):
