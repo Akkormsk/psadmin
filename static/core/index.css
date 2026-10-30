@@ -2425,10 +2425,11 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .ts-item-national { display:inline-block; margin-left:8px; vertical-align:top; font-size:11px; font-weight:400; }
 .ts-item-national > summary { display:inline-flex; align-items:center; gap:5px; list-style:none; cursor:pointer; color:var(--ink-2); }
 .ts-item-national > summary::-webkit-details-marker { display:none; }
-.ts-national-dot { width:6px; height:6px; border-radius:50%; flex:none; background:var(--ink-3); }
-.ts-national-dot--red { background:var(--negative-ink); }
-.ts-national-dot--yellow { background:var(--warning-ink); }
-.ts-national-dot--green { background:var(--positive-ink); }
+.ts-national-pill { --national-ink:var(--ink-3); display:inline-flex; align-items:center; justify-content:center; flex:none; padding:2px 8px; border:1px solid color-mix(in srgb,var(--national-ink) 35%,transparent); border-radius:999px; background:color-mix(in srgb,var(--national-ink) 9%,transparent); color:var(--national-ink); font-size:11px; font-weight:600; line-height:1.4; }
+.ts-national-pill--red { --national-ink:var(--negative-ink); }
+.ts-national-pill--yellow { --national-ink:var(--warning-ink); }
+.ts-national-pill--green { --national-ink:var(--positive-ink); }
+.ts-item-national > summary:focus-visible { outline:2px solid var(--ink-3); outline-offset:3px; border-radius:999px; }
 .ts-item-national > div { padding:8px 0; max-width:640px; color:var(--ink-2); font-size:12px; }
 .ts-item-national p { margin:0 0 6px; }
 .ts-item-national small,.ts-national-risk-basis small { display:block; overflow-wrap:anywhere; color:var(--ink-3); }
