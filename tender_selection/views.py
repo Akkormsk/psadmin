@@ -86,11 +86,13 @@ def _risk_badge(tender) -> dict:
         return {"state": "error", "text": "риск: ошибка"}
     if not tender.risk_checked_at or "risk_factors" not in (tender.risk_assessment or {}):
         return {"state": "pending", "text": "риск: ожидает"}
+    from .national_regime import risk_projection
+    assessment = risk_projection(tender, tender.risk_assessment)
     return {
         "low": {"state": "ok", "text": "риск: низкий"},
         "medium": {"state": "warn", "text": "риск: средний"},
         "high": {"state": "error", "text": "риск: высокий"},
-    }.get((tender.risk_assessment or {}).get("risk_level"), {"state": "ok", "text": "риск: оценён"})
+    }.get(assessment.get("risk_level"), {"state": "pending", "text": "риск: требуется проверка"})
 
 
 def _procurement_status(tender, card=None) -> dict:
@@ -585,6 +587,7 @@ def tender_detail(request, pk):
             "removed_rows": changes.get("removed", []),
             "name_changed": changes.get("name"), "quantity_changed": changes.get("quantity"), "unit_changed": changes.get("unit"),
             "structural_change": changes.get("structural"),
+            "national_change": changes.get("national_regime"),
             "characteristics": [row for row in characteristics if row.get("scope") != "completeness"],
             "completeness": [row for row in characteristics if row.get("scope") == "completeness"],
             "supply_kind": metadata.get("supply_kind", ""),
@@ -598,6 +601,7 @@ def tender_detail(request, pk):
     v2_questions = list(OwnerInteraction.objects.filter(tender=tender, status="open").select_related("source_item", "compute_line").order_by("pk"))
     v2_job = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk").first()
     display_items = card.get("items", []) if card else []
+    active_sources = []
     has_document_items = False
     document_item_count = 0
     original_source_texts = []
@@ -638,7 +642,7 @@ def tender_detail(request, pk):
                 details = [characteristic_display(row, documents=proposal_documents) for row in rows if isinstance(row, dict)]
                 components = [{"name": component.name, "quantity_per_parent": component.quantity_per_parent, "unit": component.unit} for component in commercial.components.filter(status="active").order_by("sort_order", "pk")]
                 changed = commercial.structure != TenderCommercialItem.Structure.SIMPLE or (source and source.source_type in {"document_enrichment", "document_extraction"})
-                display_items.append({"name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
+                display_items.append({"source_id": source.pk if source else None, "name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
                     "characteristics": details, "components": components if commercial.structure == TenderCommercialItem.Structure.COMPOSITE else [],
                     "source_mark": "Уточнено по ТЗ" if changed else "", "source_mark_kind": "enriched", "source_details": "Документация" if changed else "", "source_evidence": "", "source_changes": [], "original_source_text": "",
                     "composition_question": "", "composition_question_id": None, "composition_options": []})
@@ -669,6 +673,7 @@ def tender_detail(request, pk):
                 if is_document_item:
                     has_document_items = True
                 display_items.append({
+                    "source_id": source.pk,
                     "name": source.original_text,
                     "name_parts": item_name_parts(source),
                     "parent_display_name": metadata.get("parent_display_name", "") if metadata.get("relationship") == "component" else "",
@@ -705,6 +710,16 @@ def tender_detail(request, pk):
                     item["composition_question"] = question.question
                     item["composition_question_id"] = question.pk
                     item["composition_options"] = list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else []
+    from .national_regime import annotation, resolve_item
+    for item in display_items:
+        if active_sources:
+            source = next((source for source in active_sources if source.pk == item.get("source_id")), None)
+            origin = notification_origin(source) if source else None
+            position = (origin.metadata or {}).get("notification_index") if origin else None
+            original = notification_by_index.get(position, {})
+            item["national_regime"] = resolve_item(original.get("national_regime"), (source.metadata or {}).get("national_regime") if source else None, component=bool(source and source.metadata.get("relationship") == "component"))
+        else:
+            item["national_regime"] = item.get("national_regime") or annotation()
     display_item_groups, ungrouped_display_items = [], []
     grouped = {}
     for item in display_items:
@@ -722,6 +737,7 @@ def tender_detail(request, pk):
             display_item_groups.append(grouped[key])
         grouped[key]["items"].append(item)
     for group in display_item_groups:
+        group["national_regime"] = group["original"].get("national_regime") or annotation()
         group["name_parts"] = characteristic_display({"value": group["name"], "source": "combined", "source_facts": [{"value": group["original"].get("name", ""), "source": "notification"}]})["parts"]
     for group in document_proposal_groups:
         group["can_keep_quote"] = len(group["items"]) == 1 and group["items"][0]["quote_eligible"]
@@ -806,6 +822,8 @@ def tender_detail(request, pk):
     protocol = _protocol_view(tender)
     if analysis_snapshot and resolve_tender_analysis_status(tender).revision != analysis_status.revision:
         return HttpResponse(status=409)
+    from .national_regime import risk_projection
+    risk = risk_projection(tender, risk, card)
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,

@@ -198,7 +198,7 @@ register_tool(AssistantTool(
 
 register_tool(AssistantTool(
     "tender.analyze", "Обновить анализ документов тендера",
-    "Запускает фоновый разбор документов одного тендера с ограничением стоимости. Подтверждает запуск, а не завершение. Не строит маршрут и не принимает предложения автоматически.",
+    "Запускает фоновый разбор документов одного тендера с ограничением стоимости. Уточняет ТЗ и требования 1875 по позициям с проверяемыми основаниями в существующем потоке согласования. Подтверждает запуск, а не завершение. Не строит маршрут и не принимает предложения автоматически.",
     {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}},
     False, True, True,
     lambda user, payload: _tender_action(refresh_document_analysis, user, payload, "tender_id"),
@@ -207,7 +207,7 @@ register_tool(AssistantTool(
 
 register_tool(AssistantTool(
     "tender.document_proposals_all", "Принять или отклонить все правки товаров",
-    "Одной транзакцией принимает или отклоняет весь показанный список: уточнение товара с комплектацией либо состав набора, включая пересмотр прежней разбивки. Исходные данные и общая цена сохраняются; изменившийся состав требует нового просмотра. Подтверждения без изменений не требуют согласования; список содержит только реальные правки.",
+    "Одной транзакцией принимает или отклоняет весь показанный список: уточнение товара с комплектацией либо состав набора, включая пересмотр прежней разбивки. Исходные данные и общая цена сохраняются; изменившийся состав требует нового просмотра. Подтверждения без изменений не требуют согласования; список содержит только реальные правки, включая подтверждённые требования 1875 с источниками.",
     {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "decision": {"type": "accept|reject", "required": True, "label": "Решение", "choices": (("accept", "Принять все"), ("reject", "Отклонить все"))}, "proposal_ids": {"type": "integer[]", "required": True, "label": "Проверенные предложения", "reference": {"model": "tenders.TenderSourceItem", "label": ["original_text"]}}},
     False, True, True,
     lambda user, payload: _tender_action(decide_all_document_proposals, user, payload, "tender_id", "decision", "proposal_ids"),

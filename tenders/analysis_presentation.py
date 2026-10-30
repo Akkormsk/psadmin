@@ -70,6 +70,7 @@ _VALIDATION_MESSAGES = {
 }
 
 _REJECTION_MESSAGES = {
+    "missing_items_array": "Модель вернула некорректный формат списка товаров; прежние данные сохранены.",
     "invalid_parent_source_item_id": "Не удалось связать результат с исходной позицией.",
     "invalid_name_or_source": "Не подтверждены название товара или источник сведений.",
     "untrusted_compiled_reconciliation": "Ответ содержит неподтверждённый результат объединения.",

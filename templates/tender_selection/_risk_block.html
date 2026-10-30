@@ -21,7 +21,7 @@
 <div class="ts-risk-factors">
   <strong>Факторы оценки</strong>
   <ul>
-    {% for factor in risk.risk_factors %}<li class="ts-risk-factor ts-risk-factor--{{ factor.level }}">{{ factor.text }}</li>{% endfor %}
+    {% for factor in risk.risk_factors %}<li class="ts-risk-factor ts-risk-factor--{{ factor.level }}">{{ factor.text }}{% if factor.items %}<details class="ts-national-risk-basis"><summary>Товары и основания</summary>{% for item in factor.items %}<p><strong>{{ item.name }}</strong></p>{% if item.regime.basis %}<ul>{% include "tender_selection/_1875_basis.html" with regime=item.regime %}</ul>{% else %}<p>По товару нет подтверждённого основания; это неопределённость, а не установленный запрет.</p>{% endif %}{% endfor %}</details>{% endif %}</li>{% endfor %}
   </ul>
 </div>
 {% endif %}

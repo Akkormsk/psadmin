@@ -954,10 +954,11 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     загружено (нужен список документов) — иначе сначала notification_for(tender).
     Сбой не роняет карточку: отмечаем попытку и сохраняем причину в risk_error.
     """
+    from .national_regime import risk_projection
     if tender.law != "fz44":
         return None
     if tender.risk_assessment and "risk_factors" in tender.risk_assessment and not force:
-        return tender.risk_assessment
+        return risk_projection(tender, tender.risk_assessment)
     if not tender.notification_raw:
         return None
 
@@ -996,13 +997,14 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         data.update(_classify(data.get("risk_facts")))
         data["degraded"] = True
         if _keeps_previous_assessment(tender, data):
-            return tender.risk_assessment
+            return risk_projection(tender, tender.risk_assessment)
+        data = risk_projection(tender, data)
         tender.risk_assessment = data
         tender.risk_assessment_docs = []
         tender.risk_checked_at = timezone.now()
         tender.risk_error = ""
         tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
-        return tender.risk_assessment
+        return risk_projection(tender, tender.risk_assessment)
 
     try:
         result = assess(context)
@@ -1019,13 +1021,14 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     policy = _classify(data.get("risk_facts"))
     data.update(policy)
     if _keeps_previous_assessment(tender, data):
-        return tender.risk_assessment
+        return risk_projection(tender, tender.risk_assessment)
+    data = risk_projection(tender, data)
     tender.risk_assessment = data
     tender.risk_assessment_docs = used_names
     tender.risk_checked_at = timezone.now()
     tender.risk_error = ""
     tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
-    return tender.risk_assessment
+    return risk_projection(tender, tender.risk_assessment)
 
 
 def start_risk_assessment_in_background(tender_id: int) -> None:

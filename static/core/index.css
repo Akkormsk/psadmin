@@ -2421,3 +2421,18 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .tender-group-profit { color:var(--ink-2); font-size:12px; }
 .tender-group-heading { flex-wrap:wrap; }
 .tender-lines input:disabled { background:var(--surface-2); color:var(--ink-3); }
+
+.ts-item-national { display:inline-block; margin-left:8px; vertical-align:baseline; font-size:11px; font-weight:400; }
+.ts-item-national > summary { display:inline-flex; align-items:center; gap:5px; list-style:none; cursor:pointer; color:var(--ink-2); }
+.ts-item-national > summary::-webkit-details-marker { display:none; }
+.ts-national-dot { width:6px; height:6px; border-radius:50%; flex:none; background:var(--ink-3); }
+.ts-national-dot--red { background:var(--negative-ink); }
+.ts-national-dot--yellow { background:var(--warning-ink); }
+.ts-national-dot--green { background:var(--positive-ink); }
+.ts-item-national > div { padding:8px 0; max-width:640px; color:var(--ink-2); font-size:12px; }
+.ts-item-national p { margin:0 0 6px; }
+.ts-item-national small,.ts-national-risk-basis small { display:block; overflow-wrap:anywhere; color:var(--ink-3); }
+.ts-item-national li,.ts-national-risk-basis li { margin-bottom:6px; overflow-wrap:anywhere; }
+.ts-item-national a,.ts-national-risk-basis a { margin-left:6px; }
+.ts-national-risk-basis { font-size:12px; font-weight:400; margin-top:5px; }
+.ts-national-risk-basis > summary { color:var(--ink-3); cursor:pointer; }

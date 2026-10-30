@@ -58,13 +58,14 @@ def _characteristics(okpd_or_ktru: dict) -> list[dict]:
 
 
 def _items(source: dict) -> list[dict]:
+    from .national_regime import structured_item
     raw_items = _dig(
         source,
         "notificationInfo", "purchaseObjectsInfo", "notDrugPurchaseObjectsInfo", "purchaseObject",
         default=[],
     )
     items = []
-    for it in _as_list(raw_items):
+    for index, it in enumerate(_as_list(raw_items)):
         classifier = it.get("OKPD2") or it.get("KTRU") or {}
         code = classifier.get("OKPDCode") or classifier.get("code") or ""
         code_name = classifier.get("OKPDName") or classifier.get("name") or ""
@@ -78,6 +79,7 @@ def _items(source: dict) -> list[dict]:
                 "price": it.get("price", ""),
                 "sum": it.get("sum", ""),
                 "characteristics": _characteristics(classifier),
+                "national_regime": structured_item(it, "$.source.notificationInfo.purchaseObjectsInfo.notDrugPurchaseObjectsInfo.purchaseObject" + (f"[{index}]" if isinstance(raw_items, list) else ""), _dig(source, "commonInfo", "href", default="")),
             }
         )
     return items

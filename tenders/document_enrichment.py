@@ -323,4 +323,10 @@ def document_proposal_changes(item):
         "rows": [row for row in after if identity(row) not in old],
         "removed": [row for row in before if identity(row) not in covered],
     }
+    national = metadata.get("national_regime") or {}
+    previous = (parent.metadata or {}).get("national_regime") or {}
+    national = national if isinstance(national, dict) else {}
+    previous = previous if isinstance(previous, dict) else {}
+    if national.get("status") not in (None, "unknown") and national.get("basis") and national != previous:
+        changes["national_regime"] = national
     return changes if any(changes.values()) else {}

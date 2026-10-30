@@ -1009,6 +1009,16 @@ class TenderSourceItem(models.Model):
     supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by_items")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    def national_regime(self):
+        from tender_selection.national_regime import source_item_status
+        status = source_item_status(self)
+        return "\n".join([status["label"], status["description"], *[" · ".join(str(basis.get(key) or "") for key in ("quote", "path", "source_url", "page_or_section")) for basis in status["basis"]]])
+
+    assistant_read_computed_fields = {
+        "national_regime": models.TextField("Нацрежим 1875: статус и основания", help_text="Подтверждённые требования заказчика по этой позиции; неизвестное не означает отсутствие требований."),
+    }
+    assistant_read_computed_related = ("tender", "parent")
+
     class Meta:
         constraints=[models.UniqueConstraint(fields=["tender","source_key"],name="unique_v2_source_item")]
 

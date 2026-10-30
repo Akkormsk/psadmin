@@ -8,7 +8,7 @@
     {% for group in display_item_groups %}
     <details class="ts-item-group" open>
       <summary><span><strong>{% for part in group.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}</strong><small>{% if group.supply_kind == "kit" %}Набор{% else %}Состав исходной позиции{% endif %} · {{ group.items|length }} составляющих · {{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}</small></span><span><small>За 1 {% if group.supply_kind == "kit" %}набор{% else %}единицу поставки{% endif %}</small><strong>{{ group.original.price|rub_precise }}</strong><small>Итого{% if group.original.quantity %} за {{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}{% endif %}: {{ group.original.sum|rub_precise }}</small></span></summary>
-      <div class="ts-group-body">
+      <div class="ts-group-body">{% include "tender_selection/_1875.html" with regime=group.national_regime %}
       <p class="ts-sub">Цена группы не распределялась между составляющими.</p>
       {% include "tender_selection/_item_table.html" with items=group.items components_only=True %}</div>
     </details>
@@ -26,6 +26,7 @@
           <strong{% if proposal.name_changed %} class="ts-fact-added"{% endif %}>{{ proposal.name }}</strong>
           {% if proposal.relationship == "component" %}<span class="ts-sub"> · товар в составе {{ group.display_name }} · {{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}</span>
           {% elif proposal.structural_change %}<p>{% if proposal.supply_kind == "unclear" %}Нужно проверить состав: {{ proposal.structure_reason }}{% else %}Объединить прежние составляющие в один товар.{% endif %}</p>{% endif %}
+          {% if proposal.national_change %}<p class="ts-sub">Уточнён нацрежим товара:</p>{% include "tender_selection/_1875.html" with regime=proposal.national_change %}{% endif %}
           {% if proposal.name_changed %}<p class="ts-sub">Уточнено название.</p>{% endif %}
           {% if proposal.quantity_changed or proposal.unit_changed %}<p class="ts-fact-added">Количество: {{ proposal.quantity|floatformat:"-2" }} {{ proposal.unit }}</p>{% endif %}
           {% if proposal.changed_rows %}<details class="ts-review-facts"{% if proposal.changed_rows|length < 5 and proposal.relationship != "component" %} open{% endif %}><summary>Дополнения и уточнения ТЗ · {{ proposal.changed_rows|length }}</summary><ul class="ts-chars">{% for ch in proposal.changed_rows %}<li>{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>{% endif %}
