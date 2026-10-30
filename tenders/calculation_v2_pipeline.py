@@ -318,7 +318,7 @@ class GatewayDocumentEnricher:
             text = ' '.join(text.split())
             # "1,5" and "1.5" denote the same decimal; neither integer nor
             # the position/direction of any inequality can change.
-            text = re.sub(r'(?<=\d)[,.](?=\d)', '.', text)
+            text = re.sub(r'(?<=\d)[,.](?=\d{1,2}(?!\d))', '.', text)
             text = re.sub(r'\s*([≤≥<>])\s*', r'\1', text)
             # Source range "≥ 13.5 и ⩽ 15" and short quote "13,5 ≤ 15"
             # remain tied to the SAME cell with exactly the same bounds.
