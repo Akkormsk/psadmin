@@ -34,34 +34,45 @@ def analysis_cost(job) -> dict:
     if not job:
         return {}
     diagnostics = job.diagnostics or {}
+    staged = diagnostics.get("stages") or {}
     entries = diagnostics.get("enrichment") or []
     entries = [entries] if isinstance(entries, dict) else list(entries)
-    entries.append(diagnostics.get("routing") or {})
-    total, unknown, received = Decimal("0"), False, False
+    if staged:
+        entries = ([] if "structure" in staged else entries) + list(staged.values())
+    else:
+        entries.append(diagnostics.get("routing") or {})
+    total, unknown, received, actual = Decimal("0"), False, False, True
     for entry in entries:
         usage = entry.get("usage") or (entry.get("extraction") or {}).get("usage") or {}
         if not usage:
             unknown = unknown or bool(entry.get("provider_call_happened"))
             continue
         received = True
+        if entry.get('actual_cost_rub') is not None:
+            total += Decimal(str(entry['actual_cost_rub']))
+            continue
+        actual = False
         amount = spend_rub(usage, entry.get("model", ""))
         if amount is None:
             unknown = True
         else:
             # Preserve the tariff used when the job ran, if it was recorded.
-            total += Decimal(str(entry.get("cost_rub", amount)))
+            total += Decimal(str(entry.get("cost_rub") if entry.get("cost_rub") is not None else amount))
     if not received and job.total_cost:
         total = job.total_cost
     active = job.status in _ACTIVE
     formatted = f"{total:.2f}".replace(".", ",")
     label = "Стоимость уточняется" if unknown else "Стоимость после ответа" if active and not received else "Без нового расхода" if not total else f"≈ {formatted} ₽"
+    if actual and received and not unknown:
+        label = f"{formatted} ₽"
     if unknown and total:
         label = f"от {formatted} ₽ · часть стоимости неизвестна"
     elif not unknown and 0 < total < Decimal("0.01"):
         label = "< 0,01 ₽"
     return {"amount_rub": None if unknown else str(total), "known_rub": str(total),
-        "incomplete": unknown, "pending": active, "label": label,
-        "description": "За это обновление, включая неудачные ответы. Оценка по токенам и сохранённому тарифу, без скидки кэша; не счёт Timeweb. Текущий запрос учтётся после ответа."}
+        "incomplete": unknown, "pending": active, "label": label, "actual": actual and received and not unknown,
+        "steps": {key: str(row.get('actual_cost_rub') if row.get('actual_cost_rub') is not None else row.get('cost_rub') or '0') for key, row in staged.items()},
+        "description": "По начислениям Timeweb за это обновление, включая кэш." if actual and received and not unknown else "За это обновление, включая неудачные ответы. Оценка по токенам и сохранённому тарифу, без скидки кэша; не счёт Timeweb. Текущий запрос учтётся после ответа."}
 
 
 _STATUS = {
@@ -211,9 +222,12 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         "server_time": now.isoformat(), "elapsed_seconds": max(0, int(((job.completed_at or now) - started).total_seconds())) if started else 0,
         "heartbeat_at": job.updated_at.isoformat() if job else None,
         "worker_alive": not active or not job.started_at or (now - job.updated_at).total_seconds() < 45,
-        "stage": refresh.get("stage", ""), "full_refresh": bool(refresh),
+        "stage": refresh.get("stage", ""), "full_refresh": bool(refresh), "published_revision": (job.diagnostics or {}).get("published_revision", 0) if job else 0,
         "retryable": bool(active and (now - job.updated_at).total_seconds() > 900)}
-    stamp = job.updated_at.isoformat() if job and job.updated_at else ""
+    labels = {'notification': 'Извещение', 'documents': 'Документы', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
+    ledger = (job.diagnostics or {}).get('stages', {}) if job else {}
+    progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
+    stamp = str(job.diagnostics["published_revision"]) if job and "published_revision" in job.diagnostics else job.updated_at.isoformat() if job and job.updated_at else ""
     revision = f"{job.pk if job else 0}:{stamp}:{code}:{question_count}:{pending_count}"
     return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=active, issues=issues, progress=progress, cost=analysis_cost(job))
 

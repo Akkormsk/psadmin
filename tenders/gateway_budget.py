@@ -367,3 +367,36 @@ def report_line(usage: dict, models: dict[str, dict] | None = None) -> str:
     if known:
         parts.append(f"~{total:.2f} ₽")
     return "; ".join(parts)
+
+
+def reconcile_intake_billing(job):
+    """Attach uniquely matched provider charges; never treat an unmatched estimate as billing."""
+    from datetime import datetime, timedelta, timezone as dt_timezone
+    from decimal import Decimal
+    from urllib.parse import urlencode
+    stages = job.diagnostics.get('stages') or {}
+    pending = [(name, row) for name, row in stages.items() if row.get('usage') and row.get('started_at') and not row.get('billing_request_id')]
+    token = os.getenv('TIMEWEB_API_TOKEN', '').strip()
+    if not pending or not token:
+        return
+    start = min(datetime.fromisoformat(row['started_at']) for _, row in pending) - timedelta(seconds=2)
+    query = urlencode({'from': start.isoformat(), 'to': datetime.now(dt_timezone.utc).isoformat(), 'limit': 100})
+    request = urllib.request.Request('https://api.timeweb.cloud/api/v1/cloud-ai/ai-logs/requests?' + query, headers={'Authorization': 'Bearer ' + token})
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            records = json.load(response).get('ai_logs', [])
+    except (OSError, ValueError):
+        return
+    used = {row.get('billing_request_id') for row in stages.values() if row.get('billing_request_id')}
+    for _, stage in pending:
+        usage = stage['usage']
+        matches = [row for row in records if row.get('request_id') not in used and row.get('requested_model') == stage.get('model')
+                   and row.get('input_tokens') == usage.get('prompt_tokens') and row.get('output_tokens') == usage.get('completion_tokens')
+                   and datetime.fromisoformat(row['created_at'].replace('Z', '+00:00')) >= datetime.fromisoformat(stage['started_at']) - timedelta(seconds=2)]
+        if len(matches) != 1 or matches[0].get('cost_total') is None:
+            continue
+        row = matches[0]
+        stage.update(billing_request_id=row['request_id'], actual_cost_rub=str(Decimal(str(row['cost_total']))),
+                     billed_cache_read_tokens=row.get('cache_read_tokens'), billed_cache_write_tokens=row.get('cache_write_tokens'),
+                     billed_cache_read_rub=row.get('cost_cache_read'), billed_cache_write_rub=row.get('cost_cache_write'))
+        used.add(row['request_id'])

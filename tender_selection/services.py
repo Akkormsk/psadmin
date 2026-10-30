@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import json
 import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -1957,6 +1958,10 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
     proposals = [item for item in proposals if document_proposal_changes(item)]
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
+    if any(item.metadata.get("analysis_incomplete") for item in proposals):
+        from tenders.models import TenderComputeJob
+        if decision == "accept" or TenderComputeJob.objects.filter(tender_id=tender_id, status__in=["preparing_input", "running", "routing", "preparing"]).exists():
+            raise ValueError("ТЗ ещё обрабатывается; незавершённые изменения принять нельзя")
     if decision == "accept":
         from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
         if len(proposals) > 1 and any(is_item_enrichment(item) for item in proposals):
@@ -2040,6 +2045,7 @@ def _refresh_phase(job, phase, label, *, status="preparing_input"):
     if pending.get("reroute_requested_by"):
         job.diagnostics["reroute_requested_by"] = pending["reroute_requested_by"]
     job.status = status
+    job.diagnostics.setdefault("stages", {})[phase] = {"state": "running", "started_at": timezone.now().isoformat()}
     job.diagnostics["refresh"] = {**job.diagnostics.get("refresh", {}), "stage": phase, "label": label, "stage_started_at": timezone.now().isoformat()}
     job.save(update_fields=["status", "diagnostics", "updated_at"])
 
@@ -2052,6 +2058,124 @@ def _document_input_fingerprint(tender):
     return _fingerprint({"notification": tender.notification_raw,
         "items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity), "unit": item.unit, "requirements": effective_item_requirements(item)} for item in active_calculation_items(tender)],
         "documents": list(DocumentPreview.objects.filter(url__in=urls).order_by("url").values("url", "html", "error", "kind"))})
+
+
+def _publish_intake(job):
+    from tenders.gateway_budget import reconcile_intake_billing
+    reconcile_intake_billing(job)
+    job.diagnostics['published_revision'] = job.diagnostics.get('published_revision', 0) + 1
+    job.save(update_fields=['diagnostics', 'updated_at'])
+
+
+def _save_intake_proposals(job, result, *, incomplete):
+    from tenders.models import TenderSourceItem
+    ids = [item.pk for item in result['created']]
+    with transaction.atomic():
+        Tender.objects.select_for_update().get(pk=job.tender_id)
+        previous = TenderSourceItem.objects.filter(tender_id=job.tender_id, source_type='document_proposal', is_active=False).exclude(pk__in=ids)
+        if ids or previous.filter(metadata__analysis_job_id=job.pk).exists():
+            job.diagnostics.setdefault('superseded_pending_proposals', []).extend(json.loads(json.dumps(list(previous.values()), default=str)))
+            job.save(update_fields=['diagnostics', 'updated_at'])
+            previous.delete()
+        for item in result['created']:
+            item.metadata = {**item.metadata, 'analysis_incomplete': incomplete, 'analysis_job_id': job.pk}
+            item.save(update_fields=['metadata'])
+    job.diagnostics['proposal_ids'] = ids
+
+
+def _staged_document_analysis(job, enricher):
+    from tenders.calculation_v2_pipeline import _fingerprint, document_analysis_sources, assess_quality, enrich_suspicious_tender
+    from .national_regime import document_item, resolve_item
+    from .notification import parse_notification
+    sources = list(document_analysis_sources(job.tender)[0].values())
+    _refresh_phase(job, 'documents', 'Читаем документы…')
+    prepared = enricher.prepare_stages(job.tender, sources, assess_quality(job.tender, sources)['documents'])
+    fingerprint = _fingerprint({'input': _document_input_fingerprint(job.tender), 'contract': enricher.STAGED_CONTRACT, 'model': enricher.model, 'thinking': enricher.thinking, 'effort': enricher.reasoning_effort})
+    stages = job.diagnostics.setdefault('stages', {})
+    stages['documents'] = {'state': 'complete', 'result': prepared, 'cost_rub': '0'}
+    _publish_intake(job)
+    previous = type(job).objects.filter(tender=job.tender, diagnostics__staged_input_fingerprint=fingerprint,
+        diagnostics__enrichment_state__in=['needs_review', 'no_change', 'no_data']).exclude(pk=job.pk).order_by('-pk').first()
+    if previous:
+        for key in ('structure', 'national_regime', 'tz'):
+            old = previous.diagnostics.get('stages', {}).get(key)
+            if old:
+                stages[key] = {'state': 'complete', 'result': old['result'], 'reused_from': previous.pk, 'cost_rub': '0'}
+        job.diagnostics.update(document_analysis_reused=previous.pk, staged_input_fingerprint=fingerprint,
+            document_input_fingerprint=_document_input_fingerprint(job.tender), enrichment_state=previous.diagnostics['enrichment_state'], structure_requires_review=previous.diagnostics.get("structure_requires_review", []))
+        _publish_intake(job)
+        return {'created': [], 'state': previous.diagnostics['enrichment_state'], 'diagnostics': []}
+
+    def ask(name, label, instruction, task, validator, limit):
+        _refresh_phase(job, name, label)
+        rows, metrics = enricher.ask_stage(job, name, instruction, task, output_tokens=limit)
+        stages[name] = metrics
+        job.save(update_fields=['diagnostics', 'updated_at'])
+        validated = validator(rows)
+        stages[name]['state'] = 'complete'
+        return validated
+
+    structure_instruction = '''Задача только структуры поставки. Прочитай извещение И ВСЕ документы; для КАЖДОГО working_item верни ровно одну запись. Раздели готовое изделие с комплектностью и набор самостоятельных товаров по смыслу, а не по слову в названии. Принадлежности, расходники, документы и штатная упаковка основного готового изделия — его комплектность. Набор разных самостоятельных изделий — kit, каждый товар отдельным элементом goods, включая отдельно описанную изготовляемую упаковку набора. Не требуй буквального слова «самостоятельные» в документе. Прежние характеристики могут ошибочно содержать разные товары как вложенные словари: обязательно переоцени такую структуру. Нельзя отвечать items:[] или пропускать позиции, даже если нет новых характеристик. Если данных недостаточно — unclear с объяснением, одна целая позиция. Количество внутри набора бери из документа с обоснованием, не выдумывай единицу при отсутствии основания. Не извлекай все характеристики и 1875 на этом шаге. Формат {"items":[{"source_id":integer,"kind":"finished|kit|unclear","name":"краткое название исходной поставки","reason":"обоснование структуры","doc_id":integer,"quote":"точная короткая цитата","section":"раздел/таблица","goods":[{"name":"товар","quantity_per_parent":number,"unit":"единица"}]}]}. Для finished/unclear goods содержит один готовый товар, его название можно нормализовать; для kit перечисли ВСЕ составляющие. Цена принадлежит исходной поставке, цены частей не придумывай.'''
+    goods = ask('structure', 'Определяем товары и состав наборов…', structure_instruction, {}, enricher.validate_structure, min(16000, 5000 + len(sources)*600))
+    job.diagnostics["structure_requires_review"] = [good["source_id"] for good in goods if good["kind"] == "unclear"]
+    enricher.prepared_entries(goods)
+    result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
+    if result['state'] in {'validation_failure', 'system_extraction_failure'}:
+        raise ValueError('Состав не прошёл проверку: ' + str(enricher.diagnostics.get('final_failure_reason') or result['state']))
+    _save_intake_proposals(job, result, incomplete=True)
+    _publish_intake(job)
+
+    originals = parse_notification(job.tender.notification_raw or {}).get('items', [])
+    native = {}
+    for good in goods:
+        from tenders.document_enrichment import notification_origin
+        origin = notification_origin(enricher.stage_sources[good['source_id']])
+        index = (origin.metadata or {}).get('notification_index') if origin else None
+        native[good['key']] = originals[index].get('national_regime') if type(index) is int and 0 <= index < len(originals) else None
+    national = {}
+    _refresh_phase(job, 'national_regime', 'Проверяем требования 1875…')
+    if any('1875' in doc.get('evidence_text', '') for doc in enricher.stage_documents):
+        def verify_national(rows):
+            mapped = {row.get('key'): row for row in rows}
+            if len(mapped) != len(rows) or set(mapped) != {good['key'] for good in goods}:
+                raise ValueError('Проверка 1875 пропустила товарные позиции.')
+            documents = {doc['url']: {**doc, 'text': doc.get('evidence_text', '')} for doc in enricher.stage_documents}
+            result = {}
+            for good in goods:
+                row = mapped[good['key']]
+                evidence = row.get('basis', [])
+                for basis in evidence:
+                    doc = enricher.document_lookup.get(basis.get('doc_id'))
+                    basis['source_url'] = doc['url'] if doc else ''
+                result[good['key']] = document_item({'status': row.get('status'), 'basis': evidence}, documents, name=good['name'], component=good['kind']=='kit')
+            return result
+        national = ask('national_regime', 'Проверяем требования 1875…',
+            '''Определи только подтверждённые требования заказчика по ПП1875 для каждого переданного товара. Не делай вывод по коду/названию или общему знанию закона. Если явного требования нет — unknown. Формат {"items":[{"key":"ключ товара","status":"ban|restriction|advantage|none|unknown","basis":[{"doc_id":integer,"quote":"точная цитата с требованием, 1875 и названием товара либо явным применением ко всем товарам","page_or_section":"раздел","scope":"item|all_items"}]}]}. Не переноси требование к набору автоматически на части. Для unknown basis пустой.''',
+            {'goods': goods, 'notification_evidence': native}, verify_national, min(16000, 10000 + len(goods)*400))
+    else:
+        stages['national_regime'] = {'state': 'complete', 'result': [], 'cost_rub': '0'}
+    # Only evidence verified by the existing national-regime service can be persisted.
+    national = {good['key']: resolve_item(native.get(good['key']), national.get(good['key']), component=good['kind']=='kit') for good in goods}
+    for item in result['created']:
+        match = next((good for good in goods if good['source_id'] == item.parent_id and good['name'] == item.original_text), None)
+        if match:
+            item.metadata['national_regime'] = national[match['key']]
+            item.save(update_fields=['metadata'])
+    _publish_intake(job)
+
+    instruction = '''Задача только сверки ТЗ. Структура товаров в task.goods уже определена: НЕ меняй её и не создавай/удаляй товары. Для КАЖДОГО key верни одну запись. Собери технические характеристики из всех документов; одинаковые сведения не повторяй, совместимые уточнения объединяй, противоречия показывай явно. Для одиночного товара сохрани ВСЕ его baseline_facts: неизменные id перечисли в keep_refs, изменения свяжи baseline_refs с новым полным значением. Для составляющих набора baseline_facts пустые: извлекай собственные характеристики составляющей, не наследуй автоматически характеристики набора. Формат {"items":[{"key":"ключ","keep_refs":[integer],"characteristics":[{"name":"характеристика","value":"полное значение без потери чисел и условий","resolution":"new|merge|conflict|omit","baseline_refs":[integer],"reason":"кратко для исправления/исключения","doc_id":integer,"quote":"точная короткая цитата подтверждения","section":"раздел/таблица","scope":"product|completeness"}]}]}. Все baseline id покрой ровно один раз через keep_refs либо baseline_refs. new не имеет baseline_refs. omit требует объяснения. При merge совместимых сведений сохраняй ВСЕ важные условия, conflict сохраняет несовместимые варианты. В комплектность одиночного изделия включи поставляемые принадлежности, документы и упаковку с scope=completeness, не дели их на товары. Не заменяй ТЗ общими условиями контракта. Не делай выводов по1875 на этом шаге.'''
+    baseline_task = {good['key']: [] if good['kind']=='kit' else enricher.baselines[good['source_id']] for good in goods}
+    specifications = ask('tz', 'Сверяем ТЗ каждого товара с документами…', instruction,
+        {'goods': goods, 'baseline_facts': baseline_task}, lambda rows: enricher.validate_specifications(rows, goods), 32000)
+    enricher.prepared_entries(goods, specifications, national)
+    result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
+    if result['state'] in {'validation_failure', 'system_extraction_failure'}:
+        raise ValueError('ТЗ не прошло проверку: ' + str(enricher.diagnostics.get('final_failure_reason') or result['state']))
+    _save_intake_proposals(job, result, incomplete=False)
+    job.diagnostics.update(enrichment_state=result['state'], staged_input_fingerprint=fingerprint,
+        document_input_fingerprint=_document_input_fingerprint(job.tender), intake_contract=enricher.STAGED_CONTRACT)
+    _publish_intake(job)
+    return result
 
 
 def _run_document_analysis(job_id, *, enricher=None, router=None):
@@ -2104,7 +2228,13 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         if not sources:
             raise ValueError("В извещении не получен перечень товаров. Повторите обновление после загрузки данных.")
         result = {"created": [], "state": "no_change", "diagnostics": []}
-        if not routes_only:
+        job.diagnostics.setdefault('stages', {})['notification'] = {'state': 'complete', 'cost_rub': '0'}
+        _publish_intake(job)
+        if not routes_only and (enricher is None or isinstance(enricher, GatewayDocumentEnricher)):
+            budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
+            enricher = enricher or GatewayDocumentEnricher(max_cost_rub=budget)
+            result = _staged_document_analysis(job, enricher)
+        elif not routes_only:
             _refresh_phase(job, "documents", "Читаем документы…")
             before = _document_input_fingerprint(job.tender)
             previous = TenderComputeJob.objects.filter(tender=job.tender, diagnostics__document_input_fingerprint=before,
@@ -2138,7 +2268,10 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
         _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
         router = router or GatewayBatchRouter()
+        routing_started = timezone.now()
         decisions = route_tender_batch(job, router)
+        job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'complete', **getattr(router, 'diagnostics', {}), 'started_at': routing_started.isoformat(), 'result': {'position_count': len(decisions)}}
+        _publish_intake(job)
         job.diagnostics.update(source_item_count=len(sources), derived_item_count=len(result["created"]), enrichment_used=bool(result["created"]), routing_item_count=len(decisions), routing=getattr(router, "diagnostics", {}), routes_only=routes_only)
         from django.conf import settings
         if settings.CALCULATION_V2_PREPARATION_ENABLED:
@@ -2147,7 +2280,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             tasks, reused = plan_tender_preparation(job)
             job.diagnostics["preparation"] = {"task_count": len(tasks), "reused": reused}
         from tenders.document_enrichment import document_proposal_changes
-        pending = any(document_proposal_changes(item) for item in TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).select_related("parent"))
+        pending = bool(job.diagnostics.get("structure_requires_review")) or any(document_proposal_changes(item) for item in TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).select_related("parent"))
         job.status = "partial" if warnings else "needs_review" if pending or any(item.needs_review for item in decisions) else "ready"
         job.error = {"message": warnings[0]} if warnings else {}
         job.diagnostics["refresh"] = {"stage": "complete", "label": "Обновлено", "warnings": warnings}
@@ -2155,6 +2288,9 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         logger.exception("Tender refresh failed for job %s", job_id)
         job = job or TenderComputeJob.objects.get(pk=job_id)
         job.status, job.error = "partial", {"message": str(exc)[:1000], "class": type(exc).__name__, "retryable": True}
+        phase = job.diagnostics.get('refresh', {}).get('stage')
+        if phase and phase in job.diagnostics.get('stages', {}) and job.diagnostics['stages'][phase].get('state') != 'complete':
+            job.diagnostics['stages'][phase]['state'] = 'failed'
         if router:
             job.diagnostics["routing"] = getattr(router, "diagnostics", {})
         if enricher:
@@ -2170,6 +2306,8 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             job.diagnostics.pop("reroute_requested_by", None)
             job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0)) + Decimal(str(getattr(router, "cost_rub", 0) or 0))
             job.completed_at = timezone.now()
+            from tenders.gateway_budget import reconcile_intake_billing
+            reconcile_intake_billing(job)
             job.save(update_fields=["status", "error", "diagnostics", "total_cost", "completed_at", "updated_at"])
         close_old_connections()
         if reroute_user_id:
@@ -2200,6 +2338,14 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
         raise ValueError('У предложения не указана исходная позиция')
     for parent_id in sorted(parents):
         decide_document_proposals(user, tender_id, parent_id, decision, schedule_routes=False)
+    from tenders.models import TenderComputeJob
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, _fingerprint
+    latest = TenderComputeJob.objects.filter(tender_id=tender_id).order_by('-pk').first()
+    if latest and latest.diagnostics.get('intake_contract'):
+        extractor = GatewayDocumentEnricher()
+        latest.diagnostics['review_decision'] = {'decision': decision, 'actor_id': user.pk, 'proposal_ids': proposal_ids}
+        latest.diagnostics['staged_input_fingerprint'] = _fingerprint({'input': _document_input_fingerprint(latest.tender), 'contract': extractor.STAGED_CONTRACT, 'model': extractor.model, 'thinking': extractor.thinking, 'effort': extractor.reasoning_effort})
+        latest.save(update_fields=['diagnostics', 'updated_at'])
     if decision == "accept":
         transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))
     return {'tender_id': tender_id, 'decision': decision, 'changed': len(pending)}

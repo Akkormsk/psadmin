@@ -386,6 +386,11 @@
                 node.hidden = !data.processing || (!lost && progress?.worker_alive !== false);
                 node.textContent = lost ? 'Нет связи с задачей' : 'Задача не подтверждает работу; можно повторить обновление после её завершения.';
               });
+              document.querySelectorAll('[data-analysis-steps="' + id + '"]').forEach(node => {
+                const steps = progress?.steps || [];
+                node.textContent = steps.map(step => step.label + (step.state === 'complete' ? ' ✓' : step.state === 'failed' ? ' !' : step.state === 'running' ? ' …' : '')).join(' · ');
+                node.title = steps.map(step => step.label + ': ' + (step.reused ? 'из кэша' : step.seconds != null ? step.seconds + ' с' : step.state === 'pending' ? 'ожидает' : '') + (data.cost?.steps?.[step.id] ? ' · ' + data.cost.steps[step.id] + ' ₽' : '')).join('\n');
+              });
               if (data.cost) document.querySelectorAll('[data-analysis-cost="' + id + '"]').forEach(node => {
                 node.hidden = !data.cost.label;
                 node.textContent = '· ' + (data.cost.label || '');
@@ -405,7 +410,7 @@
               if (!response.ok || response.redirected) throw new Error('Result unavailable');
               const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
               const replacement = parsed.querySelector('[data-analysis-result="' + data.tender_id + '"]');
-              if (!replacement || replacement.dataset.analysisRevision !== data.revision || analysisStates.get(data.tender_id)?.revision !== data.revision || analysisStates.get(data.tender_id)?.processing) { again = true; return; }
+              if (!replacement || replacement.dataset.analysisRevision !== data.revision || analysisStates.get(data.tender_id)?.revision !== data.revision) { again = true; return; }
               const edits = [...target.querySelectorAll('input:not([type="hidden"]),textarea,select')].filter(node => node.name && node.form).map(node => ({action: node.form.getAttribute('action'), name: node.name, value: node.value, checked: node.checked}));
               const active = document.activeElement;
               const focus = active && target.contains(active) ? {name: active.name, action: active.form?.getAttribute('action')} : null;
@@ -467,7 +472,7 @@
                   document.querySelectorAll('[data-route-source="' + route.source_item_id + '"]').forEach(node => { node.textContent = route.label; node.dataset.routeState = route.state; });
                 }
                 document.dispatchEvent(new CustomEvent('ps-intake-status', {detail:data}));
-                if (!data.processing) await refreshAnalysisResult(data);
+                if (!data.processing || data.progress?.published_revision) await refreshAnalysisResult(data);
               }
             } catch (error) { if ([...analysisStates.values()].some(item => item.processing)) again = true; }
             finally {

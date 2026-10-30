@@ -3,8 +3,10 @@ from __future__ import annotations
 from html.parser import HTMLParser
 import re
 class _TableParser(HTMLParser):
-    def __init__(self):
+    def __init__(self, *, cell_limit=1000, expand=True):
         super().__init__()
+        self.cell_limit = cell_limit
+        self.expand = expand
         self.tables, self.table, self.row, self.cell, self.attrs = [], None, None, None, {}
     def handle_starttag(self, tag, attrs):
         if tag == "table": self.table = []
@@ -14,9 +16,10 @@ class _TableParser(HTMLParser):
         if self.cell is not None: self.cell.append(data)
     def handle_endtag(self, tag):
         if tag in {"td", "th"} and self.cell is not None:
-            self.row.append({"text": re.sub(r"\s+", " ", "".join(self.cell)).strip()[:1000], "rowspan": max(1, int(self.attrs.get("rowspan", 1) or 1)), "colspan": max(1, int(self.attrs.get("colspan", 1) or 1))}); self.cell = None
+            text = re.sub(r"\s+", " ", "".join(self.cell)).strip()
+            self.row.append({"text": text[:self.cell_limit] if self.cell_limit else text, "rowspan": max(1, int(self.attrs.get("rowspan", 1) or 1)), "colspan": max(1, int(self.attrs.get("colspan", 1) or 1))}); self.cell = None
         elif tag == "tr" and self.row is not None: self.table.append(self.row); self.row = None
-        elif tag == "table" and self.table is not None: self.tables.append(expand_table(self.table)); self.table = None
+        elif tag == "table" and self.table is not None: self.tables.append(expand_table(self.table) if self.expand else self.table); self.table = None
 def expand_table(rows):
     """Expand row/col spans without flattening product-row relationships."""
     spans, result = {}, []
@@ -35,9 +38,9 @@ def expand_table(rows):
             column += colspan; pending = next(cells, None)
         if any(row): result.append(row)
     return result
-def document_table_payload(html):
-    parser = _TableParser(); parser.feed(html or "")
-    return [{"rows": rows} for rows in parser.tables[:12] if rows]
+def document_table_payload(html, *, table_limit=12, cell_limit=1000, expand=True):
+    parser = _TableParser(cell_limit=cell_limit, expand=expand); parser.feed(html or "")
+    return [{"rows": rows} for rows in (parser.tables[:table_limit] if table_limit else parser.tables) if rows]
 
 
 def component_total_quantity(parent_quantity, quantity_per_parent):

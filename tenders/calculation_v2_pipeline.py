@@ -122,12 +122,12 @@ def _route_owner_answer_map(sources):
 
 def source_route_fingerprint(source, processes, knowledge, owner_answers=None):
     from .document_enrichment import effective_item_requirements
-    return _fingerprint({"source_id": source.pk, "name": source.original_text, "quantity": str(source.quantity), "unit": source.unit,
+    return _fingerprint({"contract": "staged-route-v1", "source_id": source.pk, "name": source.original_text, "quantity": str(source.quantity), "unit": source.unit,
                          "requirements": effective_item_requirements(source), "owner_answers": _route_owner_answer_map([source])[source.pk] if owner_answers is None else owner_answers, "processes": _route_processes(processes), "knowledge": knowledge})
 
 
 def _intake_thinking(model, namespace):
-    default = "disabled" if model.rsplit("/", 1)[-1] == "claude-haiku-5-5" else ""
+    default = "adaptive" if model.rsplit("/", 1)[-1] == "claude-haiku-5-5" else ""
     mode = os.getenv(f"CALCULATION_V2_{namespace}_THINKING_MODE", default)
     if mode not in {"", "disabled", "adaptive"}:
         raise ValueError("Некорректная настройка рассуждений при подготовке тендера")
@@ -147,26 +147,27 @@ class GatewayBatchRouter:
     def route(self, *, tender, items, processes, knowledge):
         from .gateway_budget import spend_rub
         from .services import _ai_gateway_json
+        request_started = timezone.now().isoformat()
         payload = {
             "tender": {"id": tender.pk, "title": tender.title, "subject": tender.object_info},
             "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": item.requirements} for item in items],
-            "processes": _route_processes(processes),
-            "knowledge": knowledge,
         }
+        shared_context = json.dumps({"processes": _route_processes(processes), "knowledge": knowledge}, ensure_ascii=False, default=str)
         prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string]}]}. Ask only for material uncertainty. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
-        output_tokens = min(32000, max(4000, len(items) * 220))
-        reserve = spend_rub({"prompt_tokens": len(prompt.encode("utf-8")) + 4096, "completion_tokens": output_tokens}, self.model)
+        output_tokens = min(32000, max(8000, len(items) * 400))
+        reserve = spend_rub({"prompt_tokens": len((shared_context + prompt).encode("utf-8")) + 4096, "completion_tokens": output_tokens}, self.model)
         if not self.max_cost_rub.is_finite() or self.max_cost_rub <= 0 or reserve is None or Decimal(str(reserve)) > self.max_cost_rub:
             self.diagnostics = {"provider_call_happened": False, "validation_failed": True, "final_failure_reason": "Маршрут не запущен: превышен лимит стоимости или неизвестен тариф модели."}
             raise ValueError(self.diagnostics["final_failure_reason"])
         try:
-            raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=output_tokens, timeout=90, network_attempts=1, json_attempts=1, capture_incomplete_response=True, **({"thinking": self.thinking} if self.thinking else {}), response_contract="Верни корневой объект с массивом items и одной записью на каждую переданную позицию. Не заменяй результат объяснением.")
+            raw, self.usage = _ai_gateway_json(prompt, shared_context=shared_context, reasoning_effort="low", model=self.model, max_tokens=output_tokens, timeout=180, network_attempts=1, json_attempts=1, capture_incomplete_response=True, **({"thinking": self.thinking} if self.thinking else {}), response_contract="Верни корневой объект с массивом items и одной записью на каждую переданную позицию. Не заменяй результат объяснением.")
         except Exception as exc:
             self.usage = dict(getattr(exc, "usage", {}) or {})
             self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
             self.diagnostics = {
                 "provider_call_happened": True,
                 "model": self.model,
+                "started_at": request_started,
                 "validation_failed": True,
                 "retry_count": 0,
                 "final_failure_reason": str(exc)[:1000],
@@ -175,7 +176,7 @@ class GatewayBatchRouter:
             }
             raise
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
-        self.diagnostics = {"provider_call_happened": True, "model": self.model, "thinking": self.thinking, "output_token_limit": output_tokens, "reserved_cost_rub": str(reserve), "retry_count": 0, "usage": self.usage, "cost_rub": str(self.cost_rub)}
+        self.diagnostics = {"provider_call_happened": True, "model": self.model, "started_at": request_started, "thinking": self.thinking, "output_token_limit": output_tokens, "reserved_cost_rub": str(reserve), "retry_count": 0, "usage": self.usage, "cost_rub": str(self.cost_rub)}
         rows = raw.get("items") if isinstance(raw, dict) else None
         rows = rows if isinstance(rows, list) else []
         process_ids = {process.pk for process in processes}
@@ -231,7 +232,148 @@ class GatewayDocumentEnricher:
         self.diagnostics = {}
         self.document_images = []
 
-    def _bounded_documents(self, documents):
+    STAGED_CONTRACT = "intake-steps-v1"
+
+    def prepare_stages(self, tender, sources, documents):
+        from tender_selection.services import documents_html
+        documents_html(tender, [doc for doc in documents if doc.get('url')], timeout=5, archive_timeout=5, direct_timeout=5)
+        self.stage_sources = {source.pk: source for source in sources}
+        self.stage_documents, considered = self._bounded_documents(documents, compact=True)
+        if not self.stage_documents or any(doc['reading_status'] != 'read' for doc in considered):
+            raise ValueError('Документы ещё не прочитаны полностью; разбор не отправлен модели.')
+        self.document_lookup = {index: doc for index, doc in enumerate(self.stage_documents, 1)}
+        self.baselines = {source.pk: [{'id': i, 'name': fact['name'], 'value': fact['value']} for i, fact in enumerate(effective_item_requirements(source).get('characteristics', []))] for source in sources}
+        self.shared_context = json.dumps({'notification': tender.notification_raw,
+            'working_items': [{'source_id': source.pk, 'name': source.original_text, 'quantity': str(source.quantity), 'unit': source.unit, 'baseline_facts': self.baselines[source.pk]} for source in sources],
+            'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes']} for index, doc in self.document_lookup.items()]}, ensure_ascii=False, default=str)
+        return {'documents': considered, 'context_characters': len(self.shared_context), 'contract': self.STAGED_CONTRACT}
+
+    def ask_stage(self, job, stage, instruction, task, *, output_tokens):
+        from .services import _ai_gateway_json
+        from .gateway_budget import spend_rub
+        prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
+        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort})
+        cache = TenderComputeJob.objects.filter(tender=job.tender, **{f'diagnostics__stages__{stage}__input_fingerprint': fingerprint, f'diagnostics__stages__{stage}__state': 'complete'}).exclude(pk=job.pk).order_by('-pk').first()
+        if cache:
+            previous = cache.diagnostics['stages'][stage]
+            return previous['result'], {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': cache.pk, 'result': previous['result'], 'cost_rub': '0', 'duration_ms': 0}
+        # Reserve the uncached cache-write price, not an assumed future cache hit.
+        reserve = spend_rub({'prompt_tokens': len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images), 'completion_tokens': output_tokens}, self.model)
+        remaining = self.max_cost_rub - Decimal(str(self.cost_rub)) if self.max_cost_rub is not None else Decimal('10')
+        if reserve is None or Decimal(str(reserve)) * Decimal('1.25') > remaining:
+            raise ValueError('Следующий этап превышает оставшийся бюджет; запрос не отправлен.')
+        started = time.monotonic()
+        started_at = timezone.now().isoformat()
+        try:
+            raw, usage = _ai_gateway_json(prompt, shared_context=self.shared_context, model=self.model,
+                max_tokens=output_tokens, timeout=180, network_attempts=1, json_attempts=1,
+                capture_incomplete_response=True, thinking=self.thinking, reasoning_effort=self.reasoning_effort,
+                image_data_urls=self.document_images, response_contract='Верни один полный JSON-объект с массивом items. Весь ответ должен быть валидным JSON.')
+        except Exception as exc:
+            usage = getattr(exc, 'usage', {}) or {}
+            self.cost_rub += float(spend_rub(usage, self.model) or 0)
+            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000)}
+            raise
+        amount = spend_rub(usage, self.model)
+        self.cost_rub += float(amount or 0)
+        self.usage = {key: self.usage.get(key, 0) + usage.get(key, 0) for key in ('prompt_tokens', 'completion_tokens')}
+        if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
+            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at, 'error': 'Не получен полный список результатов'}
+            raise ValueError('Этап не вернул полный список результатов.')
+        return raw['items'], {'state': 'pending_validation', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at,
+            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'result': raw['items']}
+
+    def stage_quote(self, row, *, required=True):
+        doc = self.document_lookup.get(row.get('doc_id'))
+        quote = str(row.get('quote') or '').strip()
+        normalize = lambda value: ' '.join(str(value).split()).casefold()
+        if not doc or not quote or normalize(quote) not in normalize(doc.get('evidence_text', '')):
+            if required:
+                raise ValueError('Результат не подтверждён точной цитатой из документа.')
+            return {}
+        return {'document_url': doc['url'], 'page_or_section': str(row.get('section') or '')[:300], 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
+
+    def validate_structure(self, rows):
+        seen, goods = set(), []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Некорректная запись структуры поставки")
+            source_id = row.get('source_id')
+            if type(source_id) is not int or source_id not in self.stage_sources or source_id in seen:
+                raise ValueError('Структура не соответствует исходным позициям.')
+            seen.add(source_id)
+            kind = row.get('kind')
+            if kind not in {'finished', 'kit', 'unclear'} or not str(row.get('reason') or '').strip():
+                raise ValueError('Не определена структура позиции.')
+            content = row.get('goods')
+            if not isinstance(content, list) or not content or (kind != 'kit' and len(content) != 1):
+                raise ValueError('Для позиции не получен корректный состав.')
+            if kind == 'kit' and len(content) < 2:
+                raise ValueError('Набор распознан, но его составляющие не перечислены.')
+            source = self.stage_sources[source_id]
+            provenance = self.stage_quote(row, required=kind != 'unclear')
+            names = set()
+            for index, item in enumerate(content):
+                name = str(item.get('name') or '').strip()
+                if not name or _normal(name) in names:
+                    raise ValueError('В составе пустое или повторяющееся изделие.')
+                names.add(_normal(name))
+                per_parent = _as_decimal(item.get('quantity_per_parent')) if kind == 'kit' else Decimal('1')
+                if per_parent is None or not per_parent.is_finite() or per_parent <= 0:
+                    raise ValueError('Набор распознан, но количество составляющей не определено.')
+                component_total_quantity(source.quantity, per_parent)
+                goods.append({'key': f'{source_id}:{index}', 'source_id': source_id, 'name': name, 'kind': kind,
+                    'unit': str(item.get('unit') or source.unit), 'quantity_per_parent': str(per_parent),
+                    'parent_name': str(row.get('name') or source.original_text), 'reason': row['reason'], 'provenance': provenance})
+        if seen != set(self.stage_sources):
+            raise ValueError('Модель пропустила исходные позиции при проверке состава.')
+        return goods
+
+    def prepared_entries(self, goods, specifications=None, national=None):
+        from tender_selection.national_regime import document_item
+        entries = []
+        for good in goods:
+            source = self.stage_sources[good['source_id']]
+            component = good['kind'] == 'kit'
+            requirements = (specifications or {}).get(good['key']) or {'reconciled': True, 'keep_refs': [] if component else list(range(len(self.baselines[source.pk]))), 'characteristics': []}
+            entries.append(ExtractedItem(good['name'], None if component else source.quantity, good['unit'] if component else source.unit,
+                requirements, good['provenance'], Decimal('0.9'), 'component' if component else 'enrich', Decimal(good['quantity_per_parent']), source.pk,
+                good['parent_name'], good['kind'], good['reason'], (national or {}).get(good['key'], {})))
+        self.prepared_items = entries
+        self.diagnostics = {'outcome': 'success', 'model': self.model, 'usage': self.usage, 'cost_rub': str(self.cost_rub), 'provider_call_happened': bool(self.usage)}
+        return entries
+
+    def validate_specifications(self, rows, goods):
+        expected, result = {good['key']: good for good in goods}, {}
+        for row in rows:
+            key = row.get('key')
+            if key not in expected or key in result or not isinstance(row.get('characteristics'), list):
+                raise ValueError('ТЗ не соответствует списку товаров.')
+            good = expected[key]
+            facts = []
+            for raw in row['characteristics']:
+                fact = dict(raw)
+                if not str(fact.get('name') or '').strip() or fact.get('value') in (None, '', [], {}):
+                    raise ValueError('В ТЗ получена пустая характеристика.')
+                if fact.get('resolution') != 'keep' and fact.get('resolution') != 'omit':
+                    evidence = self.stage_quote(fact)
+                    fact['source_url'] = evidence['document_url']
+                    fact['_source_provenance'] = evidence
+                    if fact.get('resolution') in {'merge', 'conflict'}:
+                        fact['document_value'] = str(raw.get('document_value') or raw.get('quote') or '')
+                    fact['page_or_section'] = evidence['page_or_section']
+                fact.pop('doc_id', None)
+                fact.pop('quote', None)
+                fact.pop('section', None)
+                facts.append(fact)
+            result[key] = {'reconciled': True, 'keep_refs': row.get('keep_refs', []), 'characteristics': facts}
+            if good['kind'] != 'kit':
+                merge_item_requirements(effective_item_requirements(self.stage_sources[good['source_id']]), result[key], provenance=good['provenance'])
+        if set(result) != set(expected):
+            raise ValueError('ТЗ получено не для всех товаров.')
+        return result
+
+    def _bounded_documents(self, documents, *, compact=False):
         """Prepare full extracted text; budget checks must reject, never clip, the request."""
         from lxml import html as html_parser
         from tender_selection.documents import MAX_BYTES
@@ -270,18 +412,26 @@ class GatewayDocumentEnricher:
                 warnings.append("Некоторые изображения недоступны для визуального чтения.")
             for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-info] | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
                 node.drop_tree()
+            compact_tables = document_table_payload(html_parser.tostring(root, encoding="unicode"), table_limit=None, cell_limit=None, expand=False) if compact else None
+            evidence_text = " ".join(" ".join(root.itertext()).split())
+            if compact:
+                for table in root.xpath(".//table"):
+                    if table.getparent() is not None:
+                        table.drop_tree()
             content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
             text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
             candidates.append({"url": url, "name": doc.get("name", ""), "text": text,
-                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes})
+                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes, "compact_tables": compact_tables, "evidence_text": evidence_text})
         if not candidates:
             return [], []
         available, considered = [], []
         for candidate in candidates:
             text = candidate["text"]
-            status = "unreadable" if not text and not candidate["image_indexes"] else "partial" if candidate["error"] or candidate["warning"] else "read"
+            status = "unreadable" if not text and not candidate["image_indexes"] and not candidate.get("compact_tables") else "partial" if candidate["error"] or candidate["warning"] else "read"
             entry = {"url": candidate["url"], "name": candidate["name"], "text": text, "image_indexes": candidate["image_indexes"]}
-            entry["tables"] = document_table_payload(candidate["html"]) if text else []
+            entry["tables"] = candidate["compact_tables"] if compact else document_table_payload(candidate["html"]) if text else []
+            if compact:
+                entry["evidence_text"] = candidate["evidence_text"]
             available.append(entry)
             considered.append({"url": candidate["url"], "name": candidate["name"],
                                "cached_text_chars": len(candidate["text"]), "sent_text_chars": len(text),
@@ -335,6 +485,8 @@ class GatewayDocumentEnricher:
         from .gateway_budget import spend_rub
         from .services import _ai_gateway_json
 
+        if getattr(self, "prepared_items", None) is not None:
+            return self.prepared_items
         started = time.monotonic()
         self.diagnostics = {}
         allowed_source_ids = {item.pk for item in source_items}
@@ -773,18 +925,23 @@ def _match_extracted_item(entry: ExtractedItem, candidates: list[TenderSourceIte
     return source if score >= 4 else None
 
 
-def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEnricher) -> dict:
-    """Document evidence can split or enrich a source item, never overwrite it."""
-    if not quality["enrichment_recommended"]:
-        return {"created": [], "state": "no_data", "diagnostics": {"outcome": "no_data", "reason": "not_recommended"}}
-    active = active_calculation_items(tender)
+def document_analysis_sources(tender):
     replacement_groups, analysis_sources = {}, {}
-    for item in active:
-        if (item.metadata or {}).get("relationship") == "component" and item.parent_id and not item.parent.is_active:
+    for item in active_calculation_items(tender):
+        if item.metadata.get("relationship") == "component" and item.parent_id and not item.parent.is_active:
             replacement_groups.setdefault(item.parent_id, []).append(item.pk)
             analysis_sources[item.parent_id] = item.parent
         else:
             analysis_sources[item.pk] = item
+    return analysis_sources, replacement_groups
+
+
+def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEnricher) -> dict:
+    """Document evidence can split or enrich a source item, never overwrite it."""
+    if not quality["enrichment_recommended"]:
+        return {"created": [], "state": "no_data", "diagnostics": {"outcome": "no_data", "reason": "not_recommended"}}
+    analysis_sources, replacement_groups = document_analysis_sources(tender)
+    active = active_calculation_items(tender)
     extract_tender = getattr(enricher, "extract_tender", None)
     if callable(extract_tender):
         extracted = extract_tender(tender=tender, source_items=list(analysis_sources.values()), documents=quality["documents"])
@@ -908,10 +1065,20 @@ def _commercial_requirements(source: TenderSourceItem) -> dict:
     return effective_item_requirements(source)
 
 
+def routing_source_items(tender):
+    """Plan complete proposed goods without accepting changes or creating an estimate."""
+    from .document_enrichment import document_proposal_changes
+    active = active_calculation_items(tender)
+    proposals = [item for item in tender.v2_source_items.filter(source_type="document_proposal", is_active=False).select_related("parent").order_by("parent_id", "pk") if not item.metadata.get("analysis_incomplete") and document_proposal_changes(item)]
+    replaced = {item.parent_id for item in proposals}
+    replaced.update(source_id for item in proposals for source_id in item.metadata.get("replaces_source_ids", []))
+    return [item for item in active if item.pk not in replaced] + proposals
+
+
 def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
     """Turn immutable source evidence into commercial items and calculation components."""
     tender = job.tender
-    active = active_calculation_items(tender)
+    active = routing_source_items(tender)
     result = []
     for source in active:
         component_sources = list(source.derived_items.filter(is_active=True, source_type="document_component").order_by("source_key", "pk"))
@@ -919,7 +1086,7 @@ def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
         commercial, _ = TenderCommercialItem.objects.update_or_create(
             tender=tender, source_key=f"commercial:{source.pk}",
             defaults={"job": job, "display_name": source.original_text, "quantity": source.quantity, "unit": source.unit,
-                      "requirements": _commercial_requirements(source), "provenance": {"source_item_ids": [source.pk]},
+                      "requirements": _commercial_requirements(source), "provenance": {"source_item_ids": [source.pk], "draft": not source.is_active},
                       "structure": structure, "status": "active"},
         )
         commercial.source_items.set([source])
@@ -1053,7 +1220,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
         Tender.objects.select_for_update().get(pk=job.tender_id)
         current_processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
         current_knowledge = _knowledge_for([])
-        current_sources = {source.pk: source for source in active_calculation_items(job.tender)}
+        current_sources = {source.pk: source for source in routing_source_items(job.tender)}
         current_answers = _route_owner_answer_map(current_sources.values())
         for item in items:
             source = current_sources.get(item.source_item_id)
@@ -1133,7 +1300,7 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
 
 def source_route_snapshots(tender, sources=None):
     """Current accepted-position routes, shared by card, estimate and assistant; SELECT only."""
-    sources = list(active_calculation_items(tender) if sources is None else sources)
+    sources = list(routing_source_items(tender) if sources is None else sources)
     processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
     knowledge = _knowledge_for([])
     plans = {}

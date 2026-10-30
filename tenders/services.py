@@ -754,10 +754,15 @@ def _visual_gateway_responses(prompt, upload, max_tokens):
     return responses
 
 
-def _json_from_model(content):
+def _json_from_model(content, *, strict_root=False):
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.IGNORECASE)
+    if strict_root:
+        try:
+            return json.loads(content, strict=False)
+        except json.JSONDecodeError as exc:
+            raise TenderAIError("Ответ модели содержит неполный или некорректный JSON; частичный результат не применён.") from exc
     decoder = json.JSONDecoder(strict=False)
     starts = [index for index, value in enumerate(content) if value in "{["]
     last_error = None
@@ -770,7 +775,7 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False, reasoning_effort=None, thinking=None):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False, reasoning_effort=None, thinking=None, shared_context=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite").strip()
@@ -779,6 +784,9 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
     has_images = bool(scan_ocr or image_data_urls)
 
     def build_user_content(max_side, quality):
+        if shared_context is not None:
+            images = [{"type": "image_url", "image_url": {"url": value, "detail": image_detail}} for value in image_data_urls or []]
+            return images + [{"type": "text", "text": shared_context, "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": prompt}]
         if not has_images:
             return prompt
         content = [{"type": "text", "text": prompt}]
@@ -878,7 +886,7 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
             # Single-attempt document extraction needs the provider's reasoning/cache
             # breakdown to distinguish a large answer from an exhausted thinking budget.
             reported_usage = {**usage, **total_usage} if capture_incomplete_response and json_attempts == 1 else total_usage
-            return _json_from_model(content), reported_usage
+            return _json_from_model(content, strict_root=shared_context is not None), reported_usage
         except TenderAIError as exc:
             exc.usage = dict(total_usage)
             if attempt < json_attempts - 1:

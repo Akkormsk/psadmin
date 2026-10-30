@@ -565,7 +565,10 @@ def tender_detail(request, pk):
                 if value not in (None, "", [], {})
             ]
         metadata = proposal.metadata if isinstance(proposal.metadata, dict) else {}
+        if metadata.get("analysis_incomplete"):
+            characteristics = []
         group["items"].append({
+            "source_id": proposal.pk, "analysis_incomplete": metadata.get("analysis_incomplete", False),
             "name": proposal.original_text,
             "name_parts": item_name_parts(proposal),
             "quantity": proposal.quantity,
@@ -613,7 +616,7 @@ def tender_detail(request, pk):
                 source_financials.append({**original, "source_item_id": origin.pk, "name": (source.metadata or {}).get("parent_display_name") or origin.original_text})
                 financial_parents.add(origin.pk)
         from tenders.models import TenderCommercialItem
-        commercial_items = list(tender.v2_commercial_items.prefetch_related("components__source_item", "source_items").filter(status="active").order_by("pk"))
+        commercial_items = list(tender.v2_commercial_items.prefetch_related("components__source_item", "source_items").filter(status="active").filter(Q(provenance__draft=False) | Q(provenance__draft__isnull=True)).order_by("pk"))
         if commercial_items and not any(source.source_type == "document_extraction" for source in active_sources):
             display_items = []
             for commercial in commercial_items:
@@ -740,6 +743,8 @@ def tender_detail(request, pk):
         group["national_regime"] = group["original"].get("national_regime") or annotation()
         group["name_parts"] = characteristic_display({"value": group["name"], "source": "combined", "source_facts": [{"value": group["original"].get("name", ""), "source": "notification"}]})["parts"]
     for group in document_proposal_groups:
+        for proposal in group["items"]:
+            proposal["production_route"] = item_routes.get(proposal["source_id"])
         group["can_keep_quote"] = len(group["items"]) == 1 and group["items"][0]["quote_eligible"]
         group["is_kit"] = bool(group["items"]) and all(item["relationship"] == "component" for item in group["items"])
         group["supply_kind"] = group["items"][0].get("supply_kind") if group["items"] else ""
@@ -848,6 +853,7 @@ def tender_detail(request, pk):
         "document_proposals": document_proposals,
         "document_proposal_ids": [item.pk for item in document_proposals],
         "document_proposal_groups": document_proposal_groups,
+        "document_proposals_incomplete": any(item.metadata.get("analysis_incomplete") for item in document_proposals),
         "analysis_status": analysis_status,
         "analysis_issues": analysis_issues(v2_job),
         "v2_lines": v2_lines,

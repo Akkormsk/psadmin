@@ -149,6 +149,7 @@ def collect_report(number):
         } for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['rejections'] = [entry.get('extraction', {}).get('rejections', []) for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['enrichment_state'] = diagnostics.get('enrichment_state')
+        latest['steps'] = {name: {key: row.get(key) for key in ('state', 'model', 'usage', 'duration_ms', 'started_at', 'cost_rub', 'actual_cost_rub', 'billed_cache_read_tokens', 'billed_cache_write_tokens', 'reused_from', 'billing_request_id')} for name, row in diagnostics.get('stages', {}).items()}
     from collections import Counter
     from types import SimpleNamespace
     from tenders.analysis_presentation import analysis_issues

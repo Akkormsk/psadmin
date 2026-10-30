@@ -185,6 +185,7 @@ class Command(BaseCommand):
                 route_ids = {key: (row['plan_id'], [step['id'] for step in row['steps']]) for key, row in routes.items()}
                 report = {'full_refresh': True, 'cache_repeat': bool(attempt), 'job_id': job.pk,
                     'status': job.status, 'error': job.error, 'cost': status.get('cost'),
+                    'steps': {name: {key: row.get(key) for key in ('state', 'model', 'usage', 'duration_ms', 'cost_rub', 'actual_cost_rub', 'billed_cache_read_tokens', 'billed_cache_write_tokens', 'reused_from', 'billing_request_id')} for name, row in job.diagnostics.get('stages', {}).items()},
                     'progress': status['progress'], 'document_reused': job.diagnostics.get('document_analysis_reused'),
                     'active_stages': ProcessDefinition.objects.filter(is_active=True).count(),
                     'routes': {key: {'state': row['state'], 'step_count': len(row['steps']),
