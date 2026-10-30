@@ -149,6 +149,17 @@ def collect_report(number):
         } for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['rejections'] = [entry.get('extraction', {}).get('rejections', []) for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['enrichment_state'] = diagnostics.get('enrichment_state')
+        if diagnostics.get('stages'):
+            from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, document_analysis_sources, assess_quality
+            from unittest.mock import patch
+            engine = GatewayDocumentEnricher(max_cost_rub='10')
+            sources = list(document_analysis_sources(tender)[0].values())
+            with patch('tender_selection.services.documents_html'):
+                prepared = engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+            latest['staged_context'] = {'characters': len(engine.shared_context), 'utf8_bytes': len(engine.shared_context.encode('utf-8')), 'sections': {key: len(json.dumps(value, ensure_ascii=False)) for key, value in json.loads(engine.shared_context).items()}, 'documents': [{key: doc.get(key) for key in ('name', 'image_indexes')} | {'paragraph_chars': len(doc['text']), 'table_chars': len(json.dumps(doc['tables'], ensure_ascii=False)), 'evidence_chars': len(doc['evidence_text'])} for doc in engine.stage_documents]}
+            normalize = lambda value: ' '.join(str(value).split()).casefold()
+            latest['structure_evidence_check'] = [{'kind': row.get('kind'), 'doc_id': row.get('doc_id'), 'goods': row.get('goods'), 'reason': row.get('reason'), 'quote': row.get('quote'), 'exact_match': normalize(row.get('quote')) in normalize(engine.document_lookup.get(row.get('doc_id'), {}).get('evidence_text', ''))} for row in diagnostics['stages'].get('structure', {}).get('result', [])]
+
         latest['steps'] = {name: {key: row.get(key) for key in ('state', 'model', 'usage', 'duration_ms', 'started_at', 'cost_rub', 'actual_cost_rub', 'billed_cache_read_tokens', 'billed_cache_write_tokens', 'reused_from', 'billing_request_id')} for name, row in diagnostics.get('stages', {}).items()}
     from collections import Counter
     from types import SimpleNamespace
