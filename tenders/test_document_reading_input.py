@@ -222,3 +222,50 @@ class StagedTableEvidenceTests(SimpleTestCase):
         for quote in ('Размер | синий', 'Размер | ≥ 11 и ≤ 12 | мм', 'мм | Размер'):
             with self.subTest(quote=quote), self.assertRaises(ValueError):
                 engine.stage_quote({'doc_id': 1, 'quote': quote})
+
+class StagedResponseCacheTests(TestCase):
+    def setUp(self):
+        self.tender = Tender.objects.create(purchase_number="staged-response-cache")
+        self.engine = GatewayDocumentEnricher()
+        self.engine.shared_context = '{}'
+        self.engine.document_images = []
+
+    def fingerprint(self):
+        from .calculation_v2_pipeline import _fingerprint
+        return _fingerprint({
+            'contract': self.engine.STAGED_CONTRACT, 'context': '{}',
+            'task': 'Read TZ\\n{"goods": []}', 'model': self.engine.model,
+            'thinking': self.engine.thinking, 'effort': self.engine.reasoning_effort,
+        })
+
+    def create_job(self, *, state=None, version=None, rows=None):
+        stage = {'state': state, 'input_fingerprint': self.fingerprint(),
+                 'validation_version': version, 'result': rows} if state else None
+        return TenderComputeJob.objects.create(
+            tender=self.tender, status="partial",
+            diagnostics={'stages': {'tz': stage}} if stage else {},
+        )
+
+    @patch('tenders.services._ai_gateway_json')
+    def test_old_invalid_response_is_revalidated_for_free_even_if_latest_failure_is_not_reusable(self, gateway):
+        old = self.create_job(state='failed', version='old-table-v0', rows=[{'key': 'old-quote'}])
+        self.create_job(state='failed', version=self.engine.STAGED_VALIDATION_VERSION,
+                        rows=[{'key': 'already-rejected'}])
+        current = self.create_job()
+        rows, metrics = self.engine.ask_stage(current, 'tz', 'Read TZ', {'goods': []}, output_tokens=500)
+        self.assertEqual(rows, [{'key': 'old-quote'}])
+        self.assertEqual(metrics['state'], 'pending_validation')
+        self.assertEqual(metrics['reused_from'], old.pk)
+        self.assertEqual(metrics['cost_rub'], '0')
+        gateway.assert_not_called()
+
+    @patch('tenders.services._ai_gateway_json')
+    def test_completed_response_preferred_over_failed_revalidation(self, gateway):
+        complete = self.create_job(state='complete', version='old-version', rows=[{'key': 'verified'}])
+        self.create_job(state='failed', version='old-table-v0', rows=[{'key': 'unverified'}])
+        current = self.create_job()
+        rows, metrics = self.engine.ask_stage(current, 'tz', 'Read TZ', {'goods': []}, output_tokens=500)
+        self.assertEqual(rows, [{'key': 'verified'}])
+        self.assertEqual(metrics['state'], 'complete')
+        self.assertEqual(metrics['reused_from'], complete.pk)
+        gateway.assert_not_called()
