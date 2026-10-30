@@ -3,6 +3,42 @@ import json
 import os
 
 
+def incomplete_response_summary(diagnostics):
+    """Inspect saved output structure without publishing customer text in CI logs."""
+    import re
+    entries = diagnostics.get('enrichment') or []
+    entries = [entries] if isinstance(entries, dict) else entries
+    result = []
+    for entry in entries:
+        evidence = entry.get('incomplete_response') or {}
+        if not evidence:
+            continue
+        text = evidence.get('content') or ''
+        summary = {key: value for key, value in evidence.items() if key != 'content'}
+        summary['captured_characters'] = len(text)
+        summary['json_key_counts'] = {key: len(re.findall(r'"' + key + r'"\s*:', text)) for key in ('items', 'parent_source_item_id', 'characteristics', 'name', 'value', 'keep_refs', 'baseline_refs', 'document_facts', 'reason', 'evidence')}
+        # Complete response rows can be decoded even when the final row is cut off.
+        start = re.search(r'"items"\s*:\s*\[', text)
+        rows, offset = [], start.end() if start else len(text)
+        decoder = json.JSONDecoder()
+        while offset < len(text):
+            offset += len(text[offset:]) - len(text[offset:].lstrip(' \r\n\t,'))
+            try:
+                row, offset = decoder.raw_decode(text, offset)
+            except ValueError:
+                break
+            if not isinstance(row, dict):
+                break
+            facts = (row.get('requirements') or {}).get('characteristics') or []
+            rows.append({'characters': len(json.dumps(row, ensure_ascii=False)),
+                'field_characters': {key: len(json.dumps(value, ensure_ascii=False)) for key, value in row.items()},
+                'fact_count': len(facts),
+                'unique_facts': len({json.dumps(fact, ensure_ascii=False, sort_keys=True) for fact in facts})})
+        summary['complete_rows'] = rows
+        result.append(summary)
+    return result
+
+
 def collect_report(number):
     from tender_selection.models import Tender
     from tender_selection.notification import parse_notification
@@ -53,6 +89,7 @@ def collect_report(number):
         from tenders.analysis_presentation import analysis_issues
         latest['issues'] = analysis_issues(SimpleNamespace(**latest))
         diagnostics = latest.pop('diagnostics') or {}
+        latest['incomplete_response_summary'] = incomplete_response_summary(diagnostics)
         latest['rejections'] = [entry.get('extraction', {}).get('rejections', []) for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['enrichment_state'] = diagnostics.get('enrichment_state')
     from collections import Counter
