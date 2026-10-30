@@ -228,16 +228,18 @@ class StagedTableEvidenceTests(SimpleTestCase):
         engine = GatewayDocumentEnricher()
         engine.document_lookup = {3: {'url': 'https://example.test/spec', 'evidence_text': '',
             'tables': [{'rows': [
-                ['Блокнот: Размер (длина)', '≥ 210 и ⩽ 240', 'мм'],
+                ['Блокнот: Размер (длина)', '≥ 210 и ⩽ 240', 'Миллиметр'],
                 ['Блокнот: Формат А5', 'тип', 'недатированный'],
                 ['Тип', 'шариковая ручка'],
                 ['Размер', '≥ 10 и ≤ 12', 'мм'],
+                ['Ручка: Длина', '≥ 13.5 и ⩽ 15', 'Сантиметр'],
             ]}]}}
         for quote, row in [
             ('Блокнот: Размер (длина) | 210 и ≤ 240 | мм', 1),
             ('Блокнот: Формат | А5', 2),
             ('Тип | шариковая ручка', 3),
             ('Размер | ≥ 10 и ≤ 12 | мм', 4),
+            ('Ручка: Длина | 13,5 ≤ 15 | см', 5),
         ]:
             with self.subTest(quote=quote):
                 proof = engine.stage_quote({'doc_id': 3, 'quote': quote})
@@ -249,6 +251,8 @@ class StagedTableEvidenceTests(SimpleTestCase):
             'Блокнот: Размер (длина) | 210 и ≥ 240 | мм',
             'Блокнот: Размер (длина) | 210 и ≤ 240 | см',
             'Тип | ≥ 10 и ≤ 12',
+            'Ручка: Длина | 13,5 ≤ 16 | см',
+            'Ручка: Длина | 13,5 ≥ 15 | см',
             'Блокнот: Формат | шариковая ручка',
         ]:
             with self.subTest(invented=invented), self.assertRaises(ValueError):
