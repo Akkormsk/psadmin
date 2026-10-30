@@ -2422,7 +2422,7 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .tender-group-heading { flex-wrap:wrap; }
 .tender-lines input:disabled { background:var(--surface-2); color:var(--ink-3); }
 
-.ts-item-national { display:inline-block; margin-left:8px; vertical-align:baseline; font-size:11px; font-weight:400; }
+.ts-item-national { display:inline-block; margin-left:8px; vertical-align:top; font-size:11px; font-weight:400; }
 .ts-item-national > summary { display:inline-flex; align-items:center; gap:5px; list-style:none; cursor:pointer; color:var(--ink-2); }
 .ts-item-national > summary::-webkit-details-marker { display:none; }
 .ts-national-dot { width:6px; height:6px; border-radius:50%; flex:none; background:var(--ink-3); }
