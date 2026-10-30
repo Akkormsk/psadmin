@@ -233,7 +233,7 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v1"
-    STAGED_VALIDATION_VERSION = "literal-table-row-v1"
+    STAGED_VALIDATION_VERSION = "math-symbols-and-cell-segments-v2"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
@@ -309,22 +309,56 @@ class GatewayDocumentEnricher:
             return {**sources[0], 'evidence': '\n'.join(source['evidence'] for source in sources), 'evidence_sources': sources}
         doc = self.document_lookup.get(row.get('doc_id'))
         quote = str(row.get('quote') or '').strip()
-        normalize = lambda value: ' '.join(str(value).split()).casefold()
+        def normalize(value):
+            # Document converters and LLM output use equivalent mathematical glyphs.
+            # Do not remove inequality signs, digits, words or invert comparisons.
+            import unicodedata
+            text = unicodedata.normalize('NFKC', str(value)).casefold()
+            text = text.translate(str.maketrans({'⩽': '≤', '≦': '≤', '⩾': '≥', '≧': '≥'}))
+            text = ' '.join(text.split())
+            # "1,5" and "1.5" denote the same decimal; neither integer nor
+            # the position/direction of any inequality can change.
+            text = re.sub(r'(?<=\d)[,.](?=\d{1,2}(?!\d))', '.', text)
+            text = re.sub(r'\s*([≤≥<>])\s*', r'\1', text)
+            # Source range "≥ 13.5 и ⩽ 15" and short quote "13,5 ≤ 15"
+            # remain tied to the SAME cell with exactly the same bounds.
+            text = re.sub(r'(?<=\d)\s+и\s*(?=[≤≥])', '', text)
+            text = re.sub(r'(?<=\d)и(?=[≤≥])', '', text)
+            # The supplier may quote a standard unit abbreviation while the
+            # document table spells out the same unit. Only literal equivalents
+            # are admitted; amounts and numeric ranges must still match.
+            for full, short in (('миллиметр', 'мм'), ('сантиметр', 'см')):
+                text = re.sub(r'(?<!\w)' + full + r'(?!\w)', short, text)
+            return text
+
         verified = bool(doc and quote and normalize(quote) in normalize(doc.get('evidence_text', '')))
         section = str(row.get('section') or '')[:300]
         if doc and quote and not verified:
-            # A table excerpt may quote adjacent cells using pipes as cell boundaries.
-            # Verify each literal fragment in order within ONE row; never join unrelated rows.
-            parts = [part.strip() for part in quote.split('|') if part.strip()]
+            # Match pipe-delimited excerpts inside ONE source row. Some converters
+            # keep label and value in one cell; others split them into columns.
+            # A fragment may continue within the SAME or the NEXT nonempty cell;
+            # never skip a nonempty cell or join adjacent rows.
+            parts = [normalize(part) for part in quote.split('|') if normalize(part)]
             for table_index, table in enumerate(doc.get('tables', []), 1):
                 for row_index, cells in enumerate(table['rows'], 1):
                     texts = [cell if isinstance(cell, str) else cell['text'] for cell in cells]
                     texts = [text for text in texts if normalize(text)]
-                    for offset in range(len(texts)):
-                        window = texts[offset:offset+len(parts)]
-                        if len(parts) >= 2 and len(window) == len(parts) and all(normalize(part) in normalize(text) for part, text in zip(parts, window)):
+                    normalized = [normalize(text) for text in texts]
+                    for start in range(len(texts)):
+                        column, cursor, matched = start, 0, True
+                        for part in parts:
+                            hit = normalized[column].find(part, cursor)
+                            if hit < 0 and cursor and column + 1 < len(texts):
+                                column += 1
+                                cursor = 0
+                                hit = normalized[column].find(part)
+                            if hit < 0:
+                                matched = False
+                                break
+                            cursor = hit + len(part)
+                        if parts and matched:
                             verified = True
-                            quote = ' | '.join(window)
+                            quote = ' | '.join(texts[start:column + 1])
                             section = f'Таблица {table_index}, строка {row_index}'
                             break
                     if verified:
@@ -333,7 +367,8 @@ class GatewayDocumentEnricher:
                     break
         if not verified:
             if required:
-                raise ValueError('Результат не подтверждён точной цитатой из документа.')
+                excerpt = quote[:120].replace('\n', ' ')
+                raise ValueError(f'Результат не подтверждён цитатой из документа (doc_id={row.get("doc_id")}, фрагмент={excerpt!r}).')
             return {}
         return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
 
