@@ -39,6 +39,8 @@ class ItemEvidenceTests(SimpleTestCase):
         self.assertEqual(result["basis"][0]["page_or_section"], "раздел 4")
         for docs, name in [({url: {"text": "Другой текст"}}, "Ручка"), ({url: {"text": quote}}, "Блокнот"), ({url: {"text": "", "image_indexes": [1]}}, "Ручка")]:
             self.assertEqual(document_item(evidence, docs, name=name)["color"], "gray")
+        absent = "Для товара Ручка по ПП 1875 запрет отсутствует."
+        self.assertEqual(document_item({"status": "ban", "basis": [{"quote": absent, "source_url": url}]}, {url: {"text": absent}}, name="Ручка")["color"], "gray")
         bad = deepcopy(evidence); bad["status"] = "none"
         self.assertEqual(document_item(bad, {url: {"text": quote}}, name="Ручка")["color"], "gray")
 

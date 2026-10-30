@@ -72,7 +72,7 @@ def document_item(value, documents, *, name, position=None, component=False):
         numbered = not component and type(position) is int and evidence.get("item_position") == position and bool(re.search(r"позици[яию]\s*№?\s*" + str(position) + r"\b", text))
         if not (all_items or named or numbered):
             continue
-        negative = bool(re.search(r"(?:не\s+(?:установлен\w*|применя\w*|предусмотрен\w*)|(?:запрет|ограничени\w*)\s+не\s+)", text))
+        negative = bool(re.search(r"(?:не\s+(?:установлен\w*|применя\w*|предусмотрен\w*)|(?:запрет\w*|ограничени\w*|преимуществ\w*)\s+(?:не\s+|отсутству\w*))", text))
         supported = ((status == "ban" and "запрет" in text and not negative) or
                      (status == "restriction" and not negative and ("ограничени" in text or (re.search(r"требуется|должен|необходимо|подтверд|предостав", text) and re.search(r"происхожден|реестр", text)))) or
                      (status == "advantage" and "преимуще" in text and not negative) or
