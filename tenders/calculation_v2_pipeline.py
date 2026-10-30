@@ -157,6 +157,7 @@ class GatewayBatchRouter:
             self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
             self.diagnostics = {
                 "provider_call_happened": True,
+                "model": self.model,
                 "validation_failed": True,
                 "retry_count": 0,
                 "final_failure_reason": str(exc)[:1000],
@@ -309,6 +310,8 @@ class GatewayDocumentEnricher:
             "failure_phase": phase,
             "usage": total_usage,
         }
+        if isinstance(getattr(exc, "incomplete_response", None), dict):
+            self.diagnostics["incomplete_response"] = exc.incomplete_response
 
     def extract_tender(self, *, tender, source_items, documents):
         """Read every available document once and map evidence back to source rows."""
@@ -352,7 +355,7 @@ class GatewayDocumentEnricher:
                                 "budget": {"max_cost_rub": str(self.max_cost_rub), "reserved_cost_rub": str(estimated_cost)}}
             return []
         try:
-            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=240, network_attempts=1, json_attempts=1, response_contract='Корневой JSON — объект с обязательным массивом items. Если товаров для уточнения нет: {"items":[]}. Не заменяй результат объяснением или объектом ошибки.', **({"image_data_urls": self.document_images} if self.document_images else {}))
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=240, network_attempts=1, json_attempts=1, capture_incomplete_response=True, response_contract='Корневой JSON — объект с обязательным массивом items. Если товаров для уточнения нет: {"items":[]}. Не заменяй результат объяснением или объектом ошибки.', **({"image_data_urls": self.document_images} if self.document_images else {}))
         except Exception as exc:
             self._record_gateway_failure(exc, usage={}, phase="document_analysis", started=started)
             raise

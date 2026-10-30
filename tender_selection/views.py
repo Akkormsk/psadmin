@@ -1566,6 +1566,7 @@ def import_by_number(request):
 @never_cache
 def analysis_status(request):
     from tenders.analysis_presentation import resolve_tender_analysis_statuses
+    from .services import tender_refresh_status_for
     values = request.GET.get('ids', '').split(',')
     if not values or len(values) > 200 or any(not value.isascii() or not value.isdigit() for value in values):
         return JsonResponse({'error': 'Нужен список тендеров'}, status=400)
@@ -1578,9 +1579,7 @@ def analysis_status(request):
     statuses = resolve_tender_analysis_statuses(tenders)
     from tenders.calculation_v2_pipeline import source_route_snapshots
     return JsonResponse({'statuses': [{
-        'tender_id': tender.pk, 'code': status.code, 'label': status.label, 'kind': status.kind,
-        'reason': status.reason, 'revision': status.revision, 'pending_count': status.pending_count,
-        'processing': status.processing, 'job_id': status.job_id, 'issues': status.issues, 'progress': status.progress,
+        **tender_refresh_status_for(request.user, tender.pk, status=status),
         'result_url': reverse('tender_selection:detail', args=[tender.pk]) + '?analysis_snapshot=1&full_card=1',
         **({'item_routes': source_route_snapshots(tender)} if request.GET.get('details') == str(tender.pk) else {}),
     } for tender in tenders for status in [statuses[tender.pk]]]})

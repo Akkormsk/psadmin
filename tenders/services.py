@@ -770,7 +770,7 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract=""):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite").strip()
@@ -816,6 +816,7 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
                 body.pop("temperature")
             payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
             request = Request(f"{base_url}/chat/completions", data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
+            response_started = time.monotonic()
             try:
                 with urlopen(request, timeout=timeout) as response:
                     response_data = json.loads(response.read().decode("utf-8"))
@@ -847,7 +848,24 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
         total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
         total_usage["completion_tokens"] += usage.get("completion_tokens", 0) or 0
         if (response_data.get("choices") or [{}])[0].get("finish_reason") in {"length", "max_tokens"}:
-            raise _ai_error("Ответ модели не завершён: исчерпан лимит вывода. Частичный результат не применён.", total_usage)
+            error = _ai_error("Ответ модели не завершён: исчерпан лимит вывода. Частичный результат не применён.", total_usage)
+            if capture_incomplete_response:
+                choice = response_data["choices"][0]
+                content = (choice.get("message") or {}).get("content")
+                content = content if isinstance(content, str) else ""
+                # Private job diagnostics only: never include input, headers or text in errors/logs.
+                error.incomplete_response = {
+                    "content": content[:256000], "content_characters": len(content),
+                    "capture_truncated": len(content) > 256000,
+                    "finish_reason": choice.get("finish_reason"),
+                    "request_id": str(response_data.get("id") or "")[:200],
+                    "model": str(response_data.get("model") or model)[:200],
+                    "output_token_limit": max_tokens,
+                    "response_time_ms": round((time.monotonic() - response_started) * 1000),
+                    "usage": usage,
+                    "reasoning_characters": len(str((choice.get("message") or {}).get("reasoning_content") or "")),
+                }
+            raise error
         try:
             content = response_data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:

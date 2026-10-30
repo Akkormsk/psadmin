@@ -2239,6 +2239,20 @@ def tender_viewable_by(user, tender):
     return bool(tender.status == Tender.PUSHED and tender.estimates.filter(owner=user).exists())
 
 
+def tender_refresh_status_for(user, tender_id, *, status=None):
+    """Shared read-only status for the card and assistant; spend is administrator-only."""
+    from tenders.analysis_presentation import resolve_tender_analysis_status
+    tender = status.tender if status else Tender.objects.get(pk=tender_id)
+    if tender.pk != int(tender_id) or not tender_viewable_by(user, tender):
+        raise ValueError("Тендер недоступен")
+    status = status or resolve_tender_analysis_status(tender)
+    return {"tender_id": tender.pk, "code": status.code, "label": status.label,
+        "kind": status.kind, "reason": status.reason, "revision": status.revision,
+        "pending_count": status.pending_count, "processing": status.processing,
+        "job_id": status.job_id, "issues": status.issues, "progress": status.progress,
+        **({"cost": status.cost} if user.is_superuser else {})}
+
+
 def source_route_for(user, tender_id, source_item_id):
     from tenders.calculation_v2_pipeline import source_route_snapshots
     tender = Tender.objects.filter(pk=tender_id).first()

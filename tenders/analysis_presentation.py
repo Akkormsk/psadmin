@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections import Counter
+from decimal import Decimal
 
 from .models import OwnerInteraction, TenderCommercialItem, TenderComputeJob, TenderSourceItem
 
@@ -24,6 +25,43 @@ class TenderAnalysisStatus:
     processing: bool = False
     issues: tuple[str, ...] = ()
     progress: dict | None = None
+    cost: dict | None = None
+
+
+def analysis_cost(job) -> dict:
+    """Estimate this job's received model answers, including failed answers, not reservations."""
+    from .gateway_budget import spend_rub
+    if not job:
+        return {}
+    diagnostics = job.diagnostics or {}
+    entries = diagnostics.get("enrichment") or []
+    entries = [entries] if isinstance(entries, dict) else list(entries)
+    entries.append(diagnostics.get("routing") or {})
+    total, unknown, received = Decimal("0"), False, False
+    for entry in entries:
+        usage = entry.get("usage") or (entry.get("extraction") or {}).get("usage") or {}
+        if not usage:
+            unknown = unknown or bool(entry.get("provider_call_happened"))
+            continue
+        received = True
+        amount = spend_rub(usage, entry.get("model", ""))
+        if amount is None:
+            unknown = True
+        else:
+            # Preserve the tariff used when the job ran, if it was recorded.
+            total += Decimal(str(entry.get("cost_rub", amount)))
+    if not received and job.total_cost:
+        total = job.total_cost
+    active = job.status in _ACTIVE
+    formatted = f"{total:.2f}".replace(".", ",")
+    label = "Стоимость уточняется" if unknown else "Стоимость после ответа" if active and not received else "Без нового расхода" if not total else f"≈ {formatted} ₽"
+    if unknown and total:
+        label = f"от {formatted} ₽ · часть стоимости неизвестна"
+    elif not unknown and 0 < total < Decimal("0.01"):
+        label = "< 0,01 ₽"
+    return {"amount_rub": None if unknown else str(total), "known_rub": str(total),
+        "incomplete": unknown, "pending": active, "label": label,
+        "description": "За это обновление, включая неудачные ответы. Оценка по токенам и сохранённому тарифу, без скидки кэша; не счёт Timeweb. Текущий запрос учтётся после ответа."}
 
 
 _STATUS = {
@@ -177,7 +215,7 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         "retryable": bool(active and (now - job.updated_at).total_seconds() > 900)}
     stamp = job.updated_at.isoformat() if job and job.updated_at else ""
     revision = f"{job.pk if job else 0}:{stamp}:{code}:{question_count}:{pending_count}"
-    return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=active, issues=issues, progress=progress)
+    return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=active, issues=issues, progress=progress, cost=analysis_cost(job))
 
 
 def resolve_tender_analysis_status(tender) -> TenderAnalysisStatus:

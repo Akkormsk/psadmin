@@ -14,6 +14,22 @@ from .models import TenderComputeJob, TenderSourceItem
 
 
 class DocumentReadingInputTests(TestCase):
+    @patch('tenders.services._ai_gateway_json')
+    def test_incomplete_answer_is_kept_in_private_diagnostics_without_creating_items(self, gateway):
+        from .services import TenderAIError
+        DocumentPreview.objects.create(url=self.documents[0]['url'], html='<p>Документ</p>')
+        error = TenderAIError('Ответ оборван')
+        error.usage = {'prompt_tokens': 100, 'completion_tokens': 32000}
+        error.incomplete_response = {'content': '{"items":[', 'output_token_limit': 32000}
+        gateway.side_effect = error
+        enricher = GatewayDocumentEnricher()
+        with self.assertRaises(TenderAIError):
+            enricher.extract_tender(tender=self.tender, source_items=[self.item], documents=self.documents)
+        self.assertEqual(enricher.diagnostics['incomplete_response'], error.incomplete_response)
+        self.assertEqual(enricher.diagnostics['usage'], error.usage)
+        self.assertTrue(gateway.call_args.kwargs['capture_incomplete_response'])
+        self.assertEqual(self.tender.v2_source_items.count(), 1)
+
     def setUp(self):
         self.tender = Tender.objects.create(purchase_number="reading-input")
         self.item = TenderSourceItem.objects.create(tender=self.tender, source_key="notification:1", original_text="Комплект")
@@ -93,7 +109,7 @@ class DocumentReadingInputTests(TestCase):
         }}
         self.tender.save(update_fields=["notification_raw"])
         TenderComputeJob.objects.create(tender=self.tender, version="v2")
-        router = Mock(cost_rub=0)
+        router = Mock(cost_rub=0, diagnostics={})
         with patch("tender_selection.services._fetch_doc_bytes", side_effect=DocumentError("Недоступен")):
             job = run_next_tender_understanding_job(router=router, enricher=GatewayDocumentEnricher())
         self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)

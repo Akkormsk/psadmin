@@ -22,6 +22,29 @@ class _Response:
 
 
 class GatewayReliabilityTests(SimpleTestCase):
+    @patch.dict(os.environ, {"TIMEWEB_AI_API_KEY": "test"})
+    @patch("tenders.services.urlopen")
+    def test_truncated_document_response_is_retained_only_when_requested(self, gateway):
+        content = '{"items":[' + 'я' * 270000
+        gateway.return_value = _Response(json.dumps({
+            "id": "request-test", "model": "test/model", "choices": [{
+                "finish_reason": "length", "message": {"content": content}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 32},
+        }).encode())
+        with self.assertRaises(TenderAIError) as caught:
+            _ai_gateway_json("private input", capture_incomplete_response=True)
+        evidence = caught.exception.incomplete_response
+        self.assertEqual(len(evidence['content']), 256000)
+        self.assertTrue(evidence['capture_truncated'])
+        self.assertEqual(evidence['content_characters'], len(content))
+        self.assertEqual(caught.exception.usage['completion_tokens'], 32)
+        self.assertNotIn('private input', str(evidence))
+        self.assertNotIn(content[:100], str(caught.exception))
+        gateway.assert_called_once()
+        with self.assertRaises(TenderAIError) as other:
+            _ai_gateway_json("private input")
+        self.assertFalse(hasattr(other.exception, 'incomplete_response'))
+
     @patch.dict(os.environ, {"TIMEWEB_AI_API_KEY": "test", "TIMEWEB_AI_BASE_URL": "https://gateway.test"})
     @patch("tenders.services.urlopen")
     def test_malformed_first_response_is_repaired_once_and_usage_is_combined(self, urlopen_mock):

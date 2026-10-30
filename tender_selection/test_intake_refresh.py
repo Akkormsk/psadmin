@@ -10,6 +10,34 @@ from .services import _run_document_analysis, refresh_document_analysis, source_
 
 
 class IntakeRefreshTests(TestCase):
+    def test_admin_cost_includes_failed_answers_and_is_hidden_from_manager(self):
+        from tenders.analysis_presentation import resolve_tender_analysis_status
+        from .services import tender_refresh_status_for
+        job = self.create_job()
+        job.status = 'partial'
+        job.diagnostics['enrichment'] = [{
+            'model': 'anthropic/claude-haiku-5-5',
+            'provider_call_happened': True,
+            'usage': {'prompt_tokens': 119578, 'completion_tokens': 32000},
+            'incomplete_response': {'content': 'private partial output'},
+        }]
+        job.save()
+        data = tender_refresh_status_for(self.user, self.tender.pk)
+        self.assertEqual(data['cost']['amount_rub'], '3.7743')
+        self.assertIn('3,77', data['cost']['label'])
+        self.assertNotIn('private partial', str(data))
+        from tenders.assistant_tools import execute_tool
+        self.assertEqual(execute_tool('tender.refresh_status', self.user, {'tender_id': self.tender.pk})['cost'], data['cost'])
+        state = self.client.get(reverse('tender_selection:analysis_status'), {'ids': self.tender.pk}).json()['statuses'][0]
+        self.assertEqual(state['cost'], data['cost'])
+        self.assertNotIn('private partial', str(state))
+        job.diagnostics['routing'] = {'model': 'unknown/model', 'usage': {'completion_tokens': 1}}
+        job.save()
+        self.assertTrue(resolve_tender_analysis_status(self.tender).cost['incomplete'])
+        manager = get_user_model().objects.create_user('cost-manager')
+        with patch('tender_selection.services.tender_viewable_by', return_value=True):
+            self.assertNotIn('cost', tender_refresh_status_for(manager, self.tender.pk))
+
     def setUp(self):
         route_fixtures.SourceRouteTests.setUp(self)
         self.user = get_user_model().objects.create_superuser('intake-owner', password='test')

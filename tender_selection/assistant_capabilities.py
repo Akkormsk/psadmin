@@ -8,7 +8,7 @@ from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
-    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number, source_route_for,
+    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number, source_route_for, tender_refresh_status_for,
 )
 
 
@@ -222,6 +222,15 @@ register_tool(AssistantTool(
     False, True, True,
     lambda user, payload: _tender_action(import_tender_by_number, user, payload, "purchase_number"),
     source="tender_selection.services.import_tender_by_number",
+))
+
+register_tool(AssistantTool(
+    "tender.refresh_status", "Проверить обновление тендера",
+    "Читает текущий этап, время и результат обновления без запуска ИИ. Администратору также показывает оценку стоимости полученных ответов этого обновления, включая неудачные; это не точный счёт провайдера. Служебный текст оборванного ответа не выдаётся.",
+    {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}},
+    True, False, False,
+    lambda user, payload: _tender_action(tender_refresh_status_for, user, payload, "tender_id"),
+    source="tender_selection.services.tender_refresh_status_for",
 ))
 
 register_tool(AssistantTool(

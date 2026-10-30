@@ -386,6 +386,11 @@
                 node.hidden = !data.processing || (!lost && progress?.worker_alive !== false);
                 node.textContent = lost ? 'Нет связи с задачей' : 'Задача не подтверждает работу; можно повторить обновление после её завершения.';
               });
+              if (data.cost) document.querySelectorAll('[data-analysis-cost="' + id + '"]').forEach(node => {
+                node.hidden = !data.cost.label;
+                node.textContent = '· ' + (data.cost.label || '');
+                node.title = data.cost.description || '';
+              });
             }
           }, 1000);
           const fragments = new Set(), fragmentAttempts = new Map();
