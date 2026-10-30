@@ -22,6 +22,7 @@ class Command(BaseCommand):
         parser.add_argument("--max-output-tokens", type=int, default=32000)
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--preflight", action="store_true")
+        parser.add_argument("--full-refresh", action="store_true", help="Verify the normal Update service and one cache-only repeat for this tender")
 
     def handle(self, *args, **options):
         budget = options["max_cost_rub"]
@@ -32,6 +33,10 @@ class Command(BaseCommand):
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
         if tender is None:
             raise CommandError("Tender not found; nothing was called")
+        if options["full_refresh"]:
+            if not options["apply"] or options["preflight"]:
+                raise CommandError("Full refresh requires apply and cannot use preflight")
+            return self.verify_full_refresh(tender, budget)
         if options["preflight"]:
             if options["apply"]:
                 raise CommandError("Preflight cannot be combined with apply")
@@ -141,3 +146,52 @@ class Command(BaseCommand):
                                           "notification_position": (item.parent.metadata or {}).get("notification_index", -1) + 1 if item.parent else None,
                                           "relationship": item.metadata.get("relationship"), "quantity_per_parent": item.metadata.get("quantity_per_parent")}
                                          for item in TenderSourceItem.objects.filter(pk__in=job.diagnostics.get("proposal_ids", [])).select_related("parent")]}, ensure_ascii=False, default=str))
+
+    def verify_full_refresh(self, tender, budget):
+        """Operator acceptance uses the exact UI/assistant executor, never a second pipeline."""
+        import os
+        import time
+        from contextlib import nullcontext
+        from unittest.mock import patch
+        from django.contrib.auth import get_user_model
+        from tender_selection.services import refresh_document_analysis, tender_refresh_status_for
+        from tenders.calculation_v2_pipeline import source_route_snapshots
+        from tenders.models import ProcessDefinition
+
+        user = get_user_model().objects.filter(is_superuser=True, is_active=True).order_by('pk').first()
+        if not user:
+            raise CommandError('No active administrator; nothing was called')
+        doc_limit = min(Decimal('10'), budget * Decimal('0.8'))
+        route_limit = min(Decimal('2'), budget - doc_limit)
+        config = {'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
+                  'CALCULATION_V2_ROUTE_MAX_COST_RUB': str(route_limit)}
+        first_routes = None
+        with patch.dict(os.environ, config):
+            for attempt in range(2):
+                # The repeat may read caches only: a miss fails verification without billing.
+                guard = patch('tenders.services._ai_gateway_json', side_effect=RuntimeError('Cache verification attempted another model call')) if attempt else nullcontext()
+                with guard:
+                    started = refresh_document_analysis(user, tender.pk)
+                    deadline = time.monotonic() + 900
+                    while True:
+                        job = TenderComputeJob.objects.get(pk=started['job_id'])
+                        if job.completed_at:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise CommandError('Refresh did not finish; no repeat was started')
+                        time.sleep(1)
+                status = tender_refresh_status_for(user, tender.pk)
+                routes = source_route_snapshots(tender)
+                route_ids = {key: (row['plan_id'], [step['id'] for step in row['steps']]) for key, row in routes.items()}
+                report = {'full_refresh': True, 'cache_repeat': bool(attempt), 'job_id': job.pk,
+                    'status': job.status, 'error': job.error, 'cost': status.get('cost'),
+                    'progress': status['progress'], 'document_reused': job.diagnostics.get('document_analysis_reused'),
+                    'active_stages': ProcessDefinition.objects.filter(is_active=True).count(),
+                    'routes': {key: {'state': row['state'], 'step_count': len(row['steps']),
+                                    'has_question': bool(row.get('question'))} for key, row in routes.items()}}
+                self.stdout.write(json.dumps(report, ensure_ascii=False, default=str))
+                if job.status not in {'ready', 'needs_review'} or not routes or any(row['state'] not in {'ready', 'needs_review'} for row in routes.values()):
+                    raise CommandError('Full refresh failed; no paid repeat was started')
+                if attempt and (job.total_cost or route_ids != first_routes):
+                    raise CommandError('Cached repeat changed routes or incurred model cost')
+                first_routes = route_ids

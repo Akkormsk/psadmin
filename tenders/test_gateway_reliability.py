@@ -32,13 +32,15 @@ class GatewayReliabilityTests(SimpleTestCase):
             'usage': usage,
         }).encode())
         data, actual = _ai_gateway_json('prompt', model='anthropic/claude-haiku-5-5',
-            reasoning_effort='low', capture_incomplete_response=True, json_attempts=1)
+            reasoning_effort='low', thinking={'type': 'disabled'}, capture_incomplete_response=True, json_attempts=1)
         body = json.loads(gateway.call_args.args[0].data)
         self.assertEqual(body['reasoning_effort'], 'low')
+        self.assertEqual(body['thinking'], {'type': 'disabled'})
         self.assertEqual(actual, usage)
         self.assertEqual(data, {'items': []})
         _ai_gateway_json('prompt', model='other/model')
         self.assertNotIn('reasoning_effort', json.loads(gateway.call_args.args[0].data))
+        self.assertNotIn('thinking', json.loads(gateway.call_args.args[0].data))
 
     @patch.dict(os.environ, {"TIMEWEB_AI_API_KEY": "test"})
     @patch("tenders.services.urlopen")

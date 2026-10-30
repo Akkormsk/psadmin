@@ -74,6 +74,37 @@ class IntakeRefreshTests(TestCase):
         enrich.assert_not_called()
         self.assertEqual(self.router.route.call_count, 1)
 
+    def test_failed_latest_job_does_not_hide_successful_cached_document_analysis(self):
+        first = self.create_job()
+        self.run_job(first)
+        TenderComputeJob.objects.create(tender=self.tender, version='v2-intake-refresh', status='partial',
+            diagnostics={'document_input_fingerprint': first.diagnostics['document_input_fingerprint'],
+                         'enrichment_state': 'system_extraction_failure'})
+        _, enrich = self.run_job(self.create_job())
+        enrich.assert_not_called()
+        self.assertEqual(self.router.route.call_count, 1)
+
+    def test_operator_acceptance_uses_normal_update_and_a_cache_only_repeat(self):
+        import io
+        import json
+        from decimal import Decimal
+        from django.core.management import call_command
+        def run_selected(user, tender_id):
+            self.assertEqual(tender_id, self.tender.pk)
+            job = self.create_job()
+            self.run_job(job)
+            return {'job_id': job.pk, 'started': True}
+        output = io.StringIO()
+        with patch('tender_selection.services.refresh_document_analysis', side_effect=run_selected) as refresh:
+            call_command('prepare_tender_documents', tender_number=self.tender.purchase_number,
+                max_cost_rub=Decimal('14'), apply=True, full_refresh=True, stdout=output)
+        reports = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(refresh.call_count, 2)
+        self.assertEqual([report['cache_repeat'] for report in reports], [False, True])
+        self.assertTrue(reports[1]['document_reused'])
+        self.assertEqual(reports[1]['routes'][str(self.source.pk)]['state'], 'ready')
+        self.assertEqual(self.router.route.call_count, 1)
+
     def test_routing_job_blocks_duplicate_click_and_progress_is_read_only(self):
         job = self.create_job(); job.status = 'routing'; job.diagnostics['refresh'] = {'stage': 'routing', 'label': 'Строим маршруты…'}; job.save()
         with patch('threading.Thread') as thread, self.captureOnCommitCallbacks(execute=True):

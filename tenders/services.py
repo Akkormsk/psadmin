@@ -770,7 +770,7 @@ def _json_from_model(content):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False, reasoning_effort=None):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False, reasoning_effort=None, thinking=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite").strip()
@@ -811,6 +811,8 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
             }
             if reasoning_effort is not None:
                 body["reasoning_effort"] = reasoning_effort
+            if thinking is not None:
+                body["thinking"] = thinking
             # Newer Anthropic models on the gateway (sonnet-5 / opus-5 …) reject
             # an explicit temperature; older ones and the OpenAI models need it
             # at 0 for stable JSON. Drop it only for the families that refuse.

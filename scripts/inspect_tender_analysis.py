@@ -90,7 +90,7 @@ def collect_report(number):
         latest['issues'] = analysis_issues(SimpleNamespace(**latest))
         diagnostics = latest.pop('diagnostics') or {}
         latest['incomplete_response_summary'] = incomplete_response_summary(diagnostics)
-        latest['enrichment_metrics'] = [{key: entry.get(key) for key in ('outcome', 'model', 'reasoning_effort', 'duration_ms', 'cost_rub')} | {
+        latest['enrichment_metrics'] = [{key: entry.get(key) for key in ('outcome', 'model', 'reasoning_effort', 'thinking', 'duration_ms', 'cost_rub')} | {
             'usage': entry.get('usage') or entry.get('extraction', {}).get('usage'),
             'accepted_count': entry.get('extraction', {}).get('accepted_count'),
         } for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]

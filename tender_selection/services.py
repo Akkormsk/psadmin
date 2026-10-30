@@ -2107,7 +2107,8 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         if not routes_only:
             _refresh_phase(job, "documents", "Читаем документы…")
             before = _document_input_fingerprint(job.tender)
-            previous = TenderComputeJob.objects.filter(tender=job.tender, diagnostics__document_input_fingerprint=before).exclude(pk=job.pk).order_by("-pk").first()
+            previous = TenderComputeJob.objects.filter(tender=job.tender, diagnostics__document_input_fingerprint=before,
+                diagnostics__enrichment_state__in=["no_change", "no_data", "needs_review"]).exclude(pk=job.pk).order_by("-pk").first()
             reusable = previous and previous.diagnostics.get("enrichment_state") in {"no_change", "no_data", "needs_review"}
             if reusable:
                 job.diagnostics["document_analysis_reused"] = previous.pk

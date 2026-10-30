@@ -57,7 +57,8 @@ class DocumentReadingInputTests(TestCase):
         fetch.assert_called_once()
         self.assertIn("В комплекте блокнот и ручка", gateway.call_args.args[0])
         self.assertEqual(enricher.diagnostics["documents"]["considered"][0]["reading_status"], "read")
-        self.assertEqual(gateway.call_args.kwargs['reasoning_effort'], 'low')
+        self.assertNotIn('reasoning_effort', gateway.call_args.kwargs)
+        self.assertEqual(gateway.call_args.kwargs['thinking'], {'type': 'disabled'})
         self.assertIsNone(GatewayDocumentEnricher(model='other/model').reasoning_effort)
 
     def test_archive_analysis_reads_every_document_and_nested_archive(self):
