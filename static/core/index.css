@@ -2444,7 +2444,7 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 :root :is(.ui-badge, .ts-national-pill, .kb-badge, .kb-card__status,
   .saved-estimate__status-pill, .record-type-badge, .bank-flag,
   .ts-count-pill, .ts-law, .ts-flag, .ts-stage, .ts-summary-pill,
-  .ts-v2-badge, .ts-position-mark, .production-base-chip,
+  .ts-position-mark, .production-base-chip,
   .tender-ai-confidence, .tender-ai-technical-status,
   .tender-requirement-state > span, .tender-clarification-chip) {
   display:inline-flex;

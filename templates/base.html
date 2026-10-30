@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=shared-badges-20261030">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=analysis-line-20261030">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -360,7 +360,7 @@
           document.querySelectorAll('[data-analysis-status="' + id + '"]').forEach(function (badge) {
             badge.textContent = data.label; badge.hidden = false;
             badge.dataset.analysisCode = "PROCESSING";
-            if (badge.classList.contains("ts-v2-badge")) badge.className = "ts-v2-badge ts-v2-badge--processing";
+            if (badge.classList.contains("ts-analysis-line")) badge.className = "ts-analysis-line ts-analysis-line--processing";
           });
           document.querySelectorAll('[data-analysis-reason="' + id + '"]').forEach(node => { node.textContent = ''; node.hidden = true; });
           requestAnalysisCheck();
@@ -414,10 +414,10 @@
                 if (Number(data.job_id) < Number(before.job_id || 0)) continue;
                 analysisStates.set(id, data);
                 document.querySelectorAll('[data-analysis-status="' + id + '"]').forEach(node => {
-                  node.textContent = data.label; node.hidden = node.classList.contains('ts-v2-badge') && data.code === 'CHECKED_NO_CHANGES';
+                  node.textContent = data.label; node.hidden = node.classList.contains('ts-analysis-line') && data.code === 'CHECKED_NO_CHANGES';
                   node.dataset.analysisCode = data.code; node.dataset.analysisRevision = data.revision;
                   node.title = data.reason || 'Открыть подробности анализа';
-                  if (node.classList.contains('ts-v2-badge')) node.className = 'ts-v2-badge ts-v2-badge--' + data.kind;
+                  if (node.classList.contains('ts-analysis-line')) node.className = 'ts-analysis-line ts-analysis-line--' + data.kind;
                   const link = node.closest('a[data-workspace-open]');
                   if (link) { const href = new URL(link.href); href.hash = data.code === 'ANALYSIS_INCOMPLETE' ? 'analysis-status' : ''; link.href = href; }
                 });
