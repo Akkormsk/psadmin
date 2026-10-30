@@ -3,7 +3,7 @@ import json
 import zipfile
 from unittest.mock import Mock, patch
 
-from django.test import TestCase
+from django.test import TestCase, SimpleTestCase
 from docx import Document
 
 from tender_selection.documents import DocumentError, extract_preview
@@ -209,3 +209,16 @@ class InlineDocumentVisionTests(TestCase):
         self.assertFalse(enricher.document_images)
         self.assertEqual(considered[0]['reading_status'], 'partial')
         self.assertTrue(considered[0]['warnings'])
+
+
+class StagedTableEvidenceTests(SimpleTestCase):
+    def test_row_evidence_preserves_values_and_rejects_cross_row_or_reordered_cells(self):
+        engine = GatewayDocumentEnricher()
+        engine.document_lookup = {1: {'url': 'https://example.test/spec', 'evidence_text': '',
+            'tables': [{'rows': [['', 'Размер', '≥ 10 и ≤ 12', 'мм'], ['Цвет', 'синий']]}]}}
+        proof = engine.stage_quote({'doc_id': 1, 'quote': 'Размер | ≥ 10 и ≤ 12 | мм'})
+        self.assertEqual(proof['evidence'], 'Размер | ≥ 10 и ≤ 12 | мм')
+        self.assertEqual(proof['page_or_section'], 'Таблица 1, строка 1')
+        for quote in ('Размер | синий', 'Размер | ≥ 11 и ≤ 12 | мм', 'мм | Размер'):
+            with self.subTest(quote=quote), self.assertRaises(ValueError):
+                engine.stage_quote({'doc_id': 1, 'quote': quote})

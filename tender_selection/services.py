@@ -2101,7 +2101,7 @@ def _staged_document_analysis(job, enricher):
             old = previous.diagnostics.get('stages', {}).get(key)
             if old:
                 stages[key] = {'state': 'complete', 'result': old['result'], 'reused_from': previous.pk, 'cost_rub': '0'}
-        job.diagnostics.update(document_analysis_reused=previous.pk, staged_input_fingerprint=fingerprint,
+        job.diagnostics.update(document_analysis_reused=previous.pk, staged_input_fingerprint=fingerprint, intake_contract=enricher.STAGED_CONTRACT,
             document_input_fingerprint=_document_input_fingerprint(job.tender), enrichment_state=previous.diagnostics['enrichment_state'], structure_requires_review=previous.diagnostics.get("structure_requires_review", []))
         _publish_intake(job)
         return {'created': [], 'state': previous.diagnostics['enrichment_state'], 'diagnostics': []}

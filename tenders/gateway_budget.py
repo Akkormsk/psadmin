@@ -377,7 +377,7 @@ def intake_spend_rub(usage, model):
     details = usage.get("prompt_tokens_details") or {}
     read = int(usage.get("cache_read_input_tokens") or details.get("cached_tokens") or 0)
     written = int(usage.get("cache_creation_input_tokens") or details.get("cache_write_tokens") or details.get("cache_creation_tokens") or 0)
-    return ordinary + (read * (1.35 - 13.5) + written * (16.875 - 13.5)) / 1_000_000
+    return ((int(usage.get("prompt_tokens") or 0) - read - written) * 13.5 + read * 1.35 + written * 16.875 + int(usage.get("completion_tokens") or 0) * 67.5) / 1_000_000
 
 
 def reconcile_intake_billing(job):

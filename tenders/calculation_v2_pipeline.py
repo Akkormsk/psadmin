@@ -233,6 +233,7 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v1"
+    STAGED_VALIDATION_VERSION = "literal-table-row-v1"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
@@ -253,10 +254,13 @@ class GatewayDocumentEnricher:
         from .gateway_budget import spend_rub, intake_spend_rub
         prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
         fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort})
-        cache = TenderComputeJob.objects.filter(tender=job.tender, **{f'diagnostics__stages__{stage}__input_fingerprint': fingerprint, f'diagnostics__stages__{stage}__state': 'complete'}).exclude(pk=job.pk).order_by('-pk').first()
+        cache = TenderComputeJob.objects.filter(tender=job.tender, **{f'diagnostics__stages__{stage}__input_fingerprint': fingerprint, f'diagnostics__stages__{stage}__state__in': ['complete', 'failed']}).exclude(pk=job.pk).order_by('-pk').first()
         if cache:
             previous = cache.diagnostics['stages'][stage]
-            return previous['result'], {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': cache.pk, 'result': previous['result'], 'cost_rub': '0', 'duration_ms': 0}
+            if previous.get('state') != 'complete' and (not isinstance(previous.get('result'), list) or previous.get('validation_version') == self.STAGED_VALIDATION_VERSION):
+                cache = None
+        if cache:
+            return previous['result'], {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': cache.pk, 'result': previous['result'], 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
         # Reserve the uncached cache-write price, not an assumed future cache hit.
         reserve = spend_rub({'prompt_tokens': len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images), 'completion_tokens': output_tokens}, self.model)
         remaining = self.max_cost_rub - Decimal(str(self.cost_rub)) if self.max_cost_rub is not None else Decimal('10')
@@ -281,7 +285,7 @@ class GatewayDocumentEnricher:
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at, 'error': 'Не получен полный список результатов'}
             raise ValueError('Этап не вернул полный список результатов.')
         return raw['items'], {'state': 'pending_validation', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at,
-            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'result': raw['items']}
+            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION, 'result': raw['items']}
 
     def stage_quote(self, row, *, required=True):
         if isinstance(row.get('evidence'), list):
@@ -294,11 +298,32 @@ class GatewayDocumentEnricher:
         doc = self.document_lookup.get(row.get('doc_id'))
         quote = str(row.get('quote') or '').strip()
         normalize = lambda value: ' '.join(str(value).split()).casefold()
-        if not doc or not quote or normalize(quote) not in normalize(doc.get('evidence_text', '')):
+        verified = bool(doc and quote and normalize(quote) in normalize(doc.get('evidence_text', '')))
+        section = str(row.get('section') or '')[:300]
+        if doc and quote and not verified:
+            # A table excerpt may quote adjacent cells using pipes as cell boundaries.
+            # Verify each literal fragment in order within ONE row; never join unrelated rows.
+            parts = [part.strip() for part in quote.split('|') if part.strip()]
+            for table_index, table in enumerate(doc.get('tables', []), 1):
+                for row_index, cells in enumerate(table['rows'], 1):
+                    texts = [cell if isinstance(cell, str) else cell['text'] for cell in cells]
+                    texts = [text for text in texts if normalize(text)]
+                    for offset in range(len(texts)):
+                        window = texts[offset:offset+len(parts)]
+                        if len(parts) >= 2 and len(window) == len(parts) and all(normalize(part) in normalize(text) for part, text in zip(parts, window)):
+                            verified = True
+                            quote = ' | '.join(window)
+                            section = f'Таблица {table_index}, строка {row_index}'
+                            break
+                    if verified:
+                        break
+                if verified:
+                    break
+        if not verified:
             if required:
                 raise ValueError('Результат не подтверждён точной цитатой из документа.')
             return {}
-        return {'document_url': doc['url'], 'page_or_section': str(row.get('section') or '')[:300], 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
+        return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
 
     def validate_structure(self, rows):
         seen, goods = set(), []
