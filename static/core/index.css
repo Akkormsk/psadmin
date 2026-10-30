@@ -47,6 +47,7 @@
   --positive-ink-strong: light-dark(#0f6734, #5cdd7d);
   --warning-ink:         light-dark(#8a5a00, #e0a33a);
   --negative-ink:        light-dark(#b91c1c, #ff6b60);
+  --info-ink:            light-dark(#2f5da8, #8fb4ff);
 
   /* ---- accent (iOS system green) ---- */
   --accent:        light-dark(#34c759, #30d158);
@@ -2425,7 +2426,7 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .ts-item-national { display:inline-block; margin-left:8px; vertical-align:top; font-size:11px; font-weight:400; }
 .ts-item-national > summary { display:inline-flex; align-items:center; gap:5px; list-style:none; cursor:pointer; color:var(--ink-2); }
 .ts-item-national > summary::-webkit-details-marker { display:none; }
-.ts-national-pill { --national-ink:var(--ink-3); display:inline-flex; align-items:center; justify-content:center; flex:none; padding:2px 8px; border:1px solid color-mix(in srgb,var(--national-ink) 35%,transparent); border-radius:999px; background:color-mix(in srgb,var(--national-ink) 9%,transparent); color:var(--national-ink); font-size:11px; font-weight:600; line-height:1.4; }
+.ts-national-pill { --national-ink:var(--ink-3); justify-content:center; flex:none; color:var(--national-ink); font-size:11px; }
 .ts-national-pill--red { --national-ink:var(--negative-ink); }
 .ts-national-pill--yellow { --national-ink:var(--warning-ink); }
 .ts-national-pill--green { --national-ink:var(--positive-ink); }
@@ -2437,3 +2438,31 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .ts-item-national a,.ts-national-risk-basis a { margin-left:6px; }
 .ts-national-risk-basis { font-size:12px; font-weight:400; margin-top:5px; }
 .ts-national-risk-basis > summary { color:var(--ink-3); cursor:pointer; }
+
+
+/* Shared badge surface; existing component classes keep their semantic text colors. */
+:root :is(.ui-badge, .ts-national-pill, .kb-badge, .kb-card__status,
+  .saved-estimate__status-pill, .record-type-badge, .bank-flag,
+  .ts-count-pill, .ts-law, .ts-flag, .ts-stage, .ts-summary-pill,
+  .ts-v2-badge, .ts-position-mark, .production-base-chip,
+  .tender-ai-confidence, .tender-ai-technical-status,
+  .tender-requirement-state > span, .tender-clarification-chip) {
+  display:inline-flex;
+  align-items:center;
+  box-sizing:border-box;
+  padding:2px 8px;
+  border:1px solid color-mix(in srgb,currentColor 35%,transparent);
+  border-radius:999px;
+  background:color-mix(in srgb,currentColor 9%,transparent);
+  box-shadow:none;
+  font-weight:600;
+  line-height:1.4;
+  vertical-align:middle;
+}
+.ui-badge { color:var(--ink-2); font-size:11px; }
+.ui-badge--positive { color:var(--positive-ink); }
+.ui-badge--warning { color:var(--warning-ink); }
+.ui-badge--negative { color:var(--negative-ink); }
+.ui-badge--info { color:var(--info-ink); }
+:root .record-type-badge { color:var(--info-ink); }
+:root .bank-flag { color:var(--ink-2); }
