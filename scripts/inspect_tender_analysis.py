@@ -159,6 +159,19 @@ def collect_report(number):
             latest['staged_context'] = {'characters': len(engine.shared_context), 'utf8_bytes': len(engine.shared_context.encode('utf-8')), 'sections': {key: len(json.dumps(value, ensure_ascii=False)) for key, value in json.loads(engine.shared_context).items()}, 'documents': [{key: doc.get(key) for key in ('name', 'image_indexes')} | {'paragraph_chars': len(doc['text']), 'table_chars': len(json.dumps(doc['tables'], ensure_ascii=False)), 'evidence_chars': len(doc['evidence_text'])} for doc in engine.stage_documents]}
             normalize = lambda value: ' '.join(str(value).split()).casefold()
             latest['structure_evidence_check'] = [{'kind': row.get('kind'), 'doc_id': row.get('doc_id'), 'goods': row.get('goods'), 'reason': row.get('reason'), 'quote': row.get('quote'), 'exact_match': normalize(row.get('quote')) in normalize(engine.document_lookup.get(row.get('doc_id'), {}).get('evidence_text', ''))} for row in diagnostics['stages'].get('structure', {}).get('result', [])]
+            latest['tz_evidence_check'] = []
+            for row in diagnostics['stages'].get('tz', {}).get('result', []):
+                for fact in row.get('characteristics', []):
+                    doc = engine.document_lookup.get(fact.get('doc_id'), {})
+                    quote = normalize(fact.get('quote'))
+                    cells = [cell if isinstance(cell, str) else cell['text'] for table in doc.get('tables', []) for line in table['rows'] for cell in line]
+                    if quote and quote not in normalize(doc.get('evidence_text', '')):
+                        import difflib
+                        text = doc.get('evidence_text', '')
+                        match = difflib.SequenceMatcher(None, quote, normalize(text)).find_longest_match()
+                        latest['tz_evidence_check'].append({'key': row.get('key'), 'name': fact.get('name'), 'quote': fact.get('quote'), 'doc_id': fact.get('doc_id'), 'exact_cell_match': any(quote in normalize(cell) for cell in cells), 'source_near_match': text[max(0,match.b-70):match.b+match.size+70]})
+            latest['proposed_items'] = [{'name': item.original_text, 'quantity': item.quantity, 'per_parent': item.metadata.get('quantity_per_parent'), 'supply_kind': item.metadata.get('supply_kind'), 'incomplete': item.metadata.get('analysis_incomplete'), 'facts': effective_item_requirements(item).get('characteristics')} for item in pending]
+
 
         latest['steps'] = {name: {key: row.get(key) for key in ('state', 'model', 'usage', 'duration_ms', 'started_at', 'cost_rub', 'actual_cost_rub', 'billed_cache_read_tokens', 'billed_cache_write_tokens', 'reused_from', 'billing_request_id')} for name, row in diagnostics.get('stages', {}).items()}
     from collections import Counter
