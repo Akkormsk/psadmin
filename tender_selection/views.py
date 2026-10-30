@@ -62,17 +62,8 @@ def superuser_required(view):
 
 
 def _tender_viewable_by(user, tender):
-    """Суперюзер видит любой тендер. Менеджер — только тот, что стал ЕГО просчётом
-    (та же проверка владения, что и у самого просчёта — см. _estimate_for_user в
-    tenders/views.py): попасть можно по ссылке «Открыть карточку →» со страницы
-    своего просчёта, а не подбором номера в адресной строке и не через каталог."""
-    if user.is_superuser:
-        return True
-    if tender.status != Tender.PUSHED:
-        return False
-    from tenders.models import TenderEstimate
-
-    return tender.estimates.filter(owner=user).exists()
+    from .services import tender_viewable_by
+    return tender_viewable_by(user, tender)
 
 
 def tender_viewer_required(view):
@@ -720,6 +711,15 @@ def tender_detail(request, pk):
             item["national_regime"] = resolve_item(original.get("national_regime"), (source.metadata or {}).get("national_regime") if source else None, component=bool(source and source.metadata.get("relationship") == "component"))
         else:
             item["national_regime"] = item.get("national_regime") or annotation()
+    from tenders.calculation_v2_pipeline import source_route_snapshots
+    item_routes = source_route_snapshots(tender)
+    current_questions = {question.source_item_id: question for question in v2_questions if question.source_item_id}
+    for item in display_items:
+        item["production_route"] = item_routes.get(item.get("source_id"))
+        question = current_questions.get(item.get("source_id"))
+        if question:
+            item.update(composition_question=question.question, composition_question_id=question.pk,
+                        composition_options=list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else [])
     display_item_groups, ungrouped_display_items = [], []
     grouped = {}
     for item in display_items:
@@ -824,7 +824,7 @@ def tender_detail(request, pk):
         return HttpResponse(status=409)
     from .national_regime import risk_projection
     risk = risk_projection(tender, risk, card)
-    response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot else "tender_selection/detail.html", {
+    response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
         "display_purchase_number": (tender.raw or {}).get("display_number") or tender.purchase_number,
@@ -1516,7 +1516,7 @@ def refresh_analysis(request, pk):
     try:
         result = refresh_document_analysis(request.user, tender.pk)
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-            return JsonResponse({"tender_id": tender.pk, "label": "Проверяем ТЗ…", **result})
+            return JsonResponse({"tender_id": tender.pk, "label": "Обновление в очереди…", **result})
         messages.info(request, result["message"])
     except ValueError as exc:
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -1576,9 +1576,20 @@ def analysis_status(request):
     if any(not _tender_viewable_by(request.user, tender) for tender in tenders):
         raise PermissionDenied
     statuses = resolve_tender_analysis_statuses(tenders)
+    from tenders.calculation_v2_pipeline import source_route_snapshots
     return JsonResponse({'statuses': [{
         'tender_id': tender.pk, 'code': status.code, 'label': status.label, 'kind': status.kind,
         'reason': status.reason, 'revision': status.revision, 'pending_count': status.pending_count,
-        'processing': status.processing, 'job_id': status.job_id, 'issues': status.issues,
-        'result_url': reverse('tender_selection:detail', args=[tender.pk]) + '?analysis_snapshot=1',
+        'processing': status.processing, 'job_id': status.job_id, 'issues': status.issues, 'progress': status.progress,
+        'result_url': reverse('tender_selection:detail', args=[tender.pk]) + '?analysis_snapshot=1&full_card=1',
+        **({'item_routes': source_route_snapshots(tender)} if request.GET.get('details') == str(tender.pk) else {}),
     } for tender in tenders for status in [statuses[tender.pk]]]})
+
+
+@tender_viewer_required
+def item_route(request, pk, source_pk):
+    from .services import source_route_for
+    try:
+        return JsonResponse(source_route_for(request.user, pk, source_pk))
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=404)

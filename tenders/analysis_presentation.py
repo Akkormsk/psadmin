@@ -23,6 +23,7 @@ class TenderAnalysisStatus:
     job_id: int = 0
     processing: bool = False
     issues: tuple[str, ...] = ()
+    progress: dict | None = None
 
 
 _STATUS = {
@@ -156,9 +157,27 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         label = f"{label} · {question_count}" if question_count else f"Нужно проверить правки ТЗ · {pending_count}"
     issues = tuple(analysis_issues(job))
     reason = issues[0] if code == "ANALYSIS_INCOMPLETE" else ""
+    from django.utils import timezone
+    now = timezone.now()
+    refresh = (job.diagnostics or {}).get("refresh", {}) if job else {}
+    active = bool(job and job.status in _ACTIVE)
+    if refresh and active:
+        label = refresh.get("label") or label
+    elif refresh and job.status == "ready":
+        label = "Маршруты обновлены" if job.diagnostics.get("routes_only") else "Обновлено"
+    elif refresh and code == "ANALYSIS_INCOMPLETE":
+        label = "Обновление не завершено"
+    started = (job.started_at or job.created_at) if job else None
+    progress = {"started_at": started.isoformat() if started else None,
+        "completed_at": job.completed_at.isoformat() if job and job.completed_at else None,
+        "server_time": now.isoformat(), "elapsed_seconds": max(0, int(((job.completed_at or now) - started).total_seconds())) if started else 0,
+        "heartbeat_at": job.updated_at.isoformat() if job else None,
+        "worker_alive": not active or not job.started_at or (now - job.updated_at).total_seconds() < 45,
+        "stage": refresh.get("stage", ""), "full_refresh": bool(refresh),
+        "retryable": bool(active and (now - job.updated_at).total_seconds() > 900)}
     stamp = job.updated_at.isoformat() if job and job.updated_at else ""
     revision = f"{job.pk if job else 0}:{stamp}:{code}:{question_count}:{pending_count}"
-    return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=bool(job and job.status in _ACTIVE), issues=issues)
+    return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=active, issues=issues, progress=progress)
 
 
 def resolve_tender_analysis_status(tender) -> TenderAnalysisStatus:

@@ -99,10 +99,38 @@ class NoopDocumentEnricher:
         return []
 
 
+def _route_processes(processes):
+    fields = ("name", "description", "when_to_use", "when_not_to_use", "role", "supplies_input", "performs_production", "terminal_mode", "scope_tags", "parameters")
+    return [{"id": process.pk, **{field: getattr(process, field) for field in fields}} for process in processes]
+
+
+def _route_owner_answer_map(sources):
+    from .models import OwnerFeedbackEvent
+    from .document_enrichment import is_item_enrichment
+    lineage = {}
+    for source in sources:
+        ids, current = {source.pk}, source
+        while is_item_enrichment(current) and current.parent_id:
+            current = current.parent
+            ids.add(current.pk)
+        lineage[source.pk] = ids
+    ids = set().union(*lineage.values()) if lineage else set()
+    events = list(OwnerFeedbackEvent.objects.filter(interaction__source_item_id__in=ids, interaction__status="resolved").select_related("interaction").order_by("pk"))
+    return {source_id: [{"question": event.interaction.question, "answer": event.raw_text, "names": event.interaction.context.get("missing_requirement_names", [])}
+                        for event in events if event.interaction.source_item_id in ancestors] for source_id, ancestors in lineage.items()}
+
+
+def source_route_fingerprint(source, processes, knowledge, owner_answers=None):
+    from .document_enrichment import effective_item_requirements
+    return _fingerprint({"source_id": source.pk, "name": source.original_text, "quantity": str(source.quantity), "unit": source.unit,
+                         "requirements": effective_item_requirements(source), "owner_answers": _route_owner_answer_map([source])[source.pk] if owner_answers is None else owner_answers, "processes": _route_processes(processes), "knowledge": knowledge})
+
+
 class GatewayBatchRouter:
     """One structured gateway request for all active items in a Tender."""
-    def __init__(self, model=None):
-        self.model = model or os.getenv("TIMEWEB_AI_V2_ROUTER_MODEL", "gemini/gemini-3.1-flash-lite")
+    def __init__(self, model=None, *, max_cost_rub=None):
+        self.model = model or os.getenv("TIMEWEB_AI_V2_ROUTER_MODEL") or os.getenv("TIMEWEB_AI_ROUTE_MODEL") or os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "anthropic/claude-haiku-5-5")
+        self.max_cost_rub = Decimal(str(max_cost_rub if max_cost_rub is not None else os.getenv("CALCULATION_V2_ROUTE_MAX_COST_RUB", "2")))
         self.usage = {}
         self.cost_rub = 0.0
         self.diagnostics = {}
@@ -113,26 +141,31 @@ class GatewayBatchRouter:
         payload = {
             "tender": {"id": tender.pk, "title": tender.title, "subject": tender.object_info},
             "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": item.requirements} for item in items],
-            "processes": [{"id": process.pk, "name": process.name, "description": process.description, "when_to_use": process.when_to_use, "when_not_to_use": process.when_not_to_use, "role": process.role, "supplies_input": process.supplies_input, "performs_production": process.performs_production, "terminal_mode": process.terminal_mode, "scope_tags": process.scope_tags, "parameters": process.parameters} for process in processes],
+            "processes": _route_processes(processes),
             "knowledge": knowledge,
         }
-        prompt = """Route every tender item in one batch. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string]}]}. Ask only for material uncertainty. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string]}]}. Ask only for material uncertainty. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        output_tokens = min(32000, max(4000, len(items) * 220))
+        reserve = spend_rub({"prompt_tokens": len(prompt.encode("utf-8")) + 4096, "completion_tokens": output_tokens}, self.model)
+        if not self.max_cost_rub.is_finite() or self.max_cost_rub <= 0 or reserve is None or Decimal(str(reserve)) > self.max_cost_rub:
+            self.diagnostics = {"provider_call_happened": False, "validation_failed": True, "final_failure_reason": "Маршрут не запущен: превышен лимит стоимости или неизвестен тариф модели."}
+            raise ValueError(self.diagnostics["final_failure_reason"])
         try:
-            raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=4000, timeout=90, network_attempts=2)
+            raw, self.usage = _ai_gateway_json(prompt, model=self.model, max_tokens=output_tokens, timeout=90, network_attempts=1, json_attempts=1, response_contract="Верни корневой объект с массивом items и одной записью на каждую переданную позицию. Не заменяй результат объяснением.")
         except Exception as exc:
             self.usage = dict(getattr(exc, "usage", {}) or {})
             self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
             self.diagnostics = {
                 "provider_call_happened": True,
                 "validation_failed": True,
-                "retry_count": 1,
+                "retry_count": 0,
                 "final_failure_reason": str(exc)[:1000],
                 "usage": self.usage,
                 "cost_rub": str(self.cost_rub),
             }
             raise
         self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
-        self.diagnostics = {"provider_call_happened": True, "retry_count": 0, "usage": self.usage, "cost_rub": str(self.cost_rub)}
+        self.diagnostics = {"provider_call_happened": True, "model": self.model, "output_token_limit": output_tokens, "reserved_cost_rub": str(reserve), "retry_count": 0, "usage": self.usage, "cost_rub": str(self.cost_rub)}
         rows = raw.get("items") if isinstance(raw, dict) else None
         rows = rows if isinstance(rows, list) else []
         process_ids = {process.pk for process in processes}
@@ -141,13 +174,13 @@ class GatewayBatchRouter:
             if not isinstance(row, dict):
                 continue
             item_id = row.get("component_id")
-            if item_id not in {item.pk for item in items} or item_id in seen:
+            if type(item_id) is not int or item_id not in {item.pk for item in items} or item_id in seen:
                 continue
             seen.add(item_id)
             raw_process_ids = row.get("process_ids")
             if not isinstance(raw_process_ids, list):
                 raw_process_ids = [row.get("process_id")]
-            selected_process_ids = tuple(value for value in raw_process_ids if isinstance(value, int) and value in process_ids)
+            selected_process_ids = tuple(value for value in raw_process_ids if type(value) is int and value in process_ids)
             valid = bool(selected_process_ids) and len(selected_process_ids) == len(raw_process_ids)
             confidence = _as_decimal(row.get("confidence"))
             confidence = confidence if confidence is not None and Decimal("0") <= confidence <= Decimal("1") else Decimal("0")
@@ -160,7 +193,7 @@ class GatewayBatchRouter:
             output.append(RouteDecision(item_id, selected_process_ids if valid else (), confidence, {"reason": str(row.get("reason") or "")[:1000], "alternatives": row.get("alternatives") if isinstance(row.get("alternatives"), list) else []}, needs_review, str(row.get("question") or "Уточните способ выполнения позиции.")[:500], question_kind, missing_names))
         for item in items:
             if item.pk not in seen:
-                output.append(RouteDecision(item.pk, (), Decimal("0"), {"reason": "Model omitted item"}, True, "Нужна проверка маршрута позиции."))
+                output.append(RouteDecision(item.pk, (), Decimal("0"), {"reason": "Не получен маршрут этой позиции"}, True, "Нужна проверка маршрута позиции."))
         return output
 
 
@@ -305,6 +338,8 @@ class GatewayDocumentEnricher:
                                        "notification_unit_price": original.get("price") if notification_quote_source(item) else None, "notification_total": original.get("sum") if notification_quote_source(item) else None,
                                        "relationship": (item.metadata or {}).get("relationship"), "aggregate_name": (item.metadata or {}).get("parent_display_name"),
                                        "existing_components": [{"name": child.original_text, "quantity": str(child.quantity), "unit": child.unit, "facts": [{"name": fact["name"], "value": fact["value"], **({"scope": fact["scope"]} if fact.get("scope") else {})} for fact in effective_item_requirements(child).get("characteristics", [])]} for child in tender.v2_source_items.filter(parent=item, is_active=True, metadata__relationship="component")]})
+        if callable(getattr(self, "progress_callback", None)):
+            self.progress_callback()
         payload = {"notification_items": notification_items, "documents": available}
         payload["notification_payload"] = tender.notification_raw or {}
         prompt = """Read every supplied tender document and compare it with every notification item. Also extract optional national_regime per item: {status:ban|restriction|advantage|none|unknown,basis:[{quote:exact_verbatim_excerpt,source_url,page_or_section,scope:item|all_items,item_position:integer}]}. Report only the customer's explicit PP1875 requirements, never infer them from OKPD2, general legal knowledge or silence. Excerpts must contain the actual requirement and the PP1875 reference; for item scope include this item's name or its notification position explicitly in the quote. all_items is allowed only when the quote explicitly applies to all supplied goods. When structured notification flags already supply the status, do not repeat them as document evidence; unknown national_regime may be omitted. Components cannot inherit the parent set restriction without item-specific or explicit all-goods evidence. none requires an explicit statement of absence; missing evidence means unknown. Do not rewrite or summarize quotes. Use the entire notification_payload as context, including structured national-regime fields; never treat organizational/SME benefits as goods-origin preferences. Attached images are numbered from 1 in attachment order; document image_indexes associate each picture with its source. Read the images together with that document text. Return JSON only {\"items\":[{\"parent_source_item_id\":integer,\"parent_display_name\":string,\"name\":string,\"quantity\":number|null,\"unit\":string,\"requirements\":object,\"confidence\":number,\"source_url\":string,\"page_or_section\":string,\"evidence\":string,\"relationship\":\"enrich|split|component\",\"quantity_per_parent\":number,\"supply_kind\":\"finished|kit|unclear\",\"structure_reason\":string}]}. The supplied working items and their requirements are the baseline, not disposable data. existing_components describe a previously accepted breakdown of this source. Reassess that entire structure against the documents: keep a genuine kit or propose one finished product with completeness when the prior split was wrong. Account for prior component requirements in the proposed product/completeness or explain excluded information; do not silently discard specifics. Reconcile every item across ALL supplied sources, attribute by attribute. For enrich, return exactly ONE synthesized row per atomic notification item, combining documented additions or corrections across all sources; never omit known baseline facts in favor of a shorter description. Reuse the existing characteristic label for the same attribute; avoid repeated or synonymous labels. Preserve differing source values with evidence instead of silently choosing one. Choose the clearest specific human product name across the sources, without procurement boilerplate, repetition or loss of identifying meaning. Technical position codes identify the parent; they are not product characteristics. The backend preserves baseline facts and original quoted money for the same item. For enrich preserve quantity and the existing unit label unless documents explicitly change them; do not paraphrase an equivalent unit. For enrich set requirements.reconciled=true. Return requirements.keep_refs as a compact array of baseline fact ids to preserve UNCHANGED; do not repeat these facts in the response. requirements.characteristics contains ONLY new, changed, conflicting or explicitly omitted facts. The backend restores unchanged facts and compiles ONE complete canonical specification. Cover every baseline fact exactly once across keep_refs and characteristic baseline_refs. Empty baseline means keep_refs=[]. Each entry has name,value,resolution (keep|merge|conflict|new|omit), baseline_refs (array of baseline_facts.id), reason, and document_facts [{value,source_url,page_or_section}] when using document evidence. For a new fact from a single document, use source_url and page_or_section directly on the characteristic; do NOT repeat the value in document_facts, document_value, reason or evidence. Only merge/conflict need document_facts with differing source values. Each document fact cites its own supplied source_url; never attribute different documents to one shared source. merge/conflict may have no baseline_refs if supported by two or more document_facts. Reasons are concise human explanations without identifiers or technical keys. Cover EVERY baseline fact exactly once. Use keep_refs for unchanged facts; a single keep row is needed only to assign scope without changing the fact. Never repeat unchanged names, values or evidence: the backend copies them exactly. Keep metadata reasons and evidence to one concise sentence, but never shorten actual technical facts. For renamed or changed wording use merge/conflict instead of keep; merge combines compatible general and specific statements into one informative value without losing specifics; conflict retains genuinely incompatible alternatives, never silently chooses one. new MUST use baseline_refs=[]; when baseline_facts is empty, all output facts must be new with document evidence, never keep/merge/omit referencing nonexistent baseline facts. existing_components are contextual prior descriptions, not numbered baseline_facts; preserve their specifics as source-backed new facts when absent from the actual baseline. keep requires exactly one valid baseline reference and cannot rename or change its value. Do not put baseline references on new entries; use merge/conflict when reconciling referenced original facts. omit requires an explicit reason (e.g. repeated technical code or generic legal boilerplate) and preserves the removed fact for visible review. For merge/conflict/omit explain the decision briefly. All original values remain in the source trail. Do not mistake compatible descriptions for contradictions. Do not use this contract to inherit aggregate facts into components. Classify each source as supply_kind=finished|kit|unclear and provide structure_reason with a concise document-grounded explanation. A finished product remains ONE enrich row even when its mandatory delivered contents are enumerated. Its included parts, accessories, documents and packaging belong to its completeness, not automatically to separate merchandise. A kit contains distinct independently specified goods combined into one supplied unit; return component rows only when the documents substantiate that distinction, not merely because there is a list, separate specifications or quantities. Never decide by product-name keyword lists. For unclear cases preserve ONE whole source as enrich with supply_kind=unclear, explain the ambiguity for the existing human accept/reject review; do not invent a split or a new question flow. For kit component rows, supply_kind must be kit, structure_reason explains why these are separate goods, and parent_display_name names the supplied kit. Set component quantity=null and give documented positive quantity_per_parent; backend computes totals. Do not emit a priced aggregate as an extra component. requirements.characteristics entries may have scope=product|completeness: describe delivered completeness as source-backed facts with scope=completeness on the finished product, using the same reconciliation contract. Completeness is preserved in the same canonical specification with its scope. Merge repeated mentions across documents without duplicating physical items; preserve separate variants and separate parents. parent_display_name is the concise documented name of the aggregate. Each name identifies the product clearly. requirements.characteristics is an array of human-readable {name,value} entries describing the product, its manufacture, branding, packaging and item-specific constraints. Do not substitute generic contract conditions or procurement wording for technical characteristics, and do not repeat global legal clauses for every product. Return enrich for one finished supplied product including its completeness, or an unclear whole position. Return split only where a document explicitly replaces an aggregate with separately quantified goods. Where notification names repeat, distinguish the source rows by their notification positions, documented quantities, prices and characteristics; a repeated name alone does not establish a parent match. An aggregate price belongs to the aggregate, never to each component. Do not use document names as evidence. Never infer products, omit a supplied document merely because of its title, or attach evidence to a different notification item. If evidence is insufficient, return no row.\n""" + json.dumps(payload, ensure_ascii=False, default=str)
@@ -490,8 +525,8 @@ def trigger_visible_tender(tender: Tender, *, trigger: str = "incoming_visible",
     active = [TenderComputeJob.Status.QUEUED, TenderComputeJob.Status.RUNNING, TenderComputeJob.Status.PREPARING_INPUT, TenderComputeJob.Status.ROUTING, TenderComputeJob.Status.PREPARING]
     with transaction.atomic():
         Tender.objects.select_for_update().get(pk=tender.pk)
-        existing = TenderComputeJob.objects.filter(tender=tender, version=version, status__in=active).order_by("pk").first()
-        return existing or TenderComputeJob.objects.create(tender=tender, trigger=trigger, version=version)
+        existing = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2", status__in=active).order_by("pk").first()
+        return existing or TenderComputeJob.objects.create(tender=tender, trigger=trigger, version=version, diagnostics={"intake_refresh": True, "refresh": {"stage": "queued", "label": "Подготовка в очереди…"}})
 
 
 def eligible_backfill_tenders(*, limit: int) -> list[Tender]:
@@ -835,12 +870,12 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
 
 def _knowledge_for(items: list[TenderSourceItem]) -> list[dict]:
     knowledge = []
-    for lesson in Lesson.objects.filter(scope__in=["route", "production_step"], is_active=True).only("item_word", "outcome"):
+    for lesson in Lesson.objects.filter(scope__in=["route", "production_step"], is_active=True).only("item_word", "outcome").order_by("pk"):
         route = lesson.outcome.get("route") if isinstance(lesson.outcome, dict) else {}
         ids = [int(step["process_id"]) for step in route.get("processes", []) if str(step.get("process_id", "")).isdigit()]
         if lesson.item_word and ids:
             knowledge.append({"needle": _normal(lesson.item_word), "process_ids": ids})
-    for record in KnowledgeRecord.objects.filter(status="active").only("scope_type", "scope_context", "payload"):
+    for record in KnowledgeRecord.objects.filter(status="active").only("scope_type", "scope_context", "payload", "applicability").order_by("pk"):
         needle = _normal(str(record.applicability.get("item_text", "")))
         process_ids = [value for value in record.payload.get("process_ids", []) if isinstance(value, int)]
         if needle and process_ids:
@@ -849,7 +884,8 @@ def _knowledge_for(items: list[TenderSourceItem]) -> list[dict]:
 
 
 def _commercial_requirements(source: TenderSourceItem) -> dict:
-    return source.requirements if isinstance(source.requirements, dict) else {}
+    from .document_enrichment import effective_item_requirements
+    return effective_item_requirements(source)
 
 
 def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
@@ -901,6 +937,9 @@ def _requirement_facts(requirements: object) -> list[tuple[str, str]]:
     if not isinstance(requirements, dict):
         return []
     facts = []
+    for answer in requirements.get("owner_answers", []):
+        if isinstance(answer, dict) and len(answer.get("names", [])) == 1 and str(answer.get("answer") or "").strip():
+            facts.append((str(answer["names"][0]), str(answer["answer"])))
     for entry in requirements.get("characteristics") or []:
         if not isinstance(entry, dict):
             continue
@@ -967,129 +1006,132 @@ def _question_evidence_state(item: CalculationComponent, decision: RouteDecision
 def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[RouteDecision]:
     commercials = build_commercial_items(job)
     items = list(CalculationComponent.objects.filter(commercial_item__in=commercials, status="active").select_related("commercial_item", "source_item").order_by("commercial_item_id", "sort_order", "pk"))
-    processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
-    decisions = router.route(tender=job.tender, items=items, processes=processes, knowledge=_knowledge_for([]))
-    by_item = {decision.component_id: decision for decision in decisions}
-    if set(by_item) != {item.pk for item in items}:
-        raise ValueError("Batch router must return exactly one decision per calculation component")
-    effective_decisions = []
+    answers = _route_owner_answer_map([item.source_item for item in items])
     for item in items:
-        decision = by_item[item.pk]
-        conflicts = _component_conflicts(item.commercial_item)
-        evidence_state, evidence_labels = _question_evidence_state(item, decision, conflicts)
-        needs_review = decision.needs_review or bool(conflicts)
-        if needs_review and decision.process_ids and evidence_state == QUESTION_KNOWN:
-            needs_review = False
-        required_inputs = []
-        for process in (process for process in processes if process.pk in decision.process_ids):
-            required_inputs.extend(
-                str(value).strip() for value in (process.parameters or {}).get("required", [])
-                if str(value).strip()
+        item.requirements = {**item.requirements, "owner_answers": answers[item.source_item_id]}
+    processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
+    knowledge = _knowledge_for([])
+    fingerprints = {item.pk: source_route_fingerprint(item.source_item, processes, knowledge, answers[item.source_item_id]) for item in items}
+    plans = {plan.component_id: plan for plan in ComponentRoutePlan.objects.filter(component__in=items, scope="component").prefetch_related("steps")}
+    cached, pending = [], []
+    for item in items:
+        plan = plans.get(item.pk)
+        if plan and plan.metadata.get("input_fingerprint") == fingerprints[item.pk] and plan.status in {"planned", "ready", "needs_review"}:
+            data = plan.metadata
+            cached.append(RouteDecision(item.pk, tuple(step.process_id for step in sorted(plan.steps.all(), key=lambda step: step.position)),
+                _as_decimal(data.get("confidence")), {"reason": data.get("reason", ""), "alternatives": data.get("alternatives", [])},
+                plan.status == "needs_review", data.get("question", ""), data.get("question_kind", "unspecified"), tuple(data.get("missing_requirement_names", []))))
+        else:
+            pending.append(item)
+    if pending and processes:
+        fresh = router.route(tender=job.tender, items=pending, processes=processes, knowledge=knowledge)
+    else:
+        fresh = [RouteDecision(item.pk, (), Decimal("0"), {"reason": "Нет активных этапов производства"}, True, "Добавьте доступные этапы в базу производства.") for item in pending]
+    if len(fresh) != len(pending) or {decision.component_id for decision in fresh} != {item.pk for item in pending}:
+        raise ValueError("Batch router must return exactly one decision per calculation component")
+    with transaction.atomic():
+        Tender.objects.select_for_update().get(pk=job.tender_id)
+        current_processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
+        current_knowledge = _knowledge_for([])
+        current_sources = {source.pk: source for source in active_calculation_items(job.tender)}
+        current_answers = _route_owner_answer_map(current_sources.values())
+        for item in items:
+            source = current_sources.get(item.source_item_id)
+            if source is None or source_route_fingerprint(source, current_processes, current_knowledge, current_answers[source.pk]) != fingerprints[item.pk]:
+                raise ValueError("ТЗ или этапы изменились во время построения; обновите маршруты.")
+        job.diagnostics.update(routing_reused_count=len(cached), routing_batch_count=1 if pending and processes else 0)
+        decisions = cached + fresh
+        cached_ids = {decision.component_id for decision in cached}
+        by_item = {decision.component_id: decision for decision in decisions}
+        if set(by_item) != {item.pk for item in items}:
+            raise ValueError("Batch router must return exactly one decision per calculation component")
+        effective_decisions = []
+        OwnerInteraction.objects.filter(tender=job.tender, source_item__is_active=False, compute_line__isnull=False, status="open").update(status="superseded")
+        for item in items:
+            decision = by_item[item.pk]
+            conflicts = _component_conflicts(item.commercial_item)
+            evidence_state, evidence_labels = _question_evidence_state(item, decision, conflicts)
+            needs_review = decision.needs_review or bool(conflicts)
+            if needs_review and decision.process_ids and evidence_state == QUESTION_KNOWN:
+                needs_review = False
+            required_inputs = []
+            for process in (process for process in processes if process.pk in decision.process_ids):
+                required_inputs.extend(
+                    str(value).strip() for value in (process.parameters or {}).get("required", [])
+                    if str(value).strip()
+                )
+            missing_inputs = [
+                required for required in required_inputs
+                if _question_evidence_state(
+                    item,
+                    replace(decision, missing_requirement_names=(required,)),
+                    conflicts,
+                )[0] != QUESTION_KNOWN
+            ]
+            if missing_inputs:
+                needs_review = True
+                decision = replace(
+                    decision,
+                    question=f"Нужны данные для выбранного способа выполнения: {', '.join(missing_inputs)}.",
+                    question_kind="missing_information",
+                    missing_requirement_names=tuple(missing_inputs),
+                )
+            effective = replace(decision, needs_review=needs_review)
+            line, _ = TenderComputeLine.objects.update_or_create(
+                job=job, source_item=item.source_item, component=item,
+                defaults={"commercial_item": item.commercial_item, "route_key": ",".join(map(str, effective.process_ids)), "route_confidence": effective.confidence,
+                          "route_metadata": effective.rationale, "status": "needs_review" if effective.needs_review else "routed",
+                          "input_snapshot": {"name": item.name, "quantity": str(item.effective_quantity), "requirements": item.requirements, "input_fingerprint": fingerprints[item.pk]}},
             )
-        missing_inputs = [
-            required for required in required_inputs
-            if _question_evidence_state(
-                item,
-                replace(decision, missing_requirement_names=(required,)),
-                conflicts,
-            )[0] != QUESTION_KNOWN
-        ]
-        if missing_inputs:
-            needs_review = True
-            decision = replace(
-                decision,
-                question=f"Нужны данные для выбранного способа выполнения: {', '.join(missing_inputs)}.",
-                question_kind="missing_information",
-                missing_requirement_names=tuple(missing_inputs),
+            plan, _ = ComponentRoutePlan.objects.update_or_create(
+                commercial_item=item.commercial_item, component=item, scope=ComponentRoutePlan.Scope.COMPONENT,
+                defaults={"status": "needs_review" if effective.needs_review else "planned", "metadata": {**effective.rationale, "input_fingerprint": fingerprints[item.pk], "confidence": str(effective.confidence or 0), "question": effective.question, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names)}},
             )
-        effective = replace(decision, needs_review=needs_review)
-        line, _ = TenderComputeLine.objects.update_or_create(
-            job=job, source_item=item.source_item, component=item,
-            defaults={"commercial_item": item.commercial_item, "route_key": ",".join(map(str, effective.process_ids)), "route_confidence": effective.confidence,
-                      "route_metadata": effective.rationale, "status": "needs_review" if effective.needs_review else "routed",
-                      "input_snapshot": {"name": item.name, "quantity": str(item.effective_quantity), "requirements": item.requirements}},
-        )
-        plan, _ = ComponentRoutePlan.objects.update_or_create(
-            commercial_item=item.commercial_item, component=item, scope=ComponentRoutePlan.Scope.COMPONENT,
-            defaults={"status": "needs_review" if effective.needs_review else "planned", "metadata": effective.rationale},
-        )
-        plan.steps.all().delete()
-        for position, process_id in enumerate(effective.process_ids, start=1):
-            ComponentOperationStep.objects.create(route_plan=plan, process_id=process_id, position=position)
-        question = effective.question
-        if conflicts:
-            question = f"Уточните противоречивые характеристики: {', '.join(conflicts)}."
-        if effective.needs_review and not OwnerInteraction.objects.filter(compute_line=line, status="open").exists():
-            OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, compute_line=line, question=question, reason=effective.rationale.get("reason", ""), confidence=effective.confidence,
-                                            context={"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "conflicts": conflicts, "evidence_state": evidence_state, "evidence_labels": evidence_labels, "question_kind": effective.question_kind})
-        effective_decisions.append(effective)
-    return effective_decisions
+            if item.pk not in cached_ids:
+                plan.steps.all().delete()
+                for position, process_id in enumerate(effective.process_ids, start=1):
+                    ComponentOperationStep.objects.create(route_plan=plan, process_id=process_id, position=position)
+            question = effective.question
+            if conflicts:
+                question = f"Уточните противоречивые характеристики: {', '.join(conflicts)}."
+            if effective.needs_review and not OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").exists():
+                OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, compute_line=line, question=question, reason=effective.rationale.get("reason", ""), confidence=effective.confidence,
+                                                context={"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "conflicts": conflicts, "evidence_state": evidence_state, "evidence_labels": evidence_labels, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names)})
+            if not effective.needs_review:
+                OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").update(status="superseded")
+            effective_decisions.append(effective)
+        return effective_decisions
+
 
 def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enricher: DocumentEnricher | None = None) -> TenderComputeJob | None:
-    router = router or GatewayBatchRouter()
-    enricher = enricher or GatewayDocumentEnricher()
     job = claim_next_job()
     if job is None:
         return None
-    started = time.monotonic()
-    try:
-        job.status = TenderComputeJob.Status.PREPARING_INPUT
-        job.save(update_fields=["status", "updated_at"])
-        source_items = ingest_source_items(job.tender)
-        quality = assess_quality(job.tender, source_items)
-        enrichment_started = time.monotonic()
-        enrichment = enrich_suspicious_tender(job.tender, quality, enricher)
-        if enrichment["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model", "document_reading_incomplete"}:
-            job.status = TenderComputeJob.Status.PARTIAL
-            job.completed_at = timezone.now()
-            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
-            job.diagnostics = {"source_item_count": len(source_items), "active_item_count": len(active_calculation_items(job.tender)), "quality": quality, "enrichment": enrichment["diagnostics"], "enrichment_state": enrichment["state"], "questions_created": 0, "ai_cost_rub": str(job.total_cost), "total_ms": round((time.monotonic() - started) * 1000, 2)}
-            job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
-            return job
-        derived = enrichment["created"]
-        if enrichment["state"] == "needs_review":
-            job.status = TenderComputeJob.Status.NEEDS_REVIEW
-            job.completed_at = timezone.now()
-            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
-            job.diagnostics = {"source_item_count": len(source_items), "active_item_count": len(active_calculation_items(job.tender)), "document_proposal_count": len(derived), "documents_inspected": len(quality["documents"]), "enrichment": enrichment["diagnostics"], "enrichment_state": enrichment["state"], "ai_cost_rub": str(job.total_cost), "document_enrichment_ms": round((time.monotonic() - enrichment_started) * 1000, 2), "total_ms": round((time.monotonic() - started) * 1000, 2)}
-            job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
-            return job
-        job.status = TenderComputeJob.Status.ROUTING
-        job.save(update_fields=["status", "updated_at"])
-        decisions = route_tender_batch(job, router)
-        from .provider_execution import calculate_routed_provider_lines
-        calculate_routed_provider_lines(job)
-        question_count = sum(1 for decision in decisions if decision.needs_review)
-        job.status = TenderComputeJob.Status.NEEDS_REVIEW if question_count else TenderComputeJob.Status.READY
-        job.completed_at = timezone.now()
-        job.diagnostics = {"source_item_count": len(source_items), "active_item_count": len(active_calculation_items(job.tender)), "derived_item_count": len(derived), "documents_inspected": len(quality["documents"]), "enrichment_used": bool(derived), "quality": quality, "enrichment": enrichment["diagnostics"], "enrichment_state": enrichment["state"], "routing_item_count": len(decisions), "routing_batch_count": 1, "questions_created": question_count, "ai_cost_rub": str(getattr(router, "cost_rub", 0) + getattr(enricher, "cost_rub", 0)), "document_enrichment_ms": round((time.monotonic() - enrichment_started) * 1000, 2), "total_ms": round((time.monotonic() - started) * 1000, 2)}
-        job.total_cost = Decimal(str(getattr(router, "cost_rub", 0) + getattr(enricher, "cost_rub", 0)))
-        job.save(update_fields=["status", "completed_at", "diagnostics", "total_cost", "updated_at"])
-        from django.conf import settings
-        if settings.CALCULATION_V2_PREPARATION_ENABLED:
-            from .preparation import plan_tender_preparation
-            preparations, reused = plan_tender_preparation(job)
-            job.diagnostics["preparation"] = {"task_count": len(preparations), "reused": reused}
-            job.save(update_fields=["diagnostics", "updated_at"])
-    except Exception as exc:
-        total_cost = Decimal(str(getattr(router, "cost_rub", 0) or 0)) + Decimal(str(getattr(enricher, "cost_rub", 0) or 0))
-        if getattr(enricher, "diagnostics", {}).get("outcome") == "system_extraction_failure" or getattr(router, "diagnostics", {}).get("validation_failed"):
-            job.status = TenderComputeJob.Status.PARTIAL
-            job.completed_at = timezone.now()
-            job.total_cost = total_cost
-            job.error = {"class": type(exc).__name__, "message": str(exc)[:1000], "retryable": True}
-            job.diagnostics = {
-                "source_item_count": len(source_items) if "source_items" in locals() else 0,
-                "questions_created": 0,
-                "ai_cost_rub": str(total_cost),
-                "enrichment": getattr(enricher, "diagnostics", {}),
-                "routing": getattr(router, "diagnostics", {}),
-                "total_ms": round((time.monotonic() - started) * 1000, 2),
-            }
-            job.save(update_fields=["status", "completed_at", "total_cost", "error", "diagnostics", "updated_at"])
-            return job
-        job.status = TenderComputeJob.Status.QUEUED
-        job.error = {"class": type(exc).__name__, "message": str(exc)}
-        job.save(update_fields=["status", "error", "updated_at"])
-        raise
-    return job
+    from tender_selection.services import _run_document_analysis
+    return _run_document_analysis(job.pk, router=router, enricher=enricher)
+
+
+def source_route_snapshots(tender, sources=None):
+    """Current accepted-position routes, shared by card, estimate and assistant; SELECT only."""
+    sources = list(active_calculation_items(tender) if sources is None else sources)
+    processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
+    knowledge = _knowledge_for([])
+    plans = {}
+    for plan in ComponentRoutePlan.objects.filter(commercial_item__tender=tender, component__source_item_id__in=[item.pk for item in sources], component__status="active", commercial_item__status="active", scope="component").select_related("component").prefetch_related("steps__process").order_by("-updated_at", "-pk"):
+        plans.setdefault(plan.component.source_item_id, plan)
+    job = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk").first()
+    active = bool(job and job.status in {"queued", "preparing_input", "running", "routing", "preparing"})
+    from .document_enrichment import document_proposal_changes
+    pending_parents = {item.parent_id for item in TenderSourceItem.objects.filter(tender=tender, source_type="document_proposal", is_active=False).select_related("parent") if document_proposal_changes(item)}
+    answers = _route_owner_answer_map(sources)
+    result = {}
+    for source in sources:
+        plan = plans.get(source.pk)
+        current = bool(plan and plan.status in {"planned", "ready", "needs_review"} and (plan.status == "needs_review" or plan.steps.all()) and plan.metadata.get("input_fingerprint") == source_route_fingerprint(source, processes, knowledge, answers[source.pk]))
+        state = ("needs_review" if plan.status == "needs_review" else "ready") if current else "building" if active else "stale" if plan else "pending"
+        steps = [{"id": step.pk, "process_id": step.process_id, "name": step.process.name, "description": step.process.description, "details": step.details, "position": step.position} for step in sorted(plan.steps.all(), key=lambda step: step.position)] if plan else []
+        result[source.pk] = {"source_item_id": source.pk, "tender_id": tender.pk, "name": source.original_text, "state": state,
+            "plan_id": plan.pk if plan else None, "steps": steps, "pending_changes": source.pk in pending_parents, "reason": plan.metadata.get("reason", "") if plan else "",
+            "question": plan.metadata.get("question", "") if current and state == "needs_review" else "",
+            "label": f"Маршрут · {len(steps)} {'этап' if len(steps) % 10 == 1 and len(steps) % 100 != 11 else 'этапа' if 2 <= len(steps) % 10 <= 4 and not 12 <= len(steps) % 100 <= 14 else 'этапов'}" if state == "ready" else {"needs_review": "Маршрут · нужно уточнение", "building": "Маршрут строится…", "stale": "Маршрут устарел", "pending": "Маршрут не построен"}[state]}
+    return result

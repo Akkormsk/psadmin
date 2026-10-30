@@ -2466,3 +2466,25 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .ui-badge--info { color:var(--info-ink); }
 :root .record-type-badge { color:var(--info-ink); }
 :root .bank-flag { color:var(--ink-2); }
+
+.ts-item-tools { display:flex; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-top:9px; }
+.ts-item-tools .ts-item-tz { margin:0; }
+.ts-item-route { display:inline-flex; align-items:center; gap:6px; padding:0; border:0; background:none; color:var(--info-ink); font:inherit; font-size:12px; line-height:1.5; cursor:pointer; text-align:left; }
+.ts-item-route:hover { text-decoration:underline; }
+.ts-item-route[data-route-state="ready"]::after { content:"›"; font-size:17px; line-height:1; }
+.ts-item-route[data-route-state="building"], .ts-item-route[data-route-state="pending"] { color:var(--ink-3); }
+.ts-item-route[data-route-state="needs_review"], .ts-item-route[data-route-state="stale"] { color:var(--warning-ink); }
+.ts-refresh-progress { display:inline-flex; align-items:center; flex-wrap:wrap; gap:5px; }
+.ts-refresh-progress [data-analysis-status] { display:inline-flex; align-items:center; gap:6px; }
+.ts-refresh-progress [data-analysis-code="PROCESSING"] { color:var(--info-ink); }
+.ts-refresh-progress [data-analysis-code="PROCESSING"]::before, .ts-item-route[data-route-state="building"]::before { content:""; width:11px; height:11px; flex:none; box-sizing:border-box; border:1.5px solid currentColor; border-right-color:transparent; border-radius:50%; animation:workspace-spin .8s linear infinite; }
+[data-analysis-clock] { color:var(--ink-3); white-space:nowrap; }
+[data-analysis-connection] { display:block; margin-top:4px; color:var(--warning-ink); }
+.item-route-body { flex:1; min-height:0; overflow:auto; padding:8px 0 24px; }
+.item-route-body .training-route { margin:0; }
+.item-route-step { padding:14px 0; border-bottom:1px solid var(--separator); }
+.item-route-step strong { display:block; font-size:14px; }
+.item-route-step p { margin:6px 0 0; color:var(--ink-2); font-size:12px; line-height:1.5; }
+@media (prefers-reduced-motion:reduce) { .ts-refresh-progress [data-analysis-code="PROCESSING"]::before, .ts-item-route[data-route-state="building"]::before { animation:none; } }
+
+.tender-requirements-drawer .modal-close { min-width:44px; min-height:44px; flex:none; }

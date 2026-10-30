@@ -5,6 +5,7 @@ from . import views
 app_name = "tender_selection"
 
 urlpatterns = [
+    path("<int:pk>/items/<int:source_pk>/route/", views.item_route, name="item_route"),
     path("analysis-status/", views.analysis_status, name="analysis_status"),
     path("import/", views.import_by_number, name="import_by_number"),
     path("", views.tender_list, name="list"),

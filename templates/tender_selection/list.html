@@ -109,7 +109,7 @@
             <summary aria-label="Ещё действия">⋮</summary>
             <div class="ts-menu__list">
               <a href="{% url 'tender_selection:detail' tender.pk %}?return_to=incoming">Открыть тендер</a>
-              {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit">Обновить анализ</button></form>{% endif %}
+              {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit">Обновить</button></form>{% endif %}
               {% if tender.eis_url %}<a href="{{ tender.eis_url }}" target="_blank" rel="noopener">Открыть в ЕИС</a>{% endif %}
               <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="not_profile"><button type="submit" class="is-danger">Не по профилю</button></form>
               <form method="post" action="{% url 'tender_selection:dismiss' tender.pk %}" data-tender-transition>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="reason" value="other"><button type="submit">Скрыть по другой причине</button></form>

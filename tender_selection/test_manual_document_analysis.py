@@ -38,22 +38,25 @@ class ManualDocumentAnalysisTests(TestCase):
             refresh_document_analysis(viewer, self.tender.pk)
         self.assertFalse(TenderComputeJob.objects.exists())
 
-    def test_worker_does_not_run_route_or_accept_data(self):
+    def test_worker_passes_budget_and_does_not_accept_data(self):
+        from tenders.test_calculation_v2_pipeline import notification, raw_item
+        self.tender.notification_raw = notification([raw_item("Товар", "1")])
+        self.tender.save()
         job = TenderComputeJob.objects.create(tender=self.tender, version='v2-document-manual', status='preparing_input')
-        with patch('tenders.calculation_v2_pipeline.GatewayDocumentEnricher') as gateway, patch('tenders.calculation_v2_pipeline.enrich_suspicious_tender', return_value={'created': [], 'state': 'no_data', 'diagnostics': []}), patch('tenders.calculation_v2_pipeline.route_tender_batch') as route:
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tenders.calculation_v2_pipeline.GatewayDocumentEnricher') as gateway, patch('tenders.calculation_v2_pipeline.enrich_suspicious_tender', return_value={'created': [], 'state': 'no_data', 'diagnostics': []}), patch('tenders.calculation_v2_pipeline.route_tender_batch') as route:
             gateway.return_value.cost_rub = 0
             _run_document_analysis(job.pk)
         job.refresh_from_db()
         self.assertEqual(job.status, 'ready')
         self.assertIsNotNone(job.completed_at)
-        route.assert_not_called()
+        route.assert_called_once()
         self.assertEqual(gateway.call_args.kwargs['max_cost_rub'], Decimal('10'))
 
     def test_ajax_start_returns_status_without_redirect(self):
         url = reverse('tender_selection:refresh_analysis', args=[self.tender.pk])
         response = self.client.post(url + '?workspace=1', HTTP_X_REQUESTED_WITH='XMLHttpRequest')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['label'], 'Проверяем ТЗ…')
+        self.assertEqual(response.json()['label'], 'Обновление в очереди…')
         self.assertTrue(response.json()['started'])
         duplicate = self.client.post(url, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
         self.assertFalse(duplicate.json()['started'])

@@ -32,12 +32,12 @@
           <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № {{ display_purchase_number }}</span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
-        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Повторно разобрать документы в фоне">↻ Обновить анализ</button></form>{% endif %}
-        <div id="analysis-status" class="ts-sub"><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span>
+        {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Обновить данные, ТЗ, требования 1875 и маршруты в фоне">↻ Обновить</button></form>{% endif %}
+        <div id="analysis-status" class="ts-sub"><span class="ts-refresh-progress"><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span><span data-analysis-clock="{{ tender.pk }}" hidden></span></span><small data-analysis-connection="{{ tender.pk }}" hidden></small>
           <p data-analysis-reason="{{ tender.pk }}" {% if not analysis_status.reason %}hidden{% endif %}>{{ analysis_status.reason }}</p>
           <details data-analysis-extra="{{ tender.pk }}" {% if analysis_issues|length < 2 %}hidden{% endif %}><summary>Подробности</summary><div data-analysis-issues="{{ tender.pk }}"><ul>{% for issue in analysis_issues|slice:"1:" %}<li>{{ issue }}</li>{% endfor %}</ul></div></details>
         </div>
-        <p class="ts-detail__links">
+        <p class="ts-detail__links" data-card-refresh="links">
           {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
           {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
         </p>
@@ -91,11 +91,11 @@
     <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
       <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку закупки ↗</a></p>
     {% elif fetch_failed %}
-    <p class="ts-warn">Не удалось загрузить извещение (возможно, лимит запросов).
+    <p class="ts-warn" data-notification-error>Не удалось загрузить извещение (возможно, лимит запросов).
       <a href="?refresh=1">Попробовать ещё раз</a>. Ниже — что известно из списка.</p>
     {% endif %}
 
-    <dl class="ts-dl">
+    <dl class="ts-dl" data-card-refresh="notification">
       <div><dt>Заказчик</dt><dd>
         {% if card.customer.name %}<strong>{{ card.customer.name }}</strong>
           {% if card.customer.short_name %}<div class="ts-sub">{{ card.customer.short_name }}</div>{% endif %}
@@ -135,11 +135,11 @@
 
   {% if not is_fz223 %}
   <details class="panel panel--separated" {% if active_stage == "review" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">Оценка рисков</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--{% if risk.risk_level == 'low' %}positive{% elif risk.risk_level == 'medium' %}warning{% elif risk.risk_level == 'high' %}negative{% else %}neutral{% endif %}">{% if risk.risk_level %}Риск: {% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% else %}высокий{% endif %}{% elif not card %}Нет данных извещения{% elif risk_needs_fetch %}Оценка выполняется{% else %}Нет данных{% endif %}</span></span></summary>
+    <summary class="panel-header"><h2 class="panel-title">Оценка рисков</h2><span class="ts-stage-summary" data-card-refresh="risk-summary"><span class="ts-summary-pill ts-summary-pill--{% if risk.risk_level == 'low' %}positive{% elif risk.risk_level == 'medium' %}warning{% elif risk.risk_level == 'high' %}negative{% else %}neutral{% endif %}">{% if risk.risk_level %}Риск: {% if risk.risk_level == "low" %}низкий{% elif risk.risk_level == "medium" %}средний{% elif risk.risk_level == "high" %}высокий{% else %}требуется проверка{% endif %}{% elif not card %}Нет данных извещения{% elif risk_needs_fetch %}Оценка выполняется{% else %}Нет данных{% endif %}</span></span></summary>
     {% if not card %}
     <p class="ts-warn">Нет данных извещения — оценить риски пока нечем.</p>
     {% else %}
-    <div id="ts-risk-block" data-risk-url="{% url 'tender_selection:risk_status' tender.pk %}">
+    <div data-card-refresh="risk" id="ts-risk-block" data-risk-url="{% url 'tender_selection:risk_status' tender.pk %}">
       {% if risk_needs_fetch %}
       <p class="ts-doc-loading" data-risk-autostart>Читаю документы закупки и оцениваю риски…</p>
       {% else %}
@@ -333,7 +333,7 @@
   </details>
   {% endif %}
 
-  <details class="panel panel--separated">
+  <details data-card-refresh="documents" class="panel panel--separated">
     <summary class="panel-header"><h2 class="panel-title">Документы{% if card.documents %} <small class="ts-count">{{ card.documents|length }}</small>{% endif %}</h2></summary>
     {% if card.documents %}
     <ul class="ts-docs">

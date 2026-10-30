@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=analysis-line-20261030">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=intake-routes-20261030">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -373,7 +373,21 @@
             const id = Number(node.dataset.analysisStatus);
             if (id) analysisStates.set(id, {revision: node.dataset.analysisRevision || '', processing: node.dataset.analysisCode === 'PROCESSING', job_id: 0});
           });
-          let timer, loading = false, again = false;
+          let timer, loading = false, again = false, lastStatusAt = performance.now();
+          const clockTimer = setInterval(() => {
+            for (const [id, data] of analysisStates) {
+              const progress = data.progress;
+              document.querySelectorAll('[data-analysis-clock="' + id + '"]').forEach(node => {
+                node.hidden = !progress?.full_refresh || !progress?.started_at;
+                if (!node.hidden) node.textContent = '· ' + Math.max(0, Math.floor(progress.elapsed_seconds + (data.processing ? (performance.now() - (data.receivedAt || performance.now())) / 1000 : 0))) + ' с';
+              });
+              document.querySelectorAll('[data-analysis-connection="' + id + '"]').forEach(node => {
+                const lost = data.processing && performance.now() - lastStatusAt > 15000;
+                node.hidden = !data.processing || (!lost && progress?.worker_alive !== false);
+                node.textContent = lost ? 'Нет связи с задачей' : 'Задача не подтверждает работу; можно повторить обновление после её завершения.';
+              });
+            }
+          }, 1000);
           const fragments = new Set(), fragmentAttempts = new Map();
           async function refreshAnalysisResult(data) {
             const target = document.querySelector('[data-analysis-result="' + data.tender_id + '"]');
@@ -390,7 +404,15 @@
               const edits = [...target.querySelectorAll('input:not([type="hidden"]),textarea,select')].filter(node => node.name && node.form).map(node => ({action: node.form.getAttribute('action'), name: node.name, value: node.value, checked: node.checked}));
               const active = document.activeElement;
               const focus = active && target.contains(active) ? {name: active.name, action: active.form?.getAttribute('action')} : null;
+              const detailKey = node => (node.closest('tr')?.querySelector('[data-route-source]')?.dataset.routeSource || node.closest('tr')?.querySelector('strong')?.textContent || '') + ':' + node.className + ':' + node.querySelector('summary')?.textContent.trim();
+              const openDetails = new Set([...target.querySelectorAll('details[open]')].map(detailKey));
               target.replaceWith(replacement);
+              replacement.querySelectorAll('details').forEach(node => { if (openDetails.has(detailKey(node))) node.open = true; });
+              for (const key of ['notification', 'links', 'documents', 'risk', 'risk-summary']) {
+                const current = document.querySelector('[data-card-refresh="' + key + '"]'), fresh = parsed.querySelector('[data-card-refresh="' + key + '"]');
+                if (current && fresh) current.innerHTML = fresh.innerHTML;
+              }
+              const oldWarning = document.querySelector('[data-notification-error]'); if (oldWarning && !parsed.querySelector('[data-notification-error]')) oldWarning.remove();
               replacement.querySelectorAll('input:not([type="hidden"]),textarea,select').forEach(node => {
                 const saved = edits.find(edit => edit.name === node.name && edit.action === node.form?.getAttribute('action'));
                 if (saved) { node.value = saved.value; if (node.type === 'checkbox' || node.type === 'radio') node.checked = saved.checked; }
@@ -406,13 +428,14 @@
             try {
               const url = new URL(endpoint, location.origin);
               url.searchParams.set('ids', [...analysisStates.keys()].join(','));
+              const card = document.querySelector('[data-analysis-result]'); if (card) url.searchParams.set('details', card.dataset.analysisResult);
               const response = await fetch(url, {cache: 'no-store'});
               if (!response.ok || response.redirected) throw new Error('Status unavailable');
-              const payload = await response.json();
+              const payload = await response.json(); lastStatusAt = performance.now();
               for (const data of payload.statuses || []) {
                 const id = Number(data.tender_id), before = analysisStates.get(id) || {};
                 if (Number(data.job_id) < Number(before.job_id || 0)) continue;
-                analysisStates.set(id, data);
+                data.receivedAt = performance.now(); analysisStates.set(id, data);
                 document.querySelectorAll('[data-analysis-status="' + id + '"]').forEach(node => {
                   node.textContent = data.label; node.hidden = node.classList.contains('ts-analysis-line') && data.code === 'CHECKED_NO_CHANGES';
                   node.dataset.analysisCode = data.code; node.dataset.analysisRevision = data.revision;
@@ -432,9 +455,13 @@
                 document.querySelectorAll('[data-analysis-extra="' + id + '"]').forEach(node => { node.hidden = (data.reason ? (data.issues || []).slice(1) : data.issues || []).length === 0; });
                 document.querySelectorAll('form[data-analysis-tender="' + id + '"] button').forEach(button => {
                   if (!button.dataset.analysisCaption) button.dataset.analysisCaption = button.textContent;
-                  button.disabled = data.processing;
-                  button.textContent = data.processing ? 'Проверяем ТЗ…' : button.dataset.analysisCaption;
+                  button.disabled = data.processing && !data.progress?.retryable;
+                  button.textContent = data.processing ? 'Обновляем…' : button.dataset.analysisCaption;
                 });
+                for (const route of Object.values(data.item_routes || {})) {
+                  document.querySelectorAll('[data-route-source="' + route.source_item_id + '"]').forEach(node => { node.textContent = route.label; node.dataset.routeState = route.state; });
+                }
+                document.dispatchEvent(new CustomEvent('ps-intake-status', {detail:data}));
                 if (!data.processing) await refreshAnalysisResult(data);
               }
             } catch (error) { if ([...analysisStates.values()].some(item => item.processing)) again = true; }
@@ -447,7 +474,8 @@
           requestAnalysisCheck = () => schedule();
           document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else schedule(); });
           window.addEventListener('focus', () => schedule());
-          window.addEventListener('pagehide', () => clearTimeout(timer));
+          window.addEventListener('pagehide', event => { clearTimeout(timer); if (!event.persisted) clearInterval(clockTimer); });
+          window.addEventListener('pageshow', event => { if (event.persisted) schedule(); });
           schedule();
         })();
 
@@ -680,6 +708,7 @@
       })();
     </script>
     {% if request.GET.workspace %}<script>window.addEventListener("load", function () { document.body.classList.add("is-ready"); });</script>{% endif %}
+<script src="{% static 'core/item-route.js' %}?v=20261030"></script>
 </body>
 </html>
 

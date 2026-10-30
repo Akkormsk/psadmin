@@ -57,8 +57,8 @@ class DocumentComponentAcceptanceTests(TestCase):
         self.assertEqual([item.parent_id for item in result["created"]], [item.pk for item in self.parents])
         self.assertTrue(all(not item.is_active for item in result["created"]))
         response = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]), {"workspace": 1})
-        self.assertContains(response, "В одном")
-        self.assertContains(response, "Всего")
+        self.assertContains(response, "товар в составе Состав 1")
+        self.assertContains(response, "200 шт")
         self.assertContains(response, "Состав 1")
         self.assertContains(response, "data-doc-preview=\"0\"")
 

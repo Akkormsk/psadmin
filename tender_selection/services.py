@@ -631,6 +631,15 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
         tender.notification_error = str(exc)[:300]
         tender.save(update_fields=["notification_checked_at", "notification_error"])
         return None
+    from .notification import parse_notification
+    old_card = parse_notification(tender.notification_raw) if tender.notification_raw else {}
+    new_card = parse_notification(payload) if isinstance(payload, dict) and isinstance(payload.get("source"), dict) else {}
+    incomplete = not new_card or not payload.get("source") or (old_card.get("items") and not new_card.get("items")) or (old_card.get("documents") and not new_card.get("documents"))
+    if incomplete:
+        tender.notification_checked_at = timezone.now()
+        tender.notification_error = "Источник вернул неполные данные; сохранённое извещение не заменено."
+        tender.save(update_fields=["notification_checked_at", "notification_error"])
+        return None
     tender.notification_raw = payload
     tender.notification_checked_at = timezone.now()
     tender.notification_error = ""
@@ -1906,6 +1915,9 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     """Resolve a tender owner question and preserve its evidence event."""
     from tenders.models import OwnerFeedbackEvent, OwnerInteraction
 
+    tender = Tender.objects.filter(pk=tender_id).first()
+    if tender is None or not tender_viewable_by(user, tender):
+        raise ValueError("Тендер недоступен")
     answer = str(answer).strip()
     if not answer:
         raise ValueError("Введите ответ, чтобы закрыть вопрос")
@@ -1921,17 +1933,20 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     interaction.status = "resolved"
     interaction.answered_at = timezone.now()
     interaction.save(update_fields=["status", "answered_at"])
+    if user.is_superuser and interaction.compute_line_id:
+        transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))
     return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
 
 
 @transaction.atomic
-def decide_document_proposals(user, tender_id, parent_id, decision):
+def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_routes=True):
     """Apply the complete document-composition decision used by the tender card."""
     _require_tender_admin(user)
     from tenders.models import TenderSourceItem
 
     if decision not in {"accept", "reject"}:
         raise ValueError("Нужно выбрать: принять или отклонить предложения")
+    Tender.objects.select_for_update().get(pk=tender_id)
     parent = TenderSourceItem.objects.select_for_update().filter(pk=parent_id, tender_id=tender_id).first()
     if parent is None:
         raise ValueError("Исходная позиция тендера не найдена")
@@ -1973,6 +1988,8 @@ def decide_document_proposals(user, tender_id, parent_id, decision):
         parent.save(update_fields=["is_active"])
     else:
         TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
+    if decision == "accept" and schedule_routes:
+        transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))
     return {"tender_id": tender_id, "decision": decision, "changed": len(proposals)}
 
 
@@ -1995,66 +2012,171 @@ def tender_document_pdf(user, tender_id, document_index):
 
 
 @transaction.atomic
-def refresh_document_analysis(user, tender_id):
-    """Schedule one document-only run, shared by the card and assistant."""
+def refresh_document_analysis(user, tender_id, *, routes_only=False):
+    """Schedule the shared complete intake refresh; do not create an estimate."""
     import threading
     from tenders.models import TenderComputeJob
 
     _require_tender_admin(user)
     tender = Tender.objects.select_for_update().get(pk=tender_id)
-    active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued"]).first()
+    active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued", "routing", "preparing"]).first()
+    if active and active.updated_at < timezone.now() - timedelta(minutes=15):
+        active.status = "partial"; active.error = {"message": "Предыдущее обновление прервано. Запущена повторная попытка."}; active.completed_at = timezone.now()
+        active.save(update_fields=["status", "error", "completed_at", "updated_at"])
+        active = None
     if active:
-        return {"started": False, "job_id": active.pk, "message": "Анализ уже выполняется"}
-    job = TenderComputeJob.objects.create(tender=tender, version="v2-document-manual", trigger="manual_document_refresh", status="preparing_input",
-        diagnostics={"documents_only": True, "requested_by": user.pk})
+        if routes_only:
+            active.diagnostics["reroute_requested_by"] = user.pk
+            active.save(update_fields=["diagnostics", "updated_at"])
+        return {"started": False, "job_id": active.pk, "message": "Обновление уже выполняется"}
+    job = TenderComputeJob.objects.create(tender=tender, version="v2-intake-refresh", trigger="manual_document_refresh", status="preparing_input",
+        diagnostics={"intake_refresh": True, "routes_only": routes_only, "requested_by": user.pk, "refresh": {"stage": "queued", "label": "Обновление в очереди…"}})
     transaction.on_commit(lambda: threading.Thread(target=_run_document_analysis, args=(job.pk,), daemon=True).start())
-    return {"started": True, "job_id": job.pk, "message": "Анализ запущен."}
+    return {"started": True, "job_id": job.pk, "message": "Обновление запущено."}
 
 
-def _run_document_analysis(job_id):
+def _refresh_phase(job, phase, label, *, status="preparing_input"):
+    pending = type(job).objects.filter(pk=job.pk).values_list("diagnostics", flat=True).first() or {}
+    if pending.get("reroute_requested_by"):
+        job.diagnostics["reroute_requested_by"] = pending["reroute_requested_by"]
+    job.status = status
+    job.diagnostics["refresh"] = {**job.diagnostics.get("refresh", {}), "stage": phase, "label": label, "stage_started_at": timezone.now().isoformat()}
+    job.save(update_fields=["status", "diagnostics", "updated_at"])
+
+
+def _document_input_fingerprint(tender):
+    from tenders.calculation_v2_pipeline import _fingerprint, active_calculation_items
+    from tenders.document_enrichment import effective_item_requirements
+    from .notification import parse_notification
+    urls = [item["url"] for item in parse_notification(tender.notification_raw or {}).get("documents", []) if item.get("url")]
+    return _fingerprint({"notification": tender.notification_raw,
+        "items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity), "unit": item.unit, "requirements": effective_item_requirements(item)} for item in active_calculation_items(tender)],
+        "documents": list(DocumentPreview.objects.filter(url__in=urls).order_by("url").values("url", "html", "error", "kind"))})
+
+
+def _run_document_analysis(job_id, *, enricher=None, router=None):
+    """One existing background job: notification → documents/TZ → 1875 → saved routes."""
     import json
     import os
+    import threading
     from decimal import Decimal
     from django.db import close_old_connections
-    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality, enrich_suspicious_tender, ingest_source_items
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, GatewayBatchRouter, assess_quality, enrich_suspicious_tender, ingest_source_items, route_tender_batch
     from tenders.models import TenderComputeJob, TenderSourceItem
 
     close_old_connections()
-    enricher = None
+    stop = threading.Event()
+    def heartbeat():
+        while not stop.wait(5):
+            close_old_connections()
+            try:
+                TenderComputeJob.objects.filter(pk=job_id, status__in=["preparing_input", "running", "routing", "preparing"]).update(updated_at=timezone.now())
+            except Exception:
+                logger.exception("Intake heartbeat failed for job %s", job_id)
+            finally:
+                close_old_connections()
+    pulse = threading.Thread(target=heartbeat, daemon=True)
+    pulse.start()
+    job = None
     try:
         job = TenderComputeJob.objects.select_related("tender").get(pk=job_id)
-        # The existing extractor reserves the full request cost before its single call.
-        budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
-        if not budget.is_finite() or budget <= 0:
-            raise ValueError("Не задан положительный бюджет анализа")
-        enricher = GatewayDocumentEnricher(max_cost_rub=budget)
-        if not job.tender.notification_raw:
-            notification_for(job.tender)
-        if not job.tender.notification_raw:
-            raise ValueError("Не удалось загрузить извещение; повторите анализ позже")
+        job.started_at = job.started_at or timezone.now()
+        job.completed_at = None
+        job.error = {}
+        job.save(update_fields=["started_at", "completed_at", "error"])
+        warnings = []
+        routes_only = bool(job.diagnostics.get("routes_only"))
+        if not routes_only:
+            _refresh_phase(job, "notification", "Обновляем извещение…")
+            previous = job.tender.notification_raw
+            from .notification import parse_notification
+            card = parse_notification(previous) if previous else {}
+            needs_notification = not card.get("items") or not card.get("documents") or not card.get("customer", {}).get("name") or bool(job.tender.notification_error)
+            if not previous or (job.trigger == "manual_document_refresh" and needs_notification):
+                fetched = notification_for(job.tender, force=True)
+                if not fetched and job.tender.law == "fz44":
+                    if not previous:
+                        raise ValueError("Не удалось загрузить извещение. Повторите обновление позже.")
+                    warnings.append("Извещение не обновлено: ЕИС не ответила; использованы сохранённые данные.")
+            if job.trigger == "manual_document_refresh":
+                extras_for(job.tender)
         sources = ingest_source_items(job.tender)
-        result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
-        replacement_ids = [item.pk for item in result["created"]]
-        with transaction.atomic():
-            old = TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).exclude(pk__in=replacement_ids)
-            job.diagnostics.update({"enrichment": result["diagnostics"], "enrichment_state": result["state"], "proposal_ids": replacement_ids})
-            if replacement_ids:
-                job.diagnostics["superseded_pending_proposals"] = json.loads(json.dumps(list(old.values()), default=str))
-            job.status = "needs_review" if replacement_ids else "ready" if result["state"] in {"no_data", "no_change"} else "partial"
-            job.total_cost = Decimal(str(enricher.cost_rub or 0))
-            job.completed_at = timezone.now()
-            job.save()
-            if replacement_ids:
-                old.delete()
+        if not sources:
+            raise ValueError("В извещении не получен перечень товаров. Повторите обновление после загрузки данных.")
+        result = {"created": [], "state": "no_change", "diagnostics": []}
+        if not routes_only:
+            _refresh_phase(job, "documents", "Читаем документы…")
+            before = _document_input_fingerprint(job.tender)
+            previous = TenderComputeJob.objects.filter(tender=job.tender, diagnostics__document_input_fingerprint=before).exclude(pk=job.pk).order_by("-pk").first()
+            reusable = previous and previous.diagnostics.get("enrichment_state") in {"no_change", "no_data", "needs_review"}
+            if reusable:
+                job.diagnostics["document_analysis_reused"] = previous.pk
+                result["state"] = "no_change"
+            else:
+                budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
+                if not budget.is_finite() or budget <= 0:
+                    raise ValueError("Не задан положительный бюджет анализа")
+                enricher = enricher or GatewayDocumentEnricher(max_cost_rub=budget)
+                enricher.progress_callback = lambda: _refresh_phase(job, "tz", "Сверяем ТЗ с документами…")
+                result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
+                job.diagnostics.update(enrichment=result["diagnostics"], enrichment_state=result["state"])
+                if result["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model", "document_reading_incomplete"}:
+                    raise ValueError("Разбор документов не завершён; прежние товары и ТЗ сохранены.")
+                replacement_ids = [item.pk for item in result["created"]]
+                with transaction.atomic():
+                    old = TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).exclude(pk__in=replacement_ids)
+                    if replacement_ids:
+                        job.diagnostics["superseded_pending_proposals"] = json.loads(json.dumps(list(old.values()), default=str))
+                        job.save(update_fields=["diagnostics", "updated_at"])
+                        old.delete()
+                job.diagnostics["proposal_ids"] = replacement_ids
+            job.diagnostics["document_input_fingerprint"] = _document_input_fingerprint(job.tender)
+            job.diagnostics.setdefault("enrichment_state", result["state"])
+            _refresh_phase(job, "national_regime", "Проверяем требования 1875…")
+            from .national_regime import tender_items
+            job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
+        _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
+        router = router or GatewayBatchRouter()
+        decisions = route_tender_batch(job, router)
+        job.diagnostics.update(source_item_count=len(sources), derived_item_count=len(result["created"]), enrichment_used=bool(result["created"]), routing_item_count=len(decisions), routing=getattr(router, "diagnostics", {}), routes_only=routes_only)
+        from django.conf import settings
+        if settings.CALCULATION_V2_PREPARATION_ENABLED:
+            _refresh_phase(job, "preparation", "Готовим прогрев кэша…", status="preparing")
+            from tenders.preparation import plan_tender_preparation
+            tasks, reused = plan_tender_preparation(job)
+            job.diagnostics["preparation"] = {"task_count": len(tasks), "reused": reused}
+        from tenders.document_enrichment import document_proposal_changes
+        pending = any(document_proposal_changes(item) for item in TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).select_related("parent"))
+        job.status = "partial" if warnings else "needs_review" if pending or any(item.needs_review for item in decisions) else "ready"
+        job.error = {"message": warnings[0]} if warnings else {}
+        job.diagnostics["refresh"] = {"stage": "complete", "label": "Обновлено", "warnings": warnings}
     except Exception as exc:
-        logger.exception("Document analysis failed for job %s", job_id)
-        job = TenderComputeJob.objects.get(pk=job_id)
-        job.status, job.error, job.completed_at = "partial", str(exc)[:1000], timezone.now()
-        job.total_cost = Decimal(str(enricher.cost_rub or 0)) if enricher else Decimal("0")
-        job.diagnostics["enrichment"] = [enricher.diagnostics] if enricher else []
-        job.save()
+        logger.exception("Tender refresh failed for job %s", job_id)
+        job = job or TenderComputeJob.objects.get(pk=job_id)
+        job.status, job.error = "partial", {"message": str(exc)[:1000], "class": type(exc).__name__, "retryable": True}
+        if router:
+            job.diagnostics["routing"] = getattr(router, "diagnostics", {})
+        if enricher:
+            job.diagnostics.setdefault("enrichment", [getattr(enricher, "diagnostics", {})])
+        job.diagnostics["refresh"] = {**job.diagnostics.get("refresh", {}), "failed": True}
     finally:
+        stop.set()
+        pulse.join(timeout=1)
+        reroute_user_id = None
+        if job:
+            saved = TenderComputeJob.objects.filter(pk=job.pk).values_list("diagnostics", flat=True).first() or {}
+            reroute_user_id = saved.get("reroute_requested_by")
+            job.diagnostics.pop("reroute_requested_by", None)
+            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0)) + Decimal(str(getattr(router, "cost_rub", 0) or 0))
+            job.completed_at = timezone.now()
+            job.save(update_fields=["status", "error", "diagnostics", "total_cost", "completed_at", "updated_at"])
         close_old_connections()
+        if reroute_user_id:
+            from django.contrib.auth import get_user_model
+            actor = get_user_model().objects.filter(pk=reroute_user_id, is_active=True, is_superuser=True).first()
+            if actor:
+                refresh_document_analysis(actor, job.tender_id, routes_only=True)
+    return job
 
 
 @transaction.atomic
@@ -2076,7 +2198,9 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
     if None in parents:
         raise ValueError('У предложения не указана исходная позиция')
     for parent_id in sorted(parents):
-        decide_document_proposals(user, tender_id, parent_id, decision)
+        decide_document_proposals(user, tender_id, parent_id, decision, schedule_routes=False)
+    if decision == "accept":
+        transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))
     return {'tender_id': tender_id, 'decision': decision, 'changed': len(pending)}
 
 
@@ -2105,3 +2229,22 @@ def import_tender_by_number(user, purchase_number):
         defaults={**_record_to_fields(record, timezone.now(), 'fz44'), 'source': Tender.EIS},
     )
     return {'tender_id': tender.pk, 'created': created}
+
+
+def tender_viewable_by(user, tender):
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return bool(tender.status == Tender.PUSHED and tender.estimates.filter(owner=user).exists())
+
+
+def source_route_for(user, tender_id, source_item_id):
+    from tenders.calculation_v2_pipeline import source_route_snapshots
+    tender = Tender.objects.filter(pk=tender_id).first()
+    if tender is None or not tender_viewable_by(user, tender):
+        raise ValueError("Тендер недоступен")
+    route = source_route_snapshots(tender).get(source_item_id)
+    if route is None:
+        raise ValueError("Позиция не найдена в текущем списке товаров")
+    return route

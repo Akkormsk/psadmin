@@ -8,7 +8,7 @@ from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
-    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number,
+    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number, source_route_for,
 )
 
 
@@ -197,8 +197,8 @@ register_tool(AssistantTool(
 ))
 
 register_tool(AssistantTool(
-    "tender.analyze", "Обновить анализ документов тендера",
-    "Запускает фоновый разбор документов одного тендера с ограничением стоимости. Уточняет ТЗ и требования 1875 по позициям с проверяемыми основаниями в существующем потоке согласования. Подтверждает запуск, а не завершение. Не строит маршрут и не принимает предложения автоматически.",
+    "tender.analyze", "Обновить тендер в фоне",
+    "Одной фоновой задачей обновляет извещение и документы, сверяет ТЗ и требования 1875, сохраняет маршруты по принятым позициям. Актуальные результаты переиспользуются. Статус и время доступны в карточке. Не принимает правки автоматически, не создаёт расчёт и не запускает калькуляторы контрагентов. Подтверждает запуск, а не завершение.",
     {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}},
     False, True, True,
     lambda user, payload: _tender_action(refresh_document_analysis, user, payload, "tender_id"),
@@ -222,4 +222,12 @@ register_tool(AssistantTool(
     False, True, True,
     lambda user, payload: _tender_action(import_tender_by_number, user, payload, "purchase_number"),
     source="tender_selection.services.import_tender_by_number",
+))
+
+register_tool(AssistantTool(
+    "tender.item_route", "Показать сохранённый маршрут товара",
+    "Читает тот же маршрут, что выдвижное окно позиции: этапы, актуальность и требующие уточнения сведения. Не запускает ИИ и не создаёт расчёт.",
+    {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "source_item_id": {"type": "integer", "required": True, "label": "Товарная позиция", "reference": {"model": "tenders.TenderSourceItem", "label": ["original_text"]}}},
+    True, False, True, lambda user, payload: _tender_action(source_route_for, user, payload, "tender_id", "source_item_id"),
+    source="tender_selection.services.source_route_for",
 ))

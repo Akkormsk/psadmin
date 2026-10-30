@@ -87,7 +87,7 @@ def _preparation_engines():
 
 def planned_tasks(job: TenderComputeJob) -> list[PreparationTask]:
     steps = list(
-        ComponentOperationStep.objects.filter(route_plan__commercial_item__job=job, status="planned")
+        ComponentOperationStep.objects.filter(route_plan__commercial_item__job=job, route_plan__status__in=["planned", "ready"], status="planned")
         .select_related("process", "route_plan__component", "route_plan__commercial_item")
         .order_by("pk")
     )
