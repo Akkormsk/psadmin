@@ -254,13 +254,25 @@ class GatewayDocumentEnricher:
         from .gateway_budget import spend_rub, intake_spend_rub
         prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
         fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort})
-        cache = TenderComputeJob.objects.filter(tender=job.tender, **{f'diagnostics__stages__{stage}__input_fingerprint': fingerprint, f'diagnostics__stages__{stage}__state__in': ['complete', 'failed']}).exclude(pk=job.pk).order_by('-pk').first()
-        if cache:
-            previous = cache.diagnostics['stages'][stage]
-            if previous.get('state') != 'complete' and (not isinstance(previous.get('result'), list) or previous.get('validation_version') == self.STAGED_VALIDATION_VERSION):
-                cache = None
-        if cache:
-            return previous['result'], {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': cache.pk, 'result': previous['result'], 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
+        history = TenderComputeJob.objects.filter(tender=job.tender, **{
+            f'diagnostics__stages__{stage}__input_fingerprint': fingerprint,
+            f'diagnostics__stages__{stage}__state__in': ['complete', 'failed'],
+        }).exclude(pk=job.pk).order_by('-pk')
+        recoverable = None
+        for cached in history:
+            previous = cached.diagnostics['stages'][stage]
+            rows = previous.get('result')
+            if not isinstance(rows, list):
+                continue
+            if previous.get('state') == 'complete':
+                return rows, {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': cached.pk,
+                    'result': rows, 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
+            if previous.get('state') == 'failed' and previous.get('validation_version') != self.STAGED_VALIDATION_VERSION and recoverable is None:
+                recoverable = (cached.pk, rows)
+        if recoverable:
+            source_id, rows = recoverable
+            return rows, {'state': 'pending_validation', 'input_fingerprint': fingerprint, 'reused_from': source_id,
+                'result': rows, 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
         # Reserve the uncached cache-write price, not an assumed future cache hit.
         reserve = spend_rub({'prompt_tokens': len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images), 'completion_tokens': output_tokens}, self.model)
         remaining = self.max_cost_rub - Decimal(str(self.cost_rub)) if self.max_cost_rub is not None else Decimal('10')
