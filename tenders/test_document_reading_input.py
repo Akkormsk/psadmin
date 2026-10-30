@@ -234,7 +234,7 @@ class StagedResponseCacheTests(TestCase):
         from .calculation_v2_pipeline import _fingerprint
         return _fingerprint({
             'contract': self.engine.STAGED_CONTRACT, 'context': '{}',
-            'task': 'Read TZ\\n{"goods": []}', 'model': self.engine.model,
+            'task': 'Read TZ\n{"goods": []}', 'model': self.engine.model,
             'thinking': self.engine.thinking, 'effort': self.engine.reasoning_effort,
         })
 
