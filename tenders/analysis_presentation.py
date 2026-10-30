@@ -30,7 +30,7 @@ class TenderAnalysisStatus:
 
 def analysis_cost(job) -> dict:
     """Estimate this job's received model answers, including failed answers, not reservations."""
-    from .gateway_budget import spend_rub
+    from .gateway_budget import intake_spend_rub
     if not job:
         return {}
     diagnostics = job.diagnostics or {}
@@ -52,7 +52,7 @@ def analysis_cost(job) -> dict:
             total += Decimal(str(entry['actual_cost_rub']))
             continue
         actual = False
-        amount = spend_rub(usage, entry.get("model", ""))
+        amount = intake_spend_rub(usage, entry.get("model", ""))
         if amount is None:
             unknown = True
         else:
@@ -72,7 +72,7 @@ def analysis_cost(job) -> dict:
     return {"amount_rub": None if unknown else str(total), "known_rub": str(total),
         "incomplete": unknown, "pending": active, "label": label, "actual": actual and received and not unknown,
         "steps": {key: str(row.get('actual_cost_rub') if row.get('actual_cost_rub') is not None else row.get('cost_rub') or '0') for key, row in staged.items()},
-        "description": "По начислениям Timeweb за это обновление, включая кэш." if actual and received and not unknown else "За это обновление, включая неудачные ответы. Оценка по токенам и сохранённому тарифу, без скидки кэша; не счёт Timeweb. Текущий запрос учтётся после ответа."}
+        "description": "По начислениям Timeweb за это обновление, включая кэш." if actual and received and not unknown else "За это обновление, включая неудачные ответы. Оценка по токенам и сохранённым тарифам, включая запись и чтение кэша, если они указаны в ответе; не счёт Timeweb. Текущий запрос учтётся после ответа."}
 
 
 _STATUS = {

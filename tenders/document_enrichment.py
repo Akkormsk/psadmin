@@ -40,7 +40,22 @@ def expand_table(rows):
     return result
 def document_table_payload(html, *, table_limit=12, cell_limit=1000, expand=True):
     parser = _TableParser(cell_limit=cell_limit, expand=expand); parser.feed(html or "")
-    return [{"rows": rows} for rows in (parser.tables[:table_limit] if table_limit else parser.tables) if rows]
+    tables = parser.tables[:table_limit] if table_limit else parser.tables
+    if not expand:
+        compact = []
+        for rows in tables:
+            packed = []
+            for row in rows:
+                cells = [cell['text'] if cell['rowspan'] == cell['colspan'] == 1 else {key: value for key, value in cell.items() if key == 'text' or value != 1} for cell in row]
+                while cells and cells[-1] == '':
+                    cells.pop()
+                packed.append(cells)
+            while packed and not packed[-1]:
+                packed.pop()
+            if packed:
+                compact.append({'rows': packed})
+        return compact
+    return [{"rows": rows} for rows in tables if rows]
 
 
 def component_total_quantity(parent_quantity, quantity_per_parent):

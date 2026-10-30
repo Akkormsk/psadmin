@@ -145,7 +145,7 @@ class GatewayBatchRouter:
         self.diagnostics = {}
 
     def route(self, *, tender, items, processes, knowledge):
-        from .gateway_budget import spend_rub
+        from .gateway_budget import spend_rub, intake_spend_rub
         from .services import _ai_gateway_json
         request_started = timezone.now().isoformat()
         payload = {
@@ -163,7 +163,7 @@ class GatewayBatchRouter:
             raw, self.usage = _ai_gateway_json(prompt, shared_context=shared_context, reasoning_effort="low", model=self.model, max_tokens=output_tokens, timeout=180, network_attempts=1, json_attempts=1, capture_incomplete_response=True, **({"thinking": self.thinking} if self.thinking else {}), response_contract="Верни корневой объект с массивом items и одной записью на каждую переданную позицию. Не заменяй результат объяснением.")
         except Exception as exc:
             self.usage = dict(getattr(exc, "usage", {}) or {})
-            self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
+            self.cost_rub = float(intake_spend_rub(self.usage, self.model) or 0)
             self.diagnostics = {
                 "provider_call_happened": True,
                 "model": self.model,
@@ -175,7 +175,7 @@ class GatewayBatchRouter:
                 "cost_rub": str(self.cost_rub),
             }
             raise
-        self.cost_rub = float(spend_rub(self.usage, self.model) or 0)
+        self.cost_rub = float(intake_spend_rub(self.usage, self.model) or 0)
         self.diagnostics = {"provider_call_happened": True, "model": self.model, "started_at": request_started, "thinking": self.thinking, "output_token_limit": output_tokens, "reserved_cost_rub": str(reserve), "retry_count": 0, "usage": self.usage, "cost_rub": str(self.cost_rub)}
         rows = raw.get("items") if isinstance(raw, dict) else None
         rows = rows if isinstance(rows, list) else []
@@ -250,7 +250,7 @@ class GatewayDocumentEnricher:
 
     def ask_stage(self, job, stage, instruction, task, *, output_tokens):
         from .services import _ai_gateway_json
-        from .gateway_budget import spend_rub
+        from .gateway_budget import spend_rub, intake_spend_rub
         prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
         fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort})
         cache = TenderComputeJob.objects.filter(tender=job.tender, **{f'diagnostics__stages__{stage}__input_fingerprint': fingerprint, f'diagnostics__stages__{stage}__state': 'complete'}).exclude(pk=job.pk).order_by('-pk').first()
@@ -271,10 +271,10 @@ class GatewayDocumentEnricher:
                 image_data_urls=self.document_images, response_contract='Верни один полный JSON-объект с массивом items. Весь ответ должен быть валидным JSON.')
         except Exception as exc:
             usage = getattr(exc, 'usage', {}) or {}
-            self.cost_rub += float(spend_rub(usage, self.model) or 0)
-            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000)}
+            self.cost_rub += float(intake_spend_rub(usage, self.model) or 0)
+            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(intake_spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000)}
             raise
-        amount = spend_rub(usage, self.model)
+        amount = intake_spend_rub(usage, self.model)
         self.cost_rub += float(amount or 0)
         self.usage = {key: self.usage.get(key, 0) + usage.get(key, 0) for key in ('prompt_tokens', 'completion_tokens')}
         if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
@@ -284,6 +284,13 @@ class GatewayDocumentEnricher:
             'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'result': raw['items']}
 
     def stage_quote(self, row, *, required=True):
+        if isinstance(row.get('evidence'), list):
+            if not row['evidence']:
+                if required:
+                    raise ValueError('Не указаны подтверждающие фрагменты документа.')
+                return {}
+            sources = [self.stage_quote(part) for part in row['evidence']]
+            return {**sources[0], 'evidence': '\n'.join(source['evidence'] for source in sources), 'evidence_sources': sources}
         doc = self.document_lookup.get(row.get('doc_id'))
         quote = str(row.get('quote') or '').strip()
         normalize = lambda value: ' '.join(str(value).split()).casefold()

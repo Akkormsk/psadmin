@@ -369,6 +369,17 @@ def report_line(usage: dict, models: dict[str, dict] | None = None) -> str:
     return "; ".join(parts)
 
 
+def intake_spend_rub(usage, model):
+    """Estimate received usage including the account-verified cache tariff."""
+    ordinary = spend_rub(usage, model)
+    if ordinary is None or model != "anthropic/claude-haiku-5-5":
+        return ordinary
+    details = usage.get("prompt_tokens_details") or {}
+    read = int(usage.get("cache_read_input_tokens") or details.get("cached_tokens") or 0)
+    written = int(usage.get("cache_creation_input_tokens") or details.get("cache_write_tokens") or details.get("cache_creation_tokens") or 0)
+    return ordinary + (read * (1.35 - 13.5) + written * (16.875 - 13.5)) / 1_000_000
+
+
 def reconcile_intake_billing(job):
     """Attach uniquely matched provider charges; never treat an unmatched estimate as billing."""
     from datetime import datetime, timedelta, timezone as dt_timezone
