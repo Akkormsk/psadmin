@@ -316,12 +316,12 @@ class GatewayDocumentEnricher:
             text = unicodedata.normalize('NFKC', str(value)).casefold()
             text = text.translate(str.maketrans({'⩽': '≤', '≦': '≤', '⩾': '≥', '≧': '≥'}))
             text = ' '.join(text.split())
-            text = re.sub(r'\\s*([≤≥<>])\\s*', r'\\1', text)
+            text = re.sub(r'\s*([≤≥<>])\s*', r'\1', text)
             # The supplier may quote a standard unit abbreviation while the
             # document table spells out the same unit. Only literal equivalents
             # are admitted; amounts and numeric ranges must still match.
             for full, short in (('миллиметр', 'мм'), ('сантиметр', 'см')):
-                text = re.sub(r'(?<!\\w)' + full + r'(?!\\w)', short, text)
+                text = re.sub(r'(?<!\w)' + full + r'(?!\w)', short, text)
             return text
 
         verified = bool(doc and quote and normalize(quote) in normalize(doc.get('evidence_text', '')))
@@ -360,7 +360,7 @@ class GatewayDocumentEnricher:
                     break
         if not verified:
             if required:
-                excerpt = quote[:120].replace('\\n', ' ')
+                excerpt = quote[:120].replace('\n', ' ')
                 raise ValueError(f'Результат не подтверждён цитатой из документа (doc_id={row.get("doc_id")}, фрагмент={excerpt!r}).')
             return {}
         return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
