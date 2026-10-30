@@ -35,9 +35,10 @@ class DocumentReconciliationTests(TestCase):
         response = self.client.get(url)
         verify(next(row for row in response.context['display_items'] if row['name'] == proposal.original_text)['characteristics'])
         proposal.refresh_from_db()
-        self.stage([self.row(self.parent, parent_source_item_id=proposal.pk, relationship='enrich', quantity=100, requirements={'reconciled': True, 'characteristics': [{'resolution': 'keep', 'baseline_refs': [index]} for index in range(len(proposal.requirements['characteristics']))]})])['created'][0]
+        repeated = self.stage([self.row(self.parent, parent_source_item_id=proposal.pk, relationship='enrich', quantity=100, requirements={'reconciled': True, 'characteristics': [{'resolution': 'keep', 'baseline_refs': [index]} for index in range(len(proposal.requirements['characteristics']))]})])
+        self.assertEqual(repeated['created'], [])
         response = self.client.get(url)
-        verify(response.context['document_proposal_groups'][0]['items'][0]['characteristics'])
+        verify(next(row for row in response.context['display_items'] if row['name'] == proposal.original_text)['characteristics'])
 
     def test_staging_preserves_original_facts_and_removes_exact_duplicates(self):
         proposal = self.proposal()

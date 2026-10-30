@@ -65,6 +65,33 @@ def inspect_card_routes(tender):
     return {'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
 
 
+def document_input_profile(tender):
+    """Measure the existing prompt from cached data; never fetch or call a model."""
+    from unittest.mock import patch
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, active_calculation_items, assess_quality
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, default=str))
+    report = {}
+    def capture(prompt, **kwargs):
+        offset = prompt.index('{"notification_items":')
+        payload = json.loads(prompt[offset:])
+        report.update(prompt_characters=len(prompt), prompt_utf8_bytes=len(prompt.encode('utf-8')),
+            instruction_characters=offset, section_characters={key: size(value) for key, value in payload.items()})
+        report['documents'] = []
+        for doc in payload['documents']:
+            cells = [cell for table in doc.get('tables', []) for row in table['rows'] for cell in row if cell]
+            report['documents'].append({'text_characters': len(doc['text']), 'table_json_characters': size(doc.get('tables', [])),
+                'table_cell_characters': sum(map(len, cells)), 'cell_characters_found_in_text': sum(len(cell) for cell in cells if cell in doc['text'])})
+        raw = payload.get('notification_payload') or {}
+        source = raw.get('source') or raw
+        report['notification_sections'] = {key: size(value) for key, value in source.items()}
+        return {'items': []}, {}
+    sources = active_calculation_items(tender)
+    with patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=capture):
+        GatewayDocumentEnricher().extract_tender(tender=tender, source_items=sources, documents=assess_quality(tender, sources)['documents'])
+    return report
+
+
 def collect_report(number):
     from tender_selection.models import Tender
     from tender_selection.notification import parse_notification
@@ -138,7 +165,7 @@ def collect_report(number):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
     return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'national_regime_fields': national_fields, 'read_only': True, 'model_called': False, 'latest_job': latest,
-            'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
+            'document_input_profile': document_input_profile(tender), 'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
 def main():
