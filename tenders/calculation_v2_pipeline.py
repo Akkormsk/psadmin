@@ -316,7 +316,14 @@ class GatewayDocumentEnricher:
             text = unicodedata.normalize('NFKC', str(value)).casefold()
             text = text.translate(str.maketrans({'⩽': '≤', '≦': '≤', '⩾': '≥', '≧': '≥'}))
             text = ' '.join(text.split())
+            # "1,5" and "1.5" denote the same decimal; neither integer nor
+            # the position/direction of any inequality can change.
+            text = re.sub(r'(?<=\d)[,.](?=\d)', '.', text)
             text = re.sub(r'\s*([≤≥<>])\s*', r'\1', text)
+            # Source range "≥ 13.5 и ⩽ 15" and short quote "13,5 ≤ 15"
+            # remain tied to the SAME cell with exactly the same bounds.
+            text = re.sub(r'(?<=\d)\s+и\s*(?=[≤≥])', '', text)
+            text = re.sub(r'(?<=\d)и(?=[≤≥])', '', text)
             # The supplier may quote a standard unit abbreviation while the
             # document table spells out the same unit. Only literal equivalents
             # are admitted; amounts and numeric ranges must still match.
