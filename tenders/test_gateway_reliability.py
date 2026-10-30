@@ -24,6 +24,24 @@ class _Response:
 class GatewayReliabilityTests(SimpleTestCase):
     @patch.dict(os.environ, {"TIMEWEB_AI_API_KEY": "test"})
     @patch("tenders.services.urlopen")
+    def test_document_effort_is_explicit_and_success_retains_token_breakdown(self, gateway):
+        usage = {'prompt_tokens': 100, 'completion_tokens': 20,
+                 'completion_tokens_details': {'reasoning_tokens': 12, 'text_tokens': 8}}
+        gateway.return_value = _Response(json.dumps({
+            'choices': [{'message': {'content': '{"items":[]}'}, 'finish_reason': 'stop'}],
+            'usage': usage,
+        }).encode())
+        data, actual = _ai_gateway_json('prompt', model='anthropic/claude-haiku-5-5',
+            reasoning_effort='low', capture_incomplete_response=True, json_attempts=1)
+        body = json.loads(gateway.call_args.args[0].data)
+        self.assertEqual(body['reasoning_effort'], 'low')
+        self.assertEqual(actual, usage)
+        self.assertEqual(data, {'items': []})
+        _ai_gateway_json('prompt', model='other/model')
+        self.assertNotIn('reasoning_effort', json.loads(gateway.call_args.args[0].data))
+
+    @patch.dict(os.environ, {"TIMEWEB_AI_API_KEY": "test"})
+    @patch("tenders.services.urlopen")
     def test_truncated_document_response_is_retained_only_when_requested(self, gateway):
         content = '{"items":[' + 'я' * 270000
         gateway.return_value = _Response(json.dumps({

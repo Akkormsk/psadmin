@@ -209,6 +209,12 @@ class GatewayDocumentEnricher:
 
     def __init__(self, model=None, *, max_cost_rub=None):
         self.model = model or os.getenv("TIMEWEB_AI_V2_EXTRACTION_MODEL") or os.getenv("TIMEWEB_AI_ASSISTANT_MODEL", "anthropic/claude-haiku-5-5")
+        # Haiku 5.5 thinks adaptively by default; that shares the JSON output cap.
+        # Other extraction models retain their existing provider defaults.
+        default_effort = "low" if self.model.rsplit("/", 1)[-1] == "claude-haiku-5-5" else ""
+        self.reasoning_effort = os.getenv("CALCULATION_V2_DOCUMENT_REASONING_EFFORT", default_effort) or None
+        if self.reasoning_effort not in {None, "low", "medium", "high"}:
+            raise ValueError("Некорректная настройка глубины разбора документов")
         self.max_cost_rub = Decimal(str(max_cost_rub)) if max_cost_rub is not None else None
         self.usage = {}
         self.cost_rub = 0.0
@@ -301,6 +307,7 @@ class GatewayDocumentEnricher:
         self.diagnostics = {
             "outcome": "system_extraction_failure",
             "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
             "duration_ms": round((time.monotonic() - started) * 1000, 2),
             "cost_rub": str(self.cost_rub),
             "provider_call_happened": True,
@@ -355,7 +362,7 @@ class GatewayDocumentEnricher:
                                 "budget": {"max_cost_rub": str(self.max_cost_rub), "reserved_cost_rub": str(estimated_cost)}}
             return []
         try:
-            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=240, network_attempts=1, json_attempts=1, capture_incomplete_response=True, response_contract='Корневой JSON — объект с обязательным массивом items. Если товаров для уточнения нет: {"items":[]}. Не заменяй результат объяснением или объектом ошибки.', **({"image_data_urls": self.document_images} if self.document_images else {}))
+            raw, extract_usage = _ai_gateway_json(prompt, model=self.model, max_tokens=self.DOCUMENT_OUTPUT_TOKEN_LIMIT, timeout=240, network_attempts=1, json_attempts=1, capture_incomplete_response=True, response_contract='Корневой JSON — объект с обязательным массивом items. Если товаров для уточнения нет: {"items":[]}. Не заменяй результат объяснением или объектом ошибки.', **({"reasoning_effort": self.reasoning_effort} if self.reasoning_effort is not None else {}), **({"image_data_urls": self.document_images} if self.document_images else {}))
         except Exception as exc:
             self._record_gateway_failure(exc, usage={}, phase="document_analysis", started=started)
             raise
@@ -429,7 +436,7 @@ class GatewayDocumentEnricher:
         if any("component" in values and len(values) > 1 for values in modes.values()):
             rejections.append({"reason": "aggregate_and_components_mixed"})
         outcome = "validation_failure" if rejections else "document_reading_incomplete" if incomplete else "success" if output else "no_data"
-        self.diagnostics = {"outcome": outcome, "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage, "target_exceeded": self.cost_rub > self.DOCUMENT_AVERAGE_COST_TARGET_RUB}, "extraction": {"selected_urls": sorted(allowed_urls), "response_shape": response_shape, "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
+        self.diagnostics = {"outcome": outcome, "model": self.model, "reasoning_effort": self.reasoning_effort, "duration_ms": round((time.monotonic() - started) * 1000, 2), "cost_rub": str(self.cost_rub), "documents": {"considered": considered}, "budget": {"average_target_rub": str(self.DOCUMENT_AVERAGE_COST_TARGET_RUB), "estimated_cost_rub": str(estimated_cost), "estimated_usage": estimated_usage, "target_exceeded": self.cost_rub > self.DOCUMENT_AVERAGE_COST_TARGET_RUB}, "extraction": {"selected_urls": sorted(allowed_urls), "response_shape": response_shape, "accepted_count": len(output), "rejected_count": len(rejections), "rejections": rejections[:50], "usage": extract_usage}}
         return output
 
     def extract(self, *, tender, aggregate, documents):
