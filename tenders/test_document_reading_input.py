@@ -223,6 +223,38 @@ class StagedTableEvidenceTests(SimpleTestCase):
             with self.subTest(quote=quote), self.assertRaises(ValueError):
                 engine.stage_quote({'doc_id': 1, 'quote': quote})
 
+
+    def test_multi_cell_specs_accept_inequality_glyph_equivalents_only_within_one_row(self):
+        engine = GatewayDocumentEnricher()
+        engine.document_lookup = {3: {'url': 'https://example.test/spec', 'evidence_text': '',
+            'tables': [{'rows': [
+                ['Блокнот: Размер (длина)', '≥ 210 и ⩽ 240', 'мм'],
+                ['Блокнот: Формат А5', 'тип', 'недатированный'],
+                ['Тип', 'шариковая ручка'],
+                ['Размер', '≥ 10 и ≤ 12', 'мм'],
+            ]}]}}
+        for quote, row in [
+            ('Блокнот: Размер (длина) | 210 и ≤ 240 | мм', 1),
+            ('Блокнот: Формат | А5', 2),
+            ('Тип | шариковая ручка', 3),
+            ('Размер | ≥ 10 и ≤ 12 | мм', 4),
+        ]:
+            with self.subTest(quote=quote):
+                proof = engine.stage_quote({'doc_id': 3, 'quote': quote})
+                self.assertEqual(proof['page_or_section'], f'Таблица 1, строка {row}')
+                self.assertNotIn('Сочи', proof['evidence'])
+
+        for invented in [
+            'Блокнот: Размер (длина) | 210 и ≤ 241 | мм',
+            'Блокнот: Размер (длина) | 210 и ≥ 240 | мм',
+            'Блокнот: Размер (длина) | 210 и ≤ 240 | см',
+            'Тип | ≥ 10 и ≤ 12',
+            'Блокнот: Формат | шариковая ручка',
+        ]:
+            with self.subTest(invented=invented), self.assertRaises(ValueError):
+                engine.stage_quote({'doc_id': 3, 'quote': invented})
+
+
 class StagedResponseCacheTests(TestCase):
     def setUp(self):
         self.tender = Tender.objects.create(purchase_number="staged-response-cache")
