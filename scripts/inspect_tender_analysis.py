@@ -39,6 +39,32 @@ def incomplete_response_summary(diagnostics):
     return result
 
 
+def inspect_card_routes(tender):
+    """Render the real read-only card and exercise its route endpoints; emit counts only."""
+    from django.contrib.auth import get_user_model
+    from django.test import RequestFactory
+    from django.urls import reverse, resolve
+    from lxml import html
+    from unittest.mock import patch
+    user = get_user_model().objects.filter(is_superuser=True, is_active=True).order_by('pk').first()
+    if not user:
+        return {'administrator_available': False}
+    factory = RequestFactory()
+    def request(path, data=None):
+        value = factory.get(path, data=data or {}, secure=True, HTTP_HOST='test.admin.psodin.ru')
+        value.user, value.session = user, {}
+        return value
+    def read(path, data=None):
+        match = resolve(path)
+        return match.func(request(path, data), *match.args, **match.kwargs)
+    with patch('tender_selection.views.notification_for', side_effect=AssertionError('Read-only snapshot fetched notification')), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Read-only card called model')):
+        response = read(reverse('tender_selection:detail', args=[tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'})
+        links = html.fromstring(response.content).xpath('//*[@data-source-route]')
+        ids = [int(node.get('data-route-source')) for node in links]
+        statuses = [read(node.get('data-source-route')).status_code for node in links]
+    return {'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
+
+
 def collect_report(number):
     from tender_selection.models import Tender
     from tender_selection.notification import parse_notification
@@ -112,7 +138,7 @@ def collect_report(number):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
     return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'national_regime_fields': national_fields, 'read_only': True, 'model_called': False, 'latest_job': latest,
-            'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
+            'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
 def main():

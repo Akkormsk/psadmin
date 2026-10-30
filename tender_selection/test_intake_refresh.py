@@ -127,6 +127,11 @@ class IntakeRefreshTests(TestCase):
         self.assertEqual(response.json(), source_route_for(self.user, self.tender.pk, self.source.pk))
         from tenders.assistant_tools import execute_tool
         self.assertEqual(execute_tool('tender.item_route', self.user, {'tender_id': self.tender.pk, 'source_item_id': self.source.pk}), response.json())
+        from scripts.inspect_tender_analysis import inspect_card_routes
+        card = inspect_card_routes(self.tender)
+        self.assertEqual(card['card_http_status'], 200)
+        self.assertEqual(card['unique_route_links'], 1)
+        self.assertEqual(card['route_endpoint_statuses'], [200])
         stranger = get_user_model().objects.create_user('stranger')
         with self.assertRaises(ValueError):
             source_route_for(stranger, self.tender.pk, self.source.pk)
