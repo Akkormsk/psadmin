@@ -1939,12 +1939,23 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
 
 
+def _ensure_document_review_ready(tender):
+    """Do not apply preliminary changes while intake is running or incomplete."""
+    from tenders.analysis_presentation import resolve_tender_analysis_status
+    status = resolve_tender_analysis_status(tender)
+    if status.processing:
+        raise ValueError("Сверка ТЗ ещё выполняется; дождитесь её завершения")
+    if status.code == "ANALYSIS_INCOMPLETE":
+        raise ValueError("Сверка ТЗ не завершена; исправьте ошибку анализа до согласования правок")
+
+
 @transaction.atomic
 def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_routes=True):
     """Apply the complete document-composition decision used by the tender card."""
     _require_tender_admin(user)
     from tenders.models import TenderSourceItem
 
+    _ensure_document_review_ready(Tender.objects.get(pk=tender_id))
     if decision not in {"accept", "reject"}:
         raise ValueError("Нужно выбрать: принять или отклонить предложения")
     Tender.objects.select_for_update().get(pk=tender_id)
@@ -1959,9 +1970,7 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
     if any(item.metadata.get("analysis_incomplete") for item in proposals):
-        from tenders.models import TenderComputeJob
-        if decision == "accept" or TenderComputeJob.objects.filter(tender_id=tender_id, status__in=["preparing_input", "running", "routing", "preparing"]).exists():
-            raise ValueError("ТЗ ещё обрабатывается; незавершённые изменения принять нельзя")
+        raise ValueError("Сверка ТЗ ещё не завершена; предварительные изменения нельзя согласовать")
     if decision == "accept":
         from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
         if len(proposals) > 1 and any(is_item_enrichment(item) for item in proposals):
@@ -2323,7 +2332,8 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
     """Accept/reject exactly the reviewed proposal snapshot as one transaction."""
     _require_tender_admin(user)
     from tenders.models import TenderSourceItem
-    Tender.objects.select_for_update().get(pk=tender_id)
+    tender = Tender.objects.select_for_update().get(pk=tender_id)
+    _ensure_document_review_ready(tender)
     if not isinstance(proposal_ids, list) or not proposal_ids or any(type(value) is not int or value <= 0 for value in proposal_ids) or len(set(proposal_ids)) != len(proposal_ids):
         raise ValueError('Нужно передать проверенный список предложений')
     pending = list(TenderSourceItem.objects.select_for_update().filter(tender_id=tender_id, source_type='document_proposal').order_by('pk'))
