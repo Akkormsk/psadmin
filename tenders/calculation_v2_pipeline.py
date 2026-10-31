@@ -477,7 +477,8 @@ class GatewayDocumentEnricher:
                             if parent_key in assigned_notification and assigned_notification[parent_key] != key:
                                 raise ValueError('Один исходный факт набора отнесён к разным товарам.')
                             assigned_notification[parent_key] = key
-                        fact['notification_source_facts'] = deepcopy(origin_facts)
+                        fact['source_facts'] = [{**deepcopy(source), 'source': 'notification'} for source in origin_facts]
+                        fact['source'] = 'combined' if has_document else 'notification'
                         if not has_document:
                             fact['_source_provenance'] = {'kind': 'notification', 'source_item_id': good['source_id'], 'fact_ids': refs}
                 fact.pop('doc_id', None)
