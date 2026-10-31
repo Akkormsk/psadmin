@@ -510,6 +510,23 @@
   .ts-item-group > summary > span:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .ts-item-group > summary > span { display: flex; flex-direction: column; gap: 4px; }
   .ts-item-group small, .ts-item-audit > summary, .ts-item-tz > summary, .ts-item-completeness > summary { color: var(--ink-2); font-size: 12px; }
+  @media (max-width: 640px) {
+    .ts-item-group > summary {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr);
+      column-gap: 10px;
+      row-gap: 12px;
+      align-items: start;
+    }
+    .ts-item-group > summary::before { grid-column: 1; grid-row: 1; }
+    .ts-item-group > summary > span:first-of-type { grid-column: 2; grid-row: 1; }
+    .ts-item-group > summary > span:last-of-type {
+      grid-column: 2;
+      grid-row: 2;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+  }
   .ts-group-body { padding: 12px; }
   .ts-item-tz .ts-chars, .ts-item-completeness .ts-chars { color: var(--ink); }
   .ts-item-tz, .ts-item-completeness, .ts-item-audit { margin-top: 8px; }
