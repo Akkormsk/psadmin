@@ -170,6 +170,12 @@ jobs:
           cd "$app/deploy/vds"
           ./twin.sh up </dev/null
           docker compose -f compose.test.yml ps test-web
+          # Focused, offline regressions. Django creates a separate test database;
+          # these tests never call a paid AI provider.
+          docker compose -f compose.test.yml exec -T test-web python manage.py test \
+            tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \
+            tenders.test_document_reconciliation \
+            tenders.test_supply_structure --noinput -v 1
           test "$(sed -n 's/^sha=//p' ../../.twin-version)" = "$deploy_sha"
           docker compose -f compose.test.yml exec -T test-web python - <<'PY'
           import json
