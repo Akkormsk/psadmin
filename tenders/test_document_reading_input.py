@@ -259,6 +259,68 @@ class StagedTableEvidenceTests(SimpleTestCase):
                 engine.stage_quote({'doc_id': 3, 'quote': invented})
 
 
+
+class StagedMultiSourceReconciliationTests(SimpleTestCase):
+    def make_engine(self):
+        engine = GatewayDocumentEnricher()
+        engine.baselines = {7: [
+            {'id': 0, 'name': 'Цвет уголков', 'value': 'золотой'},
+            {'id': 1, 'name': 'Материал ручки', 'value': 'металл'},
+        ]}
+        engine.stage_sources = {}
+        engine.document_lookup = {1: {'url': 'https://example.test/spec', 'evidence_text': 'Цвет уголков золотой и серебряный',
+            'tables': [{'rows': [['Цвет уголков', 'золотой и серебряный']]}]}}
+        return engine
+
+    def test_kit_facts_from_notification_are_retained_without_a_document_quote(self):
+        engine = self.make_engine()
+        goods = [
+            {'key': '7:0', 'source_id': 7, 'kind': 'kit'},
+            {'key': '7:1', 'source_id': 7, 'kind': 'kit'},
+        ]
+        rows = [
+            {'key': '7:0', 'keep_refs': [], 'characteristics': [
+                {'name': 'Цвет уголков', 'value': 'золотой', 'resolution': 'new', 'baseline_refs': [], 'notification_refs': [0], 'scope': 'product'}]},
+            {'key': '7:1', 'keep_refs': [], 'characteristics': [
+                {'name': 'Материал ручки', 'value': 'металл', 'resolution': 'new', 'baseline_refs': [], 'notification_refs': [1], 'scope': 'product'}]},
+        ]
+        result = engine.validate_specifications(rows, goods)
+        self.assertEqual(result['7:0']['characteristics'][0]['source'], 'notification')
+        self.assertEqual(result['7:0']['characteristics'][0]['source_facts'][0]['name'], 'Цвет уголков')
+        self.assertEqual(result['7:1']['characteristics'][0]['source'], 'notification')
+        self.assertNotIn('doc_id', result['7:0']['characteristics'][0])
+
+    def test_no_unverified_changes_or_fact_leak_between_components(self):
+        engine = self.make_engine()
+        goods = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'},
+                 {'key': '7:1', 'source_id': 7, 'kind': 'kit'}]
+        source = {'key': '7:0', 'keep_refs': [], 'characteristics': [
+            {'name': 'Цвет уголков', 'value': 'серебряный', 'resolution': 'new', 'baseline_refs': [], 'notification_refs': [0]}]}
+        with self.assertRaisesRegex(ValueError, 'изменено'):
+            engine.validate_specifications([source, {'key': '7:1', 'characteristics': []}], goods)
+        source['characteristics'][0]['value'] = 'золотой'
+        duplicate = {'key': '7:1', 'characteristics': [{
+            'name': 'Цвет уголков', 'value': 'золотой', 'resolution': 'new', 'baseline_refs': [], 'notification_refs': [0]}]}
+        with self.assertRaisesRegex(ValueError, 'разным товарам'):
+            engine.validate_specifications([source, duplicate], goods)
+        source['characteristics'][0]['value'] = 'серебряный'
+        source['characteristics'][0]['notification_refs'] = []
+        with self.assertRaisesRegex(ValueError, 'не подтверждена'):
+            engine.validate_specifications([source, {'key': '7:1', 'characteristics': []}], goods)
+
+    def test_kit_uses_both_evidences_when_the_document_changes_a_fact(self):
+        engine = self.make_engine()
+        good = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'}]
+        rows = [{'key': '7:0', 'characteristics': [{
+            'name': 'Цвет уголков', 'value': 'золотой и серебряный', 'resolution': 'merge',
+            'reason': 'Документ уточняет исходное значение', 'baseline_refs': [], 'notification_refs': [0],
+            'doc_id': 1, 'quote': 'Цвет уголков | золотой и серебряный'}]}]
+        result = engine.validate_specifications(rows, good)
+        self.assertEqual(result['7:0']['characteristics'][0]['source'], 'combined')
+        self.assertEqual(result['7:0']['characteristics'][0]['source_facts'][0]['source'], 'notification')
+        self.assertEqual(result['7:0']['characteristics'][0]['source_url'], 'https://example.test/spec')
+
+
 class StagedResponseCacheTests(TestCase):
     def setUp(self):
         self.tender = Tender.objects.create(purchase_number="staged-response-cache")

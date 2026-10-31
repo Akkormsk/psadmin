@@ -232,7 +232,7 @@ class GatewayDocumentEnricher:
         self.diagnostics = {}
         self.document_images = []
 
-    STAGED_CONTRACT = "intake-steps-v1"
+    STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
     STAGED_VALIDATION_VERSION = "math-symbols-and-cell-segments-v2"
 
     def prepare_stages(self, tender, sources, documents):
@@ -423,24 +423,64 @@ class GatewayDocumentEnricher:
         return entries
 
     def validate_specifications(self, rows, goods):
+        """Reconcile equal-priority source evidence without leaking kit-level facts."""
+        from copy import deepcopy
         expected, result = {good['key']: good for good in goods}, {}
+        assigned_notification = {}
         for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError('Некорректная запись ТЗ')
             key = row.get('key')
             if key not in expected or key in result or not isinstance(row.get('characteristics'), list):
                 raise ValueError('ТЗ не соответствует списку товаров.')
             good = expected[key]
+            baseline = self.baselines[good['source_id']]
             facts = []
+            if good['kind'] == 'kit' and row.get('keep_refs'):
+                raise ValueError('Исходные факты набора должны распределяться по товарам явно.')
             for raw in row['characteristics']:
+                if not isinstance(raw, dict):
+                    raise ValueError('Некорректная характеристика ТЗ')
                 fact = dict(raw)
                 if not str(fact.get('name') or '').strip() or fact.get('value') in (None, '', [], {}):
                     raise ValueError('В ТЗ получена пустая характеристика.')
-                if fact.get('resolution') != 'keep' and fact.get('resolution') != 'omit':
-                    evidence = self.stage_quote(fact)
-                    fact['source_url'] = evidence['document_url']
-                    fact['_source_provenance'] = evidence
-                    if fact.get('resolution') in {'merge', 'conflict'}:
-                        fact['document_value'] = str(raw.get('document_value') or raw.get('quote') or '')
-                    fact['page_or_section'] = evidence['page_or_section']
+                mode = fact.get('resolution')
+                refs = fact.pop('notification_refs', [])
+                if not isinstance(refs, list) or len(refs) != len(set(str(ref) for ref in refs)) or any(type(ref) is not int or ref < 0 or ref >= len(baseline) for ref in refs):
+                    raise ValueError('Некорректные ссылки на характеристики извещения.')
+                if refs and good['kind'] != 'kit':
+                    raise ValueError('Для обычного товара используй baseline_refs.')
+                if refs and mode in {'keep', 'omit'}:
+                    raise ValueError('Для фактов набора необходимо явное решение и название товара.')
+                if mode not in {'keep', 'omit'}:
+                    has_document = fact.get('doc_id') is not None and bool(str(fact.get('quote') or '').strip())
+                    if not has_document and not refs:
+                        raise ValueError('Характеристика не подтверждена ни извещением, ни документом.')
+                    if has_document:
+                        evidence = self.stage_quote(fact)
+                        fact['source_url'] = evidence['document_url']
+                        fact['_source_provenance'] = evidence
+                        fact['page_or_section'] = evidence['page_or_section']
+                        if mode in {'merge', 'conflict'}:
+                            fact['document_value'] = str(raw.get('document_value') or raw.get('quote') or '')
+                    if refs:
+                        origin_facts = [baseline[ref] for ref in refs]
+                        norm = lambda value: ' '.join(str(value).casefold().split())
+                        if not has_document:
+                            if len(origin_facts) != 1 or norm(fact['value']) != norm(origin_facts[0]['value']):
+                                raise ValueError('Значение из извещения изменено без подтверждения документом.')
+                            # Model may choose a clearer name without changing the verified value.
+                            if mode != 'new':
+                                raise ValueError('Факт из извещения без документа должен иметь resolution=new.')
+                        for ref in refs:
+                            parent_key = (good['source_id'], ref)
+                            if parent_key in assigned_notification and assigned_notification[parent_key] != key:
+                                raise ValueError('Один исходный факт набора отнесён к разным товарам.')
+                            assigned_notification[parent_key] = key
+                        fact['source_facts'] = [{**deepcopy(source), 'source': 'notification'} for source in origin_facts]
+                        fact['source'] = 'combined' if has_document else 'notification'
+                        if not has_document:
+                            fact['_source_provenance'] = {'kind': 'notification', 'source_item_id': good['source_id'], 'fact_ids': refs}
                 fact.pop('doc_id', None)
                 fact.pop('quote', None)
                 fact.pop('section', None)
