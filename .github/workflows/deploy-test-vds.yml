@@ -172,7 +172,7 @@ jobs:
           docker compose -f compose.test.yml ps test-web
           # Focused, offline regressions. Django creates a separate test database;
           # these tests never call a paid AI provider.
-          docker compose -f compose.test.yml exec -T test-web python manage.py test \
+          docker compose -f compose.test.yml exec -T -e DJANGO_SECURE_COOKIES=0 test-web python manage.py test \
             tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \
             tenders.test_document_reconciliation \
             tenders.test_supply_structure --noinput -v 1
