@@ -203,36 +203,37 @@ jobs:
               "latest_job": latest_job,
           }, default=str))
           PY
-          # Read-only targeted diagnosis of the saved TZ result. No provider call.
+          # One-time TEST-only replay of the previously saved failing TZ output.
+          # Reads cached document previews and JSON; does not call an LLM or save changes.
           docker compose -f compose.test.yml exec -T test-web python - <<'PY'
-          import os, django, json
+          import os, django
           os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
           django.setup()
-          from tender_selection.models import Tender
           from tenders.models import TenderComputeJob
-          tender = Tender.objects.filter(purchase_number="0372200281326000004").first()
-          print("TZ_DIAG tender_found", bool(tender))
-          if tender:
-              jobs = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk")[:4]
-              for job in jobs:
-                  stage = (job.diagnostics or {}).get("stages", {}).get("tz", {})
-                  rows = stage.get("result") or []
-                  print("TZ_DIAG job", job.pk, "status", job.status, "error", str((job.error or {}).get("message") or "")[:170],
-                        "tz", stage.get("state"), "validation", stage.get("validation_version"),
-                        "rows", len(rows), "cache_source", stage.get("reused_from"), "cost", stage.get("cost_rub"))
-                  for item in rows:
-                      if not isinstance(item, dict):
-                          continue
-                      for fact in item.get("characteristics") or []:
-                          if not isinstance(fact, dict) or fact.get("resolution") not in ("merge", "conflict"):
-                              continue
-                          base = fact.get("baseline_refs") or []
-                          documents = fact.get("document_facts") or []
-                          notification = fact.get("notification_refs") or []
-                          print("TZ_DIAG reconcile_fact", "key", str(item.get("key"))[:30],
-                                "mode", fact.get("resolution"), "base", len(base), "docs", len(documents),
-                                "notif", len(notification), "doc_id", fact.get("doc_id"),
-                                "quote", bool(fact.get("quote")), "name", str(fact.get("name"))[:90])
+          from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality, document_analysis_sources
+          from tenders.document_enrichment import effective_item_requirements
+          job = TenderComputeJob.objects.filter(
+              tender__purchase_number="0372200281326000004",
+              diagnostics__stages__tz__state="failed",
+          ).select_related("tender").order_by("-pk").first()
+          assert job is not None, "Saved cup tender TZ failure not found"
+          sources = list(document_analysis_sources(job.tender)[0].values())
+          engine = GatewayDocumentEnricher()
+          engine.stage_sources = {source.pk: source for source in sources}
+          engine.baselines = {
+              source.pk: [{"id": i, "name": row["name"], "value": row["value"]}
+                          for i, row in enumerate(effective_item_requirements(source).get("characteristics", []))]
+              for source in sources
+          }
+          docs = assess_quality(job.tender, sources)["documents"]
+          engine.stage_documents, _ = engine._bounded_documents(docs, compact=True)
+          engine.document_lookup = {i: doc for i, doc in enumerate(engine.stage_documents, 1)}
+          cached = (job.diagnostics or {})["stages"]
+          goods = engine.validate_structure(cached["structure"]["result"])
+          specs = engine.validate_specifications(cached["tz"]["result"], goods)
+          assert len(specs) == len(goods), "TZ replay did not cover all goods"
+          print("CACHED_TZ_REPLAY_OK", "job", job.pk, "goods", len(goods), "facts",
+                sum(len(item["characteristics"]) for item in specs.values()), "provider_calls", 0)
           PY
           if [ -n "$pilot_tender" ]; then
             pilot_mode=--apply
