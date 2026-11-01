@@ -176,7 +176,7 @@ jobs:
             tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \
             tenders.test_document_reading_input.StagedSingleSourceSelectionTests \
             tenders.test_document_reconciliation \
-            tenders.test_supply_structure --noinput -v 1
+            tenders.test_supply_structure --noinput -v 1 </dev/null
           test "$(sed -n 's/^sha=//p' ../../.twin-version)" = "$deploy_sha"
           docker compose -f compose.test.yml exec -T test-web python - <<'PY'
           import json
