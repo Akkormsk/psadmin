@@ -203,6 +203,37 @@ jobs:
               "latest_job": latest_job,
           }, default=str))
           PY
+          # Read-only targeted diagnosis of the saved TZ result. No provider call.
+          docker compose -f compose.test.yml exec -T test-web python - <<'PY'
+          import os, django, json
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
+          django.setup()
+          from tender_selection.models import Tender
+          from tenders.models import TenderComputeJob
+          tender = Tender.objects.filter(purchase_number="0372200281326000004").first()
+          print("TZ_DIAG tender_found", bool(tender))
+          if tender:
+              jobs = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk")[:4]
+              for job in jobs:
+                  stage = (job.diagnostics or {}).get("stages", {}).get("tz", {})
+                  rows = stage.get("result") or []
+                  print("TZ_DIAG job", job.pk, "status", job.status, "error", str((job.error or {}).get("message") or "")[:170],
+                        "tz", stage.get("state"), "validation", stage.get("validation_version"),
+                        "rows", len(rows), "cache_source", stage.get("reused_from"), "cost", stage.get("cost_rub"))
+                  for item in rows:
+                      if not isinstance(item, dict):
+                          continue
+                      for fact in item.get("characteristics") or []:
+                          if not isinstance(fact, dict) or fact.get("resolution") not in ("merge", "conflict"):
+                              continue
+                          base = fact.get("baseline_refs") or []
+                          documents = fact.get("document_facts") or []
+                          notification = fact.get("notification_refs") or []
+                          print("TZ_DIAG reconcile_fact", "key", str(item.get("key"))[:30],
+                                "mode", fact.get("resolution"), "base", len(base), "docs", len(documents),
+                                "notif", len(notification), "doc_id", fact.get("doc_id"),
+                                "quote", bool(fact.get("quote")), "name", str(fact.get("name"))[:90])
+          PY
           if [ -n "$pilot_tender" ]; then
             pilot_mode=--apply
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
