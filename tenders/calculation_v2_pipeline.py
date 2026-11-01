@@ -233,7 +233,7 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "math-symbols-and-cell-segments-v2"
+    STAGED_VALIDATION_VERSION = "single-source-reconciliation-v3"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
@@ -461,7 +461,12 @@ class GatewayDocumentEnricher:
                         fact['source_url'] = evidence['document_url']
                         fact['_source_provenance'] = evidence
                         fact['page_or_section'] = evidence['page_or_section']
-                        if mode in {'merge', 'conflict'}:
+                        if mode == 'merge' and not fact.get('baseline_refs') and not refs and not fact.get('document_facts'):
+                            # The model may call a single supported new fact a "merge".
+                            # No source is being combined: retain its evidence as a
+                            # new fact rather than failing an unrelated tender stage.
+                            fact['resolution'] = 'new'
+                        elif mode in {'merge', 'conflict'}:
                             fact['document_value'] = str(raw.get('document_value') or raw.get('quote') or '')
                     if refs:
                         origin_facts = [baseline[ref] for ref in refs]
