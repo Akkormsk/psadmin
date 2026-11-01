@@ -203,38 +203,6 @@ jobs:
               "latest_job": latest_job,
           }, default=str))
           PY
-          # One-time TEST-only replay of the previously saved failing TZ output.
-          # Reads cached document previews and JSON; does not call an LLM or save changes.
-          docker compose -f compose.test.yml exec -T test-web python - <<'PY'
-          import os, django
-          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
-          django.setup()
-          from tenders.models import TenderComputeJob
-          from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality, document_analysis_sources
-          from tenders.document_enrichment import effective_item_requirements
-          job = TenderComputeJob.objects.filter(
-              tender__purchase_number="0372200281326000004",
-              diagnostics__stages__tz__state="failed",
-          ).select_related("tender").order_by("-pk").first()
-          assert job is not None, "Saved cup tender TZ failure not found"
-          sources = list(document_analysis_sources(job.tender)[0].values())
-          engine = GatewayDocumentEnricher()
-          engine.stage_sources = {source.pk: source for source in sources}
-          engine.baselines = {
-              source.pk: [{"id": i, "name": row["name"], "value": row["value"]}
-                          for i, row in enumerate(effective_item_requirements(source).get("characteristics", []))]
-              for source in sources
-          }
-          docs = assess_quality(job.tender, sources)["documents"]
-          engine.stage_documents, _ = engine._bounded_documents(docs, compact=True)
-          engine.document_lookup = {i: doc for i, doc in enumerate(engine.stage_documents, 1)}
-          cached = (job.diagnostics or {})["stages"]
-          goods = engine.validate_structure(cached["structure"]["result"])
-          specs = engine.validate_specifications(cached["tz"]["result"], goods)
-          assert len(specs) == len(goods), "TZ replay did not cover all goods"
-          print("CACHED_TZ_REPLAY_OK", "job", job.pk, "goods", len(goods), "facts",
-                sum(len(item["characteristics"]) for item in specs.values()), "provider_calls", 0)
-          PY
           if [ -n "$pilot_tender" ]; then
             pilot_mode=--apply
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
