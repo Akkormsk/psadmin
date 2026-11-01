@@ -337,7 +337,8 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
             "evidence_text": "",
             "tables": [{"rows": [["Материал основания", "металл"]]}],
         }}
-        self.goods = [{"key": "9:0", "source_id": 9, "kind": "finished"}]
+        self.goods = [{"key": "9:0", "source_id": 9, "kind": "finished",
+                       "provenance": {"kind": "notification", "source_item_id": 9}}]
 
     def test_one_document_marked_merge_is_treated_as_new(self):
         rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
