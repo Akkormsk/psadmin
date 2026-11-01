@@ -321,6 +321,74 @@ class StagedMultiSourceReconciliationTests(SimpleTestCase):
         self.assertEqual(result['7:0']['characteristics'][0]['source_url'], 'https://example.test/spec')
 
 
+
+class StagedSingleSourceSelectionTests(SimpleTestCase):
+    """A source-backed new fact must not require several documents."""
+
+    def setUp(self):
+        self.engine = GatewayDocumentEnricher()
+        self.engine.baselines = {9: []}
+        self.engine.stage_sources = {9: TenderSourceItem(
+            source_type="notification", original_text="Наградная атрибутика",
+            requirements={"characteristics": []},
+        )}
+        self.engine.document_lookup = {1: {
+            "url": "https://example.test/tz",
+            "evidence_text": "",
+            "tables": [{"rows": [["Материал основания", "металл"]]}],
+        }}
+        self.goods = [{"key": "9:0", "source_id": 9, "kind": "finished"}]
+
+    def test_one_document_marked_merge_is_treated_as_new(self):
+        rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
+            "name": "Материал основания",
+            "value": "металл",
+            "resolution": "merge",
+            "baseline_refs": [],
+            "doc_id": 1,
+            "quote": "Материал основания | металл",
+            "reason": "Наиболее полная характеристика",
+        }]}]
+        result = self.engine.validate_specifications(rows, self.goods)
+        actual = result["9:0"]["characteristics"][0]
+        self.assertEqual(actual["resolution"], "new")
+        self.assertEqual(actual["source_url"], "https://example.test/tz")
+        self.assertEqual(actual["value"], "металл")
+        from .document_enrichment import merge_item_requirements
+        saved = merge_item_requirements({"characteristics": []}, result["9:0"])
+        self.assertEqual(saved["characteristics"][0]["value"], "металл")
+        self.assertEqual(saved["characteristics"][0]["source"], "document")
+
+    def test_real_merge_preserves_baseline_and_combines(self):
+        self.engine.baselines[9] = [{"id": 0, "name": "Материал основания", "value": "металл"}]
+        self.engine.stage_sources[9].requirements = {
+            "characteristics": [{"name": "Материал основания", "value": "металл"}]
+        }
+        rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
+            "name": "Материал основания",
+            "value": "металл с покрытием",
+            "resolution": "merge",
+            "baseline_refs": [0],
+            "doc_id": 1,
+            "quote": "Материал основания | металл",
+            "reason": "Документ уточняет покрытие",
+        }]}]
+        result = self.engine.validate_specifications(rows, self.goods)
+        self.assertEqual(result["9:0"]["characteristics"][0]["resolution"], "merge")
+        from .document_enrichment import merge_item_requirements
+        saved = merge_item_requirements(self.engine.stage_sources[9].requirements, result["9:0"])
+        self.assertEqual(saved["characteristics"][0]["source"], "combined")
+
+    def test_unsupported_single_source_is_still_rejected(self):
+        rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
+            "name": "Материал основания", "value": "латунь",
+            "resolution": "merge", "baseline_refs": [],
+            "doc_id": 1, "quote": "Материал основания | латунь",
+        }]}]
+        with self.assertRaisesRegex(ValueError, "не подтверждён"):
+            self.engine.validate_specifications(rows, self.goods)
+
+
 class StagedResponseCacheTests(TestCase):
     def setUp(self):
         self.tender = Tender.objects.create(purchase_number="staged-response-cache")
