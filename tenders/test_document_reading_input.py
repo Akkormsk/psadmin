@@ -360,6 +360,39 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         self.assertEqual(saved["characteristics"][0]["value"], "металл")
         self.assertEqual(saved["characteristics"][0]["source"], "document")
 
+    def test_single_document_marked_conflict_is_not_an_unproved_disagreement(self):
+        rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
+            "name": "Материал основания", "value": "металл",
+            "resolution": "conflict", "baseline_refs": [],
+            "doc_id": 1, "quote": "Материал основания | металл",
+            "reason": "Модель увидела различие без второй ссылки",
+        }]}]
+        result = self.engine.validate_specifications(rows, self.goods)
+        actual = result["9:0"]["characteristics"][0]
+        self.assertEqual(actual["resolution"], "new")
+        self.assertIn("не подтверждено вторым источником", actual["reason"])
+        from .document_enrichment import merge_item_requirements
+        saved = merge_item_requirements({"characteristics": []}, result["9:0"])
+        self.assertEqual(saved["characteristics"][0]["value"], "металл")
+        self.assertFalse(saved["characteristics"][0].get("conflict", False))
+
+    def test_two_independently_verified_conflicting_values_still_show_conflict(self):
+        self.engine.document_lookup[2] = {
+            "url": "https://example.test/appendix", "evidence_text": "",
+            "tables": [{"rows": [["Материал основания", "пластик"]]}],
+        }
+        rows = [{"key": "9:0", "keep_refs": [], "characteristics": [
+            {"name": "Материал основания", "value": "металл", "resolution": "conflict",
+             "baseline_refs": [], "doc_id": 1, "quote": "Материал основания | металл"},
+            {"name": "Материал основания", "value": "пластик", "resolution": "conflict",
+             "baseline_refs": [], "doc_id": 2, "quote": "Материал основания | пластик"},
+        ]}]
+        result = self.engine.validate_specifications(rows, self.goods)
+        from .document_enrichment import merge_item_requirements
+        saved = merge_item_requirements({"characteristics": []}, result["9:0"])
+        self.assertEqual(len(saved["characteristics"]), 2)
+        self.assertTrue(all(fact["conflict"] for fact in saved["characteristics"]))
+
     def test_real_merge_preserves_baseline_and_combines(self):
         self.engine.baselines[9] = [{"id": 0, "name": "Материал основания", "value": "металл"}]
         self.engine.stage_sources[9].requirements = {
