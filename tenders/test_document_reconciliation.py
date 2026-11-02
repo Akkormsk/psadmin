@@ -84,7 +84,9 @@ class DocumentReconciliationTests(TestCase):
     def test_conflicting_values_are_both_visible_before_acceptance(self):
         proposal = self.proposal(requirements={'characteristics': [{'name': 'Материал корпуса', 'value': 'пластик'}]})
         materials = [row for row in proposal.requirements['characteristics'] if row['name'] == 'Материал корпуса']
-        self.assertEqual({row['value'] for row in materials}, {'металл', 'пластик'})
+        self.assertEqual(len(materials), 1)
+        self.assertIn('металл', materials[0]['value'])
+        self.assertIn('пластик', materials[0]['value'])
         self.assertTrue(all(row['conflict'] for row in materials))
         card = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]))
         self.assertContains(card, 'Расхождение источников')

@@ -186,3 +186,60 @@ class DocumentComponentAcceptanceTests(TestCase):
         self.assertIn("лимит вывода", str(error.exception))
         self.assertEqual(error.exception.usage["completion_tokens"], 8000)
         self.assertEqual(request.call_count, 1)
+
+
+class StagedCanonicalAcceptanceTests(TestCase):
+    setUp = DocumentComponentAcceptanceTests.setUp
+
+    @patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Unexpected model call'))
+    def test_verified_kit_facts_survive_storage_acceptance_card_and_route_projection(self, gateway):
+        from .document_enrichment import effective_item_requirements
+        from .calculation_v2_pipeline import build_commercial_items
+        from .models import TenderComputeJob
+        parent = self.parents[0]
+        parent.requirements = {'characteristics': [
+            {'name': 'Цвет', 'value': 'синий'}, {'name': 'Материал', 'value': 'металл'}]}
+        parent.save(update_fields=['requirements'])
+        engine = GatewayDocumentEnricher()
+        engine.stage_sources = {parent.pk: parent}
+        engine.baselines = {parent.pk: [{'id': index, **row} for index, row in enumerate(parent.requirements['characteristics'])]}
+        engine.document_lookup = {1: {'url': 'https://zakupki.gov.ru/components', 'evidence_text': '',
+            'tables': [{'rows': [['Материал', 'алюминий'], ['Масса', '20 г']]}]}}
+        goods = [{'key': f'{parent.pk}:{index}', 'source_id': parent.pk, 'kind': 'kit', 'name': name,
+            'unit': 'шт', 'quantity_per_parent': '1', 'parent_name': 'Набор', 'reason': 'Два самостоятельных товара',
+            'provenance': {'document_url': 'https://zakupki.gov.ru/components'}} for index, name in enumerate(('Блокнот', 'Ручка'))]
+        rows = [
+            {'key': goods[0]['key'], 'characteristics': [
+                {'name': 'Цвет', 'value': 'синий', 'resolution': 'new', 'baseline_refs': [], 'notification_refs': [0]},
+                {'name': 'Масса', 'value': '20 г', 'resolution': 'new', 'baseline_refs': [], 'doc_id': 1, 'quote': 'Масса | 20 г'}]},
+            {'key': goods[1]['key'], 'characteristics': [
+                {'name': 'Материал', 'value': 'алюминий', 'resolution': 'merge', 'reason': 'Документ уточняет металл',
+                 'baseline_refs': [], 'notification_refs': [1], 'doc_id': 1, 'quote': 'Материал | алюминий'}]}]
+        specifications = engine.validate_specifications(rows, goods)
+        engine.prepared_entries(goods, specifications)
+        proposals = enrich_suspicious_tender(self.tender, assess_quality(self.tender, self.parents), engine)['created']
+        self.assertEqual(len(proposals), 2)
+        for proposal in proposals:
+            proposal.refresh_from_db()
+            self.assertEqual(effective_item_requirements(proposal, strict=True), specifications[next(good['key'] for good in goods if good['name'] == proposal.original_text)])
+        url = reverse('tender_selection:detail', args=[self.tender.pk])
+        def check_card():
+            response = self.client.get(url)
+            notebook = next(item for item in response.context['display_items'] if item['name'] == 'Блокнот') if proposals[0].is_active else next(item for group in response.context['document_proposal_groups'] for item in group['items'] if item['name'] == 'Блокнот')
+            facts = notebook['characteristics']
+            self.assertFalse(any(part['added'] for row in facts if row['name'] == 'Цвет' for part in row['parts']))
+            self.assertTrue(all(part['added'] for row in facts if row['name'] == 'Масса' for part in row['parts']))
+            self.assertNotContains(response, 'Для объединения нужны')
+        check_card()
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        proposals[0].refresh_from_db()
+        check_card()
+        job = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-test', status='ready')
+        commercials = build_commercial_items(job)
+        for item in commercials:
+            source = item.source_items.first()
+            if source.pk in {proposal.pk for proposal in proposals}:
+                component = item.components.get(status='active')
+                self.assertEqual(component.requirements, effective_item_requirements(source, strict=True))
+        self.assertEqual(parent.quantity, 100)
+        self.assertEqual(self.tender.notification_raw, self.payload)

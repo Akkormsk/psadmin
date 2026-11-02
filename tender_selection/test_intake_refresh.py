@@ -23,7 +23,7 @@ class IntakeRefreshTests(TestCase):
         }]
         job.save()
         data = tender_refresh_status_for(self.user, self.tender.pk)
-        self.assertEqual(data['cost']['amount_rub'], '3.7743')
+        self.assertEqual(data['cost']['amount_rub'], '3.774303')
         self.assertIn('3,77', data['cost']['label'])
         self.assertNotIn('private partial', str(data))
         from tenders.assistant_tools import execute_tool

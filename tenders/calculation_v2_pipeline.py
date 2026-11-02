@@ -233,7 +233,8 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "unverified-single-source-conflict-v4"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v5"
+    SPECIFICATION_ASSEMBLY = "single-pass-v1"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
@@ -243,6 +244,7 @@ class GatewayDocumentEnricher:
         if not self.stage_documents or any(doc['reading_status'] != 'read' for doc in considered):
             raise ValueError('Документы ещё не прочитаны полностью; разбор не отправлен модели.')
         self.document_lookup = {index: doc for index, doc in enumerate(self.stage_documents, 1)}
+        self.baseline_sources = {source.pk: effective_item_requirements(source).get('characteristics', []) for source in sources}
         self.baselines = {source.pk: [{'id': i, 'name': fact['name'], 'value': fact['value']} for i, fact in enumerate(effective_item_requirements(source).get('characteristics', []))] for source in sources}
         self.shared_context = json.dumps({'notification': tender.notification_raw,
             'working_items': [{'source_id': source.pk, 'name': source.original_text, 'quantity': str(source.quantity), 'unit': source.unit, 'baseline_facts': self.baselines[source.pk]} for source in sources],
@@ -441,10 +443,27 @@ class GatewayDocumentEnricher:
             for raw in row['characteristics']:
                 if not isinstance(raw, dict):
                     raise ValueError('Некорректная характеристика ТЗ')
-                fact = dict(raw)
+                fact = {key: deepcopy(value) for key, value in raw.items() if key in {
+                    'name', 'value', 'resolution', 'baseline_refs', 'notification_refs', 'reason',
+                    'doc_id', 'quote', 'section', 'scope', 'document_value', 'document_facts'}}
                 if not str(fact.get('name') or '').strip() or fact.get('value') in (None, '', [], {}):
                     raise ValueError('В ТЗ получена пустая характеристика.')
                 mode = fact.get('resolution')
+                supplied_documents = fact.pop('document_facts', [])
+                if not isinstance(supplied_documents, list):
+                    raise ValueError('Некорректные основания характеристики.')
+                verified_documents = []
+                for supplied in supplied_documents:
+                    if not isinstance(supplied, dict):
+                        raise ValueError('Некорректное основание характеристики.')
+                    proof = dict(supplied)
+                    if proof.get('doc_id') is None:
+                        proof['doc_id'] = next((index for index, doc in self.document_lookup.items() if doc['url'] == proof.get('source_url')), None)
+                    proof['quote'] = proof.get('quote') or proof.get('evidence')
+                    evidence = self.stage_quote(proof)
+                    verified_documents.append({'value': supplied.get('value') or evidence['evidence'], '_source_provenance': evidence})
+                if verified_documents:
+                    fact['document_facts'] = verified_documents
                 refs = fact.pop('notification_refs', [])
                 if not isinstance(refs, list) or len(refs) != len(set(str(ref) for ref in refs)) or any(type(ref) is not int or ref < 0 or ref >= len(baseline) for ref in refs):
                     raise ValueError('Некорректные ссылки на характеристики извещения.')
@@ -453,25 +472,26 @@ class GatewayDocumentEnricher:
                 if refs and mode in {'keep', 'omit'}:
                     raise ValueError('Для фактов набора необходимо явное решение и название товара.')
                 if mode not in {'keep', 'omit'}:
-                    has_document = fact.get('doc_id') is not None and bool(str(fact.get('quote') or '').strip())
+                    has_primary_document = fact.get('doc_id') is not None and bool(str(fact.get('quote') or '').strip())
+                    has_document = has_primary_document or bool(verified_documents)
                     if not has_document and not refs:
                         raise ValueError('Характеристика не подтверждена ни извещением, ни документом.')
                     if has_document:
-                        evidence = self.stage_quote(fact)
+                        evidence = self.stage_quote(fact) if has_primary_document else verified_documents[0]['_source_provenance']
                         fact['source_url'] = evidence['document_url']
                         fact['_source_provenance'] = evidence
                         fact['page_or_section'] = evidence['page_or_section']
-                        if mode in {'merge', 'conflict'} and not fact.get('baseline_refs') and not refs and not fact.get('document_facts'):
+                        if mode in {'merge', 'conflict'} and not fact.get('baseline_refs') and not refs and len(verified_documents) + int(has_primary_document) == 1:
                             # One verified document supports a new fact, but not a merge
                             # or contradiction. Preserve the supported value without
                             # claiming evidence of a second, unspecified source.
                             fact['resolution'] = 'new'
                             if mode == 'conflict':
                                 fact['reason'] = (str(fact.get('reason') or '').strip() + ' · ') + 'Заявленное расхождение не подтверждено вторым источником.'
-                        elif mode in {'merge', 'conflict'}:
+                        elif mode in {'merge', 'conflict'} and has_primary_document:
                             fact['document_value'] = str(raw.get('document_value') or raw.get('quote') or '')
                     if refs:
-                        origin_facts = [baseline[ref] for ref in refs]
+                        origin_facts = [deepcopy(getattr(self, 'baseline_sources', {}).get(good['source_id'], baseline)[ref]) for ref in refs]
                         norm = lambda value: ' '.join(str(value).casefold().split())
                         if not has_document:
                             if len(origin_facts) != 1 or norm(fact['value']) != norm(origin_facts[0]['value']):
@@ -484,17 +504,15 @@ class GatewayDocumentEnricher:
                             if parent_key in assigned_notification and assigned_notification[parent_key] != key:
                                 raise ValueError('Один исходный факт набора отнесён к разным товарам.')
                             assigned_notification[parent_key] = key
-                        fact['source_facts'] = [{**deepcopy(source), 'source': 'notification'} for source in origin_facts]
-                        fact['source'] = 'combined' if has_document else 'notification'
+                        fact['_verified_source_facts'] = [{**source, 'source': source.get('source') or 'notification'} for source in origin_facts]
                         if not has_document:
-                            fact['_source_provenance'] = {'kind': 'notification', 'source_item_id': good['source_id'], 'fact_ids': refs}
+                            fact['_source_provenance'] = origin_facts[0].get('provenance') or {'kind': 'notification', 'source_item_id': good['source_id'], 'fact_ids': refs}
                 fact.pop('doc_id', None)
                 fact.pop('quote', None)
                 fact.pop('section', None)
                 facts.append(fact)
             result[key] = {'reconciled': True, 'keep_refs': row.get('keep_refs', []), 'characteristics': facts}
-            if good['kind'] != 'kit':
-                merge_item_requirements(effective_item_requirements(self.stage_sources[good['source_id']]), result[key], provenance=good['provenance'])
+            result[key] = merge_item_requirements({} if good['kind'] == 'kit' else effective_item_requirements(self.stage_sources[good['source_id']]), result[key], provenance=good.get('provenance'))
         if set(result) != set(expected):
             raise ValueError('ТЗ получено не для всех товаров.')
         return result
@@ -677,6 +695,10 @@ class GatewayDocumentEnricher:
                 rejections.append({"index": index, "reason": "invalid_name_or_source"}); continue
             confidence = _as_decimal(row.get("confidence"))
             requirements = row.get("requirements")
+            if isinstance(requirements, dict):
+                for fact in requirements.get("characteristics", []):
+                    if isinstance(fact, dict):
+                        fact.pop("_verified_source_facts", None)
             if isinstance(requirements, dict) and requirements.get("compiled_reconciliation"):
                 rejections.append({"index": index, "reason": "untrusted_compiled_reconciliation"}); continue
             relationship = str(row.get("relationship") or "").lower()
@@ -692,6 +714,7 @@ class GatewayDocumentEnricher:
                     if not isinstance(fact, dict):
                         continue
                     fact.pop("_source_provenance", None)
+                    fact.pop("_verified_source_facts", None)
                     document_facts = fact.get("document_facts") or []
                     if not isinstance(document_facts, list):
                         invalid_fact_source = True; break
@@ -1231,6 +1254,7 @@ def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
 
 def _component_conflicts(commercial: TenderCommercialItem) -> list[str]:
     values: dict[str, set[str]] = {}
+    explicit = set()
     for row in (_commercial_requirements(commercial.source_items.order_by("pk").first()).get("characteristics") or []):
         if not isinstance(row, dict):
             continue
@@ -1238,7 +1262,9 @@ def _component_conflicts(commercial: TenderCommercialItem) -> list[str]:
         value = row.get("value") if row.get("value") not in (None, "") else row.get("characteristicValue")
         if name and value not in (None, "", [], {}):
             values.setdefault(_normal(name), set()).add(_normal(str(value)))
-    return [name for name, choices in values.items() if len(choices) > 1]
+            if row.get("conflict"):
+                explicit.add(_normal(name))
+    return [name for name, choices in values.items() if len(choices) > 1 or name in explicit]
 
 
 QUESTION_KNOWN = "known"

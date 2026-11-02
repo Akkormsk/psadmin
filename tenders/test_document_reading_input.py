@@ -290,6 +290,25 @@ class StagedMultiSourceReconciliationTests(SimpleTestCase):
         self.assertEqual(result['7:1']['characteristics'][0]['source'], 'notification')
         self.assertNotIn('doc_id', result['7:0']['characteristics'][0])
 
+    def test_sources_survive_canonical_compilation_and_display(self):
+        from types import SimpleNamespace
+        from .document_enrichment import effective_item_requirements, characteristic_display
+        engine = self.make_engine()
+        goods = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'}]
+        for document in (False, True):
+            fact = {'name': 'Цвет уголков', 'value': 'золотой', 'resolution': 'new', 'baseline_refs': [], 'notification_refs': [0]}
+            if document:
+                fact.update(value='золотой и серебряный', resolution='merge', reason='Документ уточняет исходное значение', doc_id=1, quote='Цвет уголков | золотой и серебряный')
+            compiled = engine.validate_specifications([{'key': '7:0', 'characteristics': [fact]}], goods)['7:0']
+            source = SimpleNamespace(pk=1, source_type='document_proposal', metadata={'relationship': 'component'}, parent_id=None, requirements=compiled, provenance={})
+            canonical = effective_item_requirements(source, strict=True)
+            self.assertTrue(canonical['compiled_reconciliation'])
+            row = canonical['characteristics'][0]
+            self.assertEqual(row['source'], 'combined' if document else 'notification')
+            self.assertTrue(any(item['source'] == 'notification' for item in row['source_facts']))
+            self.assertEqual(any(part['added'] for part in characteristic_display(row)['parts']), document)
+            self.assertEqual(effective_item_requirements(source, strict=True), canonical)
+
     def test_no_unverified_changes_or_fact_leak_between_components(self):
         engine = self.make_engine()
         goods = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'},
@@ -318,7 +337,7 @@ class StagedMultiSourceReconciliationTests(SimpleTestCase):
         result = engine.validate_specifications(rows, good)
         self.assertEqual(result['7:0']['characteristics'][0]['source'], 'combined')
         self.assertEqual(result['7:0']['characteristics'][0]['source_facts'][0]['source'], 'notification')
-        self.assertEqual(result['7:0']['characteristics'][0]['source_url'], 'https://example.test/spec')
+        self.assertEqual(result['7:0']['characteristics'][0]['provenance']['document_url'], 'https://example.test/spec')
 
 
 
@@ -352,8 +371,8 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         }]}]
         result = self.engine.validate_specifications(rows, self.goods)
         actual = result["9:0"]["characteristics"][0]
-        self.assertEqual(actual["resolution"], "new")
-        self.assertEqual(actual["source_url"], "https://example.test/tz")
+        self.assertEqual(actual["source"], "document")
+        self.assertEqual(actual["provenance"]["document_url"], "https://example.test/tz")
         self.assertEqual(actual["value"], "металл")
         from .document_enrichment import merge_item_requirements
         saved = merge_item_requirements({"characteristics": []}, result["9:0"])
@@ -369,7 +388,7 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         }]}]
         result = self.engine.validate_specifications(rows, self.goods)
         actual = result["9:0"]["characteristics"][0]
-        self.assertEqual(actual["resolution"], "new")
+        self.assertEqual(actual["source"], "document")
         self.assertIn("не подтверждено вторым источником", actual["reason"])
         from .document_enrichment import merge_item_requirements
         saved = merge_item_requirements({"characteristics": []}, result["9:0"])
@@ -390,7 +409,9 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         result = self.engine.validate_specifications(rows, self.goods)
         from .document_enrichment import merge_item_requirements
         saved = merge_item_requirements({"characteristics": []}, result["9:0"])
-        self.assertEqual(len(saved["characteristics"]), 2)
+        self.assertEqual(len(saved["characteristics"]), 1)
+        self.assertIn("металл", saved["characteristics"][0]["value"])
+        self.assertIn("пластик", saved["characteristics"][0]["value"])
         self.assertTrue(all(fact["conflict"] for fact in saved["characteristics"]))
 
     def test_real_merge_preserves_baseline_and_combines(self):
@@ -408,7 +429,7 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
             "reason": "Документ уточняет покрытие",
         }]}]
         result = self.engine.validate_specifications(rows, self.goods)
-        self.assertEqual(result["9:0"]["characteristics"][0]["resolution"], "merge")
+        self.assertTrue(result["9:0"]["compiled_reconciliation"])
         from .document_enrichment import merge_item_requirements
         saved = merge_item_requirements(self.engine.stage_sources[9].requirements, result["9:0"])
         self.assertEqual(saved["characteristics"][0]["source"], "combined")

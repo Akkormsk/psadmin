@@ -180,6 +180,10 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
     base = baseline.get("characteristics", []) if isinstance(baseline, dict) else []
     def key(fact):
         return (str(fact.get("name", "")).strip(), json.dumps(fact.get("value"), ensure_ascii=False, sort_keys=True, default=str, allow_nan=False))
+    def origin(facts):
+        sources = {fact.get("source", "notification") for fact in facts}
+        return "combined" if "combined" in sources or {"notification", "document"} <= sources else "notification" if sources == {"notification"} else "document"
+
     result = deepcopy(proposal)
     rows = result.get("characteristics")
     if not isinstance(rows, list):
@@ -208,8 +212,8 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
             detail = "новая характеристика ошибочно ссылается на исходные факты" if mode == "new" else "для сохранения или исключения не указан исходный факт"
             raise ValueError(f"{title}: {detail}")
         facts = [deepcopy(base[index]) for index in refs]
-        if mode in {"merge", "conflict"} and not refs and len(row.get("document_facts") or []) < 2:
-            raise ValueError("Для объединения нужны исходные факты или несколько документов")
+        # Populated only by the source validator, never copied from model output.
+        facts.extend(deepcopy(row.get("_verified_source_facts") or []))
         reason = str(row.get("reason") or "").strip()
         if mode in {"merge", "conflict", "omit"} and not reason:
             raise ValueError("Для объединения, расхождения или исключения нужно объяснение")
@@ -232,7 +236,7 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
             document_facts = row.get("document_facts") or []
             if not isinstance(document_facts, list):
                 raise ValueError("Некорректные ссылки на документы")
-            if mode == "new" and len(document_facts) > 1:
+            if mode == "new" and len({key({"name": name, "value": fact.get("value")}) for fact in document_facts}) > 1:
                 raise ValueError("Для сведения нескольких источников нужно объяснение")
             for document_fact in document_facts:
                 if not isinstance(document_fact, dict) or document_fact.get("value") in (None, "", [], {}):
@@ -241,13 +245,13 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
             document_value = row.get("document_value")
             if document_value not in (None, "", [], {}):
                 facts.append({"name": name, "value": document_value, "source": "document", "provenance": deepcopy(fact_provenance)})
-            if mode == "new" and not document_facts and document_value in (None, "", [], {}):
+            if mode == "new" and not facts and not document_facts and document_value in (None, "", [], {}):
                 facts.append({"name": name, "value": value, "source": "document", "provenance": deepcopy(fact_provenance)})
             if mode == "merge" and len(facts) < 2:
                 raise ValueError("Для объединения нужны исходные сведения или дополнение из документа")
             if mode == "conflict" and len({key(fact) for fact in facts}) < 2:
                 raise ValueError("Для расхождения нужны разные исходные значения")
-            final = {"name": name, "value": value, "source": "combined" if refs else "document", "conflict": mode == "conflict", "provenance": deepcopy(fact_provenance)}
+            final = {"name": name, "value": value, "source": origin(facts), "conflict": mode == "conflict", "provenance": deepcopy(fact_provenance)}
         scope = row.get("scope", final.get("scope", "product"))
         if scope not in {"product", "completeness"}:
             raise ValueError("Неизвестная область характеристики")
@@ -257,16 +261,21 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
         output.append(final)
     if covered != set(range(len(base))):
         raise ValueError("Не все исходные факты учтены в итоговом описании")
-    unique = {}
+    unique, values = {}, {}
     for fact in output:
-        identity = key(fact)
-        if identity in unique:
-            unique[identity]["source_facts"].extend(fact["source_facts"])
+        attribute = (" ".join(str(fact["name"]).casefold().split()), fact.get("scope", "product"))
+        if attribute not in unique:
+            unique[attribute] = fact
+            values[attribute] = [fact["value"]]
             continue
-        for prior in unique.values():
-            if str(prior["name"]).strip().casefold() == str(fact["name"]).strip().casefold():
-                prior["conflict"] = fact["conflict"] = True
-        unique[identity] = fact
+        prior = unique[attribute]
+        prior["source_facts"].extend(fact["source_facts"])
+        prior["source"] = origin(prior["source_facts"])
+        if fact["value"] not in values[attribute]:
+            values[attribute].append(fact["value"])
+            prior["value"] = "; ".join(str(value) for value in values[attribute])
+            prior["conflict"] = True
+        prior["conflict"] = prior.get("conflict", False) or fact.get("conflict", False)
     result.update(characteristics=list(unique.values()), omitted_facts=omitted, compiled_reconciliation=True)
     return result
 
@@ -288,7 +297,7 @@ def characteristic_display(row, *, documents=None):
     facts = [{**fact, "document": (documents or {}).get((fact.get("provenance") or {}).get("document_url"))} for fact in facts]
     name = str(row.get("name") or row.get("characteristicName") or "")
     original_facts = [fact for fact in facts if fact.get("source") == "notification"]
-    unchanged = row.get("source") == "notification" or any(str(fact.get("name") or "") == name and str(fact.get("value") if fact.get("value") is not None else "") == value for fact in original_facts)
+    unchanged = row.get("source") == "notification" or any(" ".join(str(fact.get("value") if fact.get("value") is not None else "").casefold().split()) == " ".join(value.casefold().split()) for fact in original_facts)
     changed = not unchanged
     parts = [{"text": value, "added": changed}]
     removed_text = ""
