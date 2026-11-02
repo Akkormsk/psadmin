@@ -57,7 +57,7 @@ def inspect_card_routes(tender):
     def read(path, data=None):
         match = resolve(path)
         return match.func(request(path, data), *match.args, **match.kwargs)
-    with patch('tender_selection.views.notification_for', side_effect=AssertionError('Read-only snapshot fetched notification')), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Read-only card called model')):
+    with patch('tender_selection.views.notification_for', side_effect=AssertionError('Read-only snapshot fetched notification')), patch('tender_selection.views.extras_for', return_value=(tender.clarifications_raw or [], tender.complaints_raw or [])), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Read-only card called model')):
         response = read(reverse('tender_selection:detail', args=[tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'})
         links = html.fromstring(response.content).xpath('//*[@data-source-route]')
         ids = [int(node.get('data-route-source')) for node in links]
@@ -205,7 +205,7 @@ def collect_saved_status(number):
             'cost_rub': job.total_cost, 'contract': job.diagnostics.get('intake_contract'),
             'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version')} for name, row in stages.items()}})
     pending = list(TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False).values('original_text', 'quantity', 'metadata'))
-    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs,
+    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'rendered_card': inspect_card_routes(tender),
         'proposals': [{'name': row['original_text'], 'quantity': row['quantity'], 'incomplete': row['metadata'].get('analysis_incomplete')} for row in pending],
         'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id')} for key, value in source_route_snapshots(tender).items()}}
 
