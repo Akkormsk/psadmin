@@ -2069,6 +2069,13 @@ def _document_input_fingerprint(tender):
         "documents": list(DocumentPreview.objects.filter(url__in=urls).order_by("url").values("url", "html", "error", "kind"))})
 
 
+def _staged_input_fingerprint(tender, enricher):
+    from tenders.calculation_v2_pipeline import _fingerprint
+    return _fingerprint({'input': _document_input_fingerprint(tender), 'contract': enricher.STAGED_CONTRACT,
+        'assembly': enricher.SPECIFICATION_ASSEMBLY, 'model': enricher.model,
+        'thinking': enricher.thinking, 'effort': enricher.reasoning_effort})
+
+
 def _publish_intake(job):
     from tenders.gateway_budget import reconcile_intake_billing
     reconcile_intake_billing(job)
@@ -2093,13 +2100,13 @@ def _save_intake_proposals(job, result, *, incomplete):
 
 
 def _staged_document_analysis(job, enricher):
-    from tenders.calculation_v2_pipeline import _fingerprint, document_analysis_sources, assess_quality, enrich_suspicious_tender
+    from tenders.calculation_v2_pipeline import document_analysis_sources, assess_quality, enrich_suspicious_tender
     from .national_regime import document_item, resolve_item
     from .notification import parse_notification
     sources = list(document_analysis_sources(job.tender)[0].values())
     _refresh_phase(job, 'documents', 'Читаем документы…')
     prepared = enricher.prepare_stages(job.tender, sources, assess_quality(job.tender, sources)['documents'])
-    fingerprint = _fingerprint({'input': _document_input_fingerprint(job.tender), 'contract': enricher.STAGED_CONTRACT, 'assembly': enricher.SPECIFICATION_ASSEMBLY, 'model': enricher.model, 'thinking': enricher.thinking, 'effort': enricher.reasoning_effort})
+    fingerprint = _staged_input_fingerprint(job.tender, enricher)
     stages = job.diagnostics.setdefault('stages', {})
     stages['documents'] = {'state': 'complete', 'result': prepared, 'cost_rub': '0'}
     _publish_intake(job)
@@ -2355,12 +2362,12 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
     for parent_id in sorted(parents):
         decide_document_proposals(user, tender_id, parent_id, decision, schedule_routes=False)
     from tenders.models import TenderComputeJob
-    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, _fingerprint
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
     latest = TenderComputeJob.objects.filter(tender_id=tender_id).order_by('-pk').first()
     if latest and latest.diagnostics.get('intake_contract'):
         extractor = GatewayDocumentEnricher()
         latest.diagnostics['review_decision'] = {'decision': decision, 'actor_id': user.pk, 'proposal_ids': proposal_ids}
-        latest.diagnostics['staged_input_fingerprint'] = _fingerprint({'input': _document_input_fingerprint(latest.tender), 'contract': extractor.STAGED_CONTRACT, 'model': extractor.model, 'thinking': extractor.thinking, 'effort': extractor.reasoning_effort})
+        latest.diagnostics['staged_input_fingerprint'] = _staged_input_fingerprint(latest.tender, extractor)
         latest.save(update_fields=['diagnostics', 'updated_at'])
     if decision == "accept":
         transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))

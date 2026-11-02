@@ -241,7 +241,7 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v5"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v6"
     SPECIFICATION_ASSEMBLY = "single-pass-v1"
 
     def prepare_stages(self, tender, sources, documents):
@@ -479,6 +479,7 @@ class GatewayDocumentEnricher:
                     raise ValueError('В ТЗ получена пустая характеристика.')
                 mode = fact.get('resolution')
                 supplied_documents = fact.pop('document_facts', [])
+                supplied_documents = [] if supplied_documents is None else supplied_documents
                 if not isinstance(supplied_documents, list):
                     raise ValueError('Некорректные основания характеристики.')
                 verified_documents = []
@@ -493,14 +494,22 @@ class GatewayDocumentEnricher:
                     verified_documents.append({'value': supplied.get('value') or evidence['evidence'], '_source_provenance': evidence})
                 if verified_documents:
                     fact['document_facts'] = verified_documents
-                baseline_refs = fact.setdefault('baseline_refs', [])
+                baseline_refs = fact.get('baseline_refs')
+                baseline_refs = [] if baseline_refs is None else baseline_refs
                 if not isinstance(baseline_refs, list) or any(type(ref) is not int or not 0 <= ref < len(baseline) for ref in baseline_refs):
                     raise ValueError('Некорректные ссылки на исходные характеристики.')
                 refs = fact.pop('notification_refs', [])
+                refs = [] if refs is None else refs
                 if not isinstance(refs, list) or len(refs) != len(set(str(ref) for ref in refs)) or any(type(ref) is not int or ref < 0 or ref >= len(baseline) for ref in refs):
                     raise ValueError('Некорректные ссылки на характеристики извещения.')
-                if refs and good['kind'] != 'kit':
-                    raise ValueError('Для обычного товара используй baseline_refs.')
+                # Both names refer to the same supplied baseline. Interpret them once,
+                # rather than rejecting a grounded fact because of the response spelling.
+                supplied_refs = list(dict.fromkeys(baseline_refs + refs))
+                if good['kind'] == 'kit':
+                    refs, baseline_refs = supplied_refs, []
+                else:
+                    baseline_refs, refs = supplied_refs, []
+                fact['baseline_refs'] = baseline_refs
                 if refs and mode in {'keep', 'omit'}:
                     raise ValueError('Для фактов набора необходимо явное решение и название товара.')
                 if mode not in {'keep', 'omit'}:
@@ -515,6 +524,9 @@ class GatewayDocumentEnricher:
                             raise ValueError('Исходное значение изменено без подтверждения источником.')
                         fact['resolution'] = 'keep'
                         fact['_verified_label'] = True
+                    if mode == 'new' and has_document and (baseline_refs or refs):
+                        mode = fact['resolution'] = 'merge'
+                        fact['reason'] = fact.get('reason') or 'Документ уточняет исходные сведения.'
                     if has_document:
                         evidence = self.stage_quote(fact) if has_primary_document else verified_documents[0]['_source_provenance']
                         fact['source_url'] = evidence['document_url']
@@ -550,7 +562,12 @@ class GatewayDocumentEnricher:
                 fact.pop('quote', None)
                 fact.pop('section', None)
                 facts.append(fact)
-            result[key] = {'reconciled': True, 'keep_refs': row.get('keep_refs', []), 'characteristics': facts}
+            explicit_refs = {ref for fact in facts for ref in fact.get('baseline_refs', [])}
+            keep_refs = row.get('keep_refs')
+            keep_refs = [] if keep_refs is None else keep_refs
+            if not isinstance(keep_refs, list) or any(type(ref) is not int or not 0 <= ref < len(baseline) for ref in keep_refs):
+                raise ValueError('Некорректные ссылки на сохраняемые характеристики.')
+            result[key] = {'reconciled': True, 'keep_refs': [ref for ref in keep_refs if ref not in explicit_refs], 'characteristics': facts}
             result[key] = merge_item_requirements({} if good['kind'] == 'kit' else effective_item_requirements(self.stage_sources[good['source_id']]), result[key], provenance=good.get('provenance'))
         if set(result) != set(expected):
             raise ValueError('ТЗ получено не для всех товаров.')

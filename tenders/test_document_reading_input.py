@@ -464,6 +464,18 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         with self.assertRaisesRegex(ValueError, 'не подтверждён'):
             self.engine.validate_specifications(rows, self.goods)
 
+    def test_reference_alias_and_redundant_keep_do_not_reject_a_grounded_update(self):
+        self.engine.baselines[9] = [{'id': 0, 'name': 'Материал', 'value': 'металл'}]
+        self.engine.stage_sources[9].requirements = {'characteristics': [{'name': 'Материал', 'value': 'металл'}]}
+        self.engine.document_lookup[1]['tables'] = [{'rows': [['Материал', 'алюминий']]}]
+        rows = [{'key': '9:0', 'keep_refs': [0], 'characteristics': [{
+            'name': 'Материал', 'value': 'алюминий', 'resolution': 'new', 'notification_refs': [0],
+            'doc_id': 1, 'quote': 'Материал | алюминий'}]}]
+        result = self.engine.validate_specifications(rows, self.goods)['9:0']
+        self.assertEqual(len(result['characteristics']), 1)
+        self.assertEqual(result['characteristics'][0]['source'], 'combined')
+        self.assertEqual({fact['value'] for fact in result['characteristics'][0]['source_facts']}, {'металл', 'Материал | алюминий'})
+
     def test_unsupported_single_source_is_still_rejected(self):
         rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
             "name": "Материал основания", "value": "латунь",

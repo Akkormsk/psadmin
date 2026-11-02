@@ -193,6 +193,7 @@ class StagedCanonicalAcceptanceTests(TestCase):
 
     @patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Unexpected model call'))
     def test_verified_kit_facts_survive_storage_acceptance_card_and_route_projection(self, gateway):
+        from tender_selection.services import decide_all_document_proposals, _staged_document_analysis
         from .document_enrichment import effective_item_requirements
         from .calculation_v2_pipeline import build_commercial_items
         from .models import TenderComputeJob
@@ -231,7 +232,10 @@ class StagedCanonicalAcceptanceTests(TestCase):
             self.assertTrue(all(part['added'] for row in facts if row['name'] == 'Масса' for part in row['parts']))
             self.assertNotContains(response, 'Для объединения нужны')
         check_card()
-        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        completed = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-test', status='needs_review',
+            completed_at=timezone.now(), diagnostics={'intake_contract': engine.STAGED_CONTRACT, 'enrichment_state': 'needs_review',
+            'stages': {name: {'state': 'complete', 'result': []} for name in ('structure', 'national_regime', 'tz')}})
+        decide_all_document_proposals(self.admin, self.tender.pk, 'accept', [item.pk for item in proposals])
         proposals[0].refresh_from_db()
         check_card()
         job = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-test', status='ready')
@@ -243,3 +247,7 @@ class StagedCanonicalAcceptanceTests(TestCase):
                 self.assertEqual(component.requirements, effective_item_requirements(source, strict=True))
         self.assertEqual(parent.quantity, 100)
         self.assertEqual(self.tender.notification_raw, self.payload)
+        reused_job = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-repeat', status='ready')
+        with patch('tender_selection.services.documents_html'), patch.object(GatewayDocumentEnricher, 'ask_stage', side_effect=AssertionError('Accepted facts were reanalyzed')):
+            _staged_document_analysis(reused_job, GatewayDocumentEnricher())
+        self.assertEqual(reused_job.diagnostics['document_analysis_reused'], completed.pk)
