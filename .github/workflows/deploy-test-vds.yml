@@ -256,7 +256,7 @@ jobs:
             "$SSH_USER@$SSH_HOST" "cat /home/deploy/psadmin-test/.twin-version"
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER test-web python -" < scripts/inspect_tender_analysis.py
+            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER test-web python -u -" < scripts/inspect_tender_analysis.py
 
   refresh_estimates:
     if: github.event_name == 'workflow_dispatch' && inputs.refresh_estimates != '' && github.ref == 'refs/heads/feature/m3-agent-simple'

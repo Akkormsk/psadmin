@@ -193,7 +193,25 @@ def collect_report(number):
             'document_input_profile': document_input_profile(tender), 'card_route_check': {'skipped': 'Data-only audit avoids GET refresh side effects'}, 'saved_routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id')} for key, value in source_route_snapshots(tender).items()}, 'recent_jobs': [{key: row[key] for key in ('id', 'version', 'status', 'started_at', 'completed_at', 'total_cost', 'error')} | {'phase': row['diagnostics'].get('refresh'), 'stages': {key: {'state': value.get('state'), 'reused_from': value.get('reused_from')} for key, value in row['diagnostics'].get('stages', {}).items()}} for row in TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').values('id', 'version', 'status', 'started_at', 'completed_at', 'total_cost', 'error', 'diagnostics')[:8]], 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
+def collect_saved_status(number):
+    from tender_selection.models import Tender
+    from tenders.models import TenderComputeJob, TenderSourceItem
+    from tenders.calculation_v2_pipeline import source_route_snapshots
+    tender = Tender.objects.get(purchase_number=number)
+    jobs = []
+    for job in TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk')[:10]:
+        stages = job.diagnostics.get('stages', {})
+        jobs.append({'id': job.pk, 'status': job.status, 'completed_at': job.completed_at, 'error': job.error,
+            'cost_rub': job.total_cost, 'contract': job.diagnostics.get('intake_contract'),
+            'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version')} for name, row in stages.items()}})
+    pending = list(TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False).values('original_text', 'quantity', 'metadata'))
+    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs,
+        'proposals': [{'name': row['original_text'], 'quantity': row['quantity'], 'incomplete': row['metadata'].get('analysis_incomplete')} for row in pending],
+        'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id')} for key, value in source_route_snapshots(tender).items()}}
+
+
 def main():
+    print("INTAKE_AUDIT_STARTED", flush=True)
     import django
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
     django.setup()
@@ -206,7 +224,7 @@ def main():
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
-        print(json.dumps(collect_report(number), ensure_ascii=False, default=str))
+        print("INTAKE_AUDIT " + json.dumps(collect_saved_status(number), ensure_ascii=False, default=str), flush=True)
 
 
 if __name__ == '__main__':
