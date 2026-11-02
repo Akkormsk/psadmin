@@ -95,7 +95,7 @@ def document_input_profile(tender):
 def collect_report(number):
     from tender_selection.models import Tender
     from tender_selection.notification import parse_notification
-    from tenders.calculation_v2_pipeline import active_calculation_items
+    from tenders.calculation_v2_pipeline import active_calculation_items, source_route_snapshots
     from tenders.document_enrichment import effective_item_requirements, notification_origin, notification_quote_source
     from tenders.models import TenderComputeJob
 
@@ -190,7 +190,7 @@ def collect_report(number):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
     return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'national_regime_fields': national_fields, 'read_only': True, 'model_called': False, 'latest_job': latest,
-            'document_input_profile': document_input_profile(tender), 'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
+            'document_input_profile': document_input_profile(tender), 'card_route_check': {'skipped': 'Data-only audit avoids GET refresh side effects'}, 'saved_routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id')} for key, value in source_route_snapshots(tender).items()}, 'recent_jobs': [{key: row[key] for key in ('id', 'version', 'status', 'started_at', 'completed_at', 'total_cost', 'error')} | {'phase': row['diagnostics'].get('refresh'), 'stages': {key: {'state': value.get('state'), 'reused_from': value.get('reused_from')} for key, value in row['diagnostics'].get('stages', {}).items()}} for row in TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').values('id', 'version', 'status', 'started_at', 'completed_at', 'total_cost', 'error', 'diagnostics')[:8]], 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
 def main():
