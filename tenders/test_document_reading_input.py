@@ -484,7 +484,7 @@ class StagedResponseCacheTests(TestCase):
     def fingerprint(self):
         from .calculation_v2_pipeline import _fingerprint
         return _fingerprint({
-            'contract': self.engine.STAGED_CONTRACT, 'context': '{}',
+            'contract': self.engine.STAGED_CONTRACT, 'context': self.engine.shared_context,
             'task': 'Read TZ\n{"goods": []}', 'model': self.engine.model,
             'thinking': self.engine.thinking, 'effort': self.engine.reasoning_effort,
         })
@@ -520,3 +520,21 @@ class StagedResponseCacheTests(TestCase):
         self.assertEqual(metrics['state'], 'complete')
         self.assertEqual(metrics['reused_from'], complete.pk)
         gateway.assert_not_called()
+
+    @patch('tenders.services._ai_gateway_json')
+    def test_next_stage_budget_uses_measured_input_even_after_a_cached_repeat(self, gateway):
+        from decimal import Decimal
+        self.engine.shared_context = 'x' * 200000
+        self.engine.max_cost_rub = Decimal('2')
+        measured = self.create_job(state='complete', rows=[])
+        measured.diagnostics['stages']['tz']['usage'] = {'prompt_tokens': 10000}
+        measured.save(update_fields=['diagnostics'])
+        self.create_job(state='complete', rows=[])
+        current = self.create_job()
+        self.engine.ask_stage(current, 'tz', 'Read TZ', {'goods': []}, output_tokens=500)
+        gateway.assert_not_called()
+        gateway.return_value = ({'items': []}, {'prompt_tokens': 10020, 'completion_tokens': 10})
+        _, metrics = self.engine.ask_stage(current, 'next', 'Next stage', {'goods': []}, output_tokens=500)
+        self.assertEqual(gateway.call_count, 1)
+        self.assertLess(Decimal(metrics['reserved_cost_rub']), self.engine.max_cost_rub)
+        self.assertLessEqual(Decimal(str(self.engine.cost_rub)), self.engine.max_cost_rub)

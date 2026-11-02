@@ -144,13 +144,21 @@ class GatewayBatchRouter:
         self.cost_rub = 0.0
         self.diagnostics = {}
 
+    @staticmethod
+    def _requirements_payload(requirements):
+        if not isinstance(requirements.get('characteristics'), list):
+            return requirements
+        return {'characteristics': [{key: value for key, value in row.items() if key in {'name', 'value', 'scope', 'conflict'}}
+                                    for row in requirements['characteristics']],
+                'owner_answers': requirements.get('owner_answers', [])}
+
     def route(self, *, tender, items, processes, knowledge):
         from .gateway_budget import spend_rub, intake_spend_rub
         from .services import _ai_gateway_json
         request_started = timezone.now().isoformat()
         payload = {
             "tender": {"id": tender.pk, "title": tender.title, "subject": tender.object_info},
-            "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": item.requirements} for item in items],
+            "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": self._requirements_payload(item.requirements)} for item in items],
         }
         shared_context = json.dumps({"processes": _route_processes(processes), "knowledge": knowledge}, ensure_ascii=False, default=str)
         prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string]}]}. Ask only for material uncertainty. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
@@ -238,6 +246,7 @@ class GatewayDocumentEnricher:
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
+        self._context_token_bound = None
         documents_html(tender, [doc for doc in documents if doc.get('url')], timeout=5, archive_timeout=5, direct_timeout=5)
         self.stage_sources = {source.pk: source for source in sources}
         self.stage_documents, considered = self._bounded_documents(documents, compact=True)
@@ -251,6 +260,15 @@ class GatewayDocumentEnricher:
             'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes']} for index, doc in self.document_lookup.items()]}, ensure_ascii=False, default=str)
         return {'documents': considered, 'context_characters': len(self.shared_context), 'contract': self.STAGED_CONTRACT}
 
+    def _remember_context_usage(self, usage):
+        tokens = (usage or {}).get('prompt_tokens')
+        if type(tokens) is int and tokens > 0:
+            details = usage.get('prompt_tokens_details') or {}
+            cached = (usage.get('cache_read_input_tokens') or details.get('cached_tokens') or 0) + (usage.get('cache_creation_input_tokens') or details.get('cache_write_tokens') or 0)
+            # The full prior request bounds the unchanged prefix, including images.
+            bound = max(tokens, cached)
+            self._context_token_bound = min(getattr(self, '_context_token_bound', None) or bound, bound)
+
     def ask_stage(self, job, stage, instruction, task, *, output_tokens):
         from .services import _ai_gateway_json
         from .gateway_budget import spend_rub, intake_spend_rub
@@ -260,25 +278,34 @@ class GatewayDocumentEnricher:
             f'diagnostics__stages__{stage}__input_fingerprint': fingerprint,
             f'diagnostics__stages__{stage}__state__in': ['complete', 'failed'],
         }).exclude(pk=job.pk).order_by('-pk')
-        recoverable = None
+        recoverable, completed = None, None
         for cached in history:
             previous = cached.diagnostics['stages'][stage]
+            self._remember_context_usage(previous.get('usage'))
             rows = previous.get('result')
             if not isinstance(rows, list):
                 continue
             if previous.get('state') == 'complete':
-                return rows, {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': cached.pk,
-                    'result': rows, 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
+                completed = completed or (cached.pk, rows)
+                continue
             if previous.get('state') == 'failed' and previous.get('validation_version') != self.STAGED_VALIDATION_VERSION and recoverable is None:
                 recoverable = (cached.pk, rows)
+        if completed:
+            source_id, rows = completed
+            return rows, {'state': 'complete', 'input_fingerprint': fingerprint, 'reused_from': source_id,
+                'result': rows, 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
         if recoverable:
             source_id, rows = recoverable
             return rows, {'state': 'pending_validation', 'input_fingerprint': fingerprint, 'reused_from': source_id,
                 'result': rows, 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
         # Reserve the uncached cache-write price, not an assumed future cache hit.
-        reserve = spend_rub({'prompt_tokens': len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images), 'completion_tokens': output_tokens}, self.model)
+        context_bound = getattr(self, '_context_token_bound', None)
+        input_bound = (context_bound + len(prompt.encode('utf-8')) + 4096) if context_bound else len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images)
+        reserve = spend_rub({'prompt_tokens': input_bound, 'completion_tokens': output_tokens}, self.model)
         remaining = self.max_cost_rub - Decimal(str(self.cost_rub)) if self.max_cost_rub is not None else Decimal('10')
         if reserve is None or Decimal(str(reserve)) * Decimal('1.25') > remaining:
+            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'provider_call_happened': False,
+                'input_token_bound': input_bound, 'remaining_budget_rub': str(remaining), 'reserved_cost_rub': str(reserve)}
             raise ValueError('Следующий этап превышает оставшийся бюджет; запрос не отправлен.')
         started = time.monotonic()
         started_at = timezone.now().isoformat()
@@ -293,13 +320,15 @@ class GatewayDocumentEnricher:
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(intake_spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000)}
             raise
         amount = intake_spend_rub(usage, self.model)
+        self._remember_context_usage(usage)
         self.cost_rub += float(amount or 0)
         self.usage = {key: self.usage.get(key, 0) + usage.get(key, 0) for key in ('prompt_tokens', 'completion_tokens')}
         if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at, 'error': 'Не получен полный список результатов'}
             raise ValueError('Этап не вернул полный список результатов.')
         return raw['items'], {'state': 'pending_validation', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at,
-            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION, 'result': raw['items']}
+            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION,
+            'reserved_cost_rub': str(Decimal(str(reserve)) * Decimal('1.25')), 'input_token_bound': input_bound, 'result': raw['items']}
 
     def stage_quote(self, row, *, required=True):
         if isinstance(row.get('evidence'), list):
