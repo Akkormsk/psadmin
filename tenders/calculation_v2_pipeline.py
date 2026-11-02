@@ -696,7 +696,7 @@ class GatewayDocumentEnricher:
             confidence = _as_decimal(row.get("confidence"))
             requirements = row.get("requirements")
             if isinstance(requirements, dict):
-                for fact in requirements.get("characteristics", []):
+                for fact in requirements.get("characteristics") or []:
                     if isinstance(fact, dict):
                         fact.pop("_verified_source_facts", None)
             if isinstance(requirements, dict) and requirements.get("compiled_reconciliation"):

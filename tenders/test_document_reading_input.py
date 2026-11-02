@@ -434,6 +434,20 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         saved = merge_item_requirements(self.engine.stage_sources[9].requirements, result["9:0"])
         self.assertEqual(saved["characteristics"][0]["source"], "combined")
 
+    def test_every_additional_document_has_verified_evidence(self):
+        self.engine.document_lookup[2] = {'url': 'https://example.test/second', 'evidence_text': 'Покрытие матовое', 'tables': []}
+        fact = {'name': 'Материал основания', 'value': 'металл с матовым покрытием', 'resolution': 'merge',
+                'reason': 'Совместимые требования', 'baseline_refs': [], 'document_facts': [
+                    {'doc_id': 1, 'quote': 'Материал основания | металл', 'value': 'металл'},
+                    {'doc_id': 2, 'quote': 'Покрытие матовое', 'value': 'матовое покрытие'}]}
+        rows = [{'key': '9:0', 'characteristics': [fact]}]
+        canonical = self.engine.validate_specifications(rows, self.goods)['9:0']
+        proofs = canonical['characteristics'][0]['source_facts']
+        self.assertEqual({row['provenance']['document_url'] for row in proofs}, {'https://example.test/tz', 'https://example.test/second'})
+        fact['document_facts'][1]['quote'] = 'Покрытие глянцевое'
+        with self.assertRaisesRegex(ValueError, 'не подтверждён'):
+            self.engine.validate_specifications(rows, self.goods)
+
     def test_unsupported_single_source_is_still_rejected(self):
         rows = [{"key": "9:0", "keep_refs": [], "characteristics": [{
             "name": "Материал основания", "value": "латунь",
