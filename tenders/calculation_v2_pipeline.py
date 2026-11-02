@@ -464,6 +464,9 @@ class GatewayDocumentEnricher:
                     verified_documents.append({'value': supplied.get('value') or evidence['evidence'], '_source_provenance': evidence})
                 if verified_documents:
                     fact['document_facts'] = verified_documents
+                baseline_refs = fact.setdefault('baseline_refs', [])
+                if not isinstance(baseline_refs, list) or any(type(ref) is not int or not 0 <= ref < len(baseline) for ref in baseline_refs):
+                    raise ValueError('Некорректные ссылки на исходные характеристики.')
                 refs = fact.pop('notification_refs', [])
                 if not isinstance(refs, list) or len(refs) != len(set(str(ref) for ref in refs)) or any(type(ref) is not int or ref < 0 or ref >= len(baseline) for ref in refs):
                     raise ValueError('Некорректные ссылки на характеристики извещения.')
@@ -474,8 +477,15 @@ class GatewayDocumentEnricher:
                 if mode not in {'keep', 'omit'}:
                     has_primary_document = fact.get('doc_id') is not None and bool(str(fact.get('quote') or '').strip())
                     has_document = has_primary_document or bool(verified_documents)
-                    if not has_document and not refs:
+                    has_baseline = good['kind'] != 'kit' and bool(baseline_refs)
+                    if not has_document and not refs and not has_baseline:
                         raise ValueError('Характеристика не подтверждена ни извещением, ни документом.')
+                    if not has_document and has_baseline and len(baseline_refs) == 1:
+                        original = baseline[baseline_refs[0]]
+                        if ' '.join(str(fact['value']).casefold().split()) != ' '.join(str(original['value']).casefold().split()):
+                            raise ValueError('Исходное значение изменено без подтверждения источником.')
+                        fact['resolution'] = 'keep'
+                        fact['_verified_label'] = True
                     if has_document:
                         evidence = self.stage_quote(fact) if has_primary_document else verified_documents[0]['_source_provenance']
                         fact['source_url'] = evidence['document_url']
@@ -699,6 +709,7 @@ class GatewayDocumentEnricher:
                 for fact in requirements.get("characteristics") or []:
                     if isinstance(fact, dict):
                         fact.pop("_verified_source_facts", None)
+                        fact.pop("_verified_label", None)
             if isinstance(requirements, dict) and requirements.get("compiled_reconciliation"):
                 rejections.append({"index": index, "reason": "untrusted_compiled_reconciliation"}); continue
             relationship = str(row.get("relationship") or "").lower()
@@ -714,7 +725,6 @@ class GatewayDocumentEnricher:
                     if not isinstance(fact, dict):
                         continue
                     fact.pop("_source_provenance", None)
-                    fact.pop("_verified_source_facts", None)
                     document_facts = fact.get("document_facts") or []
                     if not isinstance(document_facts, list):
                         invalid_fact_source = True; break

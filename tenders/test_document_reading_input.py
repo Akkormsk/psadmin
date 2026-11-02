@@ -342,6 +342,22 @@ class StagedMultiSourceReconciliationTests(SimpleTestCase):
 
 
 class StagedSingleSourceSelectionTests(SimpleTestCase):
+    def test_readable_label_keeps_original_value_and_color_without_a_second_source(self):
+        from .document_enrichment import characteristic_display
+        self.engine.baselines[9] = [{'id': 0, 'name': 'Цвет корпуса изделия', 'value': 'синий'}]
+        self.engine.stage_sources[9].requirements = {'characteristics': [{'name': 'Цвет корпуса изделия', 'value': 'синий'}]}
+        rows = [{'key': '9:0', 'characteristics': [{
+            'name': 'Цвет корпуса', 'value': 'синий', 'resolution': 'merge',
+            'baseline_refs': [0], 'reason': 'Краткое название свойства'}]}]
+        canonical = self.engine.validate_specifications(rows, self.goods)['9:0']
+        fact = canonical['characteristics'][0]
+        self.assertEqual(fact['name'], 'Цвет корпуса')
+        self.assertEqual(fact['value'], 'синий')
+        self.assertFalse(characteristic_display(fact)['name_added'])
+        rows[0]['characteristics'][0]['value'] = 'красный'
+        with self.assertRaisesRegex(ValueError, 'без подтверждения'):
+            self.engine.validate_specifications(rows, self.goods)
+
     """A source-backed new fact must not require several documents."""
 
     def setUp(self):

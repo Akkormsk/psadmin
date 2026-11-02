@@ -228,9 +228,11 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
         if not name or value in (None, "", [], {}):
             raise ValueError("Итоговая характеристика не может быть пустой")
         if mode == "keep":
-            if len(facts) != 1 or key({"name": name, "value": value}) != key(facts[0]):
+            if len(facts) != 1 or (key({"name": facts[0]["name"] if row.get("_verified_label") else name, "value": value}) != key(facts[0])):
                 raise ValueError("Сохранённый факт должен совпадать с исходным")
             final = deepcopy(facts[0])
+            if row.get("_verified_label"):
+                final["name"] = name
         else:
             fact_provenance = row.get("_source_provenance") or provenance or {}
             document_facts = row.get("document_facts") or []

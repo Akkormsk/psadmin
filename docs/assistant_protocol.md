@@ -1905,3 +1905,5 @@ Confirmed distinction: prior long-model failure stopped documents before routes;
 Local validation before publication:55 targeted source/structure/intake/route checks PASS; stale precision assertion updated to match pre-existing exact tariff amount (3.774303, unchanged UI rounded label). Real Chromium over actual accepted Django fixture confirmed black original and blue additional facts, both source links and original group price retained. New downstream DB regression added to existing TEST release checks so raw-validator-only success cannot hide this boundary again. No new paid calls yet.
 
 Protocol restored immediately after a local script accidentally wrote test source into it while preparing the added regression; no intended historical deletion, business data or application code change.
+
+Follow-up before real acceptance: unchanged single-source values may use a clearer attribute label without pretending a second source exists; the validator resolves its known reference and preserves the original value/proof. Actual changed values still require another source. Local UI/compile checks retain source and color after this normalization.
