@@ -37,10 +37,11 @@ class OwnerInteractionAnswerTests(TestCase):
 
     def test_ajax_radio_answer_is_idempotent_and_does_not_redirect(self):
         url = reverse("tender_selection:owner_interaction_answer", args=[self.tender.pk, self.interaction.pk])
-        for _ in range(2):
+        for attempt in range(2):
             response = self.client.post(url, {"answer": "500"}, secure=True, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()['status'], 'resolved')
+            self.assertEqual(response.json()['changed'], attempt == 0)
         self.assertEqual(OwnerFeedbackEvent.objects.filter(interaction=self.interaction).count(), 1)
 
     def test_blank_answer_keeps_question_open(self):

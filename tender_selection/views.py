@@ -950,14 +950,14 @@ def owner_interaction_answer(request, pk, interaction_pk):
         return redirect(redirect_url)
     from .services import answer_tender_owner_question
     try:
-        answer_tender_owner_question(request.user, tender.pk, interaction.pk, answer)
+        result = answer_tender_owner_question(request.user, tender.pk, interaction.pk, answer)
     except ValueError as exc:
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"error": str(exc)}, status=400)
         messages.error(request, str(exc))
         return redirect(redirect_url)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"tender_id": tender.pk, "label": "Обновляем маршрут…", "status": "resolved"})
+        return JsonResponse({**result, "label": "Обновляем маршрут…" if result["changed"] else "Уже сохранено"})
     messages.success(request, "Ответ сохранён для этого тендера.")
     return redirect(redirect_url)
 

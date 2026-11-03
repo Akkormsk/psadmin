@@ -514,7 +514,7 @@
             status.textContent = 'Сохраняем выбор…';
             fetch(submitted.action, {method:'POST', body:payload, headers:{'X-Requested-With':'XMLHttpRequest'}})
               .then(async response => { if (response.redirected) throw new Error('Нужно войти заново.'); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось сохранить выбор.'); return data; })
-              .then(data => { status.textContent = 'Выбор сохранён. Обновляем маршрут…'; showAnalysisStarted(data); if (embedded) window.parent.postMessage({type:'ps-analysis-started', ...data}, location.origin); })
+              .then(data => { if (data.changed === false) { submitted.dataset.saving = ''; controls.forEach(node => node.disabled = false); status.textContent = 'Этот выбор уже сохранён.'; return; } status.textContent = 'Выбор сохранён. Обновляем маршрут…'; showAnalysisStarted(data); if (embedded) window.parent.postMessage({type:'ps-analysis-started', ...data}, location.origin); })
               .catch(error => { submitted.dataset.saving = ''; controls.forEach(node => node.disabled = false); status.textContent = error.message; });
             return;
           }

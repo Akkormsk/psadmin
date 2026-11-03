@@ -1930,7 +1930,7 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     optional_route_choice = bool(interaction.context.get("optional_route_choice")) and bool(interaction.compute_line_id)
     latest = OwnerFeedbackEvent.objects.filter(interaction=interaction).order_by("-pk").first()
     if interaction.status == "resolved" and latest and latest.raw_text == answer:
-        return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
+        return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved", "changed": False}
     if interaction.status != "open" and not (optional_route_choice and interaction.status in {"suggested", "resolved"}):
         raise ValueError("Вопрос уже закрыт; сохранённый ответ не изменён")
     options = interaction.possible_answers.get("options", []) if isinstance(interaction.possible_answers, dict) else []
@@ -1945,7 +1945,7 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     interaction.save(update_fields=["status", "answered_at"])
     if user.is_superuser and interaction.compute_line_id:
         transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))
-    return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
+    return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved", "changed": True}
 
 
 def _ensure_document_review_ready(tender):
