@@ -221,7 +221,7 @@ def collect_saved_status(number):
         stages = job.diagnostics.get('stages', {})
         jobs.append({'id': job.pk, 'status': job.status, 'completed_at': job.completed_at, 'error': job.error,
             'cost_rub': job.total_cost, 'contract': job.diagnostics.get('intake_contract'),
-            'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version')} for name, row in stages.items()}})
+            'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version', 'reserved_cost_rub', 'remaining_budget_rub', 'input_token_bound', 'usage')} for name, row in stages.items()}})
     mismatches = []
     latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
     if latest and latest.status == 'partial' and latest.diagnostics.get('stages', {}).get('tz', {}).get('result'):
