@@ -1945,3 +1945,6 @@ Read-only Actions41479064969 rendered the actual eight-item TEST card:HTTP200, e
 
 
 **CODE_ONLY — optional correction no-op feedback, 2026-11-03.** Same-current correction returns changed=false; shared AJAX keeps controls editable and shows already saved instead of waiting for a nonexistent rebuild. Targeted idempotent actual HTTP check verifies first change versus repeat. No model/cache identity or business data changes beyond existing executor audit semantics.
+
+
+**CODE_ONLY — separate source clarification from route correction, 2026-11-03.** Real saved snapshot revealed legacy source answers could be shown as execution method captions. Keep all prior answers in routing context, but only feedback on optional-route decisions supplies selected working route text. Ordinary source clarification never becomes a route-method selector or empty optional control; unused suggested controls are superseded without losing historical answers. Actual default execution alternatives remain unchanged. No contract bump/paid re-reading needed; current route cache can be revalidated. Focused regression added.

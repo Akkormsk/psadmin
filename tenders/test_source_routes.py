@@ -95,6 +95,17 @@ class SourceRouteTests(TestCase):
         self.run_route()
         self.assertEqual(self.router.route.call_count, 2)
 
+    def test_legacy_source_clarification_is_not_selected_as_an_execution_method(self):
+        from .models import OwnerFeedbackEvent
+        from .calculation_v2_pipeline import source_route_snapshots
+        question = OwnerInteraction.objects.create(tender=self.tender, source_item=self.source, status='resolved', question='Цвет?', context={'conflicts': ['Цвет']})
+        OwnerFeedbackEvent.objects.create(interaction=question, raw_text='Серебристый', scope='current_tender')
+        self.run_route()
+        snapshot = source_route_snapshots(self.tender)[self.source.pk]
+        self.assertIsNone(snapshot['interaction'])
+        self.assertEqual(ComponentRoutePlan.objects.get().metadata['selected_choice'], '')
+        self.assertEqual(self.router.route.call_args.kwargs['items'][0].requirements['owner_answers'][0]['answer'], 'Серебристый')
+
     def test_assumption_is_usable_without_answer_and_corrections_remain_editable(self):
         from django.contrib.auth import get_user_model
         from tender_selection.services import answer_tender_owner_question

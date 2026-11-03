@@ -119,7 +119,7 @@ def _route_owner_answer_map(sources):
     ids = set().union(*lineage.values()) if lineage else set()
     events = list(OwnerFeedbackEvent.objects.filter(interaction__source_item_id__in=ids, interaction__status="resolved").select_related("interaction").order_by("pk"))
     events = sorted({event.interaction_id: event for event in events}.values(), key=lambda event: event.pk)
-    return {source_id: [{"question": event.interaction.question, "answer": event.raw_text, "names": event.interaction.context.get("missing_requirement_names") or event.interaction.context.get("conflicts") or event.interaction.context.get("evidence_labels", [])}
+    return {source_id: [{"question": event.interaction.question, "answer": event.raw_text, **({"route_override": True} if event.interaction.context.get("optional_route_choice") else {}), "names": event.interaction.context.get("missing_requirement_names") or event.interaction.context.get("conflicts") or event.interaction.context.get("evidence_labels", [])}
                         for event in events if event.interaction.source_item_id in ancestors] for source_id, ancestors in lineage.items()}
 
 
@@ -1507,7 +1507,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
                 facts = _requirement_facts(item.requirements)
                 choices = tuple(dict.fromkeys(value for label, value in facts if any(_labels_match(label, conflict) for conflict in conflicts))) if len(conflicts) == 1 else ()
             provisional = bool(decision.process_ids) and needs_review
-            saved_choice = answers[item.source_item_id][-1]["answer"] if answers[item.source_item_id] else ""
+            saved_choice = next((answer["answer"] for answer in reversed(answers[item.source_item_id]) if answer.get("route_override")), "")
             selected_choice = saved_choice or (decision.selected_choice if decision.selected_choice in choices else "")
             assumption = (decision.rationale.get("reason") or decision.question or "Выбран наиболее вероятный способ выполнения по имеющимся данным.") if provisional else ""
             rationale = {**decision.rationale, "assumption": assumption, "source_conflicts": original_conflicts}
@@ -1529,7 +1529,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
             # Optional working assumptions live inside the route, never as blocking customer questions.
             OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").update(status="superseded")
             interaction = OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, context__optional_route_choice=True).exclude(status="superseded").order_by("-pk").first()
-            if provisional or saved_choice or interaction:
+            if provisional or saved_choice or (interaction and interaction.status == "resolved"):
                 values = {"compute_line": line, "question": "Рабочее решение для маршрута", "reason": assumption or effective.rationale.get("reason", ""), "confidence": effective.confidence,
                           "possible_answers": {"options": list(effective.choices)},
                           "context": {"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "optional_route_choice": True, "conflicts": original_conflicts, "evidence_state": evidence_state, "evidence_labels": evidence_labels, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names)}}
@@ -1542,6 +1542,9 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
                     interaction.save(update_fields=list(values))
                 else:
                     OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, status="suggested", **values)
+            elif interaction:
+                interaction.status = "superseded"
+                interaction.save(update_fields=["status"])
             effective_decisions.append(effective)
         return effective_decisions
 
