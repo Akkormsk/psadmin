@@ -1726,22 +1726,22 @@ def _gap_is_covered(gap, requirements):
     return any(gap_tokens & set(text.split()) for text in requirement_texts)
 
 
-def _collapse_requirements(rows):
-    """One row per characteristic. The same spec is often restated across
-    several ТЗ tables with tiny wording differences ("90 градусов" vs "90°",
-    a typo in the composition) — keep the fullest statement per label so the
-    panel is not a wall of near-duplicates."""
-    by_label, order = {}, []
+def _collapse_requirements(rows, *, aliases=None):
+    """Collapse only equivalent facts in the same scope; preserve distinct constraints."""
+    from .requirement_values import equivalent, unit_from_label
+    result = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
-        key = _normalized_item_name(row.get("label")) or f"_{len(order)}"
-        if key not in by_label:
-            by_label[key] = row
-            order.append(key)
-        elif len(_cell_text(row.get("value"))) > len(_cell_text(by_label[key].get("value"))):
-            by_label[key] = row
-    return [by_label[key] for key in order]
+        match = next((prior for prior in result
+            if _normalized_item_name(prior.get("label")) == _normalized_item_name(row.get("label"))
+            and prior.get("scope") == row.get("scope") and prior.get("source_type") == row.get("source_type")
+            and equivalent(prior.get("value"), row.get("value"), unit=unit_from_label(row.get("label")), aliases=aliases)), None)
+        if match is None:
+            result.append(row)
+        elif len(_cell_text(row.get("value"))) > len(_cell_text(match.get("value"))):
+            result[result.index(match)] = row
+    return result
 
 
 def _effective_requirement_rows(requirements):

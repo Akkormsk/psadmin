@@ -29,7 +29,6 @@ from urllib.parse import urlparse
 
 from django.conf import settings as django_settings
 from django.db.models import F
-from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 
 from .catalog import (
@@ -51,7 +50,7 @@ from .catalog import (
     _text_search_pool,
     _variant_size,
 )
-from .models import AttributeConceptHint, CascadeCache, CatalogProduct, CatalogSupplier, UnitAlias
+from .models import AttributeConceptHint, CascadeCache, CatalogProduct, CatalogSupplier
 from .cascade_settings import text_search_settings
 
 logger = logging.getLogger(__name__)
@@ -114,6 +113,11 @@ class Criterion:
                            # (обычная, неразделённая строка).
     source_type: str = ""  # manager_clarification — факт текущего заказа,
                             # который нельзя превращать в постоянный урок.
+
+    scope: str = ""
+    lower_closed: bool | None = None
+    upper_closed: bool | None = None
+    normalized_value: dict = field(default_factory=dict)
 
     def as_row(self) -> tuple[str, str]:
         return (self.label or self.concept, self.value or self.raw_value)
@@ -241,9 +245,6 @@ def _split_composite_numbers(value_text, name_text=""):
     return numbers, tail_unit
 
 
-_LENGTH_TO_MM = {"мм": Decimal(1), "mm": Decimal(1), "см": Decimal(10), "cm": Decimal(10), "м": Decimal(1000), "m": Decimal(1000)}
-
-
 def _length_mm(number, unit):
     """Число в мм, если unit — распознанная линейная единица (мм/см/м).
     Единственная конвертация величин, которую код себе позволяет: между
@@ -252,8 +253,9 @@ def _length_mm(number, unit):
     без домысливания не переводятся, см. docs, §10 п.8)."""
     if number is None:
         return None
-    factor = _LENGTH_TO_MM.get(_cell(unit).strip().lower())
-    return number * factor if factor is not None else None
+    from .requirement_values import interval
+    value = interval(number, number, unit=unit, aliases=_unit_aliases())
+    return value.lower if value.unit == 'length' else None
 
 
 # Единицы измерения, реально встречающиеся в каталоге. Один физический
@@ -270,55 +272,14 @@ def _length_mm(number, unit):
 # символы, и обе схлопывались в одну и ту же строку «г м» — критерий про
 # площадную плотность ткани мог совпасть с атрибутом про объёмную
 # плотность совершенно другого физического смысла.
-_UNIT_ALIAS_SEED = {
-    "г/м2": "г/м²", "г/м²": "г/м²", "гм2": "г/м²", "гм²": "г/м²", "г м2": "г/м²", "г м²": "г/м²",
-    "g/m2": "г/м²", "g/m²": "г/м²", "gsm": "г/м²",
-    "г/м3": "г/м³", "г/м³": "г/м³", "гм3": "г/м³", "гм³": "г/м³", "г м3": "г/м³", "г м³": "г/м³",
-    "g/m3": "г/м³", "g/m³": "г/м³",
-    "мм": "мм", "mm": "мм",
-    "см": "см", "cm": "см",
-    "мг": "мг", "mg": "мг",
-    "кг": "кг", "kg": "кг",
-    "мл": "мл", "ml": "мл",
-    "лм": "лм", "lm": "лм",
-    "кд": "кд", "cd": "кд",
-}
-
-# Кэш объединённого словаря (сид + таблица) в памяти процесса — не тот же
-# класс риска, что смысловой индекс каталога (docs, §10 п.7): здесь десятки
-# коротких строк на весь каталог, а не сотни МБ на 71 тыс. товаров, и кэш
-# сбрасывается сразу при изменении таблицы (сигнал ниже), а не по времени и
-# не растёт сам по себе — тот же паттерн, что уже используется в
-# gateway_budget (баланс/список моделей шлюза).
-_unit_alias_cache: dict = {"value": None}
-
-
-def _unit_aliases() -> dict:
-    if _unit_alias_cache["value"] is None:
-        merged = dict(_UNIT_ALIAS_SEED)
-        merged.update({row.spelling: row.canonical for row in UnitAlias.objects.all()})
-        _unit_alias_cache["value"] = merged
-    return _unit_alias_cache["value"]
-
-
-def _reset_unit_alias_cache(**kwargs) -> None:
-    _unit_alias_cache["value"] = None
-
-
-post_save.connect(_reset_unit_alias_cache, sender=UnitAlias, dispatch_uid="reset_unit_alias_cache_on_save")
-post_delete.connect(_reset_unit_alias_cache, sender=UnitAlias, dispatch_uid="reset_unit_alias_cache_on_delete")
-
+from .requirement_values import (_UNIT_ALIAS_SEED, _unit_alias_cache, _unit_aliases, _reset_unit_alias_cache, canonical_unit as _shared_unit)
 
 def _canonical_unit(unit: str) -> str:
     """Единица к каноническому виду: сначала точный словарь известных
     вариантов написания (сид + таблица UnitAlias, без потери «²»/«³»),
     иначе — обычная текстовая нормализация как раньше (не пытаемся
     угадывать то, чего нет в словаре)."""
-    raw = _cell(unit).strip().lower().replace(" ", "")
-    aliases = _unit_aliases()
-    if raw in aliases:
-        return aliases[raw]
-    return _norm_label(unit)
+    return _shared_unit(unit, _unit_aliases())
 
 
 def _units_compatible(required_unit: str, offered_unit: str) -> bool:
@@ -326,8 +287,10 @@ def _units_compatible(required_unit: str, offered_unit: str) -> bool:
     Обе заданы — должны совпасть после приведения к каноническому виду:
     перевода между РАЗНЫМИ единицами по-прежнему нет, только распознавание
     разных написаний одной и той же (см. _UNIT_ALIASES)."""
-    a, b = _canonical_unit(required_unit), _canonical_unit(offered_unit)
-    return not a or not b or a == b
+    from .requirement_values import interval
+    if not required_unit or not offered_unit:
+        return True  # only a permissive prefilter; final comparison returns unknown
+    return interval(unit=required_unit, aliases=_unit_aliases()).unit == interval(unit=offered_unit, aliases=_unit_aliases()).unit
 
 
 @lru_cache(maxsize=4096)
@@ -362,6 +325,11 @@ def _attribute_numeric_value(attributes, concept_tokens: set, required_unit: str
         number, unit = _attribute_number(_cell(attribute.get("value")))
         if number is None or not _units_compatible(required_unit, unit):
             continue
+        if required_unit and unit:
+            from .requirement_values import interval
+            offered = interval(number, number, unit=unit, aliases=_unit_aliases())
+            target = interval(1, 1, unit=required_unit, aliases=_unit_aliases())
+            number = offered.lower / target.lower
         matches.append((number, name, hinted))
     if not matches:
         return None, ""
@@ -654,7 +622,7 @@ class Cascade:
         # вызывая модель заново. Любая правка промпта/разбора шага 1 ОБЯЗАНА
         # поднимать эту версию, иначе результат невозможно будет проверить
         # без ручной чистки CascadeCache.
-        criteria_cache_key = f"criteria-v6|{self._tz_hash}|{model}"
+        criteria_cache_key = f"criteria-v7-shared-values|{self._tz_hash}|{model}"
         cached = _cache_get("criteria", criteria_cache_key) if use_cache else None
         if cached:
             self._load_step1(cached, rows)
@@ -666,7 +634,7 @@ class Cascade:
             return self.tz
 
         numbered = "\n".join(
-            f"{i}. {_cell(r.get('label'))}: {_cell(r.get('value'))}" for i, r in enumerate(rows, 1)
+            f"{i}. {_cell(r.get('label'))}: {_cell(r.get('value'))}" + (f" [область: {r['scope']}]" if r.get('scope') else "") for i, r in enumerate(rows, 1)
         )
         prompt = f"""Ты нормализуешь критерии ТЗ тендера для последующей проверки товара.
 
@@ -791,8 +759,26 @@ class Cascade:
                     "importance_reason": _cell(entry.get("importance_reason"))[:160],
                     "maps_to": maps_to,
                     "source_type": _cell(row.get("source_type"))[:40],
+                    "scope": _cell(row.get("scope"))[:40],
                 })
-        return {"criteria": criteria}
+        from .requirement_values import normalize, unit_from_label
+        base_units = {"length": "мм", "mass": "г", "volume": "мл", "area_density": "г/м²", "volume_density": "г/м³"}
+        for criterion in criteria:
+            source_row = next((row for row in rows if _cell(row.get('label')) == criterion['source_label'] and _cell(row.get('value'))[:500] == criterion['raw_value'] and _cell(row.get('scope')) == criterion.get('scope', '')), None)
+            if source_row and source_row.get('normalized_value'):
+                value = normalize(source_row['value'], unit=unit_from_label(source_row['label']), aliases=_unit_aliases())
+                if value.kind == 'numeric':
+                    criterion.update(num_min=str(value.lower) if value.lower is not None else None,
+                        num_max=str(value.upper) if value.upper is not None else None,
+                        lower_closed=value.lower_closed, upper_closed=value.upper_closed,
+                        unit=base_units.get(value.unit, value.unit), maps_to="",
+                        operator=("=" if value.lower == value.upper else (">=" if value.lower_closed else ">") if value.upper is None else ("<=" if value.upper_closed else "<") if value.lower is None else "range"))
+        from types import SimpleNamespace
+        from .requirement_values import criterion_value, VERSION
+        for entry in criteria:
+            view = SimpleNamespace(**{**entry, "num_min": _decimal(entry.get("num_min")), "num_max": _decimal(entry.get("num_max"))})
+            entry["normalized_value"] = criterion_value(view, aliases=_unit_aliases()).snapshot(_unit_aliases())
+        return {"criteria": criteria, "value_schema": VERSION}
 
     def _load_step1(self, payload, rows) -> None:
         explicit = {
@@ -830,6 +816,8 @@ class Cascade:
                 value=_cell(entry.get("value"))[:200],
                 unit=_cell(entry.get("unit"))[:24],
                 checked=checked,
+                scope=_cell(entry.get('scope')),
+                lower_closed=entry.get('lower_closed'), upper_closed=entry.get('upper_closed'),
                 axis=_cell(entry.get("axis")),
                 num_min=_decimal(entry.get("num_min")),
                 num_max=_decimal(entry.get("num_max")),
@@ -840,6 +828,9 @@ class Cascade:
                 maps_to=entry.get("maps_to") if entry.get("maps_to") in {"color", "material"} else "",
                 source_type=_cell(entry.get("source_type"))[:40],
             ))
+        from .requirement_values import criterion_value
+        for criterion in self.tz:
+            criterion.normalized_value = criterion_value(criterion, aliases=_unit_aliases()).snapshot(_unit_aliases())
         limit = max(0, min(100, int(self.step_settings.get("1", {}).get("max_active_requirements", 0) or 0)))
         if limit:
             # Разбиение строки ТЗ на несколько осей («40 х 50» → длина+ширина)
@@ -1237,15 +1228,16 @@ class Cascade:
             for crit in criteria:
                 value = self._axis_value(product, crit)
                 if value is not None:
-                    if crit.num_min is not None and value < crit.num_min * (1 - tolerance):
-                        ok = False
-                    if crit.num_max is not None and value > crit.num_max * (1 + tolerance):
+                    from .requirement_values import normalize, criterion_value, satisfies
+                    # This stage only rejects proven mismatches.
+                    if satisfies(normalize(value, unit=crit.unit, aliases=_unit_aliases()), criterion_value(crit, tolerance=tolerance, aliases=_unit_aliases())) is False:
                         ok = False
                 if crit.options and crit.num_min is None and crit.num_max is None:
                     label = _variant_size(product)
                     if label:
                         offered, required = {_normalized(label)}, {_normalized(o) for o in crit.options}
-                        satisfied = (offered >= required) if crit.axis_mode == "fulfill_set" else bool(offered & required)
+                        from .requirement_values import options_satisfy
+                        satisfied = options_satisfy(offered, required, mode=crit.axis_mode)
                         if not satisfied:
                             ok = False
             if ok:
@@ -1267,6 +1259,7 @@ class Cascade:
         return number
 
     def _serialize(self, face, skus) -> dict:
+        from .requirement_values import normalized_fact
         variants, variant_ids, sizes = [], [], []
         varying_attribute = _group_varying_attribute(skus)
         for product in sorted(skus, key=lambda p: p.effective_price or Decimal("Infinity")):
@@ -1333,7 +1326,7 @@ class Cascade:
             "variants": variants or list(_product_variants(face)),
             "description": _text(face.description, 800),
             "attributes": [
-                {"name": _text(v.get("name"), 100), "value": _text(v.get("value"), 250)}
+                normalized_fact({"name": _text(v.get("name"), 100), "value": _text(v.get("value"), 250)}, aliases=_unit_aliases())
                 for v in (face.attributes if isinstance(face.attributes, list) else [])
                 if isinstance(v, dict) and _text(v.get("name"), 100) and _text(v.get("value"), 250)
             ][:20],
@@ -1479,7 +1472,8 @@ class Cascade:
     def _verdict_cache_key(self, card_id):
         settings = self.step_settings.get("6", {})
         model = _selected_model(settings.get("model"), _AGENT_MODEL)
-        parts = []
+        from .requirement_values import VERSION, registry_signature
+        parts = [VERSION, registry_signature(_unit_aliases())]
         if settings.get("engine") == "jev":
             parts.append("jev-1.13.0")
         elif settings.get("engine") == "jev_agent":
@@ -1677,10 +1671,11 @@ class Cascade:
             for perm in itertools.permutations(numbers, len(bounds)):
                 ok_all = True
                 for (row_idx, num_min, num_max), value in zip(bounds, perm):
-                    ok = (
-                        (num_min is None or value >= num_min * (1 - tolerance))
-                        and (num_max is None or value <= num_max * (1 + tolerance))
-                    )
+                    from .requirement_values import interval, satisfies
+                    criterion = next(crit for index, crit in members if index == row_idx)
+                    low = num_min - abs(num_min) * tolerance if num_min is not None else None
+                    high = num_max + abs(num_max) * tolerance if num_max is not None else None
+                    ok = satisfies(interval(value, value), interval(low, high, lower_closed=criterion.operator != '>', upper_closed=criterion.operator != '<')) is True
                     ever_ok[row_idx] = ever_ok[row_idx] or ok
                     ok_all = ok_all and ok
                 if ok_all and satisfying is None:
@@ -1718,8 +1713,8 @@ class Cascade:
                 offered = {_normalized(v) for v in (card.get("sizes") or []) if _cell(v)}
                 required = {_normalized(v) for v in crit.options if _cell(v)}
                 if offered and required:
-                    fulfilled = offered >= required
-                    matches = fulfilled if crit.axis_mode == "fulfill_set" else bool(offered & required)
+                    from .requirement_values import options_satisfy
+                    matches = options_satisfy(offered, required, mode=crit.axis_mode)
                     reason = (
                         "есть весь размерный ряд" if matches and crit.axis_mode == "fulfill_set"
                         else ", ".join(sorted(offered & required)) if matches
@@ -1735,10 +1730,15 @@ class Cascade:
             )
             if number is None:
                 continue  # нет совпадающей характеристики — агенту, без гаданий
-            ok = (
-                (crit.num_min is None or number >= crit.num_min * (1 - tolerance))
-                and (crit.num_max is None or number <= crit.num_max * (1 + tolerance))
-            )
+            from .requirement_values import normalize, criterion_value, satisfies, unit_from_label
+            attribute = next((entry for entry in card.get("attributes", []) if _cell(entry.get("name")) == attr_name), None)
+            if attribute is None:
+                continue
+            offered = normalize(attribute.get("value"), unit=unit_from_label(attr_name), aliases=_unit_aliases())
+            required = criterion_value(crit, tolerance=tolerance, aliases=_unit_aliases())
+            ok = satisfies(offered, required)
+            if ok is None:
+                continue
             reason = f"{attr_name}: {number}" if attr_name else str(number)
             self._apply_cell(card, rows, row_idx, "y" if ok else "n", reason[:90], "code")
 
@@ -2175,11 +2175,16 @@ class Cascade:
 
         requirements = self.line.get("requirements")
         rows = _effective_requirement_rows(requirements) if isinstance(requirements, dict) else requirements
-        rows = _collapse_requirements(rows) if isinstance(rows, list) else []
-        return [
-            r for r in rows
-            if isinstance(r, dict) and _cell(r.get("label")) and _cell(r.get("value"))
-        ]
+        rows = _collapse_requirements(rows, aliases=_unit_aliases()) if isinstance(rows, list) else []
+        from .requirement_values import normalize, unit_from_label
+        result = []
+        for row in rows:
+            if not isinstance(row, dict) or not _cell(row.get('label')) or not _cell(row.get('value')):
+                continue
+            row = dict(row)
+            row['normalized_value'] = normalize(row['value'], unit=unit_from_label(row['label']), aliases=_unit_aliases()).snapshot(_unit_aliases())
+            result.append(row)
+        return result
 
     def _pull_lessons(self) -> None:
         instructions = [

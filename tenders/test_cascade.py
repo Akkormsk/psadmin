@@ -145,7 +145,8 @@ class CascadeStep1Tests(TestCase):
         ])
         result = _run(gw, _line(rows=rows))
         self.assertEqual([c.concept for c in result.tz], ["интерфейс", "ёмкость памяти"])
-        self.assertEqual(result.tz[1].num_min, Decimal("32768"))
+        self.assertEqual(result.tz[1].num_min, Decimal("32"))
+        self.assertEqual(result.tz[1].unit, "гб")
         self.assertEqual(result.tz[1].axis, "capacity")
         self.assertEqual(gw.calls["step1"], 1)
         self.assertTrue(CascadeCache.objects.filter(kind="criteria").exists())
@@ -705,6 +706,23 @@ class CascadeGenericNumericAttributeTests(TestCase):
                 )
         self.assertEqual(tokens.call_count, 1)
         self.assertEqual(numbers.call_count, 1)
+
+    def test_shared_numeric_core_converts_units_and_preserves_open_boundaries(self):
+        _product('Ткань', external_id='P1', attributes=[{'name': 'Плотность', 'value': '0.4 кг/м²'}])
+        criterion = [{'n': 1, 'concept': 'плотность', 'operator': '>', 'value': '380 г/м²', 'unit': 'г/м²', 'num_min': 380, 'importance': 90}]
+        gw = _Gateway(queries=['ткань'], criteria=criterion, grid=[])
+        result = _run(gw, _line(name='Ткань', rows=[{'label': 'Плотность', 'value': 'более 380 г/м²'}]))
+        self.assertEqual(result.candidates[0]['matrix'][0]['source'], 'code')
+        self.assertEqual(result.candidates[0]['mismatch_count'], 0)
+        self.assertEqual(gw.calls['step6'], 0)
+
+    def test_shared_numeric_core_leaves_overlapping_ranges_unconfirmed(self):
+        _product('Ткань', external_id='P1', attributes=[{'name': 'Плотность', 'value': '350-450 г/м²'}])
+        criterion = [{'n': 1, 'concept': 'плотность', 'operator': '>=', 'value': '380 г/м²', 'unit': 'г/м²', 'num_min': 380, 'importance': 90}]
+        gw = _Gateway(queries=['ткань'], criteria=criterion, grid=[])
+        result = _run(gw, _line(name='Ткань', rows=[{'label': 'Плотность', 'value': 'не менее 380 г/м²'}]))
+        self.assertNotEqual(result.candidates[0]['matrix'][0]['source'], 'code')
+        self.assertGreater(gw.calls['step6'], 0)
 
     def test_matching_attribute_name_is_resolved_by_code(self):
         _product("Бумага офисная", external_id="P1",

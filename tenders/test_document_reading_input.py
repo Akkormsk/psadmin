@@ -262,6 +262,22 @@ class StagedTableEvidenceTests(SimpleTestCase):
 
 
 class StagedMultiSourceReconciliationTests(SimpleTestCase):
+    def test_shared_value_equivalence_preserves_original_source_and_rejects_changed_bounds(self):
+        engine = self.make_engine()
+        fact = {'name': 'Плотность, г/м2', 'value': 'не менее 380'}
+        engine.baselines = {7: [{'id': 0, **fact}]}
+        from types import SimpleNamespace
+        engine.stage_sources[7] = SimpleNamespace(pk=7, source_type='notification', parent_id=None, metadata={}, requirements={'characteristics': [fact]})
+        goods = [{'key': '7:0', 'source_id': 7, 'kind': 'finished'}]
+        row = {'name': fact['name'], 'value': '≥0,38 кг/м²', 'resolution': 'new', 'baseline_refs': [0]}
+        result = engine.validate_specifications([{'key': '7:0', 'characteristics': [row]}], goods)['7:0']['characteristics'][0]
+        self.assertEqual(result['value'], fact['value'])
+        self.assertEqual(result['normalized_value']['lower'], '380')
+        self.assertEqual(result['source'], 'notification')
+        for changed in ('>380 г/м²', '380 г/м²', '≥380 г/м³'):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                engine.validate_specifications([{'key': '7:0', 'characteristics': [{**row, 'value': changed}]}], goods)
+
     def test_compound_caption_copies_two_existing_properties_without_equating_them(self):
         engine = self.make_engine()
         engine.baselines = {7: [{'id': 0, 'name': 'Изделие', 'value': {

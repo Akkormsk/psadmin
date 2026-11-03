@@ -624,7 +624,8 @@ def _product_from_payload(supplier, raw, category_map, marker):
         return None
     category_ids = [str(value) for value in _list(raw.get("categories") or raw.get("categories_array"))]
     category_names = [category_map[value] for value in category_ids if value in category_map]
-    attributes = [item for item in _list(raw.get("attributes")) if isinstance(item, dict)][:100]
+    from .requirement_values import normalized_fact, _unit_aliases
+    attributes = [normalized_fact(item, aliases=_unit_aliases()) for item in _list(raw.get("attributes")) if isinstance(item, dict)][:100]
     materials = [_text(value, 150) for value in _list(raw.get("materials")) if _text(value, 150)][:30]
     colors = _color_names(raw.get("colors"))[:30]
     branding = [_text(value, 150) for value in _list(raw.get("branding")) if _text(value, 150)][:30]

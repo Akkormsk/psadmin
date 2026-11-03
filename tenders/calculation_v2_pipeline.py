@@ -244,13 +244,15 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v8"
-    SPECIFICATION_ASSEMBLY = "single-pass-v1"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v9-shared-values"
+    SPECIFICATION_ASSEMBLY = "shared-values-v1"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
         self._context_token_bound = None
         documents_html(tender, [doc for doc in documents if doc.get('url')], timeout=5, archive_timeout=5, direct_timeout=5)
+        from .requirement_values import _unit_aliases
+        self.unit_aliases = _unit_aliases()
         self.stage_sources = {source.pk: source for source in sources}
         self.stage_documents, considered = self._bounded_documents(documents, compact=True)
         if not self.stage_documents or any(doc['reading_status'] != 'read' for doc in considered):
@@ -541,8 +543,10 @@ class GatewayDocumentEnricher:
                         raise ValueError('Характеристика не подтверждена ни извещением, ни документом.')
                     if not has_document and has_baseline and len(baseline_refs) == 1:
                         original = baseline[baseline_refs[0]]
-                        if ' '.join(str(fact['value']).casefold().split()) != ' '.join(str(original['value']).casefold().split()):
+                        from .requirement_values import equivalent, unit_from_label
+                        if not equivalent(fact['value'], original['value'], unit=unit_from_label(original['name']), aliases=getattr(self, 'unit_aliases', None)):
                             raise ValueError('Исходное значение изменено без подтверждения источником.')
+                        fact['value'] = deepcopy(original['value'])
                         fact['resolution'] = 'keep'
                         fact['_verified_label'] = True
                     if mode == 'new' and has_document and (baseline_refs or refs):
@@ -569,7 +573,7 @@ class GatewayDocumentEnricher:
                             from .document_enrichment import project_source_fact
                             resolved = []
                             for ref, source in assignments:
-                                projected = project_source_fact(source, fact['name'], fact['value'], source_item_id=good['source_id'], reference=ref)
+                                projected = project_source_fact(source, fact['name'], fact['value'], source_item_id=good['source_id'], reference=ref, aliases=getattr(self, 'unit_aliases', None))
                                 if not projected:
                                     raise ValueError('Значение исходной характеристики изменено без подтверждения источником.')
                                 resolved.extend((ref, item) for item in projected)
@@ -609,6 +613,8 @@ class GatewayDocumentEnricher:
                 raise ValueError('Некорректные ссылки на сохраняемые характеристики.')
             result[key] = {'reconciled': True, 'keep_refs': [ref for ref in keep_refs if ref not in explicit_refs], 'characteristics': facts}
             result[key] = merge_item_requirements({} if good['kind'] == 'kit' else effective_item_requirements(self.stage_sources[good['source_id']]), result[key], provenance=good.get('provenance'))
+            from .requirement_values import normalized_fact
+            result[key]['characteristics'] = [normalized_fact(fact, aliases=getattr(self, 'unit_aliases', None)) for fact in result[key].get('characteristics', [])]
         if set(result) != set(expected):
             raise ValueError('ТЗ получено не для всех товаров.')
         return result
@@ -1034,12 +1040,17 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
     result = []
     for index, row in enumerate(_notification_rows(tender)):
         name = str(row.get("name") or "").strip()
-        requirements = {"characteristics": row.get("characteristics") or []}
-        payload = {"name": name, "quantity": row.get("quantity"), "unit": row.get("unit"), "requirements": requirements, "code": row.get("code") or ""}
+        from .requirement_values import normalized_fact, _unit_aliases
+        raw_requirements = {"characteristics": row.get("characteristics") or []}
+        requirements = {"characteristics": [normalized_fact(fact, aliases=_unit_aliases()) for fact in raw_requirements['characteristics']]}
+        payload = {"name": name, "quantity": row.get("quantity"), "unit": row.get("unit"), "requirements": raw_requirements, "code": row.get("code") or ""}
         source_key = _source_key(row, index)
         fingerprint = _fingerprint(payload)
         current = TenderSourceItem.objects.filter(tender=tender, source_key__startswith=source_key, is_active=True).order_by("-pk").first()
         if current and current.metadata.get("source_fingerprint") == fingerprint:
+            if current.requirements != requirements:
+                current.requirements = requirements
+                current.save(update_fields=["requirements"])
             result.append(current)
             continue
         if current:

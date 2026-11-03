@@ -92,7 +92,7 @@ def notification_origin(item, *, same_item=False):
     return None
 
 
-def project_source_fact(original, name, value, *, source_item_id, reference):
+def project_source_fact(original, name, value, *, source_item_id, reference, aliases=None):
     """Resolve an unchanged property inside an existing structured source fact."""
     from copy import deepcopy
     import unicodedata
@@ -101,7 +101,8 @@ def project_source_fact(original, name, value, *, source_item_id, reference):
         text = unicodedata.normalize('NFKC', str(item)).casefold()
         return ' '.join(text.split())
 
-    if normalized(original.get('value')) == normalized(value):
+    from .requirement_values import equivalent, unit_from_label
+    if equivalent(original.get('value'), value, unit=unit_from_label(original.get('name')), aliases=aliases):
         return [deepcopy(original)]
     if not isinstance(original.get('value'), dict):
         return []
@@ -125,7 +126,7 @@ def project_source_fact(original, name, value, *, source_item_id, reference):
         named = [(path, item) for path, item in candidates
                  if len(words := label(path[-1]).split()) >= 2
                  and (' ' + ' '.join(words[:2]) + ' ') in target]
-    matched = [(path, item) for path, item in (named or candidates) if normalized(item) == normalized(value)]
+    matched = [(path, item) for path, item in (named or candidates) if equivalent(item, value, unit=unit_from_label(path[-1]), aliases=aliases)]
     # Do not turn a wrong property/value pair into a reference to another field.
     if not matched or (not named and len(matched) != 1):
         return []
@@ -290,7 +291,8 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
         if not name or value in (None, "", [], {}):
             raise ValueError("Итоговая характеристика не может быть пустой")
         if mode == "keep":
-            if len(facts) != 1 or (key({"name": facts[0]["name"] if row.get("_verified_label") else name, "value": value}) != key(facts[0])):
+            from .requirement_values import equivalent, unit_from_label
+            if len(facts) != 1 or (not row.get("_verified_label") and name != facts[0]["name"]) or not equivalent(value, facts[0]["value"], unit=unit_from_label(facts[0]["name"])):
                 raise ValueError("Сохранённый факт должен совпадать с исходным")
             final = deepcopy(facts[0])
             if row.get("_verified_label"):
