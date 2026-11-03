@@ -92,6 +92,63 @@ def notification_origin(item, *, same_item=False):
     return None
 
 
+def project_source_fact(original, name, value, *, source_item_id, reference):
+    """Resolve an unchanged property inside an existing structured source fact."""
+    from copy import deepcopy
+    import unicodedata
+
+    def normalized(item):
+        text = unicodedata.normalize('NFKC', str(item)).casefold()
+        return ' '.join(text.split())
+
+    if normalized(original.get('value')) == normalized(value):
+        return [deepcopy(original)]
+    if not isinstance(original.get('value'), dict):
+        return []
+
+    def leaves(node, path=()):
+        if isinstance(node, dict):
+            for key, child in node.items():
+                yield from leaves(child, path + (key,))
+        else:
+            yield path, node
+
+    def label(item):
+        return re.sub(r'[\W_]+', ' ', normalized(item)).strip()
+
+    candidates = list(leaves(original['value']))
+    named = [(path, item) for path, item in candidates if label(name) in {
+        label(path[-1]), label(' '.join(map(str, path))),
+        label(str(original.get('name', '')) + ' ' + ' '.join(map(str, path)))}]
+    matched = [(path, item) for path, item in (named or candidates) if normalized(item) == normalized(value)]
+    # Do not turn a wrong property/value pair into a reference to another field.
+    if not matched or (not named and len(matched) != 1):
+        return []
+
+    def project(source, path):
+        node = source.get('value')
+        for key in path:
+            if not isinstance(node, dict) or key not in node:
+                return None
+            node = node[key]
+        projected = deepcopy(source)
+        projected.update(name=' · '.join(map(str, path)), value=deepcopy(node))
+        children = [item for child in source.get('source_facts', [])
+                    if (item := project(child, path)) is not None]
+        if children:
+            projected['source_facts'] = children
+            sources = {item.get('source') or 'notification' for item in children}
+            projected['source'] = 'combined' if 'combined' in sources or {'notification', 'document'} <= sources else next(iter(sources))
+        proof = projected['provenance'] = deepcopy(projected.get('provenance') or {})
+        proof.update(source_item_id=source_item_id, baseline_ref=reference,
+                     field_path=[str(original.get('name') or ''), *map(str, path)])
+        location = ' → '.join(proof['field_path'])
+        proof['page_or_section'] = ' · '.join(filter(None, [proof.get('page_or_section'), location]))
+        return projected
+
+    return [project(original, path) for path, _ in matched]
+
+
 def merge_item_requirements(baseline, additions, *, provenance=None):
     """Keep baseline facts; append new evidence, deduplicate facts and expose conflicts."""
     from copy import deepcopy

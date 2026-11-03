@@ -241,7 +241,7 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v6"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v7"
     SPECIFICATION_ASSEMBLY = "single-pass-v1"
 
     def prepare_stages(self, tender, sources, documents):
@@ -510,8 +510,10 @@ class GatewayDocumentEnricher:
                 else:
                     baseline_refs, refs = supplied_refs, []
                 fact['baseline_refs'] = baseline_refs
-                if refs and mode in {'keep', 'omit'}:
+                if refs and mode == 'omit':
                     raise ValueError('Для фактов набора необходимо явное решение и название товара.')
+                if refs and mode == 'keep':
+                    mode = fact['resolution'] = 'new'
                 if mode not in {'keep', 'omit'}:
                     has_primary_document = fact.get('doc_id') is not None and bool(str(fact.get('quote') or '').strip())
                     has_document = has_primary_document or bool(verified_documents)
@@ -543,15 +545,23 @@ class GatewayDocumentEnricher:
                             fact['document_value'] = str(raw.get('document_value') or raw.get('quote') or '')
                     if refs:
                         origin_facts = [deepcopy(getattr(self, 'baseline_sources', {}).get(good['source_id'], baseline)[ref]) for ref in refs]
-                        norm = lambda value: ' '.join(str(value).casefold().split())
+                        assignments = list(zip(refs, origin_facts))
                         if not has_document:
-                            if len(origin_facts) != 1 or norm(fact['value']) != norm(origin_facts[0]['value']):
-                                raise ValueError('Значение из извещения изменено без подтверждения документом.')
-                            # Model may choose a clearer name without changing the verified value.
-                            if mode != 'new':
-                                raise ValueError('Факт из извещения без документа должен иметь resolution=new.')
-                        for ref in refs:
-                            parent_key = (good['source_id'], ref)
+                            from .document_enrichment import project_source_fact
+                            resolved = []
+                            for ref, source in assignments:
+                                projected = project_source_fact(source, fact['name'], fact['value'], source_item_id=good['source_id'], reference=ref)
+                                if not projected:
+                                    raise ValueError('Значение исходной характеристики изменено без подтверждения источником.')
+                                resolved.extend((ref, item) for item in projected)
+                            assignments = resolved
+                            origin_facts = [item for _, item in resolved]
+                            fact['value'] = origin_facts[0]['value']
+                            if isinstance(baseline[refs[0]]['value'], dict):
+                                fact['name'] = origin_facts[0]['name']
+                            fact['resolution'] = 'new'
+                        for ref, source in assignments:
+                            parent_key = (good['source_id'], ref, tuple((source.get('provenance') or {}).get('field_path', [])))
                             if parent_key in assigned_notification and assigned_notification[parent_key] != key:
                                 raise ValueError('Один исходный факт набора отнесён к разным товарам.')
                             assigned_notification[parent_key] = key

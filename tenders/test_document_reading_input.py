@@ -261,6 +261,44 @@ class StagedTableEvidenceTests(SimpleTestCase):
 
 
 class StagedMultiSourceReconciliationTests(SimpleTestCase):
+    def test_nested_source_properties_are_copied_with_their_paths(self):
+        from .document_enrichment import characteristic_display
+        engine = self.make_engine()
+        engine.baselines = {7: [{'id': 0, 'name': 'Изделие', 'value': {
+            'Формат': 'А5', 'Количество страниц': 80, 'Параметры': {'Цвет': 'синий'}}}]}
+        goods = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'}]
+        facts = [{'name': name, 'value': value, 'resolution': 'new', 'notification_refs': [0]}
+                 for name, value in [('Формат', 'А5'), ('Количество страниц', '80'), ('Цвет', 'синий')]]
+        result = engine.validate_specifications([{'key': '7:0', 'characteristics': facts}], goods)['7:0']
+        self.assertEqual(len(result['characteristics']), 3)
+        for row in result['characteristics']:
+            self.assertEqual(row['source'], 'notification')
+            self.assertFalse(characteristic_display(row)['name_added'])
+            self.assertTrue(row['source_facts'][0]['provenance']['field_path'])
+        facts[0]['value'] = 'А4'
+        with self.assertRaisesRegex(ValueError, 'изменено'):
+            engine.validate_specifications([{'key': '7:0', 'characteristics': facts}], goods)
+
+    def test_nested_projection_keeps_each_original_source_and_rejects_cross_field_values(self):
+        from .document_enrichment import characteristic_display
+        engine = self.make_engine()
+        value = {'Формат': 'А5', 'Цвет': 'синий', 'Надпись': 'красный'}
+        engine.baselines = {7: [{'id': 0, 'name': 'Группа', 'value': value}]}
+        engine.baseline_sources = {7: [{'name': 'Группа', 'value': value, 'source': 'combined', 'source_facts': [
+            {'name': 'Группа', 'value': {'Формат': 'А5'}, 'source': 'notification'},
+            {'name': 'Группа', 'value': {'Цвет': 'синий', 'Надпись': 'красный'}, 'source': 'document',
+             'provenance': {'document_url': 'https://example.test/spec'}}]}]}
+        goods = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'}]
+        rows = [{'key': '7:0', 'characteristics': [
+            {'name': name, 'value': content, 'resolution': 'new', 'notification_refs': [0]}
+            for name, content in [('Формат', 'А5'), ('Цвет', 'синий')]]}]
+        result = engine.validate_specifications(rows, goods)['7:0']['characteristics']
+        self.assertEqual([row['source'] for row in result], ['notification', 'document'])
+        self.assertEqual([characteristic_display(row)['name_added'] for row in result], [False, True])
+        rows[0]['characteristics'][1]['value'] = 'красный'
+        with self.assertRaisesRegex(ValueError, 'изменено'):
+            engine.validate_specifications(rows, goods)
+
     def make_engine(self):
         engine = GatewayDocumentEnricher()
         engine.baselines = {7: [
