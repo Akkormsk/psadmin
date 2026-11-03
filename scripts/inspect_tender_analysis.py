@@ -235,6 +235,11 @@ def collect_saved_status(number):
         for row in latest.diagnostics['stages']['tz']['result']:
             source_id = int(row['key'].split(':')[0])
             for fact in row.get('characteristics', []):
+                grounded = bool((fact.get('doc_id') is not None and str(fact.get('quote') or '').strip()) or fact.get('document_facts') or fact.get('baseline_refs') or fact.get('notification_refs'))
+                if not grounded and fact.get('resolution') not in {'keep', 'omit'}:
+                    mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id]})
+                    if len(mismatches) >= 3: break
+                    continue
                 if fact.get('doc_id') is not None or fact.get('document_facts') or fact.get('resolution') in {'keep', 'omit'}:
                     continue
                 refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
