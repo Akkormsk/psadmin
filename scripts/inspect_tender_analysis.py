@@ -244,11 +244,20 @@ def collect_saved_status(number):
             engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
         from tender_selection.notification import _dig, _as_list
         raw_items = _as_list(_dig(tender.notification_raw.get('source', {}), 'notificationInfo', 'purchaseObjectsInfo', 'notDrugPurchaseObjectsInfo', 'purchaseObject', default=[]))
+        def named_source_nodes(node, name):
+            if isinstance(node, dict):
+                if node.get('name') == name:
+                    yield node
+                for child in node.values():
+                    yield from named_source_nodes(child, name)
+            elif isinstance(node, list):
+                for child in node:
+                    yield from named_source_nodes(child, name)
         for row in latest.diagnostics['stages']['tz']['result']:
             source_id = int(row['key'].split(':')[0])
             for fact in row.get('characteristics', []):
                 if fact.get('resolution') in {'keep', 'omit'} and not fact.get('baseline_refs') and not fact.get('notification_refs'):
-                    mismatches.append({'key': row['key'], 'missing_reference': fact,
+                    mismatches.append({'key': row['key'], 'missing_reference': fact, 'raw_source_facts': list(named_source_nodes(tender.notification_raw, fact.get('name'))),
                         'matching_source_facts': [source for source in engine.baselines[source_id] if source.get('name') == fact.get('name')]})
                 grounded = bool((fact.get('doc_id') is not None and str(fact.get('quote') or '').strip()) or fact.get('document_facts') or fact.get('baseline_refs') or fact.get('notification_refs'))
                 if not grounded and fact.get('resolution') not in {'keep', 'omit'}:
