@@ -1915,3 +1915,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — provisional-route inspection, 2026-11-03.** Read-only operator report includes existing saved assumption and optional working-choice snapshot to verify default selection controls without paid calls or mutations. Owner-approved automatic provisional route implementation is on TEST; this inspection does not deploy app code.
+
+
+**CODE_ONLY — missing-source TZ diagnosis, 2026-11-03.** Owner reports another completed model response rejected at source validation. Existing read-only inspection now reports rows lacking both document references and baseline indices with their actual provided baseline. No new model request, data mutation or app deployment. Cause not yet established.

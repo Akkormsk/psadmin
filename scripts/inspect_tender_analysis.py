@@ -238,6 +238,9 @@ def collect_saved_status(number):
                 if fact.get('doc_id') is not None or fact.get('document_facts') or fact.get('resolution') in {'keep', 'omit'}:
                     continue
                 refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
+                if not refs:
+                    mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id]})
+                    if len(mismatches) >= 3: break
                 original = [engine.baselines[source_id][ref] for ref in refs if type(ref) is int and 0 <= ref < len(engine.baselines[source_id])]
                 norm = lambda value: ' '.join(str(value).casefold().split())
                 if original and not all(project_source_fact(item, fact.get('name'), fact.get('value'), source_item_id=source_id, reference=item['id']) for item in original):
