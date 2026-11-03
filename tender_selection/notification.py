@@ -41,17 +41,35 @@ def _person(info: dict) -> str:
     return " ".join(p for p in parts if p)
 
 
+def _characteristic_value_text(value: dict) -> str:
+    if value.get("qualityDescription") not in (None, ""):
+        return str(value["qualityDescription"])
+    operators = {"greaterOrEqual": "не менее", "greater": "более", "lessOrEqual": "не более", "less": "менее", "equal": "равно"}
+    ranges = []
+    for bounds in _as_list(_dig(value, "rangeSet", "valueRange")):
+        if not isinstance(bounds, dict):
+            continue
+        parts = []
+        for key, default in (("min", "от"), ("max", "до")):
+            bound = bounds.get(key)
+            if bound is None or bound == "":
+                continue
+            notation = bounds.get(key + "MathNotation")
+            operator = operators.get(notation, str(notation)) if notation else default
+            parts.append(f"{operator} {bound}")
+        if parts:
+            ranges.append("; ".join(parts))
+    return " или ".join(ranges)
+
+
 def _characteristics(okpd_or_ktru: dict) -> list[dict]:
     chars = _dig(okpd_or_ktru, "characteristics", default={}) or {}
     out = []
     for group in ("characteristicsUsingReferenceInfo", "characteristicsUsingTextForm"):
         for ch in _as_list(chars.get(group)):
             name = ch.get("name", "")
-            value = _dig(ch, "values", "value", "qualityDescription", default="")
-            if not value:
-                value = ", ".join(
-                    v.get("qualityDescription", "") for v in _as_list(_dig(ch, "values", "value"))
-                )
+            values = [_characteristic_value_text(v) for v in _as_list(_dig(ch, "values", "value")) if isinstance(v, dict)]
+            value = ", ".join(text for text in values if text)
             if name or value:
                 out.append({"name": name, "value": value})
     return out

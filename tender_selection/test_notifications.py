@@ -37,6 +37,22 @@ class JointPurchaseNotificationTests(SimpleTestCase):
         self.assertEqual(card["money"]["app_guarantee_amount"], "1000")
 
 
+class NumericNotificationCharacteristicsTests(SimpleTestCase):
+    def test_ranges_and_text_values_are_kept_for_card_and_source_ingestion(self):
+        from .notification import _characteristics
+        classifier = {'characteristics': {'characteristicsUsingTextForm': [
+            {'name': 'Плотность, г/м2', 'values': {'value': {'rangeSet': {'valueRange': {'min': '380', 'minMathNotation': 'greaterOrEqual'}}}}},
+            {'name': 'Размер', 'values': {'value': {'rangeSet': {'valueRange': {'min': '0', 'minMathNotation': 'greater', 'max': '12.5', 'maxMathNotation': 'lessOrEqual'}}}}},
+            {'name': 'Цвет', 'values': {'value': [{'qualityDescription': 'Белый'}, {'qualityDescription': 'Серый'}]}},
+        ]}}
+        facts = _characteristics(classifier)
+        self.assertEqual(facts, [
+            {'name': 'Плотность, г/м2', 'value': 'не менее 380'},
+            {'name': 'Размер', 'value': 'более 0; не более 12.5'},
+            {'name': 'Цвет', 'value': 'Белый, Серый'},
+        ])
+
+
 class RetryPendingNotificationsTests(TestCase):
     def _tender(self, number, *, checked_ago=None, raw=None, closes_in=timedelta(days=5)):
         now = timezone.now()
