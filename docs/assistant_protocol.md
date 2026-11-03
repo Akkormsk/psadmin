@@ -1906,3 +1906,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — hidden-list diagnosis, 2026-11-03.** Extend existing read-only operator inspection to render actual archive and all-incoming handlers and report status/error without publishing row content. No app deployment, database writes or model calls. Owner reports touch-device opening failure; cause not established.
+
+
+**CODE_ONLY — tender location diagnosis, 2026-11-03.** Read-only inspection reports lifecycle state, deadline and existing-filter visibility plus direct detail path for the owner-selected tender. No business writes, paid analysis or app deploy. Checking manual take-to-work from hidden incoming.

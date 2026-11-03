@@ -206,6 +206,13 @@ def collect_saved_status(number):
     from tenders.models import TenderComputeJob, TenderSourceItem
     from tenders.calculation_v2_pipeline import source_route_snapshots
     tender = Tender.objects.get(purchase_number=number)
+    from django.urls import reverse
+    from django.utils import timezone
+    from tender_selection.models import FilterSettings
+    from tender_selection.services import visible_found_tenders
+    settings = FilterSettings.load()
+    visible, hidden, expired = visible_found_tenders(Tender.objects.filter(pk=tender.pk), min_price=settings.min_price, include_words=settings.include_words, exclude_words=settings.exclude_words)
+    print('TENDER_LOCATION ' + json.dumps({'pk': tender.pk, 'number': number, 'status': tender.status, 'review': tender.review, 'deadline': tender.collecting_finished_at, 'server_time': timezone.now(), 'archived_at': tender.archived_at, 'archived_from_stage': tender.archived_from_stage, 'filters_visible': bool(visible), 'filtered_count': hidden, 'expired_count': expired, 'detail_url': reverse('tender_selection:detail', args=[tender.pk]), 'estimates': list(tender.estimates.values('pk'))}, default=str), flush=True)
     jobs = []
     for job in TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk')[:10]:
         stages = job.diagnostics.get('stages', {})
