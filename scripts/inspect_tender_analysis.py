@@ -209,6 +209,7 @@ def collect_saved_status(number):
     if latest and latest.status == 'partial' and latest.diagnostics.get('stages', {}).get('tz', {}).get('result'):
         from unittest.mock import patch
         from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, document_analysis_sources, assess_quality
+        from tenders.document_enrichment import project_source_fact
         engine = GatewayDocumentEnricher(max_cost_rub='0')
         sources = list(document_analysis_sources(tender)[0].values())
         with patch('tender_selection.services.documents_html'):
@@ -221,7 +222,7 @@ def collect_saved_status(number):
                 refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
                 original = [engine.baselines[source_id][ref] for ref in refs if type(ref) is int and 0 <= ref < len(engine.baselines[source_id])]
                 norm = lambda value: ' '.join(str(value).casefold().split())
-                if original and not any(norm(item['value']) == norm(fact.get('value')) for item in original):
+                if original and not all(project_source_fact(item, fact.get('name'), fact.get('value'), source_item_id=source_id, reference=item['id']) for item in original):
                     mismatches.append({'key': row['key'], 'name': fact.get('name'), 'value': fact.get('value'), 'resolution': fact.get('resolution'), 'original': original})
                 if len(mismatches) >= 5:
                     break
