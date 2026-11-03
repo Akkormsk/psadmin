@@ -247,6 +247,9 @@ def collect_saved_status(number):
         for row in latest.diagnostics['stages']['tz']['result']:
             source_id = int(row['key'].split(':')[0])
             for fact in row.get('characteristics', []):
+                if fact.get('resolution') in {'keep', 'omit'} and not fact.get('baseline_refs') and not fact.get('notification_refs'):
+                    mismatches.append({'key': row['key'], 'missing_reference': fact,
+                        'matching_source_facts': [source for source in engine.baselines[source_id] if source.get('name') == fact.get('name')]})
                 grounded = bool((fact.get('doc_id') is not None and str(fact.get('quote') or '').strip()) or fact.get('document_facts') or fact.get('baseline_refs') or fact.get('notification_refs'))
                 if not grounded and fact.get('resolution') not in {'keep', 'omit'}:
                     mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id], 'raw_characteristics': [(raw_items[(engine.stage_sources[source_id].metadata or {}).get('notification_index', 0)].get('KTRU') or raw_items[(engine.stage_sources[source_id].metadata or {}).get('notification_index', 0)].get('OKPD2') or {}).get('characteristics', {})]})
