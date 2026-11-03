@@ -22,6 +22,7 @@ class Command(BaseCommand):
         parser.add_argument("--max-output-tokens", type=int, default=32000)
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--preflight", action="store_true")
+        parser.add_argument("--route-budget-rub", type=Decimal, help="Reserve part of the same total pilot budget for routes")
         parser.add_argument("--full-refresh", action="store_true", help="Verify the normal Update service and one cache-only repeat for this tender")
 
     def handle(self, *args, **options):
@@ -36,7 +37,7 @@ class Command(BaseCommand):
         if options["full_refresh"]:
             if not options["apply"] or options["preflight"]:
                 raise CommandError("Full refresh requires apply and cannot use preflight")
-            return self.verify_full_refresh(tender, budget)
+            return self.verify_full_refresh(tender, budget, route_budget=options["route_budget_rub"])
         if options["preflight"]:
             if options["apply"]:
                 raise CommandError("Preflight cannot be combined with apply")
@@ -147,7 +148,7 @@ class Command(BaseCommand):
                                           "relationship": item.metadata.get("relationship"), "quantity_per_parent": item.metadata.get("quantity_per_parent")}
                                          for item in TenderSourceItem.objects.filter(pk__in=job.diagnostics.get("proposal_ids", [])).select_related("parent")]}, ensure_ascii=False, default=str))
 
-    def verify_full_refresh(self, tender, budget):
+    def verify_full_refresh(self, tender, budget, *, route_budget=None):
         """Operator acceptance uses the exact UI/assistant executor, never a second pipeline."""
         import os
         import time
@@ -161,7 +162,9 @@ class Command(BaseCommand):
         user = get_user_model().objects.filter(is_superuser=True, is_active=True).order_by('pk').first()
         if not user:
             raise CommandError('No active administrator; nothing was called')
-        doc_limit = min(Decimal('10'), budget * Decimal('0.8'))
+        if route_budget is not None and (not route_budget.is_finite() or not Decimal('0') < route_budget < budget or route_budget > Decimal('2')):
+            raise CommandError('Route allocation must be positive, below total budget and at most 2 RUB')
+        doc_limit = min(Decimal('10'), budget - route_budget if route_budget is not None else budget * Decimal('0.8'))
         route_limit = min(Decimal('2'), budget - doc_limit)
         config = {'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
                   'CALCULATION_V2_ROUTE_MAX_COST_RUB': str(route_limit)}

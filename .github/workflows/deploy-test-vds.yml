@@ -35,6 +35,12 @@ on:
         default: "14"
         type: string
 
+      document_pilot_route_budget_rub:
+        description: "Optional route allocation within the same total pilot budget"
+        required: false
+        default: ""
+        type: string
+
       document_pilot_full_refresh:
         description: "Verify the normal Update service and a model-blocked cache repeat for exactly the pilot tender"
         required: false
@@ -120,6 +126,7 @@ jobs:
           DOCUMENT_PILOT_TENDER: ${{ inputs.document_pilot_tender || '' }}
           DOCUMENT_PILOT_CHECK_ONLY: ${{ inputs.document_pilot_check_only && '1' || '0' }}
           DOCUMENT_PILOT_FULL_REFRESH: ${{ inputs.document_pilot_full_refresh && '1' || '0' }}
+          DOCUMENT_PILOT_ROUTE_BUDGET_RUB: ${{ inputs.document_pilot_route_budget_rub || '' }}
           DOCUMENT_PILOT_BUDGET_RUB: ${{ inputs.document_pilot_budget_rub || '14' }}
         run: |
           set -euo pipefail
@@ -129,12 +136,13 @@ jobs:
           if [ -n "$DOCUMENT_PILOT_TENDER" ] && ! [[ "$DOCUMENT_PILOT_TENDER" =~ ^[0-9]{19}$ ]]; then
             echo "Invalid pilot purchase number" >&2; exit 2
           fi
+          if [ -n "$DOCUMENT_PILOT_ROUTE_BUDGET_RUB" ] && ! [[ "$DOCUMENT_PILOT_ROUTE_BUDGET_RUB" =~ ^[0-9]+([.][0-9]+)?$ ]]; then exit 1; fi
           if ! [[ "$DOCUMENT_PILOT_BUDGET_RUB" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
             echo "Invalid pilot budget" >&2; exit 2
           fi
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY' '$DOCUMENT_PILOT_FULL_REFRESH' '$DOCUMENT_PILOT_BUDGET_RUB' '$RESTORE_BOARD_TENDER'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY' '$DOCUMENT_PILOT_FULL_REFRESH' '$DOCUMENT_PILOT_BUDGET_RUB' '$RESTORE_BOARD_TENDER' '$DOCUMENT_PILOT_ROUTE_BUDGET_RUB'" <<'REMOTE'
           set -euo pipefail
 
           deploy_sha="$1"
@@ -143,6 +151,7 @@ jobs:
           pilot_check_only="${4:-0}"
           pilot_full_refresh="${5:-0}"
           pilot_budget="${6:-14}"
+          pilot_route_budget="${8:-}"
           restore_board_tender="${7:-}"
           root=/home/deploy
           app="$root/psadmin-test"
@@ -238,6 +247,7 @@ jobs:
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
             pilot_extra=()
             if [ "$pilot_full_refresh" = 1 ]; then pilot_extra=(--full-refresh); fi
+            if [ -n "$pilot_route_budget" ]; then pilot_extra+=(--route-budget-rub "$pilot_route_budget"); fi
             docker compose -f compose.test.yml exec -T test-web python manage.py prepare_tender_documents \
               --tender-number "$pilot_tender" --max-cost-rub "$pilot_budget" --max-output-tokens 32000 "$pilot_mode" "${pilot_extra[@]}" </dev/null
           fi
