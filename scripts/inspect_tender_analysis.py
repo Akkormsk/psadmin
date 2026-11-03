@@ -63,8 +63,9 @@ def inspect_card_routes(tender):
         ids = [int(node.get('data-route-source')) for node in links]
         statuses = [read(node.get('data-source-route')).status_code for node in links]
     collections = {}
-    for key, path, params in [('archive', reverse('tender_selection:archive'), {}), ('hidden', reverse('tender_selection:list'), {'view': 'list', 'all': '1'})]:
+    for key, path, params in [('hidden', reverse('tender_selection:list'), {'view': 'list', 'all': '1'})]:
         try:
+            print('COLLECTION_STARTED ' + key, flush=True)
             collection = read(path, params)
             collections[key] = {'status': collection.status_code, 'bytes': len(collection.content)}
         except Exception as exc:
