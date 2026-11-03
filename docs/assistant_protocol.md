@@ -1912,3 +1912,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — route answer diagnosis, 2026-11-03.** Inspect persisted question scopes and answer events for the selected tender to diagnose repeated clarification. No model calls or writes. Conversation153 audit separately confirms incorrect archived-status/incoming-view intersection and day-start instead of last-hour boundary; no assistant search fix claimed.
+
+
+**CODE_ONLY — provisional-route inspection, 2026-11-03.** Read-only operator report includes existing saved assumption and optional working-choice snapshot to verify default selection controls without paid calls or mutations. Owner-approved automatic provisional route implementation is on TEST; this inspection does not deploy app code.
