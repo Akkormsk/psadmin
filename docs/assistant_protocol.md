@@ -1918,3 +1918,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — missing-source TZ diagnosis, 2026-11-03.** Owner reports another completed model response rejected at source validation. Existing read-only inspection now reports rows lacking both document references and baseline indices with their actual provided baseline. No new model request, data mutation or app deployment. Cause not yet established.
+
+
+**CODE_ONLY — numeric original-source UI inspection, 2026-11-03.** Existing read-only actual card rendering verifies numeric source range rows are present and retain original black styling. Names are derived from parsed source facts, with no product-specific selector or mutation.

@@ -70,7 +70,17 @@ def inspect_card_routes(tender):
             collections[key] = {'status': collection.status_code, 'bytes': len(collection.content)}
         except Exception as exc:
             collections[key] = {'error_type': type(exc).__name__, 'error': str(exc)}
-    return {'collections': collections, 'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
+    from tender_selection.notification import parse_notification
+    tree = html.fromstring(response.content)
+    rendered_facts = tree.xpath('//ul[contains(concat(" ",normalize-space(@class)," ")," ts-chars ")]/li')
+    numeric_rows = []
+    for item in parse_notification(tender.notification_raw).get('items', []):
+        for fact in item.get('characteristics', []):
+            if not str(fact.get('value', '')).startswith(('не менее ', 'более ', 'не более ', 'менее ', 'от ', 'до ')):
+                continue
+            matching = [node for node in rendered_facts if ' '.join(node.itertext()).strip().startswith(fact['name'] + ':') and str(fact['value']) in ' '.join(node.itertext())]
+            numeric_rows.append({'name': fact['name'], 'value': fact['value'], 'rendered': bool(matching), 'original_black': any(not node.xpath('.//*[contains(@class,"ts-fact-added")]') for node in matching)})
+    return {'numeric_notification_rows': numeric_rows, 'collections': collections, 'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
 
 
 def document_input_profile(tender):
