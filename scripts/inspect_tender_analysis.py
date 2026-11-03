@@ -249,7 +249,7 @@ def collect_saved_status(number):
     pending = list(TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False).values('original_text', 'quantity', 'metadata'))
     return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'source_mismatches': mismatches, 'rendered_card': inspect_card_routes(tender),
         'proposals': [{'name': row['original_text'], 'quantity': row['quantity'], 'incomplete': row['metadata'].get('analysis_incomplete')} for row in pending],
-        'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id')} for key, value in source_route_snapshots(tender).items()}}
+        'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id'), 'assumption': value.get('assumption'), 'working_choice': value.get('interaction')} for key, value in source_route_snapshots(tender).items()}}
 
 
 def main():
