@@ -11,6 +11,12 @@ on:
         required: false
         type: string
 
+      restore_board_tender:
+        description: "Explicitly return one selected TEST tender to kanban for 168 hours, preserving EIS deadline and calculations"
+        required: false
+        default: ""
+        type: string
+
       document_pilot_tender:
         description: "Optional single-tender document pilot (purchase number); empty means no AI calls"
         required: false
@@ -110,12 +116,16 @@ jobs:
       - name: Activate test release and run twin
         shell: bash
         env:
+          RESTORE_BOARD_TENDER: ${{ inputs.restore_board_tender || '' }}
           DOCUMENT_PILOT_TENDER: ${{ inputs.document_pilot_tender || '' }}
           DOCUMENT_PILOT_CHECK_ONLY: ${{ inputs.document_pilot_check_only && '1' || '0' }}
           DOCUMENT_PILOT_FULL_REFRESH: ${{ inputs.document_pilot_full_refresh && '1' || '0' }}
           DOCUMENT_PILOT_BUDGET_RUB: ${{ inputs.document_pilot_budget_rub || '14' }}
         run: |
           set -euo pipefail
+          if [ -n "$RESTORE_BOARD_TENDER" ] && ! [[ "$RESTORE_BOARD_TENDER" =~ ^[0-9]{19}$ ]]; then
+            echo "Invalid board restore purchase number" >&2; exit 2
+          fi
           if [ -n "$DOCUMENT_PILOT_TENDER" ] && ! [[ "$DOCUMENT_PILOT_TENDER" =~ ^[0-9]{19}$ ]]; then
             echo "Invalid pilot purchase number" >&2; exit 2
           fi
@@ -124,7 +134,7 @@ jobs:
           fi
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY' '$DOCUMENT_PILOT_FULL_REFRESH' '$DOCUMENT_PILOT_BUDGET_RUB'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY' '$DOCUMENT_PILOT_FULL_REFRESH' '$DOCUMENT_PILOT_BUDGET_RUB' '$RESTORE_BOARD_TENDER'" <<'REMOTE'
           set -euo pipefail
 
           deploy_sha="$1"
@@ -133,6 +143,7 @@ jobs:
           pilot_check_only="${4:-0}"
           pilot_full_refresh="${5:-0}"
           pilot_budget="${6:-14}"
+          restore_board_tender="${7:-}"
           root=/home/deploy
           app="$root/psadmin-test"
           rollback_root="$root/psadmin-test-rollbacks"
@@ -216,6 +227,10 @@ jobs:
               "latest_job": latest_job,
           }, default=str))
           PY
+          if [ -n "$restore_board_tender" ]; then
+            docker compose -f compose.test.yml exec -T test-web python manage.py restore_tender_board \
+              --tender-number "$restore_board_tender" --keep-hours 168 --apply </dev/null
+          fi
           if [ -n "$pilot_tender" ]; then
             pilot_mode=--apply
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi

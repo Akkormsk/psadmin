@@ -56,21 +56,27 @@ MSK = ZoneInfo("Europe/Moscow")
 UTC = ZoneInfo("UTC")
 
 
-def visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False):
+def visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False, include_board_pins=False):
     """Existing shared rules for the site's incoming tender list and board."""
     now = timezone.now()
     if min_price:
-        queryset = queryset.filter(Q(max_price__gte=min_price) | Q(max_price__isnull=True))
+        price_filter = Q(max_price__gte=min_price) | Q(max_price__isnull=True)
+        if include_board_pins:
+            price_filter |= Q(kanban_visible_until__gt=now)
+        queryset = queryset.filter(price_filter)
     expired = 0
     if not show_all:
-        expired = queryset.filter(collecting_finished_at__lt=now).count()
-        queryset = queryset.filter(Q(collecting_finished_at__gte=now) | Q(collecting_finished_at__isnull=True))
+        expired_filter = Q(collecting_finished_at__lt=now)
+        if include_board_pins:
+            expired_filter &= ~Q(kanban_visible_until__gt=now)
+        expired = queryset.filter(expired_filter).count()
+        queryset = queryset.exclude(expired_filter)
     include = parse_terms(include_words)
     exclude = parse_terms(exclude_words)
     rows, hidden = [], 0
     for tender in queryset:
         passes, hits = match_title(tender.title or tender.object_info, include, exclude)
-        if passes or show_all:
+        if passes or show_all or (include_board_pins and tender.kanban_visible_until and tender.kanban_visible_until > now):
             tender.match_hits = hits
             tender.filtered_out = not passes
             rows.append(tender)
@@ -847,12 +853,12 @@ def purge_stale() -> dict:
         archived_evaluation = Tender.objects.filter(
             status=Tender.NEW, review=Tender.INTERESTING,
             collecting_finished_at__lt=now,
-        ).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="evaluation")
+        ).exclude(kanban_visible_until__gt=now).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="evaluation")
         archived_calculation = Tender.objects.filter(
             status=Tender.PUSHED,
             outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_NOT_PARTICIPATED),
             collecting_finished_at__lt=now,
-        ).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="calculation")
+        ).exclude(kanban_visible_until__gt=now).update(status=Tender.DISMISSED, archived_at=now, archived_from_stage="calculation")
     return {
         "expired_incoming": expired_incoming, "archived_incoming": archived_incoming,
         "archived_evaluation": archived_evaluation, "archived_calculation": archived_calculation,
@@ -1761,12 +1767,24 @@ def hide_tender(user, tender_id, *, reason=None):
     return {"tender_id": tender.pk, "status": tender.status}
 
 
-def restore_hidden_tender(user, tender_id):
+@transaction.atomic
+def restore_hidden_tender(user, tender_id, keep_on_board_hours=0):
     _require_tender_admin(user)
-    tender = Tender.objects.filter(pk=tender_id, status=Tender.DISMISSED).first()
-    if tender is None:
+    if type(keep_on_board_hours) is not int or not 0 <= keep_on_board_hours <= 168:
+        raise ValueError("Срок закрепления должен быть от 0 до 168 часов")
+    tender = Tender.objects.select_for_update().filter(pk=tender_id).first()
+    if tender is None or (tender.status != Tender.DISMISSED and not keep_on_board_hours):
         raise ValueError("Скрытый тендер не найден")
-    restore_tender(tender)
+    if tender.status == Tender.DISMISSED:
+        restore_tender(tender)
+    if keep_on_board_hours:
+        tender.kanban_visible_until = timezone.now() + timedelta(hours=keep_on_board_hours)
+        if tender.status == Tender.NEW:
+            tender.review = Tender.INTERESTING
+        tender.save(update_fields=["kanban_visible_until", "review"])
+        from django.contrib.admin.models import LogEntry, CHANGE
+        LogEntry.objects.log_actions(user_id=user.pk, queryset=Tender.objects.filter(pk=tender.pk), action_flag=CHANGE,
+            change_message=[{"changed": {"fields": ["Показывать на доске до"], "name": "Временное закрепление", "object": tender.kanban_visible_until.isoformat()}}])
     return {"tender_id": tender.pk, "status": tender.status}
 
 

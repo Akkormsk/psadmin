@@ -134,6 +134,7 @@ class Tender(models.Model):
     opened_at = models.DateTimeField("Открыт пользователем (впервые)", null=True, blank=True)
     first_seen_at = models.DateTimeField("Впервые найден", null=True, blank=True)
     last_pulled_at = models.DateTimeField("Последняя выгрузка", null=True, blank=True)
+    kanban_visible_until = models.DateTimeField("Показывать на доске до", null=True, blank=True, help_text="Временное ручное закрепление просроченной карточки; срок подачи из ЕИС не меняется.")
     archived_at = models.DateTimeField("В архиве с", null=True, blank=True)
     archived_from_stage = models.CharField("Этап при архивировании", max_length=16, blank=True, db_index=True)
     created_at = models.DateTimeField("Создан", auto_now_add=True)

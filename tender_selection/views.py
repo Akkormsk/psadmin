@@ -324,7 +324,7 @@ def kanban(request):
         qs = base_qs.order_by(*_deadline_order(dir_key, "collecting_finished_at", "first_seen_at"))
         rows, _hidden, _expired = visible_found_tenders(
             qs, min_price=settings.min_price,
-            include_words=settings.include_words, exclude_words=settings.exclude_words,
+            include_words=settings.include_words, exclude_words=settings.exclude_words, include_board_pins=True,
         )
         return rows
 
@@ -355,7 +355,9 @@ def kanban(request):
 
     calculation = [
         estimate_card(e) for e in
-        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_DRAFT).order_by(
+        live_estimates.filter(tender__outcome_status=Tender.OUTCOME_DRAFT).filter(
+            Q(tender__collecting_finished_at__gte=timezone.now()) | Q(tender__collecting_finished_at__isnull=True) | Q(tender__kanban_visible_until__gt=timezone.now())
+        ).order_by(
             *_deadline_order("calculation", "tender__collecting_finished_at", "updated_at")
         )
     ]
@@ -410,10 +412,10 @@ def _board_count(settings) -> int:
     from tenders.models import TenderEstimate
 
     review, _hidden, _expired = visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at"), min_price=settings.min_price,
-        include_words=settings.include_words, exclude_words=settings.exclude_words,
+        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at", "kanban_visible_until"), min_price=settings.min_price,
+        include_words=settings.include_words, exclude_words=settings.exclude_words, include_board_pins=True,
     )
-    estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).count()
+    estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).exclude(Q(tender__outcome_status=Tender.OUTCOME_DRAFT, tender__collecting_finished_at__lt=timezone.now()) & ~Q(tender__kanban_visible_until__gt=timezone.now())).count()
     return len(review) + estimates
 
 

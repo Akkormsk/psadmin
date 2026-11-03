@@ -29,6 +29,46 @@ class IncomingPageTests(TestCase):
     def _page(self, **params):
         return self.client.get("/tender-selection/", {"view": "list", **params})
 
+    def test_calculation_hides_expired_immediately_but_keeps_bidding_and_pinned_cards(self):
+        for number, deadline, outcome, pin in [
+            ('expired', -2, Tender.OUTCOME_DRAFT, False),
+            ('future', 2, Tender.OUTCOME_DRAFT, False),
+            ('bidding', -2, Tender.OUTCOME_PENDING, False),
+            ('pinned', -2, Tender.OUTCOME_DRAFT, True),
+        ]:
+            tender = self._tender(number, number, days=deadline, status=Tender.PUSHED, outcome_status=outcome,
+                kanban_visible_until=self.now + timedelta(days=1) if pin else None)
+            TenderEstimate.objects.create(owner=self.admin, tender=tender, tender_number=number, name=number)
+        response = self.client.get('/tender-selection/', {'view': 'kanban'})
+        calculation = next(column for column in response.context['columns'] if column['key'] == 'calculation')
+        self.assertEqual(len(calculation['cards']), 2)
+        self.assertEqual(response.context['nav_counts']['board'], 3)
+        self.assertNotContains(response, '>expired<')
+        from tender_selection.views import _board_count
+        self.assertEqual(_board_count(FilterSettings.load()), 3)
+
+    def test_temporary_board_return_preserves_deadline_and_expires_normally(self):
+        from .services import purge_stale
+        tender = self._tender('0000000000000000001', 'Сувенир', days=-2, review=Tender.INTERESTING)
+        original_deadline = tender.collecting_finished_at
+        from django.core.management import call_command
+        from io import StringIO
+        output = StringIO()
+        call_command('restore_tender_board', tender_number=tender.purchase_number, keep_hours=168, apply=True, stdout=output)
+        self.assertIn('"visible": true', output.getvalue())
+        purge_stale()
+        response = self.client.get('/tender-selection/', {'view': 'kanban'})
+        review = next(column for column in response.context['columns'] if column['key'] == 'review')
+        self.assertEqual(len(review['cards']), 1)
+        tender.refresh_from_db()
+        self.assertEqual(tender.collecting_finished_at, original_deadline)
+        self.assertFalse(tender.estimates.exists())
+        tender.kanban_visible_until = self.now - timedelta(seconds=1)
+        tender.save(update_fields=['kanban_visible_until'])
+        purge_stale()
+        tender.refresh_from_db()
+        self.assertEqual(tender.status, Tender.DISMISSED)
+
     def test_search_matches_title_number_and_customer(self):
         Organization.objects.create(inn="7700000001", name="Спорткомитет")
         self._tender("0322000047", "Сувенирная продукция", days=3, customer_inn="7700000001")

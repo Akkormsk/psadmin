@@ -125,10 +125,10 @@ register_tool(AssistantTool(
 ))
 register_tool(AssistantTool(
     "tender.restore", "Вернуть скрытый тендер",
-    "Возвращает скрытый тендер в работу тем же сервисом, что кнопка восстановления в архиве.",
-    {'tender_id': {'type': 'integer', 'description': 'Идентификатор выбранного скрытого тендера', 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}},
+    "Возвращает скрытый тендер тем же сервисом, что архив. По явной просьбе можно временно закрепить на доске на 1–168 часов, сохранив срок подачи из ЕИС; этот режим доступен и для активной карточки.",
+    {'tender_id': {'type': 'integer', 'description': 'Идентификатор выбранного тендера', 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}, 'keep_on_board_hours': {'type': 'integer', 'required': False, 'label': 'Закрепить на доске, часов (до 168)'}},
     False, True, True,
-    lambda user, payload: restore_hidden_tender(user, payload["tender_id"]),
+    lambda user, payload: restore_hidden_tender(user, payload["tender_id"], payload.get("keep_on_board_hours", 0)),
     source="tender_selection.services.restore_hidden_tender",
 ))
 register_tool(AssistantTool(
