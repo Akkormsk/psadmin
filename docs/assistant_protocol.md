@@ -1909,3 +1909,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — tender location diagnosis, 2026-11-03.** Read-only inspection reports lifecycle state, deadline and existing-filter visibility plus direct detail path for the owner-selected tender. No business writes, paid analysis or app deploy. Checking manual take-to-work from hidden incoming.
+
+
+**CODE_ONLY — route answer diagnosis, 2026-11-03.** Inspect persisted question scopes and answer events for the selected tender to diagnose repeated clarification. No model calls or writes. Conversation153 audit separately confirms incorrect archived-status/incoming-view intersection and day-start instead of last-hour boundary; no assistant search fix claimed.
