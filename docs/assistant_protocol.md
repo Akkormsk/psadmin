@@ -1900,3 +1900,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — real card verification after canonical source repair, 2026-11-02.** Operator renders actual TEST card and all displayed route endpoints while reusing stored extras instead of invoking expired-cache refresh. Model/notification fetches are blocked and PostgreSQL READ ONLY remains enforced. This adds no business mock, paid call, application deploy or data write; verifies same persisted facts/proposals/routes visible through the real handlers.
+
+
+**CODE_ONLY — source-only value mismatch diagnosis, 2026-11-03.** Owner screenshot reports incomplete TZ for the previously accepted kit on TEST8001503. No new inference requested. Read-only operator now compares saved source-only proposed values with the exact referenced baseline entries and emits up to5 mismatches, to distinguish legitimate structured-value projection/style normalization from an unsupported actual change. No application deploy, data write, guessed product rules or relaxed evidence guard in this diagnostic.

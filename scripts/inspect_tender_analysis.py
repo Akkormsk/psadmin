@@ -204,8 +204,31 @@ def collect_saved_status(number):
         jobs.append({'id': job.pk, 'status': job.status, 'completed_at': job.completed_at, 'error': job.error,
             'cost_rub': job.total_cost, 'contract': job.diagnostics.get('intake_contract'),
             'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version')} for name, row in stages.items()}})
+    mismatches = []
+    latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
+    if latest and latest.status == 'partial' and latest.diagnostics.get('stages', {}).get('tz', {}).get('result'):
+        from unittest.mock import patch
+        from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, document_analysis_sources, assess_quality
+        engine = GatewayDocumentEnricher(max_cost_rub='0')
+        sources = list(document_analysis_sources(tender)[0].values())
+        with patch('tender_selection.services.documents_html'):
+            engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+        for row in latest.diagnostics['stages']['tz']['result']:
+            source_id = int(row['key'].split(':')[0])
+            for fact in row.get('characteristics', []):
+                if fact.get('doc_id') is not None or fact.get('document_facts') or fact.get('resolution') in {'keep', 'omit'}:
+                    continue
+                refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
+                original = [engine.baselines[source_id][ref] for ref in refs if type(ref) is int and 0 <= ref < len(engine.baselines[source_id])]
+                norm = lambda value: ' '.join(str(value).casefold().split())
+                if original and not any(norm(item['value']) == norm(fact.get('value')) for item in original):
+                    mismatches.append({'key': row['key'], 'name': fact.get('name'), 'value': fact.get('value'), 'resolution': fact.get('resolution'), 'original': original})
+                if len(mismatches) >= 5:
+                    break
+            if len(mismatches) >= 5:
+                break
     pending = list(TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False).values('original_text', 'quantity', 'metadata'))
-    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'rendered_card': inspect_card_routes(tender),
+    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'source_mismatches': mismatches, 'rendered_card': inspect_card_routes(tender),
         'proposals': [{'name': row['original_text'], 'quantity': row['quantity'], 'incomplete': row['metadata'].get('analysis_incomplete')} for row in pending],
         'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id')} for key, value in source_route_snapshots(tender).items()}}
 
