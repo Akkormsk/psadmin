@@ -2119,10 +2119,14 @@ def _save_intake_proposals(job, result, *, incomplete):
         if ids or previous.filter(metadata__analysis_job_id=job.pk).exists():
             job.diagnostics.setdefault('superseded_pending_proposals', []).extend(json.loads(json.dumps(list(previous.values()), default=str)))
             job.save(update_fields=['diagnostics', 'updated_at'])
-            previous.delete()
+            for prior in previous:
+                prior.source_type = "document_superseded"
+                prior.metadata = {**prior.metadata, "superseded_by_job_id": job.pk}
+                prior.save(update_fields=["source_type", "metadata"])
         for item in result['created']:
+            item.source_type = 'document_proposal'
             item.metadata = {**item.metadata, 'analysis_incomplete': incomplete, 'analysis_job_id': job.pk}
-            item.save(update_fields=['metadata'])
+            item.save(update_fields=['source_type', 'metadata'])
     job.diagnostics['proposal_ids'] = ids
 
 

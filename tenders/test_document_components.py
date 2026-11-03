@@ -251,3 +251,21 @@ class StagedCanonicalAcceptanceTests(TestCase):
         with patch('tender_selection.services.documents_html'), patch.object(GatewayDocumentEnricher, 'ask_stage', side_effect=AssertionError('Accepted facts were reanalyzed')):
             _staged_document_analysis(reused_job, GatewayDocumentEnricher())
         self.assertEqual(reused_job.diagnostics['document_analysis_reused'], completed.pk)
+
+
+class IntakeProposalHistoryTests(TestCase):
+    def test_refresh_preserves_sources_referenced_by_routes(self):
+        from .models import TenderSourceItem, TenderComputeJob, TenderComputeLine
+        from tender_selection.services import _save_intake_proposals
+        tender = Tender.objects.create(purchase_number="history-refresh", title="History")
+        job = TenderComputeJob.objects.create(tender=tender)
+        old = TenderSourceItem.objects.create(tender=tender, source_key="old", source_type="document_proposal", is_active=False)
+        line = TenderComputeLine.objects.create(job=job, source_item=old)
+        new = TenderSourceItem.objects.create(tender=tender, source_key="new", source_type="document_proposal", is_active=False)
+        _save_intake_proposals(job, {"created": [new]}, incomplete=True)
+        old.refresh_from_db()
+        line.refresh_from_db()
+        self.assertEqual(old.source_type, "document_superseded")
+        self.assertEqual(line.source_item_id, old.pk)
+        self.assertEqual(old.metadata["superseded_by_job_id"], job.pk)
+        self.assertEqual(list(tender.v2_source_items.filter(source_type="document_proposal").values_list("pk", flat=True)), [new.pk])
