@@ -232,19 +232,21 @@ def collect_saved_status(number):
         sources = list(document_analysis_sources(tender)[0].values())
         with patch('tender_selection.services.documents_html'):
             engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+        from tender_selection.notification import _dig, _as_list
+        raw_items = _as_list(_dig(tender.notification_raw.get('source', {}), 'notificationInfo', 'purchaseObjectsInfo', 'notDrugPurchaseObjectsInfo', 'purchaseObject', default=[]))
         for row in latest.diagnostics['stages']['tz']['result']:
             source_id = int(row['key'].split(':')[0])
             for fact in row.get('characteristics', []):
                 grounded = bool((fact.get('doc_id') is not None and str(fact.get('quote') or '').strip()) or fact.get('document_facts') or fact.get('baseline_refs') or fact.get('notification_refs'))
                 if not grounded and fact.get('resolution') not in {'keep', 'omit'}:
-                    mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id]})
+                    mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id], 'raw_characteristics': [(raw_items[(engine.stage_sources[source_id].metadata or {}).get('notification_index', 0)].get('KTRU') or raw_items[(engine.stage_sources[source_id].metadata or {}).get('notification_index', 0)].get('OKPD2') or {}).get('characteristics', {})]})
                     if len(mismatches) >= 3: break
                     continue
                 if fact.get('doc_id') is not None or fact.get('document_facts') or fact.get('resolution') in {'keep', 'omit'}:
                     continue
                 refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
                 if not refs:
-                    mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id]})
+                    mismatches.append({'key': row['key'], 'unsupported_fact': fact, 'baseline': engine.baselines[source_id], 'raw_characteristics': [(raw_items[(engine.stage_sources[source_id].metadata or {}).get('notification_index', 0)].get('KTRU') or raw_items[(engine.stage_sources[source_id].metadata or {}).get('notification_index', 0)].get('OKPD2') or {}).get('characteristics', {})]})
                     if len(mismatches) >= 3: break
                 original = [engine.baselines[source_id][ref] for ref in refs if type(ref) is int and 0 <= ref < len(engine.baselines[source_id])]
                 norm = lambda value: ' '.join(str(value).casefold().split())
