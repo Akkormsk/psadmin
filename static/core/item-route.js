@@ -19,7 +19,7 @@
     document.addEventListener('keydown', event => {
       if (!overlay.classList.contains('is-open')) return;
       if (event.key === 'Escape') { event.stopImmediatePropagation(); event.preventDefault(); close(); }
-      if (event.key === 'Tab') { const nodes = [...overlay.querySelectorAll('button,a[href]')], first = nodes[0], last = nodes.at(-1); if (event.shiftKey && document.activeElement === first) { last.focus(); event.preventDefault(); } else if (!event.shiftKey && document.activeElement === last) { first.focus(); event.preventDefault(); } }
+      if (event.key === 'Tab') { const nodes = [...overlay.querySelectorAll('button:not(:disabled),a[href],input:not([type=hidden]):not(:disabled),textarea:not(:disabled)')], first = nodes[0], last = nodes.at(-1); if (event.shiftKey && document.activeElement === first) { last.focus(); event.preventDefault(); } else if (!event.shiftKey && document.activeElement === last) { first.focus(); event.preventDefault(); } }
     }, true);
   }
   function paragraph(text) { const node = document.createElement('p'); node.className = 'ts-sub'; node.textContent = text; body.append(node); }
@@ -38,7 +38,7 @@
       title.textContent = data.name;
       if (data.state !== 'ready') paragraph(({needs_review:'В маршруте есть неопределённость.', building:'Маршрут строится в фоне.', stale:'ТЗ или этапы изменились. Сохранённый маршрут ниже устарел.', pending:'Маршрут ещё не построен. Нажмите «Обновить» в карточке тендера.'})[data.state] || 'Маршрут недоступен.');
       if (data.pending_changes) paragraph('Есть правки ТЗ на согласовании. Маршрут относится к текущим принятым данным.');
-      if (data.reason) paragraph(data.reason);
+      if (data.reason && !data.assumption) paragraph(data.reason);
       for (const step of data.steps || []) {
         const article = document.createElement('article'); article.className = 'item-route-step';
         const heading = document.createElement('strong'); heading.textContent = step.position + '. ' + step.name; article.append(heading);
@@ -46,13 +46,27 @@
         body.append(article);
       }
       if (data.missing_inputs?.length) paragraph('Для точного подбора исполнения не хватает данных: ' + data.missing_inputs.join(', ') + '. Требования заказчика не изменены.');
-      if (data.interaction?.options?.length >= 2) {
-        paragraph(data.interaction.question);
-        const form = document.createElement('form'); form.method = 'post'; form.action = data.interaction.url; form.dataset.ownerAnswer = ''; form.dataset.tenderId = data.tender_id;
-        const csrf = document.createElement('input'); csrf.type = 'hidden'; csrf.name = 'csrfmiddlewaretoken'; csrf.value = document.querySelector('[name="csrfmiddlewaretoken"]')?.value || ''; form.append(csrf);
-        const options = document.createElement('div'); options.className = 'ts-question-options';
-        for (const value of data.interaction.options) { const label = document.createElement('label'), radio = document.createElement('input'), text = document.createElement('span'); radio.type = 'radio'; radio.name = 'answer'; radio.value = value; radio.required = true; text.textContent = value; label.append(radio, text); options.append(label); }
-        const status = document.createElement('span'); status.dataset.ownerAnswerStatus = ''; status.setAttribute('role', 'status'); form.append(options, status); body.append(form);
+      if (data.assumption || data.interaction) {
+        const details = document.createElement('details'), summary = document.createElement('summary'); details.className = 'item-route-assumption';
+        summary.textContent = data.interaction?.selected ? 'Рабочий вариант · ' + data.interaction.selected : 'Допущение · можно изменить'; details.append(summary);
+        const explanation = document.createElement('p'); explanation.textContent = data.assumption || data.reason || 'Сохранено ваше рабочее решение.'; details.append(explanation);
+        if (data.source_conflicts?.length) { const warning = document.createElement('p'); warning.className = 'ts-sub'; warning.textContent = 'В источниках есть расхождения: ' + data.source_conflicts.join(', ') + '. Рабочий выбор не меняет ТЗ заказчика.'; details.append(warning); }
+        if (data.interaction) {
+          function makeForm() {
+            const form = document.createElement('form'); form.method = 'post'; form.action = data.interaction.url; form.dataset.ownerAnswer = ''; form.dataset.tenderId = data.tender_id;
+            const csrf = document.createElement('input'); csrf.type = 'hidden'; csrf.name = 'csrfmiddlewaretoken'; csrf.value = document.querySelector('[name="csrfmiddlewaretoken"]')?.value || ''; form.append(csrf); return form;
+          }
+          function statusFor(form) { const status = document.createElement('span'); status.dataset.ownerAnswerStatus = ''; status.setAttribute('role', 'status'); form.append(status); }
+          if (data.interaction.options?.length >= 2) {
+            const form = makeForm(), options = document.createElement('div'); options.className = 'ts-question-options';
+            for (const value of data.interaction.options) { const label = document.createElement('label'), radio = document.createElement('input'), text = document.createElement('span'); radio.type = 'radio'; radio.name = 'answer'; radio.value = value; radio.required = true; radio.checked = value === data.interaction.selected; text.textContent = value; label.append(radio, text); options.append(label); }
+            form.append(options); statusFor(form); details.append(form);
+          }
+          const custom = makeForm(), input = document.createElement('textarea'), apply = document.createElement('button'); input.name = 'answer'; input.required = true; input.rows = 2; input.className = 'form-control'; input.setAttribute('aria-label', 'Своя правка маршрута'); input.placeholder = 'Своя правка маршрута…';
+          if (data.interaction.selected && !data.interaction.options?.includes(data.interaction.selected)) input.value = data.interaction.selected;
+          apply.type = 'submit'; apply.className = 'button-secondary'; apply.textContent = 'Применить'; custom.append(input, apply); statusFor(custom); details.append(custom);
+        }
+        body.append(details);
       }
     } catch (error) { if (error.name !== 'AbortError' && active === request) { title.textContent = 'Маршрут'; paragraph(error.message || 'Не удалось загрузить маршрут.'); } }
   }

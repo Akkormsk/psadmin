@@ -1927,12 +1927,14 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     ).first()
     if interaction is None:
         raise ValueError("Вопрос не найден или уже закрыт")
-    if interaction.status == "resolved" and OwnerFeedbackEvent.objects.filter(interaction=interaction, raw_text=answer).exists():
+    optional_route_choice = bool(interaction.context.get("optional_route_choice")) and bool(interaction.compute_line_id)
+    latest = OwnerFeedbackEvent.objects.filter(interaction=interaction).order_by("-pk").first()
+    if interaction.status == "resolved" and latest and latest.raw_text == answer:
         return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
-    if interaction.status != "open":
+    if interaction.status != "open" and not (optional_route_choice and interaction.status in {"suggested", "resolved"}):
         raise ValueError("Вопрос уже закрыт; сохранённый ответ не изменён")
     options = interaction.possible_answers.get("options", []) if isinstance(interaction.possible_answers, dict) else []
-    if interaction.compute_line_id and options and answer not in options:
+    if interaction.compute_line_id and not optional_route_choice and options and answer not in options:
         raise ValueError("Выберите один из предложенных вариантов")
     OwnerFeedbackEvent.objects.create(
         interaction=interaction, actor=user, raw_text=answer,

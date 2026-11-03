@@ -302,3 +302,8 @@ body.workspace-embedded .ts-detail--document .ts-linkchip {
 .ts-question-options label:has(input:checked) { border-color:var(--ink-3); background:var(--tint-neutral); }
 .ts-question-options input[type="radio"] { margin:0; accent-color:var(--ink); }
 [data-owner-answer-status] { display:block; margin-top:8px; color:var(--ink-2); font-size:13px; }
+
+.item-route-assumption { border-top:1px solid var(--border); margin-top:18px; padding-top:14px; }
+.item-route-assumption summary { cursor:pointer; font-weight:600; color:var(--ink-2); }
+.item-route-assumption form { margin-top:12px; }
+.item-route-assumption textarea { width:100%; box-sizing:border-box; margin-bottom:8px; }

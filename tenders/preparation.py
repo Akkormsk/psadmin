@@ -93,7 +93,7 @@ def planned_tasks(job: TenderComputeJob) -> list[PreparationTask]:
     )
     tasks: list[PreparationTask] = []
     for engine in _preparation_engines():
-        supported = [step for step in steps if engine.supports_preparation(step)]
+        supported = [step for step in steps if not step.route_plan.metadata.get("assumption") and engine.supports_preparation(step)]
         tasks.extend(engine.plan_tender_preparation(job, supported))
     return tasks
 

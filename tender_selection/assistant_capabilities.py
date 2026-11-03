@@ -180,7 +180,7 @@ register_tool(AssistantTool(
 
 register_tool(AssistantTool(
     "tender.owner_question_answer", "Ответить на запрос уточнения по тендеру",
-    "Сохраняет рабочий выбор для текущего тендера, закрывает вопрос и обновляет маршрут в фоне. Не меняет подтверждённое ТЗ заказчика. Повтор того же ответа не создаёт дубликат; для маршрутного вопроса с вариантами принимает только предложенный вариант.",
+    "Сохраняет или изменяет рабочее решение маршрута для текущей позиции: вариант либо свой текст. Обновляет маршрут в фоне без изменения ТЗ заказчика; последнее решение имеет приоритет, история сохраняется. Повтор текущего ответа не создаёт дубликат. Обычные закрытые вопросы остаются неизменяемыми.",
     {'tender_id': {'type': 'integer', 'required': True, 'reference': {'model': 'tender_selection.Tender', 'label': ['purchase_number', 'title']}}, 'interaction_id': {'type': 'integer', 'required': True, 'label': 'Запрос уточнения', 'reference': {'model': 'tenders.OwnerInteraction', 'label': ['question']}}, 'answer': {'type': 'string', 'required': True, 'label': 'Ответ'}},
     False, True, True, _answer_owner_question,
     source="tender_selection.services.answer_tender_owner_question",

@@ -55,6 +55,7 @@ class RouteDecision:
     question_kind: str = "unspecified"
     missing_requirement_names: tuple[str, ...] = ()
     choices: tuple[str, ...] = ()
+    selected_choice: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,13 +118,14 @@ def _route_owner_answer_map(sources):
         lineage[source.pk] = ids
     ids = set().union(*lineage.values()) if lineage else set()
     events = list(OwnerFeedbackEvent.objects.filter(interaction__source_item_id__in=ids, interaction__status="resolved").select_related("interaction").order_by("pk"))
+    events = sorted({event.interaction_id: event for event in events}.values(), key=lambda event: event.pk)
     return {source_id: [{"question": event.interaction.question, "answer": event.raw_text, "names": event.interaction.context.get("missing_requirement_names") or event.interaction.context.get("conflicts") or event.interaction.context.get("evidence_labels", [])}
                         for event in events if event.interaction.source_item_id in ancestors] for source_id, ancestors in lineage.items()}
 
 
 def source_route_fingerprint(source, processes, knowledge, owner_answers=None):
     from .document_enrichment import effective_item_requirements
-    return _fingerprint({"contract": "staged-route-v2-owner-decisions", "source_id": source.pk, "name": source.original_text, "quantity": str(source.quantity), "unit": source.unit,
+    return _fingerprint({"contract": "staged-route-v3-provisional", "source_id": source.pk, "name": source.original_text, "quantity": str(source.quantity), "unit": source.unit,
                          "requirements": effective_item_requirements(source), "owner_answers": _route_owner_answer_map([source])[source.pk] if owner_answers is None else owner_answers, "processes": _route_processes(processes), "knowledge": knowledge})
 
 
@@ -162,7 +164,7 @@ class GatewayBatchRouter:
             "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": self._requirements_payload(item.requirements)} for item in items],
         }
         shared_context = json.dumps({"processes": _route_processes(processes), "knowledge": knowledge}, ensure_ascii=False, default=str)
-        prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string],\"choices\":[string]}]}. Plan from the combined requirements and owner_answers already supplied; do not reread documents. The owner is not the customer: never ask them what the customer meant or to invent missing specifications. For missing customer data, select the best supported provisional execution route, explain the gap in reason and set needs_review if it materially affects execution. Do not invent requirements. Ask an execution_choice only when a real operating decision is unavoidable, with 2 to 5 concise concrete choices. Choices are working route assumptions, not verified customer requirements. Never repeat a resolved owner question, including paraphrases. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string],\"choices\":[string],\"selected_choice\":string}]}. Plan from the combined requirements and owner_answers already supplied; do not reread documents. The owner is not the customer: never ask them what the customer meant or to invent missing specifications. For missing customer data, select the best supported provisional execution route, explain the gap in reason and set needs_review if it materially affects execution. Do not invent requirements. Always choose the most probable defensible route yourself; do not block for owner answers. For uncertainty, retain needs_review=true to identify an assumption, explain why the selected route is most probable in reason, and supply 2 to 5 optional working alternatives in choices. selected_choice must equal the offered alternative actually used by process_ids; never select a label inconsistent with the route. Missing data does not justify inventing customer specifications. Previously saved owner_answers are binding working instructions for this position; the latest correction for the same aspect takes precedence. Preserve these instructions if new documents conflict, and explicitly flag the conflict in reason instead of silently replacing the owner choice. Choices are working route assumptions, not verified customer requirements. Never repeat a resolved owner question, including paraphrases. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         output_tokens = min(32000, max(8000, len(items) * 400))
         reserve = spend_rub({"prompt_tokens": len((shared_context + prompt).encode("utf-8")) + 4096, "completion_tokens": output_tokens}, self.model)
         if not self.max_cost_rub.is_finite() or self.max_cost_rub <= 0 or reserve is None or Decimal(str(reserve)) > self.max_cost_rub:
@@ -210,7 +212,7 @@ class GatewayBatchRouter:
                 question_kind = "unspecified"
             missing_names = row.get("missing_requirement_names")
             missing_names = tuple(str(name).strip()[:200] for name in missing_names if str(name).strip()) if isinstance(missing_names, list) else ()
-            output.append(RouteDecision(item_id, selected_process_ids if valid else (), confidence, {"reason": str(row.get("reason") or "")[:1000], "alternatives": row.get("alternatives") if isinstance(row.get("alternatives"), list) else []}, needs_review, str(row.get("question") or "Уточните способ выполнения позиции.")[:500], question_kind, missing_names, tuple(dict.fromkeys(value.strip()[:200] for value in row.get("choices", []) if isinstance(value, str) and value.strip()))[:5] if isinstance(row.get("choices"), list) else ()))
+            output.append(RouteDecision(item_id, selected_process_ids if valid else (), confidence, {"reason": str(row.get("reason") or "")[:1000], "alternatives": row.get("alternatives") if isinstance(row.get("alternatives"), list) else []}, needs_review, str(row.get("question") or "Уточните способ выполнения позиции.")[:500], question_kind, missing_names, tuple(dict.fromkeys(value.strip()[:200] for value in row.get("choices", []) if isinstance(value, str) and value.strip()))[:5] if isinstance(row.get("choices"), list) else (), str(row.get("selected_choice") or "").strip()[:200]))
         for item in items:
             if item.pk not in seen:
                 output.append(RouteDecision(item.pk, (), Decimal("0"), {"reason": "Не получен маршрут этой позиции"}, True, "Нужна проверка маршрута позиции."))
@@ -1443,8 +1445,8 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
         if plan and plan.metadata.get("input_fingerprint") == fingerprints[item.pk] and plan.status in {"planned", "ready", "needs_review"}:
             data = plan.metadata
             cached.append(RouteDecision(item.pk, tuple(step.process_id for step in sorted(plan.steps.all(), key=lambda step: step.position)),
-                _as_decimal(data.get("confidence")), {"reason": data.get("reason", ""), "alternatives": data.get("alternatives", [])},
-                plan.status == "needs_review", data.get("question", ""), data.get("question_kind", "unspecified"), tuple(data.get("missing_requirement_names", [])), tuple(data.get("choices", []))))
+                _as_decimal(data.get("confidence")), {key: data[key] for key in ("reason", "alternatives", "missing_inputs", "assumption", "source_conflicts") if key in data},
+                bool(data.get("assumption")) or plan.status == "needs_review", data.get("question", ""), data.get("question_kind", "unspecified"), tuple(data.get("missing_requirement_names", [])), tuple(data.get("choices", [])), data.get("selected_choice", "")))
         else:
             pending.append(item)
     if pending and processes:
@@ -1504,8 +1506,12 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
             if conflicts:
                 facts = _requirement_facts(item.requirements)
                 choices = tuple(dict.fromkeys(value for label, value in facts if any(_labels_match(label, conflict) for conflict in conflicts))) if len(conflicts) == 1 else ()
-            actionable = needs_review and len(choices) >= 2 and (bool(conflicts) or decision.question_kind == "execution_choice")
-            effective = replace(decision, needs_review=needs_review, choices=choices if actionable else (), question=decision.question if actionable else "")
+            provisional = bool(decision.process_ids) and needs_review
+            saved_choice = answers[item.source_item_id][-1]["answer"] if answers[item.source_item_id] else ""
+            selected_choice = saved_choice or (decision.selected_choice if decision.selected_choice in choices else "")
+            assumption = (decision.rationale.get("reason") or decision.question or "Выбран наиболее вероятный способ выполнения по имеющимся данным.") if provisional else ""
+            rationale = {**decision.rationale, "assumption": assumption, "source_conflicts": original_conflicts}
+            effective = replace(decision, rationale=rationale, needs_review=not bool(decision.process_ids), choices=choices, selected_choice=selected_choice, question="")
             line, _ = TenderComputeLine.objects.update_or_create(
                 job=job, source_item=item.source_item, component=item,
                 defaults={"commercial_item": item.commercial_item, "route_key": ",".join(map(str, effective.process_ids)), "route_confidence": effective.confidence,
@@ -1514,30 +1520,28 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter) -> list[Route
             )
             plan, _ = ComponentRoutePlan.objects.update_or_create(
                 commercial_item=item.commercial_item, component=item, scope=ComponentRoutePlan.Scope.COMPONENT,
-                defaults={"status": "needs_review" if effective.needs_review else "planned", "metadata": {**effective.rationale, "input_fingerprint": fingerprints[item.pk], "confidence": str(effective.confidence or 0), "question": effective.question, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names), "choices": list(effective.choices)}},
+                defaults={"status": "needs_review" if effective.needs_review else "planned", "metadata": {**effective.rationale, "input_fingerprint": fingerprints[item.pk], "confidence": str(effective.confidence or 0), "question": effective.question, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names), "choices": list(effective.choices), "selected_choice": effective.selected_choice}},
             )
             if item.pk not in cached_ids:
                 plan.steps.all().delete()
                 for position, process_id in enumerate(effective.process_ids, start=1):
                     ComponentOperationStep.objects.create(route_plan=plan, process_id=process_id, position=position)
-            question = effective.question
-            if conflicts:
-                question = f"Рабочий вариант для маршрута: {', '.join(conflicts)}. Требования заказчика останутся без изменений."
-            if not actionable:
-                OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").update(status="superseded")
-            if actionable:
-                interaction = OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").order_by("pk").first()
-                values = {"compute_line": line, "question": question, "reason": effective.rationale.get("reason", ""), "confidence": effective.confidence,
+            # Optional working assumptions live inside the route, never as blocking customer questions.
+            OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").update(status="superseded")
+            interaction = OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, context__optional_route_choice=True).exclude(status="superseded").order_by("-pk").first()
+            if provisional or saved_choice or interaction:
+                values = {"compute_line": line, "question": "Рабочее решение для маршрута", "reason": assumption or effective.rationale.get("reason", ""), "confidence": effective.confidence,
                           "possible_answers": {"options": list(effective.choices)},
-                          "context": {"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "conflicts": conflicts, "evidence_state": evidence_state, "evidence_labels": evidence_labels, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names)}}
+                          "context": {"commercial_item_id": item.commercial_item_id, "component_id": item.pk, "optional_route_choice": True, "conflicts": original_conflicts, "evidence_state": evidence_state, "evidence_labels": evidence_labels, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names)}}
                 if interaction:
+                    if interaction.status == "resolved":
+                        for key in ("conflicts", "evidence_labels", "question_kind", "missing_requirement_names"):
+                            values["context"][key] = interaction.context.get(key, values["context"][key])
                     for key, value in values.items():
                         setattr(interaction, key, value)
                     interaction.save(update_fields=list(values))
                 else:
-                    OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, **values)
-            if not effective.needs_review:
-                OwnerInteraction.objects.filter(tender=job.tender, source_item=item.source_item, context__component_id=item.pk, status="open").update(status="superseded")
+                    OwnerInteraction.objects.create(tender=job.tender, source_item=item.source_item, status="suggested", **values)
             effective_decisions.append(effective)
         return effective_decisions
 
@@ -1563,7 +1567,7 @@ def source_route_snapshots(tender, sources=None):
     from .document_enrichment import document_proposal_changes
     pending_parents = {item.parent_id for item in TenderSourceItem.objects.filter(tender=tender, source_type="document_proposal", is_active=False).select_related("parent") if document_proposal_changes(item)}
     answers = _route_owner_answer_map(sources)
-    interactions = {question.source_item_id: question for question in OwnerInteraction.objects.filter(tender=tender, source_item__in=sources, compute_line__isnull=False, status="open").order_by("pk")}
+    interactions = {question.source_item_id: question for question in OwnerInteraction.objects.filter(tender=tender, source_item__in=sources, compute_line__isnull=False, status__in=["suggested", "resolved"], context__optional_route_choice=True).order_by("pk")}
     result = {}
     for source in sources:
         plan = plans.get(source.pk)
@@ -1572,9 +1576,9 @@ def source_route_snapshots(tender, sources=None):
         steps = [{"id": step.pk, "process_id": step.process_id, "name": step.process.name, "description": step.process.description, "details": step.details, "position": step.position} for step in sorted(plan.steps.all(), key=lambda step: step.position)] if plan else []
         interaction = interactions.get(source.pk)
         from django.urls import reverse
-        choice = {"question": interaction.question, "options": interaction.possible_answers.get("options", []), "url": reverse("tender_selection:owner_interaction_answer", args=[tender.pk, interaction.pk])} if interaction and current else None
-        result[source.pk] = {"interaction": choice, "missing_inputs": plan.metadata.get("missing_inputs", []) if plan else [], "source_item_id": source.pk, "tender_id": tender.pk, "name": source.original_text, "state": state,
+        choice = {"question": interaction.question, "selected": plan.metadata.get("selected_choice", ""), "options": interaction.possible_answers.get("options", []), "url": reverse("tender_selection:owner_interaction_answer", args=[tender.pk, interaction.pk])} if interaction and current else None
+        result[source.pk] = {"interaction": choice, "assumption": plan.metadata.get("assumption", "") if plan else "", "source_conflicts": plan.metadata.get("source_conflicts", []) if plan else [], "missing_inputs": plan.metadata.get("missing_inputs", []) if plan else [], "source_item_id": source.pk, "tender_id": tender.pk, "name": source.original_text, "state": state,
             "plan_id": plan.pk if plan else None, "steps": steps, "pending_changes": source.pk in pending_parents, "reason": plan.metadata.get("reason", "") if plan else "",
             "question": plan.metadata.get("question", "") if current and state == "needs_review" else "",
-            "label": f"Маршрут · {len(steps)} {'этап' if len(steps) % 10 == 1 and len(steps) % 100 != 11 else 'этапа' if 2 <= len(steps) % 10 <= 4 and not 12 <= len(steps) % 100 <= 14 else 'этапов'}" if state == "ready" else {"needs_review": "Маршрут · есть неопределённость", "building": "Маршрут строится…", "stale": "Маршрут устарел", "pending": "Маршрут не построен"}[state]}
+            "label": ("Маршрут · допущение" if plan and plan.metadata.get("assumption") else f"Маршрут · {len(steps)} {'этап' if len(steps) % 10 == 1 and len(steps) % 100 != 11 else 'этапа' if 2 <= len(steps) % 10 <= 4 and not 12 <= len(steps) % 100 <= 14 else 'этапов'}") if state == "ready" else {"needs_review": "Маршрут · есть неопределённость", "building": "Маршрут строится…", "stale": "Маршрут устарел", "pending": "Маршрут не построен"}[state]}
     return result
