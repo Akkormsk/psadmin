@@ -120,6 +120,11 @@ def project_source_fact(original, name, value, *, source_item_id, reference):
     named = [(path, item) for path, item in candidates if label(name) in {
         label(path[-1]), label(' '.join(map(str, path))),
         label(str(original.get('name', '')) + ' ' + ' '.join(map(str, path)))}]
+    if not named:
+        target = ' ' + label(name) + ' '
+        named = [(path, item) for path, item in candidates
+                 if len(words := label(path[-1]).split()) >= 2
+                 and (' ' + ' '.join(words[:2]) + ' ') in target]
     matched = [(path, item) for path, item in (named or candidates) if normalized(item) == normalized(value)]
     # Do not turn a wrong property/value pair into a reference to another field.
     if not matched or (not named and len(matched) != 1):

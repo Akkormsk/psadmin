@@ -241,7 +241,7 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v7"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v8"
     SPECIFICATION_ASSEMBLY = "single-pass-v1"
 
     def prepare_stages(self, tender, sources, documents):
@@ -568,6 +568,17 @@ class GatewayDocumentEnricher:
                         fact['_verified_source_facts'] = [{**source, 'source': source.get('source') or 'notification'} for source in origin_facts]
                         if not has_document:
                             fact['_source_provenance'] = origin_facts[0].get('provenance') or {'kind': 'notification', 'source_item_id': good['source_id'], 'fact_ids': refs}
+                            properties = {}
+                            for source in fact['_verified_source_facts']:
+                                identity = (source['name'], json.dumps(source['value'], ensure_ascii=False, sort_keys=True, default=str))
+                                properties.setdefault(identity, []).append(source)
+                            if len(properties) > 1:
+                                for sources in properties.values():
+                                    separate = deepcopy(fact)
+                                    separate.update(name=sources[0]['name'], value=sources[0]['value'],
+                                        _verified_source_facts=sources, _source_provenance=sources[0].get('provenance') or fact['_source_provenance'])
+                                    facts.append(separate)
+                                continue
                 fact.pop('doc_id', None)
                 fact.pop('quote', None)
                 fact.pop('section', None)

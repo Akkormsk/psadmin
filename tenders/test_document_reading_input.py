@@ -261,6 +261,19 @@ class StagedTableEvidenceTests(SimpleTestCase):
 
 
 class StagedMultiSourceReconciliationTests(SimpleTestCase):
+    def test_compound_caption_copies_two_existing_properties_without_equating_them(self):
+        engine = self.make_engine()
+        engine.baselines = {7: [{'id': 0, 'name': 'Изделие', 'value': {
+            'Покрытие края': 'серебряный', 'Защитные элементы корпуса': 'серебряный', 'Цвет корпуса': 'белый'}}]}
+        goods = [{'key': '7:0', 'source_id': 7, 'kind': 'kit'}]
+        rows = [{'key': '7:0', 'characteristics': [{
+            'name': 'Покрытие края (защитные элементы)', 'value': 'серебряный',
+            'resolution': 'new', 'notification_refs': [0]}]}]
+        facts = engine.validate_specifications(rows, goods)['7:0']['characteristics']
+        self.assertEqual({row['name'] for row in facts}, {'Покрытие края', 'Защитные элементы корпуса'})
+        self.assertTrue(all(row['value'] == 'серебряный' for row in facts))
+        self.assertTrue(all(row['source_facts'][0]['provenance']['field_path'] for row in facts))
+
     def test_nested_source_properties_are_copied_with_their_paths(self):
         from .document_enrichment import characteristic_display
         engine = self.make_engine()
