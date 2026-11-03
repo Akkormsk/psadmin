@@ -1903,3 +1903,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — source-only value mismatch diagnosis, 2026-11-03.** Owner screenshot reports incomplete TZ for the previously accepted kit on TEST8001503. No new inference requested. Read-only operator now compares saved source-only proposed values with the exact referenced baseline entries and emits up to5 mismatches, to distinguish legitimate structured-value projection/style normalization from an unsupported actual change. No application deploy, data write, guessed product rules or relaxed evidence guard in this diagnostic.
+
+
+**CODE_ONLY — hidden-list diagnosis, 2026-11-03.** Extend existing read-only operator inspection to render actual archive and all-incoming handlers and report status/error without publishing row content. No app deployment, database writes or model calls. Owner reports touch-device opening failure; cause not established.

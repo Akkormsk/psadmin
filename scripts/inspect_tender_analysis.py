@@ -62,7 +62,14 @@ def inspect_card_routes(tender):
         links = html.fromstring(response.content).xpath('//*[@data-source-route]')
         ids = [int(node.get('data-route-source')) for node in links]
         statuses = [read(node.get('data-source-route')).status_code for node in links]
-    return {'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
+    collections = {}
+    for key, path, params in [('archive', reverse('tender_selection:archive'), {}), ('hidden', reverse('tender_selection:list'), {'view': 'list', 'all': '1'})]:
+        try:
+            collection = read(path, params)
+            collections[key] = {'status': collection.status_code, 'bytes': len(collection.content)}
+        except Exception as exc:
+            collections[key] = {'error_type': type(exc).__name__, 'error': str(exc)}
+    return {'collections': collections, 'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
 
 
 def document_input_profile(tender):
