@@ -1923,10 +1923,17 @@ def answer_tender_owner_question(user, tender_id, interaction_id, answer):
     if not answer:
         raise ValueError("Введите ответ, чтобы закрыть вопрос")
     interaction = OwnerInteraction.objects.select_for_update().filter(
-        pk=interaction_id, tender_id=tender_id, status="open",
+        pk=interaction_id, tender_id=tender_id,
     ).first()
     if interaction is None:
         raise ValueError("Вопрос не найден или уже закрыт")
+    if interaction.status == "resolved" and OwnerFeedbackEvent.objects.filter(interaction=interaction, raw_text=answer).exists():
+        return {"tender_id": tender_id, "interaction_id": interaction_id, "status": "resolved"}
+    if interaction.status != "open":
+        raise ValueError("Вопрос уже закрыт; сохранённый ответ не изменён")
+    options = interaction.possible_answers.get("options", []) if isinstance(interaction.possible_answers, dict) else []
+    if interaction.compute_line_id and options and answer not in options:
+        raise ValueError("Выберите один из предложенных вариантов")
     OwnerFeedbackEvent.objects.create(
         interaction=interaction, actor=user, raw_text=answer,
         payload={"answer": answer}, scope="current_tender",

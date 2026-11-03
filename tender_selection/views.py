@@ -942,7 +942,7 @@ def owner_interaction_answer(request, pk, interaction_pk):
     tender = get_object_or_404(Tender, pk=pk)
     from tenders.models import OwnerFeedbackEvent, OwnerInteraction
 
-    interaction = get_object_or_404(OwnerInteraction, pk=interaction_pk, tender=tender, status="open")
+    interaction = get_object_or_404(OwnerInteraction, pk=interaction_pk, tender=tender)
     answer = request.POST.get("answer", "").strip()
     redirect_url = f"{reverse('tender_selection:detail', args=[tender.pk])}#owner-question-{interaction.pk}"
     if not answer:
@@ -952,8 +952,12 @@ def owner_interaction_answer(request, pk, interaction_pk):
     try:
         answer_tender_owner_question(request.user, tender.pk, interaction.pk, answer)
     except ValueError as exc:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"error": str(exc)}, status=400)
         messages.error(request, str(exc))
         return redirect(redirect_url)
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"tender_id": tender.pk, "label": "Обновляем маршрут…", "status": "resolved"})
     messages.success(request, "Ответ сохранён для этого тендера.")
     return redirect(redirect_url)
 

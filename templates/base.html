@@ -434,8 +434,8 @@
               }
               const oldWarning = document.querySelector('[data-notification-error]'); if (oldWarning && !parsed.querySelector('[data-notification-error]')) oldWarning.remove();
               replacement.querySelectorAll('input:not([type="hidden"]),textarea,select').forEach(node => {
-                const saved = edits.find(edit => edit.name === node.name && edit.action === node.form?.getAttribute('action'));
-                if (saved) { node.value = saved.value; if (node.type === 'checkbox' || node.type === 'radio') node.checked = saved.checked; }
+                const saved = edits.find(edit => edit.name === node.name && edit.action === node.form?.getAttribute('action') && (node.type !== 'radio' || edit.value === node.value));
+                if (saved) { if (node.type === 'checkbox' || node.type === 'radio') node.checked = saved.checked; else node.value = saved.value; }
                 if (focus && focus.name === node.name && focus.action === node.form?.getAttribute('action')) node.focus({preventScroll: true});
               });
             } catch (error) { const tries = (fragmentAttempts.get(data.revision) || 0) + 1; fragmentAttempts.set(data.revision, tries); again = tries < 3; }
@@ -500,8 +500,24 @@
           schedule();
         })();
 
+        document.addEventListener('change', function (event) {
+          if (event.target.matches('form[data-owner-answer] input[type="radio"]')) event.target.form.requestSubmit();
+        });
         document.addEventListener("submit", function (event) {
           const submitted = event.target.closest("form");
+          if (submitted?.hasAttribute('data-owner-answer') && !event.defaultPrevented) {
+            event.preventDefault();
+            if (submitted.dataset.saving === '1') return;
+            const payload = new FormData(submitted), controls = [...submitted.querySelectorAll('input,button,textarea')];
+            const status = submitted.querySelector('[data-owner-answer-status]');
+            submitted.dataset.saving = '1'; controls.forEach(node => node.disabled = true);
+            status.textContent = 'Сохраняем выбор…';
+            fetch(submitted.action, {method:'POST', body:payload, headers:{'X-Requested-With':'XMLHttpRequest'}})
+              .then(async response => { if (response.redirected) throw new Error('Нужно войти заново.'); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось сохранить выбор.'); return data; })
+              .then(data => { status.textContent = 'Выбор сохранён. Обновляем маршрут…'; showAnalysisStarted(data); if (embedded) window.parent.postMessage({type:'ps-analysis-started', ...data}, location.origin); })
+              .catch(error => { submitted.dataset.saving = ''; controls.forEach(node => node.disabled = false); status.textContent = error.message; });
+            return;
+          }
           if (embedded && submitted && (submitted.getAttribute("method") || "get").toLowerCase() === "post") {
             const action = new URL(submitted.getAttribute("action") || location.href, location.href);
             if (action.origin === location.origin) submitted.setAttribute("action", embeddedUrl(action.href));
@@ -729,7 +745,7 @@
       })();
     </script>
     {% if request.GET.workspace %}<script>window.addEventListener("load", function () { document.body.classList.add("is-ready"); });</script>{% endif %}
-<script src="{% static 'core/item-route.js' %}?v=20261030"></script>
+<script src="{% static 'core/item-route.js' %}?v=20261103-owner-choice"></script>
 </body>
 </html>
 

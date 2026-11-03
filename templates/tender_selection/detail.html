@@ -2,7 +2,7 @@
 {% load static tz tender_selection_extras %}
 
 {% block title %}{{ tender.title|default:tender.object_info|truncatechars:60 }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261103-owner-choice">{% endblock %}
 
 {% block content %}
 <div class="container ts-detail ts-detail--document" data-workspace-single-layer>

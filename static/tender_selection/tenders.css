@@ -297,3 +297,8 @@ body.workspace-embedded .ts-detail--document .ts-linkchip {
  .ts-mobile-close-row > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-2); font-size:12px; }
  .ts-mobile-close-row a { display:inline-flex; align-items:center; gap:8px; flex:none; min-height:44px; padding:0 12px; border-radius:10px; background:var(--surface-2); color:var(--ink); text-decoration:none; font-size:13px; }
 }
+
+.ts-question-options label { display:flex; align-items:center; gap:8px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; cursor:pointer; }
+.ts-question-options label:has(input:checked) { border-color:var(--ink-3); background:var(--tint-neutral); }
+.ts-question-options input[type="radio"] { margin:0; accent-color:var(--ink); }
+[data-owner-answer-status] { display:block; margin-top:8px; color:var(--ink-2); font-size:13px; }

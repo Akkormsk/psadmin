@@ -36,7 +36,7 @@
       if (!response.ok || response.redirected) throw new Error('Маршрут недоступен');
       const data = await response.json(); if (active !== request) return;
       title.textContent = data.name;
-      if (data.state !== 'ready') paragraph(({needs_review:'Маршрут требует уточнения.', building:'Маршрут строится в фоне.', stale:'ТЗ или этапы изменились. Сохранённый маршрут ниже устарел.', pending:'Маршрут ещё не построен. Нажмите «Обновить» в карточке тендера.'})[data.state] || 'Маршрут недоступен.');
+      if (data.state !== 'ready') paragraph(({needs_review:'В маршруте есть неопределённость.', building:'Маршрут строится в фоне.', stale:'ТЗ или этапы изменились. Сохранённый маршрут ниже устарел.', pending:'Маршрут ещё не построен. Нажмите «Обновить» в карточке тендера.'})[data.state] || 'Маршрут недоступен.');
       if (data.pending_changes) paragraph('Есть правки ТЗ на согласовании. Маршрут относится к текущим принятым данным.');
       if (data.reason) paragraph(data.reason);
       for (const step of data.steps || []) {
@@ -45,7 +45,15 @@
         if (step.description) { const description = document.createElement('p'); description.textContent = step.description; article.append(description); }
         body.append(article);
       }
-      if (data.question) paragraph(data.question);
+      if (data.missing_inputs?.length) paragraph('Для точного подбора исполнения не хватает данных: ' + data.missing_inputs.join(', ') + '. Требования заказчика не изменены.');
+      if (data.interaction?.options?.length >= 2) {
+        paragraph(data.interaction.question);
+        const form = document.createElement('form'); form.method = 'post'; form.action = data.interaction.url; form.dataset.ownerAnswer = ''; form.dataset.tenderId = data.tender_id;
+        const csrf = document.createElement('input'); csrf.type = 'hidden'; csrf.name = 'csrfmiddlewaretoken'; csrf.value = document.querySelector('[name="csrfmiddlewaretoken"]')?.value || ''; form.append(csrf);
+        const options = document.createElement('div'); options.className = 'ts-question-options';
+        for (const value of data.interaction.options) { const label = document.createElement('label'), radio = document.createElement('input'), text = document.createElement('span'); radio.type = 'radio'; radio.name = 'answer'; radio.value = value; radio.required = true; text.textContent = value; label.append(radio, text); options.append(label); }
+        const status = document.createElement('span'); status.dataset.ownerAnswerStatus = ''; status.setAttribute('role', 'status'); form.append(options, status); body.append(form);
+      }
     } catch (error) { if (error.name !== 'AbortError' && active === request) { title.textContent = 'Маршрут'; paragraph(error.message || 'Не удалось загрузить маршрут.'); } }
   }
   document.addEventListener('click', event => { const button = event.target.closest('[data-source-route]'); if (!button) return; event.preventDefault(); event.stopPropagation(); openRoute(button); });

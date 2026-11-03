@@ -196,10 +196,11 @@ class OwnerQuestionEvidenceTests(TestCase):
         self.assertTrue(decisions[0].needs_review)
         self.assertTrue(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
 
-    def test_missing_fact_keeps_owner_question(self):
+    def test_missing_customer_fact_is_not_a_question_to_the_owner(self):
         job = self.component({})
-        self.route(job, missing=["Плотность"], question="Укажите плотность.")
-        self.assertTrue(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+        decisions = self.route(job, missing=["Плотность"], question="Укажите плотность.")
+        self.assertTrue(decisions[0].needs_review)
+        self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
 
     def test_resolvable_alternate_label_suppresses_duplicate_question(self):
         job = self.component({"Плотность бумаги, г/м2": "200"})
@@ -212,12 +213,12 @@ class OwnerQuestionEvidenceTests(TestCase):
         self.assertFalse(decisions[0].needs_review)
         self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
 
-    def test_process_required_input_missing_creates_question(self):
+    def test_missing_calculator_input_is_retained_as_gap_without_owner_question(self):
         job = self.component({})
         decisions = self.route(job, missing=[], process_parameters={"required": ["Размер"]}, needs_review=False)
         self.assertTrue(decisions[0].needs_review)
-        self.assertIn("Размер", decisions[0].question)
-        self.assertTrue(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
+        self.assertEqual(decisions[0].rationale['missing_inputs'], ['Размер'])
+        self.assertFalse(OwnerInteraction.objects.filter(tender=job.tender, status="open").exists())
 
     @override_settings(CALCULATION_V2_ENABLED=True)
     def test_extraction_failure_is_partial_without_owner_question(self):

@@ -52,13 +52,13 @@ class SourceRouteTests(TestCase):
         self.run_route(); self.run_route()
         self.router.route.assert_not_called()
         self.assertEqual(ComponentRoutePlan.objects.get().status, "needs_review")
-        self.assertEqual(OwnerInteraction.objects.count(), 1)
+        self.assertEqual(OwnerInteraction.objects.count(), 0)
 
     def test_answer_to_route_question_invalidates_cache_and_reaches_router(self):
         from django.contrib.auth import get_user_model
         from tender_selection.services import answer_tender_owner_question
         user = get_user_model().objects.create_superuser('route-answer', password='test')
-        self.router.route.side_effect = lambda **kwargs: [RouteDecision(item.pk, (self.stage.pk,), Decimal('.9'), {}, True, 'Укажите цвет.', 'missing_information', ('Цвет',)) for item in kwargs['items']]
+        self.router.route.side_effect = lambda **kwargs: [RouteDecision(item.pk, (self.stage.pk,), Decimal('.9'), {}, True, 'Рабочий цвет?', 'execution_choice', ('Цвет',), ('Красный', 'Синий')) for item in kwargs['items']]
         self.run_route()
         question = OwnerInteraction.objects.get(status='open')
         answer_tender_owner_question(user, self.tender.pk, question.pk, 'Красный')
@@ -68,6 +68,30 @@ class SourceRouteTests(TestCase):
         answers = self.router.route.call_args.kwargs['items'][0].requirements['owner_answers']
         self.assertEqual(answers[0]['answer'], 'Красный')
         self.assertFalse(OwnerInteraction.objects.filter(status='open').exists())
+
+    def test_answered_source_conflict_is_not_reopened_or_written_into_customer_tz(self):
+        from django.contrib.auth import get_user_model
+        from tender_selection.services import answer_tender_owner_question
+        from .calculation_v2_pipeline import source_route_snapshots
+        user = get_user_model().objects.create_superuser('conflict-answer', password='test')
+        requirements = {"characteristics": [{"name": "Покрытие", "value": "матовое"}, {"name": "Покрытие", "value": "глянцевое"}]}
+        self.source.requirements = requirements
+        self.source.save()
+        self.router.route.side_effect = lambda **kwargs: [RouteDecision(item.pk, (self.stage.pk,), Decimal('.9'), {}, True, 'Уточните покрытие.', 'conflicting_information') for item in kwargs['items']]
+        self.run_route()
+        question = OwnerInteraction.objects.get(status='open')
+        self.assertEqual(question.possible_answers['options'], ['матовое', 'глянцевое'])
+        # Legacy stored interactions used conflicts, without missing_requirement_names.
+        question.context['missing_requirement_names'] = []
+        question.save()
+        answer_tender_owner_question(user, self.tender.pk, question.pk, 'матовое')
+        self.run_route()
+        self.assertFalse(OwnerInteraction.objects.filter(status='open').exists())
+        self.assertEqual(source_route_snapshots(self.tender)[self.source.pk]['state'], 'ready')
+        self.source.refresh_from_db()
+        self.assertEqual(self.source.requirements, requirements)
+        self.run_route()
+        self.assertEqual(self.router.route.call_count, 2)
 
     def test_route_budget_blocks_unpriced_call_before_gateway(self):
         from .calculation_v2_pipeline import GatewayBatchRouter, build_commercial_items

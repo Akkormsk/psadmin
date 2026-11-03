@@ -1105,8 +1105,8 @@ class AssistantToolRegistryTests(TestCase):
             execute_tool("tender.owner_question_answer", self.admin, args)
         self.assertEqual(execute_tool("tender.owner_question_answer", self.admin, args, confirmed=True)["status"], "resolved")
         self.assertEqual(OwnerFeedbackEvent.objects.filter(interaction=question).count(), 1)
-        with self.assertRaisesRegex(Exception, "уже закрыт"):
-            execute_tool("tender.owner_question_answer", self.admin, args, confirmed=True)
+        self.assertEqual(execute_tool("tender.owner_question_answer", self.admin, args, confirmed=True)["status"], "resolved")
+        self.assertEqual(OwnerFeedbackEvent.objects.filter(interaction=question).count(), 1)
 
     def test_estimate_save_recomputes_and_updates_same_record(self):
         from .models import TenderEstimate
