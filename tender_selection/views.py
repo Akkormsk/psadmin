@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.db.models import Count, F, Q
+from django.db.models import BooleanField, Case, Count, F, Q, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -399,7 +399,7 @@ def _deadline_urgency(deadline, now) -> tuple[int | None, str]:
 
 def _incoming_count(settings) -> int:
     rows, _hidden, _expired = visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED), min_price=settings.min_price,
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at"), min_price=settings.min_price,
         include_words=settings.include_words, exclude_words=settings.exclude_words,
     )
     return len(rows)
@@ -410,7 +410,7 @@ def _board_count(settings) -> int:
     from tenders.models import TenderEstimate
 
     review, _hidden, _expired = visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), min_price=settings.min_price,
+        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at"), min_price=settings.min_price,
         include_words=settings.include_words, exclude_words=settings.exclude_words,
     )
     estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).count()
@@ -440,7 +440,11 @@ def tender_list(request):
     now = timezone.now()
 
     queryset = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).defer(
-        "raw", "clarifications_raw", "risk_assessment", "risk_assessment_docs",
+        "raw", "notification_raw", "clarifications_raw", "complaints_raw", "protocol",
+        "risk_assessment", "risk_assessment_docs",
+    ).annotate(
+        list_notification_present=Case(When(notification_raw={}, then=Value(False)), default=Value(True), output_field=BooleanField()),
+        list_has_complaint=Case(When(complaints_raw=[], then=Value(False)), default=Value(True), output_field=BooleanField()),
     )
     if law_filter != "all":
         queryset = queryset.filter(law=law_filter)
@@ -468,7 +472,7 @@ def tender_list(request):
         tender.region_label = region_name(tender.region) if tender.region else ""
         tender.law_label = LAW_LABELS.get(tender.law, tender.law)
         tender.days_left, tender.deadline_state = _deadline_urgency(tender.collecting_finished_at, now)
-        tender.has_complaint = bool(tender.complaints_raw)
+        tender.has_complaint = tender.list_has_complaint
         # 223-ФЗ не имеет разобранного извещения по конструкции источника — это не
         # ошибка. У 44-ФЗ пустой notification_raw значит запрос ещё не удался — но
         # только если попытка вообще была (notification_checked_at): свежевыгруженный
@@ -476,7 +480,7 @@ def tender_list(request):
         # до него не добрался, — это не сбой, а «ещё не проверяли», значок не должен
         # гореть на буквально каждой новой карточке.
         tender.notification_missing = (
-            tender.law == "fz44" and not tender.notification_raw and tender.notification_checked_at is not None
+            tender.law == "fz44" and not tender.list_notification_present and tender.notification_checked_at is not None
             and not tender.notification_error
         )
 

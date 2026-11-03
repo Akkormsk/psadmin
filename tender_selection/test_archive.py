@@ -35,6 +35,26 @@ class ArchiveTests(TestCase):
         self.assertEqual(response.status_code, 200)
         return [row["tender"].purchase_number for row in response.context["page_obj"].object_list], response
 
+    def test_hidden_incoming_keeps_payloads_deferred_and_displays_flags(self):
+        from .models import FilterSettings
+        settings = FilterSettings.load()
+        settings.include_words = "кружки"
+        settings.save()
+        Tender.objects.create(
+            purchase_number="hidden-payload", title="Блокноты", law="fz44",
+            notification_raw={"source": {"large_document": "x" * 10000}},
+            notification_checked_at=self.now, complaints_raw=[{"text": "Жалоба"}],
+            raw={"large_document": "x" * 10000},
+        )
+        response = self.client.get("/tender-selection/", {"view": "list", "all": "1"})
+        self.assertEqual(response.status_code, 200)
+        rows = list(response.context["page_obj"].object_list)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].has_complaint)
+        self.assertFalse(rows[0].notification_missing)
+        self.assertTrue({"raw", "notification_raw", "complaints_raw", "protocol"} <= rows[0].get_deferred_fields())
+        self.assertContains(response, "Вернуть отбор")
+
     def test_stage_is_the_reason_and_each_stage_is_counted(self):
         self._archived("incoming", "Кружки")
         self._archived("evaluation", "Флаги", review=Tender.INTERESTING)
