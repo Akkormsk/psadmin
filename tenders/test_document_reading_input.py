@@ -1,6 +1,7 @@
 import io
 import json
 import zipfile
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from django.test import TestCase, SimpleTestCase
@@ -543,6 +544,27 @@ class StagedResponseCacheTests(TestCase):
         self.engine = GatewayDocumentEnricher()
         self.engine.shared_context = '{}'
         self.engine.document_images = []
+
+    @patch('tenders.services._ai_gateway_json')
+    def test_budget_limits_output_reservation_without_cutting_input_or_thinking(self, gateway):
+        from .models import TenderComputeJob
+        engine = GatewayDocumentEnricher(max_cost_rub='4')
+        engine.shared_context = 'x' * 216000
+        job = TenderComputeJob.objects.create(tender=self.tender)
+        gateway.return_value = ({'items': []}, {'prompt_tokens': 50000, 'completion_tokens': 1200})
+        rows, metrics = engine.ask_stage(job, 'structure', 'Read structure', {}, output_tokens=6200)
+        self.assertEqual(rows, [])
+        self.assertEqual(gateway.call_args.kwargs['shared_context'], engine.shared_context)
+        self.assertEqual(gateway.call_args.kwargs['thinking'], engine.thinking)
+        self.assertGreaterEqual(gateway.call_args.kwargs['max_tokens'], 2048)
+        self.assertLess(gateway.call_args.kwargs['max_tokens'], 6200)
+        self.assertTrue(metrics['budget_limited_output'])
+        self.assertLessEqual(Decimal(metrics['reserved_cost_rub']), Decimal('4'))
+        engine.max_cost_rub = Decimal('0.001')
+        gateway.reset_mock()
+        with self.assertRaisesRegex(ValueError, 'бюджет'):
+            engine.ask_stage(TenderComputeJob.objects.create(tender=self.tender), 'tz', 'Read TZ', {}, output_tokens=32000)
+        gateway.assert_not_called()
 
     def fingerprint(self):
         from .calculation_v2_pipeline import _fingerprint

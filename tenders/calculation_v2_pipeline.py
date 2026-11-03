@@ -304,8 +304,23 @@ class GatewayDocumentEnricher:
         # Reserve the uncached cache-write price, not an assumed future cache hit.
         context_bound = getattr(self, '_context_token_bound', None)
         input_bound = (context_bound + len(prompt.encode('utf-8')) + 4096) if context_bound else len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images)
-        reserve = spend_rub({'prompt_tokens': input_bound, 'completion_tokens': output_tokens}, self.model)
+        requested_output_tokens = output_tokens
         remaining = self.max_cost_rub - Decimal(str(self.cost_rub)) if self.max_cost_rub is not None else Decimal('10')
+        def reservation(limit):
+            amount = spend_rub({'prompt_tokens': input_bound, 'completion_tokens': limit}, self.model)
+            return Decimal(str(amount)) * Decimal('1.25') if amount is not None else None
+        reserved = reservation(output_tokens)
+        if reserved is not None and reserved > remaining:
+            low, high = 0, output_tokens
+            while low < high:
+                mid = (low + high + 1) // 2
+                if reservation(mid) <= remaining:
+                    low = mid
+                else:
+                    high = mid - 1
+            if low >= min(2048, requested_output_tokens):
+                output_tokens = low
+        reserve = spend_rub({'prompt_tokens': input_bound, 'completion_tokens': output_tokens}, self.model)
         if reserve is None or Decimal(str(reserve)) * Decimal('1.25') > remaining:
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'provider_call_happened': False,
                 'input_token_bound': input_bound, 'remaining_budget_rub': str(remaining), 'reserved_cost_rub': str(reserve)}
@@ -331,7 +346,8 @@ class GatewayDocumentEnricher:
             raise ValueError('Этап не вернул полный список результатов.')
         return raw['items'], {'state': 'pending_validation', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at,
             'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION,
-            'reserved_cost_rub': str(Decimal(str(reserve)) * Decimal('1.25')), 'input_token_bound': input_bound, 'result': raw['items']}
+            'reserved_cost_rub': str(Decimal(str(reserve)) * Decimal('1.25')), 'input_token_bound': input_bound,
+            'requested_output_tokens': requested_output_tokens, 'output_token_limit': output_tokens, 'budget_limited_output': output_tokens < requested_output_tokens, 'result': raw['items']}
 
     def stage_quote(self, row, *, required=True):
         if isinstance(row.get('evidence'), list):
