@@ -282,6 +282,17 @@ def collect_saved_status(number):
     diagnostic_engine = GatewayDocumentEnricher(max_cost_rub='0')
     _, document_states = diagnostic_engine._bounded_documents(assess_quality(tender, [])['documents'], compact=True)
     document_states = [{key: row.get(key) for key in ('name', 'reading_status', 'error', 'warnings', 'cache_kind', 'cached_text_chars', 'sent_text_chars', 'image_count')} for row in document_states]
+    from unittest.mock import patch
+    from tenders.calculation_v2_pipeline import document_analysis_sources
+    sources = list(document_analysis_sources(tender)[0].values())
+    with patch('tender_selection.services.documents_html'):
+        diagnostic_engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+    context = json.loads(diagnostic_engine.shared_context)
+    print('CONTEXT_FOOTPRINT ' + json.dumps({'source_count': len(sources),
+        'sections': {key: {'characters': len(json.dumps(value, ensure_ascii=False)),
+                           'utf8_bytes': len(json.dumps(value, ensure_ascii=False).encode('utf-8'))} for key,value in context.items()},
+        'documents': [{'name': doc['name'], 'paragraph_chars': len(doc['text']),
+            'table_chars': len(json.dumps(doc['tables'], ensure_ascii=False))} for doc in diagnostic_engine.stage_documents]}, ensure_ascii=False), flush=True)
     replay = None
     stages = latest.diagnostics.get('stages', {}) if latest else {}
     if stages.get('tz', {}).get('result') and hasattr(diagnostic_engine, 'reconcile_specifications'):
