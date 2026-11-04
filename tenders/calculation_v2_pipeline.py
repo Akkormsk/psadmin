@@ -164,7 +164,7 @@ class GatewayBatchRouter:
             "items": [{"component_id": item.pk, "name": item.name, "quantity": str(item.effective_quantity), "unit": item.unit, "requirements": self._requirements_payload(item.requirements)} for item in items],
         }
         shared_context = json.dumps({"processes": _route_processes(processes), "knowledge": knowledge}, ensure_ascii=False, default=str)
-        prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string],\"choices\":[string],\"selected_choice\":string}]}. Plan from the combined requirements and owner_answers already supplied; do not reread documents. The owner is not the customer: never ask them what the customer meant or to invent missing specifications. For missing customer data, select the best supported provisional execution route, explain the gap in reason and set needs_review if it materially affects execution. Do not invent requirements. Always choose the most probable defensible route yourself; do not block for owner answers. For uncertainty, retain needs_review=true to identify an assumption, explain why the selected route is most probable in reason, and supply 2 to 5 optional working alternatives in choices. selected_choice must equal the offered alternative actually used by process_ids; never select a label inconsistent with the route. Missing data does not justify inventing customer specifications. Previously saved owner_answers are binding working instructions for this position; the latest correction for the same aspect takes precedence. Preserve these instructions if new documents conflict, and explicitly flag the conflict in reason instead of silently replacing the owner choice. Choices are working route assumptions, not verified customer requirements. Never repeat a resolved owner question, including paraphrases. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
+        prompt = """Route every tender item in one batch. Write all reasons and questions in Russian. A listed process is a commercially meaningful external execution capability: one provider may deliver the finished component alone, or multiple providers may be needed in a meaningful sequence. Do not decompose a finished result into internal factory operations. Do not invent a supply step merely because a product has a physical material. Use only listed process ids. Do not search, price, or calculate. Return JSON only: {\"items\":[{\"component_id\":integer,\"process_ids\":[integer],\"confidence\":number 0..1,\"reason\":string,\"alternatives\":[integer],\"needs_review\":boolean,\"question\":string,\"question_kind\":\"missing_information|conflicting_information|execution_choice|unspecified\",\"missing_requirement_names\":[string],\"choices\":[string],\"selected_choice\":string}]}. Keep reason to one concise Russian sentence; do not repeat item specifications. Omit optional question/choices/alternatives fields when there is no material uncertainty. Plan from the combined requirements and owner_answers already supplied; do not reread documents. The owner is not the customer: never ask them what the customer meant or to invent missing specifications. For missing customer data, select the best supported provisional execution route, explain the gap in reason and set needs_review if it materially affects execution. Do not invent requirements. Always choose the most probable defensible route yourself; do not block for owner answers. For uncertainty, retain needs_review=true to identify an assumption, explain why the selected route is most probable in reason, and supply 2 to 5 optional working alternatives in choices. selected_choice must equal the offered alternative actually used by process_ids; never select a label inconsistent with the route. Missing data does not justify inventing customer specifications. Previously saved owner_answers are binding working instructions for this position; the latest correction for the same aspect takes precedence. Preserve these instructions if new documents conflict, and explicitly flag the conflict in reason instead of silently replacing the owner choice. Choices are working route assumptions, not verified customer requirements. Never repeat a resolved owner question, including paraphrases. Never ask for a requirement already present in the item requirements. For missing_information, list the exact requirement names that are missing. Context data follows:\n""" + json.dumps(payload, ensure_ascii=False, default=str)
         output_tokens = min(32000, max(8000, len(items) * 400))
         reserve = spend_rub({"prompt_tokens": len((shared_context + prompt).encode("utf-8")) + 4096, "completion_tokens": output_tokens}, self.model)
         if not self.max_cost_rub.is_finite() or self.max_cost_rub <= 0 or reserve is None or Decimal(str(reserve)) > self.max_cost_rub:
@@ -219,6 +219,39 @@ class GatewayBatchRouter:
         return output
 
 
+def compact_intake_context(payload):
+    """Losslessly reference repeated source strings; do not summarize or clip evidence."""
+    import collections
+    original = json.dumps(payload, ensure_ascii=False, default=str)
+    if len(original.encode('utf-8')) < 250000:
+        return original
+    counts = collections.Counter()
+    def count(value):
+        if isinstance(value, str):
+            counts[value] += 1
+        elif isinstance(value, dict):
+            for child in value.values():
+                count(child)
+        elif isinstance(value, list):
+            for child in value:
+                count(child)
+    count(payload)
+    texts = [text for text, frequency in counts.items() if frequency > 1 and len(text.encode('utf-8')) >= 80]
+    indexes = {text: index for index, text in enumerate(texts)}
+    def pack(value):
+        if isinstance(value, str):
+            return {'$text': indexes[value]} if value in indexes else value
+        if isinstance(value, dict):
+            return {key: pack(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [pack(child) for child in value]
+        return value
+    packed = {**pack(payload), 'shared_texts': texts,
+        'context_encoding': 'A value {"$text": N} means the exact complete string shared_texts[N]. Read it as expanded source text; copy quotations from that original string. No source text has been removed or summarized.'}
+    encoded = json.dumps(packed, ensure_ascii=False, default=str)
+    return encoded if len(encoded.encode('utf-8')) < len(original.encode('utf-8')) * .9 else original
+
+
 class GatewayDocumentEnricher:
     """One bounded, evidence-only document analysis for the pre-routing intake stage."""
 
@@ -261,9 +294,9 @@ class GatewayDocumentEnricher:
         self.document_lookup = {index: doc for index, doc in enumerate(self.stage_documents, 1)}
         self.baseline_sources = {source.pk: effective_item_requirements(source).get('characteristics', []) for source in sources}
         self.baselines = {source.pk: [{'id': i, 'name': fact['name'], 'value': fact['value']} for i, fact in enumerate(effective_item_requirements(source).get('characteristics', []))] for source in sources}
-        self.shared_context = json.dumps({'notification': tender.notification_raw,
+        self.shared_context = compact_intake_context({'notification': tender.notification_raw,
             'working_items': [{'source_id': source.pk, 'name': source.original_text, 'quantity': str(source.quantity), 'unit': source.unit, 'baseline_facts': self.baselines[source.pk]} for source in sources],
-            'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes'], **({'visual_pages': doc['visual_pages']} if doc.get('visual_pages') else {})} for index, doc in self.document_lookup.items()]}, ensure_ascii=False, default=str)
+            'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes'], **({'visual_pages': doc['visual_pages']} if doc.get('visual_pages') else {})} for index, doc in self.document_lookup.items()]})
         return {'documents': considered, 'context_characters': len(self.shared_context), 'contract': self.STAGED_CONTRACT}
 
     def _remember_context_usage(self, usage):
@@ -282,7 +315,7 @@ class GatewayDocumentEnricher:
         fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
         history = TenderComputeJob.objects.filter(tender=job.tender, **{
             f'diagnostics__stages__{stage}__input_fingerprint': fingerprint,
-            f'diagnostics__stages__{stage}__state__in': ['complete', 'failed'],
+            f'diagnostics__stages__{stage}__state__in': ['complete', 'failed', 'pending_validation'],
         }).exclude(pk=job.pk).order_by('-pk')
         recoverable, completed = None, None
         for cached in history:
@@ -294,7 +327,7 @@ class GatewayDocumentEnricher:
             if previous.get('state') == 'complete':
                 completed = completed or (cached.pk, rows)
                 continue
-            if previous.get('state') == 'failed' and previous.get('validation_version') != self.STAGED_VALIDATION_VERSION and recoverable is None:
+            if recoverable is None and (previous.get('state') == 'pending_validation' or (previous.get('state') == 'failed' and previous.get('validation_version') != self.STAGED_VALIDATION_VERSION)):
                 recoverable = (cached.pk, rows)
         if completed:
             source_id, rows = completed

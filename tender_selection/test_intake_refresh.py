@@ -233,3 +233,57 @@ class ResilientIntakeFlowTests(TransactionTestCase):
         self.assertIsNone(source.quantity)
         self.assertEqual(source.provenance, {'kind': 'tender_subject', 'field': 'title'})
         self.assertFalse(source.requirements['characteristics'])
+
+
+class LargeIntakeStageTests(TestCase):
+    def test_batches_keep_all_positions_and_do_not_reuse_source_only_result(self):
+        from decimal import Decimal
+        from .models import Tender
+        from .services import _staged_document_analysis, _staged_input_fingerprint
+        from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, ingest_source_items
+        from tenders.test_calculation_v2_pipeline import notification, raw_item
+        tender = Tender.objects.create(purchase_number='large-stage', title='Товары', notification_raw=notification([raw_item(f'Товар {i}', '1') for i in range(21)], documents=[{'url': 'https://zakupki.gov.ru/large-spec', 'fileName': 'spec.docx'}]))
+        from .models import DocumentPreview
+        DocumentPreview.objects.create(url='https://zakupki.gov.ru/large-spec', filename='spec.docx', kind='docx', html=''.join(f'<p>Товар {i}</p>' for i in range(21)))
+        sources = ingest_source_items(tender)
+        engine = GatewayDocumentEnricher(max_cost_rub=Decimal('6'))
+        previous = TenderComputeJob.objects.create(tender=tender, status='needs_review', diagnostics={
+            'staged_input_fingerprint': _staged_input_fingerprint(tender, engine), 'enrichment_state': 'no_change',
+            'stages': {name: {'state': 'complete', 'outcome': 'source_only', 'result': []} for name in ('structure','national_regime','tz')}})
+        job = TenderComputeJob.objects.create(tender=tender, status='running')
+        by_id = {source.pk: source for source in sources}
+        def answer(_job, stage, instruction, task, **kwargs):
+            if stage.startswith('structure'):
+                rows = [{'source_id': pk, 'kind': 'finished', 'name': by_id[pk].original_text, 'reason': 'Один товар', 'evidence': [{'doc_id': 1, 'quote': by_id[pk].original_text}], 'goods': [{'name': by_id[pk].original_text, 'quantity_per_parent': 1, 'unit': by_id[pk].unit}]} for pk in task['requested_source_ids']]
+            elif stage.startswith('national_regime'):
+                rows = [{'key': good['key'], 'status': 'unknown', 'basis': []} for good in task['goods']]
+            else:
+                rows = [{'key': good['key'], 'characteristics': []} for good in task['goods']]
+            return rows, {'state': 'pending_validation', 'result': rows, 'cost_rub': '0'}
+        with patch('tender_selection.services.documents_html'), patch.object(engine, 'ask_stage', side_effect=answer) as ask:
+            _staged_document_analysis(job, engine)
+        self.assertEqual(len(job.diagnostics['stages']['structure']['result']), 21)
+        self.assertNotIn('document_analysis_reused', job.diagnostics)
+        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [20, 1])
+        self.assertEqual(len(job.diagnostics['stages']['tz']['result']), 21)
+        self.assertEqual(job.diagnostics['analysis_gaps'], [])
+        self.assertTrue(all(job.diagnostics['stages'][name]['state'] == 'complete' for name in ('structure','national_regime','tz')))
+
+    def test_context_compaction_preserves_full_original_data(self):
+        import json
+        from tenders.calculation_v2_pipeline import compact_intake_context
+        text = 'Точное исходное требование: 10 ≤ значение < 20. ' * 20
+        original = {'notification': {'items': [{'name': str(i), 'value': text} for i in range(400)]}, 'documents': [{'paragraphs': text}]}
+        encoded = compact_intake_context(original)
+        packed = json.loads(encoded)
+        self.assertIn('shared_texts', packed)
+        def expand(value):
+            if isinstance(value, dict):
+                if set(value) == {'$text'}:
+                    return packed['shared_texts'][value['$text']]
+                return {key: expand(child) for key,child in value.items()}
+            if isinstance(value, list):
+                return [expand(child) for child in value]
+            return value
+        self.assertEqual({key: expand(packed[key]) for key in original}, original)
+        self.assertLess(len(encoded), len(json.dumps(original, ensure_ascii=False)) / 2)

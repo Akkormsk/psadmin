@@ -2150,10 +2150,14 @@ def _staged_document_analysis(job, enricher):
     stages['documents'] = {'state': 'complete', 'result': prepared, 'cost_rub': '0'}
     job.diagnostics['analysis_gaps'] = [{'stage': 'documents', 'name': doc['name'], 'reason': doc.get('error') or '; '.join(doc.get('warnings') or []) or 'Документ прочитан не полностью.'} for doc in getattr(enricher, 'input_gaps', [])]
     _publish_intake(job)
-    previous = type(job).objects.filter(tender=job.tender, diagnostics__staged_input_fingerprint=fingerprint,
-        diagnostics__enrichment_state__in=['needs_review', 'no_change', 'no_data']).exclude(pk=job.pk).order_by('-pk').first()
+    candidates = type(job).objects.filter(tender=job.tender, diagnostics__staged_input_fingerprint=fingerprint,
+        diagnostics__enrichment_state__in=['needs_review', 'no_change', 'no_data']).exclude(pk=job.pk).order_by('-pk')
+    previous = next((candidate for candidate in candidates if all(
+        candidate.diagnostics.get('stages', {}).get(name, {}).get('state') == 'complete'
+        and candidate.diagnostics['stages'][name].get('outcome') != 'source_only'
+        for name in ('structure', 'national_regime', 'tz'))), None)
     if previous:
-        job.diagnostics["analysis_gaps"].extend(previous.diagnostics.get("analysis_gaps", []))
+        job.diagnostics["analysis_gaps"].extend(gap for gap in previous.diagnostics.get("analysis_gaps", []) if gap.get("stage") in {"structure", "national_regime", "tz"})
         for key in ('structure', 'national_regime', 'tz'):
             old = previous.diagnostics.get('stages', {}).get(key)
             if old:
@@ -2169,10 +2173,37 @@ def _staged_document_analysis(job, enricher):
         if enricher.document_images:
             instruction += '\nИзображения приложены в порядке image_indexes. Прочитай их вместе с текстом. Для цитаты со скана укажи section: «Страница N» из visual_pages; для встроенного рисунка — «Изображение N» из image_indexes. Не выдавай предположение по изображению за установленное требование.'
         try:
-            rows, metrics = enricher.ask_stage(job, name, instruction, task, output_tokens=limit)
-            stages[name] = metrics
-            job.save(update_fields=['diagnostics', 'updated_at'])
-            validated = validator(rows)
+            requested = list(enricher.stage_sources) if name == 'structure' else task.get('goods', [])
+            batches = [requested[offset:offset + 20] for offset in range(0, len(requested), 20)] if len(requested) > 20 else []
+            if batches:
+                rows, children = [], []
+                for index, batch in enumerate(batches, 1):
+                    child = f'{name}:{index}'
+                    subset = {**task}
+                    if name == 'structure':
+                        subset['requested_source_ids'] = batch
+                    else:
+                        subset['goods'] = batch
+                        keys = {good['key'] for good in batch}
+                        for field in ('baseline_facts', 'notification_evidence'):
+                            if field in subset:
+                                subset[field] = {key: value for key, value in subset[field].items() if key in keys}
+                    job.diagnostics['refresh']['label'] = f'{label} {index}/{len(batches)}'
+                    _publish_intake(job)
+                    reply, metrics = enricher.ask_stage(job, child, instruction, subset, output_tokens=limit)
+                    stages[child] = metrics
+                    children.append(child)
+                    rows.extend(reply)
+                    _publish_intake(job)
+                stages[name] = {'state': 'pending_validation', 'result': rows, 'batches': children, 'cost_rub': '0'}
+                validated = validator(rows)
+                for child in children:
+                    stages[child]['state'] = 'complete'
+            else:
+                rows, metrics = enricher.ask_stage(job, name, instruction, task, output_tokens=limit)
+                stages[name] = metrics
+                job.save(update_fields=['diagnostics', 'updated_at'])
+                validated = validator(rows)
         except (ValueError, TenderAIError) as exc:
             job.diagnostics['analysis_gaps'].append({'stage': name, 'reason': str(exc)})
             stages[name] = {**stages.get(name, {}), 'outcome': 'source_only', 'warning': str(exc)}
@@ -2180,7 +2211,7 @@ def _staged_document_analysis(job, enricher):
         stages[name]['state'] = 'complete'
         return validated
 
-    structure_instruction = '''Задача только структуры поставки. Прочитай извещение И ВСЕ документы; для КАЖДОГО working_item верни ровно одну запись. Раздели готовое изделие с комплектностью и набор самостоятельных товаров по смыслу, а не по слову в названии. Принадлежности, расходники, документы и штатная упаковка основного готового изделия — его комплектность. Набор разных самостоятельных изделий — kit, каждый товар отдельным элементом goods, включая отдельно описанную изготовляемую упаковку набора. Не требуй буквального слова «самостоятельные» в документе. Прежние характеристики могут ошибочно содержать разные товары как вложенные словари: обязательно переоцени такую структуру. Нельзя отвечать items:[] или пропускать позиции, даже если нет новых характеристик. Если данных недостаточно — unclear с объяснением, одна целая позиция. Количество внутри набора бери из документа с обоснованием, не выдумывай единицу при отсутствии основания. Не извлекай все характеристики и 1875 на этом шаге. Формат {"items":[{"source_id":integer,"kind":"finished|kit|unclear","name":"краткое название исходной поставки","reason":"обоснование структуры","evidence":[{"doc_id":integer,"quote":"ОДИН дословный непрерывный фрагмент ячейки/абзаца","section":"раздел/таблица"}],"goods":[{"name":"товар","quantity_per_parent":number,"unit":"единица"}]}]}. Для evidence копируй текст дословно, не соединяй разные ячейки через двоеточия/тире/точки с запятой и не вставляй многоточия. Если основания в разных местах — отдельные объекты evidence. Для unclear evidence может быть пустым. Для finished/unclear goods содержит один готовый товар, его название можно нормализовать; для kit перечисли ВСЕ составляющие. Цена принадлежит исходной поставке, цены частей не придумывай.'''
+    structure_instruction = '''Задача только структуры поставки. Прочитай извещение И ВСЕ документы; для КАЖДОГО working_item верни ровно одну запись; если task.requested_source_ids передан, верни ТОЛЬКО эти позиции, остальные будут разобраны отдельно с теми же документами. Раздели готовое изделие с комплектностью и набор самостоятельных товаров по смыслу, а не по слову в названии. Принадлежности, расходники, документы и штатная упаковка основного готового изделия — его комплектность. Набор разных самостоятельных изделий — kit, каждый товар отдельным элементом goods, включая отдельно описанную изготовляемую упаковку набора. Не требуй буквального слова «самостоятельные» в документе. Прежние характеристики могут ошибочно содержать разные товары как вложенные словари: обязательно переоцени такую структуру. Нельзя отвечать items:[] или пропускать позиции, даже если нет новых характеристик. Если данных недостаточно — unclear с объяснением, одна целая позиция. Количество внутри набора бери из документа с обоснованием, не выдумывай единицу при отсутствии основания. Не извлекай все характеристики и 1875 на этом шаге. Формат {"items":[{"source_id":integer,"kind":"finished|kit|unclear","name":"краткое название исходной поставки","reason":"обоснование структуры","evidence":[{"doc_id":integer,"quote":"ОДИН дословный непрерывный фрагмент ячейки/абзаца","section":"раздел/таблица"}],"goods":[{"name":"товар","quantity_per_parent":number,"unit":"единица"}]}]}. Для evidence копируй текст дословно, не соединяй разные ячейки через двоеточия/тире/точки с запятой и не вставляй многоточия. Если основания в разных местах — отдельные объекты evidence. Для unclear evidence может быть пустым. Для finished/unclear goods содержит один готовый товар, его название можно нормализовать; для kit перечисли ВСЕ составляющие. Цена принадлежит исходной поставке, цены частей не придумывай.'''
     goods = ask('structure', 'Определяем товары и состав наборов…', structure_instruction, {}, enricher.reconcile_structure, min(16000, 5000 + len(sources)*600), lambda: enricher.reconcile_structure([]))
     job.diagnostics['analysis_gaps'].extend(enricher.validation_gaps)
     job.diagnostics["structure_requires_review"] = [good["source_id"] for good in goods if good["kind"] == "unclear"]
