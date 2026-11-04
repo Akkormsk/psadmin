@@ -283,6 +283,7 @@ class GatewayDocumentEnricher:
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
         self._context_token_bound = None
+        self._stage_output_density = {}
         documents_html(tender, [doc for doc in documents if doc.get('url')], timeout=5, archive_timeout=5, direct_timeout=5)
         from .requirement_values import _unit_aliases
         self.unit_aliases = _unit_aliases()
@@ -299,6 +300,8 @@ class GatewayDocumentEnricher:
         notice = copy.deepcopy(tender.notification_raw)
         objects = _dig(notice or {}, 'source', 'notificationInfo', 'purchaseObjectsInfo', 'notDrugPurchaseObjectsInfo', default={})
         raw_items = _as_list(objects.get('purchaseObject')) if isinstance(objects, dict) else []
+        normalized_items = parse_notification(tender.notification_raw or {}).get('items', [])
+        self.normalized_notification_items = {}
         from .document_enrichment import notification_origin
         self.notification_items = {}
         for source in sources:
@@ -306,6 +309,8 @@ class GatewayDocumentEnricher:
             index = (origin.metadata or {}).get('notification_index') if origin else None
             if type(index) is int and 0 <= index < len(raw_items):
                 self.notification_items[source.pk] = {'source_id': source.pk, 'notification_index': index, 'value': raw_items[index]}
+                if index < len(normalized_items):
+                    self.normalized_notification_items[source.pk] = {'source_id': source.pk, 'notification_index': index, 'value': normalized_items[index]}
         if raw_items:
             objects['purchaseObject'] = {'location': 'task.notification_items; complete original records for the requested positions',
                 'unassigned': [{'notification_index': index, 'value': value} for index, value in enumerate(raw_items) if index not in {row['notification_index'] for row in self.notification_items.values()}]}
@@ -322,8 +327,8 @@ class GatewayDocumentEnricher:
         if type(tokens) is int and tokens > 0:
             details = usage.get('prompt_tokens_details') or {}
             cached = (usage.get('cache_read_input_tokens') or details.get('cached_tokens') or 0) + (usage.get('cache_creation_input_tokens') or details.get('cache_write_tokens') or 0)
-            # The full prior request bounds the unchanged prefix, including images.
-            bound = max(tokens, cached)
+            # An explicit cache checkpoint measures the unchanged prefix exactly, including images.
+            bound = cached or tokens
             self._context_token_bound = min(getattr(self, '_context_token_bound', None) or bound, bound)
 
     def ask_stage(self, job, stage, instruction, task, *, output_tokens):
@@ -333,8 +338,17 @@ class GatewayDocumentEnricher:
             selected = task.get('requested_source_ids')
             if selected is None:
                 selected = list(dict.fromkeys(good['source_id'] for good in task['goods'])) if task.get('goods') else list(self.stage_sources)
+            notice_items = self.normalized_notification_items if stage.split(':', 1)[0] in {'national_regime', 'tz'} else self.notification_items
             task = {**task, 'working_items': [self.working_context[pk] for pk in selected],
-                'notification_items': [self.notification_items[pk] for pk in selected if pk in self.notification_items]}
+                'notification_items': [notice_items[pk] for pk in selected if pk in notice_items]}
+        item_count = len(task.get('requested_source_ids') or task.get('goods') or [])
+        phase = stage.split(':', 1)[0]
+        densities = getattr(self, '_stage_output_density', {})
+        self._stage_output_density = densities
+        def remember_output(usage):
+            tokens = (usage or {}).get('completion_tokens') or 0
+            if item_count and tokens:
+                densities[phase] = max(densities.get(phase, 0), tokens / item_count)
         prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
         fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
         history = TenderComputeJob.objects.filter(tender=job.tender, **{
@@ -345,6 +359,7 @@ class GatewayDocumentEnricher:
         for cached in history:
             previous = cached.diagnostics['stages'][stage]
             self._remember_context_usage(previous.get('usage'))
+            remember_output(previous.get('usage'))
             rows = previous.get('result')
             if not isinstance(rows, list):
                 continue
@@ -380,10 +395,12 @@ class GatewayDocumentEnricher:
                     high = mid - 1
             if low >= min(2048, requested_output_tokens):
                 output_tokens = low
+        import math
+        minimum_output = min(requested_output_tokens, max(2048, math.ceil(item_count * max(400, densities.get(phase, 0) * 1.5))))
         reserve = spend_rub({'prompt_tokens': input_bound, 'completion_tokens': output_tokens}, self.model)
-        if reserve is None or Decimal(str(reserve)) * Decimal('1.25') > remaining:
+        if output_tokens < minimum_output or reserve is None or Decimal(str(reserve)) * Decimal('1.25') > remaining:
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'provider_call_happened': False,
-                'input_token_bound': input_bound, 'remaining_budget_rub': str(remaining), 'reserved_cost_rub': str(reserve)}
+                'input_token_bound': input_bound, 'remaining_budget_rub': str(remaining), 'reserved_cost_rub': str(reserve), 'minimum_output_tokens': minimum_output, 'affordable_output_tokens': output_tokens}
             raise ValueError('Следующий этап превышает оставшийся бюджет; запрос не отправлен.')
         started = time.monotonic()
         started_at = timezone.now().isoformat()
@@ -395,10 +412,13 @@ class GatewayDocumentEnricher:
         except Exception as exc:
             usage = getattr(exc, 'usage', {}) or {}
             self.cost_rub += float(intake_spend_rub(usage, self.model) or 0)
-            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(intake_spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000)}
+            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(intake_spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000),
+                'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION,
+                **({'incomplete_response': exc.incomplete_response} if getattr(exc, 'incomplete_response', None) else {})}
             raise
         amount = intake_spend_rub(usage, self.model)
         self._remember_context_usage(usage)
+        remember_output(usage)
         self.cost_rub += float(amount or 0)
         self.usage = {key: self.usage.get(key, 0) + usage.get(key, 0) for key in ('prompt_tokens', 'completion_tokens')}
         if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):

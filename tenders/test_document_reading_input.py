@@ -582,6 +582,21 @@ class StagedResponseCacheTests(TestCase):
             engine.ask_stage(TenderComputeJob.objects.create(tender=self.tender), 'tz', 'Read TZ', {}, output_tokens=32000)
         gateway.assert_not_called()
 
+    @patch('tenders.services._ai_gateway_json')
+    def test_budget_refuses_undersized_output_before_paying_for_a_large_batch(self, gateway):
+        from decimal import Decimal
+        self.engine.shared_context = 'x' * 200000
+        self.engine.max_cost_rub = Decimal('4')
+        self.engine._stage_output_density = {'structure': 400}
+        current = self.create_job()
+        with self.assertRaisesRegex(ValueError, 'бюджет'):
+            self.engine.ask_stage(current, 'structure:1', 'Read', {'requested_source_ids': list(range(20))}, output_tokens=16000)
+        gateway.assert_not_called()
+        self.assertFalse(current.diagnostics['stages']['structure:1']['provider_call_happened'])
+        self.assertEqual(current.diagnostics['stages']['structure:1']['minimum_output_tokens'], 12000)
+        self.engine._remember_context_usage({'prompt_tokens': 146122, 'cache_creation_input_tokens': 115678})
+        self.assertEqual(self.engine._context_token_bound, 115678)
+
     def fingerprint(self):
         from .calculation_v2_pipeline import _fingerprint
         return _fingerprint({

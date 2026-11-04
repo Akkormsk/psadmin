@@ -49,15 +49,16 @@ class GatewayReliabilityTests(SimpleTestCase):
         gateway.return_value = _Response(json.dumps({
             "id": "request-test", "model": "test/model", "choices": [{
                 "finish_reason": "length", "message": {"content": content}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 32},
+            "usage": {"prompt_tokens": 12, "completion_tokens": 32, "cache_read_input_tokens": 8},
         }).encode())
         with self.assertRaises(TenderAIError) as caught:
-            _ai_gateway_json("private input", capture_incomplete_response=True)
+            _ai_gateway_json("private input", capture_incomplete_response=True, json_attempts=1)
         evidence = caught.exception.incomplete_response
         self.assertEqual(len(evidence['content']), 256000)
         self.assertTrue(evidence['capture_truncated'])
         self.assertEqual(evidence['content_characters'], len(content))
         self.assertEqual(caught.exception.usage['completion_tokens'], 32)
+        self.assertEqual(caught.exception.usage['cache_read_input_tokens'], 8)
         self.assertNotIn('private input', str(evidence))
         self.assertNotIn(content[:100], str(caught.exception))
         gateway.assert_called_once()
