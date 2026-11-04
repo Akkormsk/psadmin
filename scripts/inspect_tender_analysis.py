@@ -8,6 +8,8 @@ def incomplete_response_summary(diagnostics):
     import re
     entries = diagnostics.get('enrichment') or []
     entries = [entries] if isinstance(entries, dict) else entries
+    entries = entries + [{'stage': name, 'incomplete_response': stage['incomplete_response']}
+        for name, stage in diagnostics.get('stages', {}).items() if stage.get('incomplete_response')]
     result = []
     for entry in entries:
         evidence = entry.get('incomplete_response') or {}
@@ -15,6 +17,9 @@ def incomplete_response_summary(diagnostics):
             continue
         text = evidence.get('content') or ''
         summary = {key: value for key, value in evidence.items() if key != 'content'}
+        summary['stage'] = entry.get('stage')
+        from tenders.calculation_v2_pipeline import closed_stage_records
+        summary['closed_record_count'] = len(closed_stage_records(text))
         summary['captured_characters'] = len(text)
         summary['json_key_counts'] = {key: len(re.findall(r'"' + key + r'"\s*:', text)) for key in ('items', 'parent_source_item_id', 'characteristics', 'name', 'value', 'keep_refs', 'baseline_refs', 'document_facts', 'reason', 'evidence')}
         # Complete response rows can be decoded even when the final row is cut off.
@@ -231,6 +236,7 @@ def collect_saved_status(number):
         stages = job.diagnostics.get('stages', {})
         jobs.append({'id': job.pk, 'status': job.status, 'completed_at': job.completed_at, 'error': job.error,
             'cost_rub': job.total_cost, 'contract': job.diagnostics.get('intake_contract'),
+            'incomplete_response_summary': incomplete_response_summary(job.diagnostics),
             'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version', 'reserved_cost_rub', 'remaining_budget_rub', 'input_token_bound', 'usage')} for name, row in stages.items()}})
     mismatches = []
     latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()

@@ -1948,3 +1948,5 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **DECIDED — keep approved aggregate50RUB, reassign unused standalone QA, 2026-11-04.** Standalone profile spending1.879713 + shadow negative QA~0.1265RUB; initial missing-source QA cost0. Profile QA finished and must not be repeated under this allocation. Reassign unused standalone reserve to persistent full acceptance ceiling47.98RUB (plus standalone2.006213 totals49.986213, rounding buffer remains). Existing acceptance_run ledger retained, not reset. No increase of owner-approved50RUB, no PROD/background spending.
+
+**CODE_ONLY — private truncated-stage diagnostics, 2026-11-04.** Existing read-only inspection includes staged incomplete responses and counts fully closed JSON item records using the deployed application parser. Output omits private response content. No model calls, writes, lessons or budget changes; requires matching TEST code before inspection.
