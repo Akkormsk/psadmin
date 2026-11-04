@@ -36,6 +36,67 @@ from .models import (
 )
 
 
+def closed_stage_records(content):
+    """Decode closed records from the root items array; never repair truncated JSON."""
+    if not isinstance(content, str):
+        return []
+    text = content.lstrip()
+    if text.startswith('```json\n'):
+        text = text[8:].lstrip()
+    def unique(pairs):
+        row = {}
+        for key, value in pairs:
+            if key in row:
+                raise ValueError('Duplicate JSON key')
+            row[key] = value
+        return row
+    def invalid_constant(value):
+        raise ValueError('Non-finite JSON value')
+    decoder = json.JSONDecoder(object_pairs_hook=unique, parse_constant=invalid_constant)
+    if not text.startswith('{'):
+        return []
+    pos, seen = 1, set()
+    try:
+        while True:
+            pos += len(text[pos:]) - len(text[pos:].lstrip())
+            key, pos = decoder.raw_decode(text, pos)
+            if not isinstance(key, str) or key in seen:
+                return []
+            seen.add(key)
+            pos += len(text[pos:]) - len(text[pos:].lstrip())
+            if text[pos:pos + 1] != ':':
+                return []
+            pos += 1
+            pos += len(text[pos:]) - len(text[pos:].lstrip())
+            if key == 'items':
+                break
+            _, pos = decoder.raw_decode(text, pos)
+            pos += len(text[pos:]) - len(text[pos:].lstrip())
+            if text[pos:pos + 1] != ',':
+                return []
+            pos += 1
+    except (ValueError, TypeError):
+        return []
+    if text[pos:pos + 1] != '[':
+        return []
+    records, pos = [], pos + 1
+    while True:
+        pos += len(text[pos:]) - len(text[pos:].lstrip())
+        try:
+            row, end = decoder.raw_decode(text, pos)
+        except ValueError:
+            return records
+        if not isinstance(row, dict):
+            return []
+        end += len(text[end:]) - len(text[end:].lstrip())
+        if text[end:end + 1] not in {',', ']', ''}:
+            return []
+        records.append(row)
+        if text[end:end + 1] != ',':
+            return records
+        pos = end + 1
+
+
 class BatchRouter(Protocol):
     def route(self, *, tender: Tender, items: list[CalculationComponent], processes: list[ProcessDefinition], knowledge: list[dict]) -> list["RouteDecision"]: ...
 
@@ -168,7 +229,7 @@ class GatewayBatchRouter:
         output_tokens = min(32000, max(8000, len(items) * 400))
         reserve = spend_rub({"prompt_tokens": len((shared_context + prompt).encode("utf-8")) + 4096, "completion_tokens": output_tokens}, self.model)
         if not self.max_cost_rub.is_finite() or self.max_cost_rub <= 0 or reserve is None or Decimal(str(reserve)) > self.max_cost_rub:
-            self.diagnostics = {"provider_call_happened": False, "validation_failed": True, "final_failure_reason": "Маршрут не запущен: превышен лимит стоимости или неизвестен тариф модели."}
+            self.diagnostics = {"provider_call_happened": False, "reserved_cost_rub": str(reserve) if reserve is not None else None, "validation_failed": True, "final_failure_reason": "Маршрут не запущен: превышен лимит стоимости или неизвестен тариф модели."}
             raise ValueError(self.diagnostics["final_failure_reason"])
         try:
             raw, self.usage = _ai_gateway_json(prompt, shared_context=shared_context, reasoning_effort="low", model=self.model, max_tokens=output_tokens, timeout=180, network_attempts=1, json_attempts=1, capture_incomplete_response=True, **({"thinking": self.thinking} if self.thinking else {}), response_contract="Верни корневой объект с массивом items и одной записью на каждую переданную позицию. Не заменяй результат объяснением.")
@@ -331,9 +392,7 @@ class GatewayDocumentEnricher:
             bound = cached or tokens
             self._context_token_bound = min(getattr(self, '_context_token_bound', None) or bound, bound)
 
-    def ask_stage(self, job, stage, instruction, task, *, output_tokens):
-        from .services import _ai_gateway_json
-        from .gateway_budget import spend_rub, intake_spend_rub
+    def stage_request(self, stage, instruction, task):
         if hasattr(self, 'working_context'):
             selected = task.get('requested_source_ids')
             if selected is None:
@@ -341,7 +400,17 @@ class GatewayDocumentEnricher:
             notice_items = self.normalized_notification_items if stage.split(':', 1)[0] in {'national_regime', 'tz'} else self.notification_items
             task = {**task, 'working_items': [self.working_context[pk] for pk in selected],
                 'notification_items': [notice_items[pk] for pk in selected if pk in notice_items]}
+        prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
+        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
+        return prompt, fingerprint
+
+    def ask_stage(self, job, stage, instruction, task, *, output_tokens):
+        from .services import _ai_gateway_json
+        from .gateway_budget import spend_rub, intake_spend_rub
         item_count = len(task.get('requested_source_ids') or task.get('goods') or [])
+        requested_keys = task.get('requested_source_ids') if stage.split(':', 1)[0] == 'structure' else [good['key'] for good in task.get('goods', [])]
+        if requested_keys is None:
+            requested_keys = list(getattr(self, 'stage_sources', {}))
         phase = stage.split(':', 1)[0]
         densities = getattr(self, '_stage_output_density', {})
         self._stage_output_density = densities
@@ -349,8 +418,7 @@ class GatewayDocumentEnricher:
             tokens = (usage or {}).get('completion_tokens') or 0
             if item_count and tokens:
                 densities[phase] = max(densities.get(phase, 0), tokens / item_count)
-        prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
-        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
+        prompt, fingerprint = self.stage_request(stage, instruction, task)
         history = TenderComputeJob.objects.filter(tender=job.tender, **{
             f'diagnostics__stages__{stage}__input_fingerprint': fingerprint,
             f'diagnostics__stages__{stage}__state__in': ['complete', 'failed', 'pending_validation'],
@@ -413,7 +481,7 @@ class GatewayDocumentEnricher:
             usage = getattr(exc, 'usage', {}) or {}
             self.cost_rub += float(intake_spend_rub(usage, self.model) or 0)
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(intake_spend_rub(usage, self.model)), 'started_at': started_at, 'error': str(exc), 'duration_ms': round((time.monotonic()-started)*1000),
-                'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION,
+                'input_fingerprint': fingerprint, 'requested_keys': requested_keys, 'validation_version': self.STAGED_VALIDATION_VERSION,
                 **({'incomplete_response': exc.incomplete_response} if getattr(exc, 'incomplete_response', None) else {})}
             raise
         amount = intake_spend_rub(usage, self.model)
@@ -424,8 +492,14 @@ class GatewayDocumentEnricher:
         if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at, 'error': 'Не получен полный список результатов'}
             raise ValueError('Этап не вернул полный список результатов.')
+        field = 'source_id' if phase == 'structure' else 'key'
+        if requested_keys and any(not isinstance(row, dict) or row.get(field) not in requested_keys for row in raw['items']):
+            job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage,
+                'cost_rub': str(amount), 'input_fingerprint': fingerprint, 'requested_keys': requested_keys,
+                'error': 'Ответ содержит позиции вне переданного запроса.'}
+            raise ValueError('Ответ содержит позиции вне переданного запроса.')
         return raw['items'], {'state': 'pending_validation', 'model': self.model, 'usage': usage, 'cost_rub': str(amount), 'started_at': started_at,
-            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'validation_version': self.STAGED_VALIDATION_VERSION,
+            'duration_ms': round((time.monotonic()-started)*1000), 'input_fingerprint': fingerprint, 'requested_keys': requested_keys, 'validation_version': self.STAGED_VALIDATION_VERSION,
             'reserved_cost_rub': str(Decimal(str(reserve)) * Decimal('1.25')), 'input_token_bound': input_bound,
             'requested_output_tokens': requested_output_tokens, 'output_token_limit': output_tokens, 'budget_limited_output': output_tokens < requested_output_tokens, 'result': raw['items']}
 
@@ -584,10 +658,13 @@ class GatewayDocumentEnricher:
         seen = set()
         for row in rows if isinstance(rows, list) else []:
             key = row.get('key') if isinstance(row, dict) else None
-            if key not in pending or key in seen:
+            if not isinstance(key, str) or key not in pending or key in seen:
                 self.specification_gaps.append({'stage': 'tz', 'reason': 'Лишняя или повторная товарная позиция в ответе не применена.'})
                 continue
             seen.add(key)
+            if not isinstance(row.get('characteristics'), list):
+                self.specification_gaps.append({'stage': 'tz', 'key': key, 'reason': 'Не получен список дополнений; исходные требования сохранены.'})
+                continue
             for fact in row.get('characteristics', []) if isinstance(row.get('characteristics'), list) else []:
                 # The model cannot remove source data. Missing keep/omit links are
                 # irrelevant to backend preservation, not a reason to stop the job.
@@ -1107,6 +1184,9 @@ def is_visible_incoming(tender: Tender, settings: FilterSettings | None = None) 
         return False
     if tender.collecting_finished_at and tender.collecting_finished_at < timezone.now():
         return False
+    if settings.profile_triage_enabled:
+        from tender_selection.profile_triage import profile_disposition
+        return profile_disposition(tender) != 'not_fit'
     return match_title(tender.title or tender.object_info, parse_terms(settings.include_words), parse_terms(settings.exclude_words))[0]
 
 
@@ -1119,6 +1199,10 @@ def trigger_visible_tender(tender: Tender, *, trigger: str = "incoming_visible",
     with transaction.atomic():
         Tender.objects.select_for_update().get(pk=tender.pk)
         existing = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2", status__in=active).order_by("pk").first()
+        if not existing:
+            from tender_selection.intake_readiness import summarize
+            if summarize([tender])['all_complete']:
+                return None
         return existing or TenderComputeJob.objects.create(tender=tender, trigger=trigger, version=version, diagnostics={"intake_refresh": True, "refresh": {"stage": "queued", "label": "Подготовка в очереди…"}})
 
 

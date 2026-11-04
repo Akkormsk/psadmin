@@ -24,8 +24,10 @@ def summarize(tenders):
         missing = [name for name in PHASES if stages.get(name, {}).get('state') != 'complete' or stages.get(name, {}).get('outcome') == 'source_only']
         gaps = job.diagnostics.get('analysis_gaps', []) if job else []
         profile = profile_disposition(tender)
+        from .services import _document_input_fingerprint
+        sources_current = bool(job and job.status not in ACTIVE and job.diagnostics.get('document_input_fingerprint') and job.diagnostics['document_input_fingerprint'] == _document_input_fingerprint(tender))
         profile_done = tender.review == tender.INTERESTING or (profile_is_current(tender) and profile in {'fit', 'review'})
-        complete = bool(job and job.status not in ACTIVE and not job.error and not missing and not gaps and profile_done and routes and ready == len(routes))
+        complete = bool(job and job.status not in ACTIVE and not job.error and not missing and not gaps and sources_current and profile_done and routes and ready == len(routes))
         if complete:
             reason = ''
         elif job and job.status in ACTIVE:
@@ -38,6 +40,8 @@ def summarize(tenders):
             reason = 'Не все этапы анализа завершены'
         elif gaps:
             reason = str(gaps[0].get('reason') or 'Есть непроверенные сведения')
+        elif not sources_current:
+            reason = 'Исходные данные изменились после анализа'
         elif not profile_done:
             reason = 'Профиль закупки не подтверждён'
         else:

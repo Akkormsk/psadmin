@@ -58,8 +58,8 @@ class DocumentReadingInputTests(TestCase):
         fetch.assert_called_once()
         self.assertIn("В комплекте блокнот и ручка", gateway.call_args.args[0])
         self.assertEqual(enricher.diagnostics["documents"]["considered"][0]["reading_status"], "read")
-        self.assertNotIn('reasoning_effort', gateway.call_args.kwargs)
-        self.assertEqual(gateway.call_args.kwargs['thinking'], {'type': 'disabled'})
+        self.assertEqual(gateway.call_args.kwargs['reasoning_effort'], 'low')
+        self.assertEqual(gateway.call_args.kwargs['thinking'], {'type': 'adaptive'})
         self.assertIsNone(GatewayDocumentEnricher(model='other/model').reasoning_effort)
 
     def test_archive_analysis_reads_every_document_and_nested_archive(self):
@@ -103,7 +103,7 @@ class DocumentReadingInputTests(TestCase):
         self.assertIn("Блокнот", gateway.call_args.args[0])
 
     @patch("tenders.services._ai_gateway_json")
-    def test_unreadable_input_is_partial_and_does_not_reach_router(self, gateway):
+    def test_unreadable_input_retains_gap_and_uses_available_notice(self, gateway):
         from .analysis_presentation import resolve_tender_analysis_status
         from .calculation_v2_pipeline import run_next_tender_understanding_job
 
@@ -114,12 +114,17 @@ class DocumentReadingInputTests(TestCase):
         self.tender.save(update_fields=["notification_raw"])
         TenderComputeJob.objects.create(tender=self.tender, version="v2")
         router = Mock(cost_rub=0, diagnostics={})
+        from .services import TenderAIError
+        gateway.side_effect = TenderAIError('Unavailable')
+        router.route.side_effect = TenderAIError('Route unavailable')
         with patch("tender_selection.services._fetch_doc_bytes", side_effect=DocumentError("Недоступен")):
             job = run_next_tender_understanding_job(router=router, enricher=GatewayDocumentEnricher())
-        self.assertEqual(job.status, TenderComputeJob.Status.PARTIAL)
-        self.assertEqual(resolve_tender_analysis_status(self.tender).code, "ANALYSIS_INCOMPLETE")
-        gateway.assert_not_called()
-        router.route.assert_not_called()
+        self.assertEqual(job.status, TenderComputeJob.Status.NEEDS_REVIEW)
+        self.assertEqual(resolve_tender_analysis_status(self.tender).code, "CHECKED_WITH_GAPS")
+        self.assertTrue(gateway.called)
+        self.assertTrue(job.diagnostics['analysis_gaps'])
+        self.assertTrue(all(not json.loads(call.kwargs['shared_context'])['documents'] for call in gateway.call_args_list))
+        router.route.assert_called_once()
 
     def test_archive_warning_is_bounded_to_existing_database_field(self):
         data = self.archive({("unsupported" + str(index) + "x" * 90 + ".bin"): b"data" for index in range(10)})
@@ -166,8 +171,10 @@ class DocumentReadingInputTests(TestCase):
     def test_oversized_preview_is_rejected_instead_of_silently_clipped(self):
         DocumentPreview.objects.create(url=self.documents[0]["url"], html="<p>Длинный документ</p>")
         with patch("tender_selection.documents.MAX_BYTES", 8):
-            with self.assertRaises(ValueError):
-                GatewayDocumentEnricher()._bounded_documents(self.documents)
+            available, considered = GatewayDocumentEnricher()._bounded_documents(self.documents)
+        self.assertTrue(all(not entry['text'] and not entry['tables'] and not entry['image_indexes'] for entry in available))
+        self.assertEqual(considered[0]['reading_status'], 'unreadable')
+        self.assertIn('size limit', considered[0]['error'])
 
 
 class InlineDocumentVisionTests(TestCase):
@@ -552,6 +559,18 @@ class StagedSingleSourceSelectionTests(SimpleTestCase):
         }]}]
         with self.assertRaisesRegex(ValueError, "не подтверждён"):
             self.engine.validate_specifications(rows, self.goods)
+
+
+class ClosedStageRecordTests(SimpleTestCase):
+    def test_only_complete_records_are_recovered_without_repair(self):
+        from .calculation_v2_pipeline import closed_stage_records
+        row = {'key': '1:0', 'characteristics': [{'value': '≥ 10; строка "items": ['}]}
+        content = json.dumps({'items': [row]}, ensure_ascii=False)[:-2] + ', {"key":"2:0","characteristics":['
+        self.assertEqual(closed_stage_records(content), [row])
+        self.assertEqual(closed_stage_records('{"nested":{"items":[{"key":"fake"}]},"items":['), [])
+        self.assertEqual(closed_stage_records('{"items":[{"key":"x","key":"y"}'), [])
+        self.assertEqual(closed_stage_records('{"items":[{"value":NaN}'), [])
+        self.assertEqual(closed_stage_records('{"items":[{"key":"x"} nonsense'), [])
 
 
 class StagedResponseCacheTests(TestCase):

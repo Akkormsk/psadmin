@@ -2006,6 +2006,11 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
         raise ValueError("Предложения из документации не найдены")
     if any(item.metadata.get("analysis_incomplete") for item in proposals):
         raise ValueError("Сверка ТЗ ещё не завершена; предварительные изменения нельзя согласовать")
+    from tenders.models import TenderComputeJob
+    verified_job = TenderComputeJob.objects.filter(tender_id=tender_id).order_by('-pk').first()
+    if not (verified_job and verified_job.diagnostics.get('document_input_fingerprint') == _document_input_fingerprint(parent.tender)
+            and all(item.metadata.get('analysis_job_id') == verified_job.pk for item in proposals)):
+        verified_job = None
     if decision == "accept":
         from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
         if len(proposals) > 1 and any(is_item_enrichment(item) for item in proposals):
@@ -2037,6 +2042,10 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
         parent.save(update_fields=["is_active"])
     else:
         TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
+    if verified_job:
+        # Promoting this job's reviewed facts changes row ids, not the analysed evidence.
+        verified_job.diagnostics['document_input_fingerprint'] = _document_input_fingerprint(parent.tender)
+        verified_job.save(update_fields=['diagnostics', 'updated_at'])
     if decision == "accept" and schedule_routes:
         transaction.on_commit(lambda: refresh_document_analysis(user, tender_id, routes_only=True))
     return {"tender_id": tender_id, "decision": decision, "changed": len(proposals)}
@@ -2078,9 +2087,20 @@ def refresh_document_analysis(user, tender_id, *, routes_only=False):
             active.diagnostics["reroute_requested_by"] = user.pk
             active.save(update_fields=["diagnostics", "updated_at"])
         return {"started": False, "job_id": active.pk, "message": "Обновление уже выполняется"}
-    job = TenderComputeJob.objects.create(tender=tender, version="v2-intake-refresh", trigger="manual_document_refresh", status="preparing_input",
-        diagnostics={"intake_refresh": True, "routes_only": routes_only, "requested_by": user.pk, "refresh": {"stage": "queued", "label": "Обновление в очереди…"}})
-    transaction.on_commit(lambda: threading.Thread(target=_run_document_analysis, args=(job.pk,), daemon=True).start())
+    from django.conf import settings
+    diagnostics = {"intake_refresh": True, "routes_only": routes_only, "requested_by": user.pk, "refresh": {"stage": "queued", "label": "Обновление в очереди…"}}
+    if routes_only:
+        fingerprint = _document_input_fingerprint(tender)
+        previous = TenderComputeJob.objects.filter(tender=tender, diagnostics__document_input_fingerprint=fingerprint).order_by('-pk').first()
+        if previous:
+            diagnostics['document_input_fingerprint'] = fingerprint
+            diagnostics['stages'] = {name: {'state': stage.get('state'), 'outcome': stage.get('outcome'), 'result': stage.get('result'),
+                'reused_from': previous.pk, 'cost_rub': '0'} for name, stage in previous.diagnostics.get('stages', {}).items()
+                if name in {'notification','documents','structure','national_regime','tz'}}
+            diagnostics['analysis_gaps'] = [gap for gap in previous.diagnostics.get('analysis_gaps', []) if gap.get('stage') in {'notification','documents','structure','national_regime','tz'}]
+    job = TenderComputeJob.objects.create(tender=tender, version="v2-intake-refresh", trigger="manual_document_refresh", status="queued" if settings.CALCULATION_V2_ENABLED else "preparing_input", diagnostics=diagnostics)
+    if not settings.CALCULATION_V2_ENABLED:
+        transaction.on_commit(lambda: threading.Thread(target=_run_document_analysis, args=(job.pk,), daemon=True).start())
     return {"started": True, "job_id": job.pk, "message": "Обновление запущено."}
 
 
@@ -2184,7 +2204,43 @@ def _staged_document_analysis(job, enricher):
                 return value if type(value) is (int if name == 'structure' else str) else None
             def ordered(rows):
                 return sorted(rows, key=lambda row: order.get(record_id(row), len(order)))
-            saved, origins = {}, {}
+            def subset_task(batch):
+                subset = {**task}
+                if name == 'structure':
+                    subset['requested_source_ids'] = batch
+                else:
+                    subset['goods'] = batch
+                    keys = {good['key'] for good in batch}
+                    for field in ('baseline_facts', 'notification_evidence'):
+                        if field in subset:
+                            subset[field] = {key: value for key, value in subset[field].items() if key in keys}
+                return subset
+            def recovered_records(segment):
+                from tenders.calculation_v2_pipeline import closed_stage_records
+                incomplete = segment.get('incomplete_response') or {}
+                if incomplete.get('finish_reason') not in {'length', 'max_tokens'}:
+                    return []
+                rows = closed_stage_records(incomplete.get('content'))
+                if not rows:
+                    return []
+                scope = segment.get('requested_keys')
+                if scope is None:
+                    # Historical replies have no manifest. Prove the original request exactly;
+                    # a known source id alone does not prove the model was asked about it.
+                    first = order.get(record_id(rows[0]))
+                    if first is None:
+                        return []
+                    candidates = [task]
+                    for start in range(max(0, first - 19), first + 1):
+                        for end in range(first + 1, min(len(requested), start + 20) + 1):
+                            candidates.append(subset_task(requested[start:end]))
+                    matched = next((candidate for candidate in candidates
+                        if enricher.stage_request(name, instruction, candidate)[1] == segment.get('input_fingerprint')), None)
+                    if matched is None:
+                        return []
+                    scope = matched.get('requested_source_ids', list(enricher.stage_sources)) if name == 'structure' else [good['key'] for good in matched.get('goods', [])]
+                return rows if all(record_id(row) in scope for row in rows) else []
+            saved, origins, ambiguous = {}, {}, set()
             history = type(job).objects.filter(tender=job.tender, diagnostics__staged_input_fingerprint=fingerprint).exclude(pk=job.pk).order_by('-pk')
             for prior in history:
                 old_stages = prior.diagnostics.get('stages', {})
@@ -2211,18 +2267,29 @@ def _staged_document_analysis(job, enricher):
                 if any(type(gap.get(field)) is not (int if name == 'structure' else str) for gap in invalid):
                     continue
                 rejected = {gap[field] for gap in invalid}
+                job_records, conflicts = {}, set()
                 for key, segment in old_stages.items():
                     if key != name and not key.startswith(name + ':'):
                         continue
-                    if segment.get('state') not in {'complete', 'pending_validation'} or segment.get('outcome') == 'source_only':
+                    enricher._remember_context_usage(segment.get('usage'))
+                    if segment.get('outcome') == 'source_only':
                         continue
-                    records = segment.get('result')
+                    records = segment.get('result') if segment.get('state') in {'complete', 'pending_validation'} else recovered_records(segment)
                     if not isinstance(records, list):
                         continue
                     for row in records:
                         identity_key = record_id(row)
-                        if identity_key in wanted - rejected and identity_key not in saved and (compatible_sources is None or identity_key in compatible_sources):
-                            saved[identity_key], origins[str(identity_key)] = row, prior.pk
+                        scope = segment.get('requested_keys')
+                        if scope is not None and identity_key not in scope:
+                            continue
+                        if identity_key in wanted - rejected and (compatible_sources is None or identity_key in compatible_sources):
+                            if identity_key in job_records and job_records[identity_key] != row:
+                                conflicts.add(identity_key)
+                            job_records[identity_key] = row
+                ambiguous.update(conflicts - saved.keys())
+                for identity_key, row in job_records.items():
+                    if identity_key not in saved and identity_key not in ambiguous:
+                        saved[identity_key], origins[str(identity_key)] = row, prior.pk
             remaining = [item for item in requested if identity(item) not in saved]
             batches = [remaining[offset:offset + 20] for offset in range(0, len(remaining), 20)] if len(requested) > 20 or saved else []
             if saved and not remaining:
@@ -2236,15 +2303,7 @@ def _staged_document_analysis(job, enricher):
                     batch = queue.pop(0)
                     index = len(children) + 1
                     child = f'{name}:{index}'
-                    subset = {**task}
-                    if name == 'structure':
-                        subset['requested_source_ids'] = batch
-                    else:
-                        subset['goods'] = batch
-                        keys = {good['key'] for good in batch}
-                        for field in ('baseline_facts', 'notification_evidence'):
-                            if field in subset:
-                                subset[field] = {key: value for key, value in subset[field].items() if key in keys}
+                    subset = subset_task(batch)
                     job.diagnostics['refresh']['label'] = f'{label} {index}/{len(children) + len(queue) + 1}'
                     _publish_intake(job)
                     try:
@@ -2304,6 +2363,10 @@ def _staged_document_analysis(job, enricher):
     _refresh_phase(job, 'national_regime', 'Проверяем требования 1875…')
     if any('1875' in doc.get('evidence_text', '') for doc in enricher.stage_documents):
         def verify_national(rows):
+            if any(not isinstance(row, dict) or not isinstance(row.get('key'), str)
+                    or row.get('status') not in {'ban', 'restriction', 'advantage', 'none', 'unknown'}
+                    or not isinstance(row.get('basis'), list) or any(not isinstance(basis, dict) for basis in row['basis']) for row in rows):
+                raise ValueError('Проверка 1875 вернула некорректный формат позиций или оснований.')
             mapped = {row.get('key'): row for row in rows}
             if len(mapped) != len(rows) or set(mapped) != {good['key'] for good in goods}:
                 raise ValueError('Проверка 1875 пропустила товарные позиции.')
@@ -2356,7 +2419,7 @@ def _staged_document_analysis(job, enricher):
 def _refresh_intake_profile(job, *, stage='profile', max_cost_rub=None):
     """The existing profile agent consumes the same notice and verified working facts."""
     from .profile_triage import profile_disposition, triage_tenders
-    if not FilterSettings.load().profile_triage_enabled or job.tender.review != Tender.UNREVIEWED:
+    if not FilterSettings.load().profile_triage_enabled or job.tender.status != Tender.NEW or job.tender.review != Tender.UNREVIEWED:
         return 'review'
     _refresh_phase(job, stage, 'Проверяем соответствие профилю…')
     metrics = {}
@@ -2470,7 +2533,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
             profile_cost += Decimal(str(job.diagnostics.get('stages', {}).get('profile_after_tz', {}).get('cost_rub', 0)))
             from .profile_triage import profile_disposition
-            if profile_disposition(job.tender) == 'not_fit' and job.trigger != 'manual_document_refresh':
+            if profile_disposition(job.tender) == 'not_fit' and job.tender.status == Tender.NEW and job.tender.review == Tender.UNREVIEWED and job.trigger != 'manual_document_refresh':
                 job.status, job.error = 'ready', {}
                 job.diagnostics.update(profile_excluded=True, refresh={'stage': 'complete', 'label': 'Не по профилю', 'warnings': []})
                 return job
@@ -2489,7 +2552,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         _publish_intake(job)
         if any(not decision.process_ids for decision in decisions):
             job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'reason': 'Для части позиций не получен маршрут; они не считаются готовыми.'})
-        if not routes_only and FilterSettings.load().profile_triage_enabled and job.tender.review == Tender.UNREVIEWED:
+        if not routes_only and FilterSettings.load().profile_triage_enabled and job.tender.status == Tender.NEW and job.tender.review == Tender.UNREVIEWED:
             from .profile_triage import profile_is_current
             if not profile_is_current(job.tender):
                 job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'profile', 'reason': 'Проверка соответствия профилю не получена.'})

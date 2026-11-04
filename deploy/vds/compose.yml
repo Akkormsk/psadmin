@@ -6,6 +6,10 @@ services:
       context: ../..
       dockerfile: deploy/vds/Dockerfile
     env_file: .env
+    environment:
+      TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
+      CALCULATION_V2_ROUTER_MODEL: anthropic/claude-haiku-5-5
+      INCOMING_PROFILE_MODEL: anthropic/claude-haiku-5-5
     restart: unless-stopped
     mem_limit: 1200m
     depends_on:
@@ -18,6 +22,26 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+
+  intake-worker:
+    profiles: ["intake"]
+    build:
+      context: ../..
+      dockerfile: deploy/vds/Dockerfile
+    env_file: .env
+    environment:
+      TENDER_AUTOPULL_WEB_ENABLED: "0"
+      TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
+      CALCULATION_V2_ROUTER_MODEL: anthropic/claude-haiku-5-5
+      INCOMING_PROFILE_MODEL: anthropic/claude-haiku-5-5
+    command: ["python", "manage.py", "run_calculation_v2_job", "--watch"]
+    restart: unless-stopped
+    stop_grace_period: 600s
+    mem_limit: 600m
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:16

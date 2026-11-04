@@ -25,6 +25,8 @@ class IntakeReadinessTests(TestCase):
         job.status = 'ready'
         from .intake_readiness import PHASES
         job.diagnostics['stages'] = {phase: {'state': 'complete'} for phase in PHASES}
+        from .services import _document_input_fingerprint
+        job.diagnostics['document_input_fingerprint'] = _document_input_fingerprint(self.tender)
         job.save()
         self.tender.profile_assessment = {'contract': CONTRACT, 'title': self.tender.title or self.tender.object_info,
             'object_info': self.tender.object_info, 'verdict': 'fit'}

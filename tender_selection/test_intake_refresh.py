@@ -242,6 +242,12 @@ class LargeIntakeStageTests(TestCase):
     def test_repartitioned_requests_reuse_individual_complete_records(self):
         self._exercise_batches(reuse=True)
 
+    def test_truncated_reply_reuses_only_closed_in_scope_records(self):
+        self._exercise_batches(reuse='truncated')
+
+    def test_conflicting_cached_duplicates_are_requested_again(self):
+        self._exercise_batches(reuse='conflict')
+
     def _exercise_batches(self, *, reuse=False):
         from decimal import Decimal
         from .models import Tender
@@ -263,6 +269,18 @@ class LargeIntakeStageTests(TestCase):
                      'evidence': [{'doc_id': 1, 'quote': source.original_text}],
                      'goods': [{'name': source.original_text, 'quantity_per_parent': 1, 'unit': source.unit}]}
                     for source in sources[chunk * 10:(chunk + 1) * 10]]}
+            if reuse == 'truncated':
+                import json
+                for chunk in range(2):
+                    segment = previous.diagnostics['stages'][f'structure:{chunk + 1}']
+                    rows = segment.pop('result')
+                    segment.update(state='failed', requested_keys=[row['source_id'] for row in rows],
+                        incomplete_response={'finish_reason': 'length', 'content': json.dumps({'items': rows})[:-2] + ', {"source_id":'})
+            elif reuse == 'conflict':
+                import copy
+                conflict = copy.deepcopy(previous.diagnostics['stages']['structure:1']['result'][0])
+                conflict['reason'] = 'Другое толкование'
+                previous.diagnostics['stages']['structure:1']['result'].append(conflict)
             previous.save()
         job = TenderComputeJob.objects.create(tender=tender, status='running')
         by_id = {source.pk: source for source in sources}
@@ -281,7 +299,7 @@ class LargeIntakeStageTests(TestCase):
             _staged_document_analysis(job, engine)
         self.assertEqual(len(job.diagnostics['stages']['structure']['result']), 21)
         self.assertNotIn('document_analysis_reused', job.diagnostics)
-        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [1] if reuse else [20, 10, 10, 1])
+        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [2] if reuse == 'conflict' else [1] if reuse else [20, 10, 10, 1])
         self.assertEqual(len(job.diagnostics['stages']['tz']['result']), 21)
         self.assertEqual(job.diagnostics['analysis_gaps'], [])
         self.assertEqual(len(engine.notification_items), 21)

@@ -29,6 +29,23 @@ class TenderAnalysisStatus:
 
 
 def analysis_cost(job) -> dict:
+    data = _job_analysis_cost(job)
+    root = (job.diagnostics or {}).get('refresh_root_id') if job else None
+    if not root:
+        return data
+    from django.db.models import Q
+    from .models import TenderComputeJob
+    history = TenderComputeJob.objects.filter(Q(pk=root) | Q(diagnostics__refresh_root_id=root)).exclude(pk=job.pk)
+    parts = [data] + [_job_analysis_cost(previous) for previous in history]
+    total = sum((Decimal(part.get('known_rub') or '0') for part in parts), Decimal('0'))
+    unknown = any(part.get('incomplete') for part in parts)
+    formatted = f'{total:.2f}'.replace('.', ',')
+    return {**data, 'amount_rub': str(total) if not unknown else None, 'known_rub': str(total),
+        'incomplete': unknown, 'actual': not unknown and all(part.get('actual') for part in parts),
+        'label': 'Стоимость уточняется' if unknown else f'≈ {formatted} ₽' if total else data.get('label', 'Без нового расхода')}
+
+
+def _job_analysis_cost(job) -> dict:
     """Estimate this job's received model answers, including failed answers, not reservations."""
     from .gateway_budget import intake_spend_rub
     if not job:
@@ -41,7 +58,7 @@ def analysis_cost(job) -> dict:
         entries = ([] if "structure" in staged else entries) + list(staged.values())
     else:
         entries.append(diagnostics.get("routing") or {})
-    total, unknown, received, actual = Decimal("0"), False, False, True
+    total, unknown, received, actual = Decimal("0"), bool(diagnostics.get("billing_uncertain")), False, True
     for entry in entries:
         usage = entry.get("usage") or (entry.get("extraction") or {}).get("usage") or {}
         if not usage:
@@ -223,6 +240,12 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     elif refresh and code == "ANALYSIS_INCOMPLETE":
         label = "Обновление не завершено"
     started = (job.started_at or job.created_at) if job else None
+    if job and job.diagnostics.get('refresh_started_at'):
+        from datetime import datetime
+        try:
+            started = datetime.fromisoformat(job.diagnostics['refresh_started_at'])
+        except (TypeError, ValueError):
+            pass
     progress = {"started_at": started.isoformat() if started else None,
         "completed_at": job.completed_at.isoformat() if job and job.completed_at else None,
         "server_time": now.isoformat(), "elapsed_seconds": max(0, int(((job.completed_at or now) - started).total_seconds())) if started else 0,

@@ -214,6 +214,9 @@ jobs:
             tender_selection.test_notifications.FixedNotificationValueTests \
             tenders.test_document_reading_input.ResilientIntakeTests \
             tenders.test_document_reading_input.StagedResponseCacheTests \
+            tenders.test_document_reading_input.ClosedStageRecordTests \
+            tender_selection.test_intake_refresh.LargeIntakeStageTests \
+            tenders.test_intake_worker \
             tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \
             tenders.test_document_reading_input.StagedSingleSourceSelectionTests \
             tenders.test_document_reconciliation \

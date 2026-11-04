@@ -24,7 +24,7 @@ _FIRST_RUN_DELAY_SECONDS = 60    # дать приложению поднять�
 _started = False
 _SKIP_ARGV = {
     "migrate", "makemigrations", "collectstatic", "test", "shell",
-    "createsuperuser", "makemessages", "compilemessages", "check", "dbshell",
+    "createsuperuser", "makemessages", "compilemessages", "check", "dbshell", "run_calculation_v2_job",
 }
 
 
