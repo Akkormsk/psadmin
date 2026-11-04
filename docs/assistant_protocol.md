@@ -2029,3 +2029,6 @@ Read-only Actions41479064969 rendered the actual eight-item TEST card:HTTP200, e
 
 
 **CODE_ONLY — bind reusable item evidence to its actual decomposition, 2026-11-04.** Position-granular1875/TZ replay additionally requires matching verified structure (kind and entire component list including names/units/per-parent quantities). A whole-product key ending:0 must never transfer old facts to component:0 of a newly recognized kit. Current validators still run over the complete assembled response; record identity types checked at the cache boundary.
+
+
+**CODE_ONLY — TEST runner fallback during GitHub incident, 2026-11-04.** Deploy41862932087 queued over10minutes with no active repository jobs; official githubstatus reports Actions/Pages degraded16:05UTC. Try standard ubuntu-22.04 runner for SSH-only TEST deployment; no different hosting, PROD changes, paid larger runner or application behavior changes. Deployment SHA/health still required; source7ff7bbc not yet verified on server.

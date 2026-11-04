@@ -74,7 +74,7 @@ concurrency:
 jobs:
   deploy:
     if: github.ref == 'refs/heads/test-server' && !inputs.inspect_tender_number && !inputs.refresh_estimates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       TEST_URL: https://test.admin.psodin.ru
       REMOTE_ARCHIVE: /home/deploy/psadmin-test-${{ github.run_id }}.tar.gz
