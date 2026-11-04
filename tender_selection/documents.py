@@ -435,7 +435,26 @@ def _archive_content(data: bytes, *, depth=0, budget=None) -> dict:
                     errors.append(str(info.filename) + ": " + result["error"])
     except (zipfile.BadZipFile, DocumentError, RuntimeError, OSError) as exc:
         errors.append(str(exc))
-    return {"kind": "zip-content", "html": '<section data-document-archive-version="2">' + "\n".join(parts) + '</section>', "error": "; ".join(errors)[:2000]}
+    return {"kind": "zip-content", "html": '<section data-document-archive-version="3">' + "\n".join(parts) + '</section>', "error": "; ".join(errors)[:2000]}
+
+
+def _image_html(data: bytes) -> str:
+    """Use the same visual evidence path as scanned PDF pages, including TIFF pages."""
+    from PIL import Image, ImageOps, ImageSequence
+
+    parts = []
+    with Image.open(io.BytesIO(data)) as source:
+        for number, frame in enumerate(ImageSequence.Iterator(source), 1):
+            if number > MAX_PDF_PAGES:
+                parts.append('<p data-document-warning="truncated">Не все страницы изображения прочитаны.</p>')
+                break
+            image = ImageOps.exif_transpose(frame).convert('RGB')
+            image.thumbnail((1600, 1600))
+            output = io.BytesIO()
+            image.save(output, format='JPEG', quality=85, optimize=True)
+            encoded = base64.b64encode(output.getvalue()).decode('ascii')
+            parts.append(f'<section class="ts-doc-page"><img data-document-page="{number}" src="data:image/jpeg;base64,{encoded}" alt="Страница {number}"></section>')
+    return ''.join(parts)
 
 
 def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_archive=False) -> dict:
@@ -451,7 +470,7 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
-                office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "xls", "pdf")]
+                office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "xls", "pdf", "jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff")]
                 if len(office) == 1 and not browse_archive:
                     return extract_preview(zf.read(office[0]), office[0])
                 if not browse_archive and office and len({_archive_stem(path) for path in office}) == 1:
@@ -469,6 +488,8 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
 
     ext = _ext(name)
     try:
+        if ext in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"}:
+            return {"kind": ext, "html": _image_html(data)}
         if ext == "docx" or (is_zip and b"word/document.xml" in data[:4000] + data[-4000:]):
             return {"kind": "docx", "html": _docx_html(data)}
         if ext == "xlsx":

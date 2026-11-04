@@ -282,3 +282,27 @@ class ZipNavigationTests(TestCase):
         with patch.object(documents, "MAX_BYTES", 2):
             with self.assertRaises(documents.DocumentError):
                 documents.extract_zip_entry(self._archive({"large.txt": b"123"}), "large.txt")
+
+
+class ImageAttachmentTests(TestCase):
+    def test_archived_images_become_visual_evidence(self):
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new('RGB', (120, 60), 'white').save(image, format='JPEG')
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as zf:
+            zf.writestr('sample.jpg', image.getvalue())
+        result = documents.extract_preview(archive.getvalue(), 'samples.zip', read_archive=True)
+        self.assertFalse(result['error'])
+        self.assertIn('data:image/jpeg;base64,', result['html'])
+        self.assertIn('sample.jpg', result['html'])
+        self.assertFalse(services._preview_needs_upgrade(result['kind'], result['html']))
+        self.assertTrue(services._preview_needs_upgrade('zip-content', '<section data-document-archive-version="2"></section>'))
+
+    def test_all_tiff_pages_are_preserved(self):
+        from PIL import Image
+        data = io.BytesIO()
+        Image.new('RGB', (20, 20)).save(data, format='TIFF', save_all=True, append_images=[Image.new('RGB', (20, 20))])
+        result = documents.extract_preview(data.getvalue(), 'scan.tiff')
+        self.assertNotIn('error', result)
+        self.assertEqual(result['html'].count('data:image/jpeg;base64,'), 2)
