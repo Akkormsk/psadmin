@@ -274,7 +274,7 @@ jobs:
           fi
           if [[ "$INSPECT_NUMBER" = profile-test || "$INSPECT_NUMBER" = acceptance-test ]]; then
             extra=""
-            budget=45
+            budget=47.98
             if [[ "$INSPECT_NUMBER" = profile-test ]]; then extra="--profile-only"; budget=5; fi
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \

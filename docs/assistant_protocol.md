@@ -1945,3 +1945,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — read-only source QA across differing TEST inventory, 2026-11-04.** Initial QA0RUB correctly refused absent TEST examples. Revised operator streams explicitly selected existing PROD notice fields into TEST inference without persisting/importing tenders. Source and target PostgreSQL sessions are READ ONLY, scheduler off; unsaved negative DTO IDs cannot accidentally pick unrelated TEST positions. Uses the same _answers/_state/_valid_answer functions, no new classifier/lessons/decisions. Private source payload remains inside server pipe; CI prints bounded verdict/billing only. Single remaining profile allocation3.12RUB unchanged; full-run cap45 unchanged. Actual QA pending.
+
+
+**DECIDED — keep approved aggregate50RUB, reassign unused standalone QA, 2026-11-04.** Standalone profile spending1.879713 + shadow negative QA~0.1265RUB; initial missing-source QA cost0. Profile QA finished and must not be repeated under this allocation. Reassign unused standalone reserve to persistent full acceptance ceiling47.98RUB (plus standalone2.006213 totals49.986213, rounding buffer remains). Existing acceptance_run ledger retained, not reset. No increase of owner-approved50RUB, no PROD/background spending.
