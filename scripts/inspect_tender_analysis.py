@@ -282,8 +282,25 @@ def collect_saved_status(number):
     diagnostic_engine = GatewayDocumentEnricher(max_cost_rub='0')
     _, document_states = diagnostic_engine._bounded_documents(assess_quality(tender, [])['documents'], compact=True)
     document_states = [{key: row.get(key) for key in ('name', 'reading_status', 'error', 'warnings', 'cache_kind', 'cached_text_chars', 'sent_text_chars', 'image_count')} for row in document_states]
+    replay = None
+    stages = latest.diagnostics.get('stages', {}) if latest else {}
+    if stages.get('tz', {}).get('result') and hasattr(diagnostic_engine, 'reconcile_specifications'):
+        from unittest.mock import patch
+        from tenders.calculation_v2_pipeline import document_analysis_sources
+        sources = list(document_analysis_sources(tender)[0].values())
+        with patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=RuntimeError('Read-only replay cannot call a model')):
+            diagnostic_engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+            goods = diagnostic_engine.reconcile_structure(stages.get('structure', {}).get('result', []))
+            compiled = diagnostic_engine.reconcile_specifications(stages['tz']['result'], goods)
+        from tender_selection.notification import parse_notification
+        parsed = parse_notification(tender.notification_raw or {})
+        replay = {'model_called': False, 'writes': False, 'goods_count': len(goods),
+            'compiled_goods_count': len(compiled), 'original_fact_count': sum(len(facts) for facts in diagnostic_engine.baselines.values()),
+            'compiled_fact_count': sum(len(row.get('characteristics', [])) for row in compiled.values()),
+            'quarantined_additions': diagnostic_engine.specification_gaps,
+            'parsed_characteristics': [{'name': item['name'], 'facts': item.get('characteristics', [])} for item in parsed.get('items', [])]}
     pending = list(TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False).values('original_text', 'quantity', 'metadata'))
-    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'documents': document_states, 'source_mismatches': mismatches, 'rendered_card': inspect_card_routes(tender),
+    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'documents': document_states, 'saved_reply_replay': replay, 'source_mismatches': mismatches, 'rendered_card': inspect_card_routes(tender),
         'proposals': [{'name': row['original_text'], 'quantity': row['quantity'], 'incomplete': row['metadata'].get('analysis_incomplete')} for row in pending],
         'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id'), 'assumption': value.get('assumption'), 'working_choice': value.get('interaction')} for key, value in source_route_snapshots(tender).items()}}
 
