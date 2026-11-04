@@ -39,7 +39,7 @@ with transaction.atomic():
             columns = ','.join('t.' + quote(column) for column in metadata['columns'])
             restriction = ' WHERE id <= %s' if metadata['max_id'] is not None else ''
             params = [metadata['max_id']] if restriction else []
-            sql = 'SELECT count(*), md5(COALESCE(string_agg(digest, \'\' ORDER BY digest),\'\')) FROM (SELECT md5(jsonb_build_array(' + columns + ')::text) AS digest FROM ' + quote(table) + ' t' + restriction + ') original_rows'
+            sql = 'SELECT count(*), md5(COALESCE(string_agg(digest, \'\' ORDER BY digest),\'\')) FROM (SELECT md5((SELECT row_to_json(original) FROM (SELECT ' + columns + ') original)::text) AS digest FROM ' + quote(table) + ' t' + restriction + ') original_rows'
             cursor.execute(sql, params)
             count, digest = cursor.fetchone()
             total += count
