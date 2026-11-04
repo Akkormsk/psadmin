@@ -1936,3 +1936,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — read-only intake context footprint, 2026-11-04.** Owner-authorized bounded TEST acceptance stops on first incomplete card. Operator inspection reports per-section UTF8 sizes and document text/table sizes using the existing enricher and cached files only, with document fetching patched out. No model calls, lessons, feedback writes or business mutations; no actual data committed. PROD untouched.
+
+
+**CODE_ONLY — bounded large-cohort verification ceiling, 2026-11-04.** TEST operator acceptance uses the normal10RUB whole-refresh cap for a single large source instead of its arbitrary6RUB test cap. Persistent group cap45RUB unchanged and prior profile QA allocation5RUB unchanged: approved total50RUB cannot increase. Does not enable any automatic/PROD spending.
