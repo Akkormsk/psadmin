@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from tenders import test_source_routes as route_fixtures
@@ -182,9 +182,13 @@ class IntakeRefreshTests(TestCase):
         gateway.assert_not_called()
 
 
-class ResilientIntakeFlowTests(TestCase):
+class ResilientIntakeFlowTests(TransactionTestCase):
     setUp = IntakeRefreshTests.setUp
-    create_job = IntakeRefreshTests.create_job
+
+    def create_job(self):
+        with patch('threading.Thread'):
+            result = refresh_document_analysis(self.user, self.tender.pk)
+        return TenderComputeJob.objects.get(pk=result['job_id'])
     def test_unreadable_document_and_bad_model_reply_still_reach_saved_route(self):
         from tenders.analysis_presentation import resolve_tender_analysis_status
         from .models import DocumentPreview

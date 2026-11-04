@@ -2158,6 +2158,8 @@ def _staged_document_analysis(job, enricher):
     def ask(name, label, instruction, task, validator, limit, fallback):
         from tenders.services import TenderAIError
         _refresh_phase(job, name, label)
+        if enricher.document_images:
+            instruction += '\nИзображения приложены в порядке image_indexes. Прочитай их вместе с текстом. Для цитаты со скана укажи section: «Страница N» из visual_pages; для встроенного рисунка — «Изображение N» из image_indexes. Не выдавай предположение по изображению за установленное требование.'
         try:
             rows, metrics = enricher.ask_stage(job, name, instruction, task, output_tokens=limit)
             stages[name] = metrics

@@ -419,9 +419,10 @@ class GatewayDocumentEnricher:
                 if verified:
                     break
         visual = False
-        if not verified and doc and quote and doc.get('visual_pages'):
+        if not verified and doc and quote and doc.get('image_indexes'):
             pages = [int(n) for n in re.findall(r'(?:страниц[аеуы]?|page)\s*(\d+)', section, flags=re.I)]
-            visual = bool(pages and all(page in doc['visual_pages'] for page in pages))
+            images = [int(n) for n in re.findall(r'(?:изображени[ея]|image)\s*(\d+)', section, flags=re.I)]
+            visual = bool((pages and all(page in doc.get('visual_pages', []) for page in pages)) or (images and all(image in doc['image_indexes'] for image in images)))
             verified = visual
         if not verified:
             if required:
