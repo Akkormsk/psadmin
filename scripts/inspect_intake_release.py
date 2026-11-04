@@ -69,7 +69,12 @@ def main():
                 'issues':[{'tender_id':row['tender_id'],'job':row['pk'],'status':row['status'],'error':row['error'],
                     'gaps':row['diagnostics'].get('analysis_gaps',[]), 'routing':row['diagnostics'].get('stages',{}).get('routing',{}).get('state')}
                     for row in latest.values() if row['error'] or row['diagnostics'].get('analysis_gaps') or row['status'] not in {'ready','needs_review'}]})
-            from tenders.calculation_v2_pipeline import source_route_snapshots
+            from tenders import calculation_v2_pipeline
+            source_route_snapshots = getattr(calculation_v2_pipeline, 'source_route_snapshots', None)
+            if source_route_snapshots is None:
+                emit('ROUTE_COVERAGE', {'available':False,'reason':'Deployed version has no intake route presentation'})
+                emit('AUDIT_COMPLETE', {'read_only':True,'model_called':False,'time':timezone.now()})
+                return
             coverage = []
             for tender in qs.filter(pk__in=ids).defer(*[name for name in ('notification_raw','extras_raw') if name in fields]).iterator():
                 routes = source_route_snapshots(tender)

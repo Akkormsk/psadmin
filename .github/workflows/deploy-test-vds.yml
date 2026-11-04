@@ -250,6 +250,15 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = backup-prod ]]; then
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" '/home/deploy/psadmin/deploy/vds/backup.sh'
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" 'python3 -' < scripts/inspect_backup_manifest.py
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = audit-prod || "$INSPECT_NUMBER" = audit-test ]]; then
             app=/home/deploy/psadmin-test
             compose=compose.test.yml
