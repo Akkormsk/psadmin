@@ -51,7 +51,7 @@ class ManualDocumentAnalysisTests(TestCase):
         self.assertEqual(job.status, 'ready')
         self.assertIsNotNone(job.completed_at)
         route.assert_called_once()
-        self.assertEqual(gateway.call_args.kwargs['max_cost_rub'], Decimal('10'))
+        self.assertEqual(gateway.call_args.kwargs['max_cost_rub'], Decimal('9'))
 
     def test_ajax_start_returns_status_without_redirect(self):
         url = reverse('tender_selection:refresh_analysis', args=[self.tender.pk])

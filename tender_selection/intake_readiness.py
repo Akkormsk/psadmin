@@ -22,8 +22,9 @@ def summarize(tenders):
         routes = source_route_snapshots(tender)
         ready = sum(route['state'] == 'ready' and bool(route['steps']) for route in routes.values())
         missing = [name for name in PHASES if stages.get(name, {}).get('state') != 'complete' or stages.get(name, {}).get('outcome') == 'source_only']
+        gaps = job.diagnostics.get('analysis_gaps', []) if job else []
         profile = profile_disposition(tender)
-        complete = bool(job and job.status not in ACTIVE and not job.error and not missing and profile == 'fit' and routes and ready == len(routes))
+        complete = bool(job and job.status not in ACTIVE and not job.error and not missing and not gaps and profile == 'fit' and routes and ready == len(routes))
         if complete:
             reason = ''
         elif job and job.status in ACTIVE:
@@ -34,6 +35,8 @@ def summarize(tenders):
             reason = str(job.error.get('message') or 'Этап анализа не завершён')
         elif missing:
             reason = 'Не все этапы анализа завершены'
+        elif gaps:
+            reason = str(gaps[0].get('reason') or 'Есть непроверенные сведения')
         elif profile != 'fit':
             reason = 'Профиль закупки не подтверждён'
         else:

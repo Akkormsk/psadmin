@@ -113,3 +113,13 @@ class ProfileTriageTests(TestCase):
         rows, _, _ = visible_found_tenders(Tender.objects.filter(pk=tender.pk), min_price=0,
             include_words='другое', exclude_words='описание')
         self.assertEqual([row.pk for row in rows], [tender.pk])
+
+    def test_profile_uses_verified_structured_reference_without_model_copying_text(self):
+        from .profile_triage import _state, _valid_answer
+        tender = Tender.objects.create(purchase_number='structured-reference', title='Подтверждённый предмет')
+        state = _state(tender, FilterSettings.load())
+        answer = {'id': tender.pk, 'verdict': 'fit', 'confidence': .85, 'reason': 'Подходит по фактическому предмету',
+            'basis': [{'field': 'title'}]}
+        valid = _valid_answer(answer, {tender.pk: state})
+        self.assertEqual(valid[1], Tender.PROFILE_SIGNAL_CLEAR)
+        self.assertEqual(valid[-1]['basis'][0]['quote'], tender.title)

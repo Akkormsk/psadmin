@@ -2233,9 +2233,9 @@ def _staged_document_analysis(job, enricher):
 
     Для каждого товара переданы baseline_facts его ИСХОДНОЙ позиции. Если kind=kit, это факты ВСЕГО набора, а не автоматически факты каждого товара: распределяй только доказуемо относящиеся к конкретному товару; сомнительные не присваивай, сохрани их в исходном наборе для проверки.
 
-    Для одиночного товара: неизменённые исходные id укажи в keep_refs, уточнённые/конфликтующие охвати baseline_refs в соответствующих characteristics; каждое исходное id учитывай ровно один раз, для new baseline_refs пуст. Для составляющих набора keep_refs пуст: у каждой новой характеристики можешь указать notification_refs — id исходных фактов набора, которые действительно относятся к ЭТОМУ товару. Не дублируй один исходный факт по разным товарам без подтверждения. Для новой характеристики используй либо (a) doc_id + точную quote документа, либо (b) notification_refs с точным исходным значением; если оба источника нужны для уточнения, укажи оба. Не приписывай факту источник, который его не подтверждает. При наличии разных сведений покажи конфликт, а не выбирай значение наугад.
+    Для одиночного товара верни только подтверждённые дополнения и изменения: неизменённые исходные факты бэкенд сохраняет автоматически, не перечисляй их и не возвращай keep_refs. Для уточнения/конфликта укажи baseline_refs соответствующих исходных фактов; для new baseline_refs пуст. Если дополнений нет — characteristics пуст. Не исключай исходные факты. Для составляющих набора keep_refs пуст: у каждой новой характеристики можешь указать notification_refs — id исходных фактов набора, которые действительно относятся к ЭТОМУ товару. Не дублируй один исходный факт по разным товарам без подтверждения. Для новой характеристики используй либо (a) doc_id + точную quote документа, либо (b) notification_refs с точным исходным значением; если оба источника нужны для уточнения, укажи оба. Не приписывай факту источник, который его не подтверждает. При наличии разных сведений покажи конфликт, а не выбирай значение наугад.
 
-    Формат {"items":[{"key":"ключ товара","keep_refs":[integer],"characteristics":[{"name":"название характеристики","value":"полное значение","resolution":"new|merge|conflict|omit","baseline_refs":[integer],"notification_refs":[integer],"reason":"объяснение уточнения, объединения или исключения","doc_id":integer,"quote":"дословная цитата из документа","section":"раздел/таблица","scope":"product|completeness"}]}]}. Для факта исключительно из извещения doc_id и quote НЕ указывай. Для факта только из документа notification_refs НЕ указывай. Для keep в одиночном товаре достаточно keep_refs. Если совпадающие сведения подтверждают несколько документов, сохрани одну характеристику; для разных дополняющих или противоречащих значений укажи document_facts:[{doc_id,quote,section,value}] с основанием каждого значения. Не переписывай неизменённые факты ради стиля: keep_refs сохраняет их точно. В названии товара убирай закупочные канцеляризмы, но все содержательные требования оставляй в ТЗ. При противоречии явно укажи оба значения, не выбирай победителя. Ничего не удаляй молча. Не возвращай характеристики без подтверждаемого источника. Не делай выводов по1875.'''
+    Формат {"items":[{"key":"ключ товара","characteristics":[{"name":"название характеристики","value":"полное значение","resolution":"new|merge|conflict","baseline_refs":[integer],"notification_refs":[integer],"reason":"объяснение уточнения, объединения или исключения","doc_id":integer,"quote":"дословная цитата из документа","section":"раздел/таблица","scope":"product|completeness"}]}]}. Для факта исключительно из извещения doc_id и quote НЕ указывай. Для факта только из документа notification_refs НЕ указывай.  Если совпадающие сведения подтверждают несколько документов, сохрани одну характеристику; для разных дополняющих или противоречащих значений укажи document_facts:[{doc_id,quote,section,value}] с основанием каждого значения. Не переписывай неизменённые факты ради стиля: они сохраняются автоматически. В названии товара убирай закупочные канцеляризмы, но все содержательные требования оставляй в ТЗ. При противоречии явно укажи оба значения, не выбирай победителя. Ничего не удаляй молча. Не возвращай характеристики без подтверждаемого источника. Не делай выводов по1875.'''
     baseline_task = {good['key']: enricher.baselines[good['source_id']] for good in goods}
     specifications = ask('tz', 'Сопоставляем ТЗ и извещение по каждому товару…', instruction,
         {'goods': goods, 'baseline_facts': baseline_task}, lambda rows: enricher.reconcile_specifications(rows, goods), 32000, lambda: enricher.reconcile_specifications([], goods))
@@ -2301,8 +2301,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         job.error = {}
         job.save(update_fields=["started_at", "completed_at", "error"])
         warnings = []
-        total_cap = job.diagnostics.get('max_total_cost_rub')
-        total_cap = Decimal(str(total_cap)) if total_cap is not None else None
+        total_cap = Decimal(str(job.diagnostics.get('max_total_cost_rub', os.getenv("CALCULATION_V2_INTAKE_MAX_COST_RUB", "10"))))
         if total_cap is not None and (not total_cap.is_finite() or total_cap <= 0):
             raise ValueError('Не задан положительный бюджет проверки.')
         profile_cost = Decimal('0')
@@ -2328,7 +2327,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         job.diagnostics.setdefault('stages', {})['notification'] = {'state': 'complete', 'cost_rub': '0'}
         _publish_intake(job)
         if not routes_only:
-            disposition = _refresh_intake_profile(job, max_cost_rub=min(Decimal('2'), total_cap / 2) if total_cap is not None else Decimal('2'))
+            disposition = _refresh_intake_profile(job, max_cost_rub=total_cap / 2)
             profile_cost = Decimal(str(job.diagnostics.get('stages', {}).get('profile', {}).get('cost_rub', 0)))
             if disposition == 'not_fit' and job.trigger != 'manual_document_refresh':
                 job.status, job.error = 'ready', {}
@@ -2366,7 +2365,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             from .national_regime import tender_items
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
         if not routes_only:
-            _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=min(Decimal('2'), max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)) - min(Decimal('1'), total_cap / 4))) if total_cap is not None else Decimal('2'))
+            _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
             profile_cost += Decimal(str(job.diagnostics.get('stages', {}).get('profile_after_tz', {}).get('cost_rub', 0)))
             from .profile_triage import profile_disposition
             if profile_disposition(job.tender) == 'not_fit' and job.trigger != 'manual_document_refresh':
@@ -2374,7 +2373,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
                 job.diagnostics.update(profile_excluded=True, refresh={'stage': 'complete', 'label': 'Не по профилю', 'warnings': []})
                 return job
         _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
-        route_cap = None if total_cap is None else min(Decimal('2'), max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
+        route_cap = max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)))
         router = router or GatewayBatchRouter(**({'max_cost_rub': route_cap} if route_cap is not None else {}))
         routing_started = timezone.now()
         from tenders.services import TenderAIError
