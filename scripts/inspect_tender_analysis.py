@@ -238,6 +238,7 @@ def collect_saved_status(number):
             'cost_rub': job.total_cost, 'contract': job.diagnostics.get('intake_contract'),
             'incomplete_response_summary': incomplete_response_summary(job.diagnostics),
             'stages': {name: {key: row.get(key) for key in ('state', 'cost_rub', 'reused_from', 'validation_version', 'reserved_cost_rub', 'remaining_budget_rub', 'input_token_bound', 'usage')} for name, row in stages.items()}})
+    print('SAVED_STAGE_RECORDS ' + json.dumps([{'id': job['id'], 'incomplete': job['incomplete_response_summary']} for job in jobs], ensure_ascii=False, default=str), flush=True)
     mismatches = []
     latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
     if latest and latest.status == 'partial' and latest.diagnostics.get('stages', {}).get('tz', {}).get('result'):
@@ -317,7 +318,7 @@ def collect_saved_status(number):
             'quarantined_additions': diagnostic_engine.specification_gaps,
             'parsed_characteristics': [{'name': item['name'], 'facts': item.get('characteristics', [])} for item in parsed.get('items', [])]}
     pending = list(TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False).values('original_text', 'quantity', 'metadata'))
-    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'documents': document_states, 'saved_reply_replay': replay, 'source_mismatches': mismatches, 'rendered_card': inspect_card_routes(tender),
+    return {'number': number, 'read_only': True, 'model_called': False, 'jobs': jobs, 'documents': document_states, 'saved_reply_replay': replay, 'source_mismatches': mismatches, 'rendered_card': {'skipped': 'Saved-source inspection avoids rendering every route'},
         'proposals': [{'name': row['original_text'], 'quantity': row['quantity'], 'incomplete': row['metadata'].get('analysis_incomplete')} for row in pending],
         'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id'), 'assumption': value.get('assumption'), 'working_choice': value.get('interaction')} for key, value in source_route_snapshots(tender).items()}}
 
