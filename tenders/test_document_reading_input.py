@@ -188,6 +188,23 @@ class InlineDocumentVisionTests(TestCase):
         self.documents = [{'url': 'https://example.test/vision', 'name': 'Document.docx'}]
         DocumentPreview.objects.create(url=self.documents[0]['url'], kind='docx', html=f'<p>Text facts</p><img src="{self.image_url}">')
 
+    def test_gateway_sends_identical_images_once_without_losing_original_reference_numbers(self):
+        from .services import _ai_gateway_json
+        response = {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"items":[]}'}}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1}}
+        with patch.dict('os.environ', {'TIMEWEB_AI_API_KEY': 'synthetic-key'}), patch('tenders.services.urlopen', return_value=io.BytesIO(json.dumps(response).encode())) as request:
+            _ai_gateway_json('Read both sources', shared_context='Same drawing occurs in two source documents',
+                image_data_urls=[self.image_url, self.image_url], network_attempts=1, json_attempts=1)
+        content = json.loads(request.call_args.args[0].data)['messages'][1]['content']
+        self.assertEqual(sum(part['type'] == 'image_url' for part in content), 1)
+        self.assertTrue(any(part.get('text') == 'Изображение 2: точная копия изображения 1.' for part in content))
+        engine = GatewayDocumentEnricher()
+        engine.document_images = [self.image_url]
+        single = engine._image_token_bound()
+        engine.document_images = [self.image_url] * 100
+        self.assertLess(engine._image_token_bound(), single * 25)
+        engine.document_lookup = {1: {'image_indexes': [2], 'evidence_text': '', 'url': self.documents[0]['url']}}
+        self.assertTrue(engine.stage_quote({'doc_id': 1, 'quote': 'Вид изделия', 'section': 'Изображение 2'}))
+
     @patch('tenders.services._ai_gateway_json', return_value=({'items': []}, {'prompt_tokens': 100, 'completion_tokens': 10}))
     def test_picture_is_forwarded_in_the_same_call_and_bound_to_its_document(self, gateway):
         enricher = GatewayDocumentEnricher()

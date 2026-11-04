@@ -926,10 +926,17 @@ class GatewayDocumentEnricher:
         import base64
         import io
         from PIL import Image
-        total = 0
-        for url in self.document_images:
+        # Gateway sends byte-identical images once and retains every original label.
+        total = 128 * len(self.document_images)
+        for url in dict.fromkeys(self.document_images):
             with Image.open(io.BytesIO(base64.b64decode(url.split(',', 1)[1]))) as image:
-                total += 4096 + (image.width * image.height + 127) // 128
+                if self.model.startswith('anthropic/claude-'):
+                    # Claude vision: 28px patches, at most4784 native visual tokens.
+                    # https://platform.claude.com/docs/en/build-with-claude/vision
+                    patches = ((image.width + 27) // 28) * ((image.height + 27) // 28)
+                    total += 512 + min(4784, patches)
+                else:
+                    total += 4096 + (image.width * image.height + 127) // 128
         return total
 
     def _preflight_cost(self, prompt):

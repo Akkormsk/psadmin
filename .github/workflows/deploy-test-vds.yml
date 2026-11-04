@@ -215,6 +215,8 @@ jobs:
             tenders.test_document_reading_input.ResilientIntakeTests \
             tenders.test_document_reading_input.StagedResponseCacheTests \
             tenders.test_document_reading_input.ClosedStageRecordTests \
+            tenders.test_document_reading_input.InlineDocumentVisionTests \
+            tenders.test_gateway_reliability \
             tender_selection.test_intake_refresh.LargeIntakeStageTests \
             tenders.test_intake_worker \
             tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \

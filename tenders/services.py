@@ -783,9 +783,21 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
         raise TenderAIError("AI Gateway ещё не настроен.")
     has_images = bool(scan_ocr or image_data_urls)
 
+    def referenced_images():
+        content, seen = [], {}
+        for number, value in enumerate(image_data_urls or [], 1):
+            original = seen.get(value)
+            if original is not None:
+                content.append({'type': 'text', 'text': f'Изображение {number}: точная копия изображения {original}.'})
+            else:
+                seen[value] = number
+                content.extend([{'type': 'text', 'text': f'Изображение {number}:'},
+                    {'type': 'image_url', 'image_url': {'url': value, 'detail': image_detail}}])
+        return content
+
     def build_user_content(max_side, quality):
         if shared_context is not None:
-            images = [{"type": "image_url", "image_url": {"url": value, "detail": image_detail}} for value in image_data_urls or []]
+            images = referenced_images()
             return images + [{"type": "text", "text": shared_context, "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": prompt}]
         if not has_images:
             return prompt
@@ -796,7 +808,7 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
                 for image in _scan_pdf_images(upload, max_side=max_side, quality=quality)
             )
         if image_data_urls:
-            content.extend({"type": "image_url", "image_url": {"url": image, "detail": image_detail}} for image in image_data_urls)
+            content.extend(referenced_images())
         return content
 
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
