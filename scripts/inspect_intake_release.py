@@ -52,7 +52,7 @@ def main():
         ids = [tender.pk for tender in visible]
         emit('INCOMING_TOTAL', {'visible': len(ids), 'word_hidden': hidden, 'expired': expired})
         emit('INCOMING_SAMPLE', list(qs.filter(pk__in=ids).order_by('-pk').values(*wanted)[:80]))
-        feedback_model = next((model for model in apps.get_models() if model._meta.app_label == 'tender_selection' and model.__name__ == 'DismissalFeedback'), None)
+        feedback_model = next((model for model in apps.get_models() if model._meta.app_label == 'tender_selection' and model.__name__ == 'TenderDismissalFeedback'), None)
         if feedback_model:
             emit('DISMISSED_SAMPLE', list(feedback_model.objects.order_by('-pk').values('reason','created_at','tender__purchase_number','tender__title','tender__okpd2')[:100]))
         emit('HIDDEN_SAMPLE', list(qs.filter(status=Tender.NEW, review=Tender.UNREVIEWED).exclude(pk__in=ids).order_by('-pk').values(*wanted)[:50]))

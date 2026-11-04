@@ -1921,3 +1921,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — numeric original-source UI inspection, 2026-11-03.** Existing read-only actual card rendering verifies numeric source range rows are present and retain original black styling. Names are derived from parsed source facts, with no product-specific selector or mutation.
+
+
+**CODE_ONLY — read-only release readiness audit, 2026-11-04.** Owner requests complete intake relevance/TZ/1875/routes before accepting TEST and then PROD; no unconditional rollout or mass worker enablement authorized. Operator audit uses PostgreSQL READ ONLY, no model/network/document fetch/settings writes; compares per-app data counts, applied migrations, feature flags, current incoming and user dismissal feedback, latest jobs and actual saved route coverage. Explicit audit-prod/audit-test selectors run existing containers without changing them. Current main has explanatory Gemini profile fields/migrations absent from TEST; blind TEST deployment would regress that feature/history. Preserve both migration branches and main profile behavior before any release. No counterparties or calculation warmup in current scope. No PROD mutations/deploy or paid calls performed by audit tooling.
