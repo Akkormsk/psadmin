@@ -323,6 +323,50 @@ def collect_saved_status(number):
         'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id'), 'assumption': value.get('assumption'), 'working_choice': value.get('interaction')} for key, value in source_route_snapshots(tender).items()}}
 
 
+def verify_stage_cache(number):
+    """Exercise the real stage executor on saved sources, with all writes rolled back."""
+    from django.db import connection, transaction
+    from unittest.mock import patch
+    from tender_selection.models import Tender
+    from tender_selection.services import _staged_document_analysis
+    from tenders.models import TenderComputeJob, TenderSourceItem
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, closed_stage_records
+    from tenders.services import TenderAIError
+    if connection.settings_dict.get('HOST') != 'test-db':
+        raise RuntimeError('Rollback verification is TEST-only')
+    tender = Tender.objects.get(purchase_number=number)
+    latest = TenderComputeJob.objects.filter(tender=tender).latest('pk')
+    old = latest.diagnostics['stages']
+    intact = old.get('tz:1', {}).get('result', [])
+    recovered = closed_stage_records((old.get('tz:2', {}).get('incomplete_response') or {}).get('content'))
+    expected = {row['key'] for row in intact + recovered}
+    before = (TenderComputeJob.objects.count(), TenderSourceItem.objects.count())
+    calls = []
+    engine = GatewayDocumentEnricher(max_cost_rub='10')
+    def missing(_job, phase, instruction, task, **kwargs):
+        calls.append({'phase': phase, 'keys': [good['key'] for good in task.get('goods', [])]})
+        raise TenderAIError('Model intentionally blocked during rollback verification')
+    with transaction.atomic():
+        job = TenderComputeJob.objects.create(tender=tender, version='v2-cache-verification')
+        with patch('tender_selection.services.documents_html'), patch('tender_selection.services._fetch_doc_bytes', side_effect=AssertionError('Unexpected download')), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Unexpected paid call')) as gateway, patch.object(engine, 'ask_stage', side_effect=missing):
+            _staged_document_analysis(job, engine)
+            goods = engine.reconcile_structure(job.diagnostics['stages']['structure']['result'])
+            keys = [good['key'] for good in goods]
+            next_keys = [key for key in keys if key not in expected][:20]
+            if len(calls) != 1 or calls[0]['phase'] != 'tz:1' or calls[0]['keys'] != next_keys:
+                raise AssertionError('Actual executor did not reuse exactly the saved complete records')
+            compiled = engine.reconcile_specifications(intact + recovered, goods)
+            if any(gap.get('key') in expected for gap in engine.specification_gaps):
+                raise AssertionError('Saved closed records failed current source validation')
+            gateway.assert_not_called()
+        transaction.set_rollback(True)
+    after = (TenderComputeJob.objects.count(), TenderSourceItem.objects.count())
+    if before != after:
+        raise AssertionError('Rollback verification changed stored row counts')
+    return {'model_called': False, 'persisted_writes': False, 'intact_records': len(intact),
+        'recovered_records': len(recovered), 'compiled_goods': len(compiled), 'missing_records': len(keys) - len(expected)}
+
+
 def main():
     print("INTAKE_AUDIT_STARTED", flush=True)
     import django
@@ -334,6 +378,9 @@ def main():
         raise ValueError('Expected one purchase number')
     if connection.vendor != 'postgresql':
         raise RuntimeError('Live inspection requires PostgreSQL read-only transaction')
+    if os.environ.get('VERIFY_STAGE_CACHE') == '1':
+        print('CACHE_VERIFICATION ' + json.dumps(verify_stage_cache(number)), flush=True)
+        return
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
