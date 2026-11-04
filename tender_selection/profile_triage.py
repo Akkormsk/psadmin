@@ -34,14 +34,12 @@ def _state(tender: Tender, settings: FilterSettings) -> dict:
     from .notification import parse_notification
     objects = parse_notification(tender.notification_raw or {}).get("items", [])
     objects = [{"name": item["name"], "characteristics": item.get("characteristics", [])} for item in objects]
-    # Use only existing, completed evidence proposals; never learn category rules.
-    from tenders.models import TenderSourceItem
-    for source in TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal', is_active=False):
-        if source.metadata.get('analysis_incomplete') or not source.requirements.get('compiled_reconciliation'):
-            continue
-        objects.append({'name': source.original_text, 'characteristics': [
-            {key: value for key, value in fact.items() if key in {'name','value','scope','conflict'}}
-            for fact in source.requirements.get('characteristics', [])]})
+    from tenders.calculation_v2_pipeline import routing_source_items, effective_item_requirements
+    working = list(routing_source_items(tender))
+    if working:
+        objects = [{'name': source.original_text, 'source_item_id': source.pk,
+            'characteristics': [{key: value for key,value in fact.items() if key in {'name','value','scope','conflict'}}
+                for fact in effective_item_requirements(source).get('characteristics', [])]} for source in working]
     return {
         "id": tender.pk,
         "title": title,
@@ -75,6 +73,8 @@ def _answers(batch: list[Tender], settings: FilterSettings, *, max_cost_rub=None
     output_limit = min(6000, 800 + 300 * len(batch) + 80 * sum(len(state['objects']) for state in states))
     bound = spend_rub({'prompt_tokens': len(prompt.encode('utf-8')) + 4096, 'completion_tokens': output_limit}, MODEL)
     reserved = Decimal(str(bound)) * Decimal('1.25') if bound is not None else None
+    if diagnostics is not None:
+        diagnostics.update(model=MODEL, reserved_cost_rub=str(reserved) if reserved is not None else None, input_token_bound=len(prompt.encode('utf-8')) + 4096, output_token_limit=output_limit)
     if max_cost_rub is not None and (reserved is None or reserved > max_cost_rub):
         raise AIGatewayError('Проверка профиля не отправлена: превышен доступный бюджет.')
     if diagnostics is not None:
@@ -124,7 +124,7 @@ def _valid_answer(item: object, states: dict):
         quote = str(proof.get('quote') or '').strip()
         if not quote or norm(quote) not in norm(source):
             return None
-        verified.append({'field': field, **({'index': index} if field == 'objects' else {}), 'quote': quote})
+        verified.append({'field': field, **({'index': index, 'source_item_id': state['objects'][index].get('source_item_id')} if field == 'objects' else {}), 'quote': quote})
     if verdict != 'review' and not verified:
         return None
     if state['objects'] and verdict != 'review':
@@ -160,12 +160,22 @@ def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostic
     spent = Decimal('0')
     if diagnostics is not None:
         diagnostics.update(calls=[], cost_rub='0')
-    for offset in range(0, len(tenders), BATCH_SIZE):
-        batch = tenders[offset:offset + BATCH_SIZE]
+    batches = [tenders[offset:offset + BATCH_SIZE] for offset in range(0, len(tenders), BATCH_SIZE)]
+    while batches:
+        batch = batches.pop(0)
         metrics = {}
         try:
             answers = _answers(batch, selection, max_cost_rub=Decimal(str(max_cost_rub)) - spent if max_cost_rub is not None else None, diagnostics=metrics)
         except AIGatewayError as exc:
+            if not metrics.get('provider_call_happened') and len(batch) > 1:
+                middle = len(batch) // 2
+                batches[0:0] = [batch[:middle], batch[middle:]]
+                continue
+            if not metrics.get('provider_call_happened'):
+                if diagnostics is not None:
+                    diagnostics.setdefault('blocked', []).append({'tender_ids': [tender.pk for tender in batch], **metrics})
+                    diagnostics['warning'] = str(exc)
+                continue
             if diagnostics is not None:
                 diagnostics['warning'] = str(exc)
             if metrics.get('provider_call_happened'):
