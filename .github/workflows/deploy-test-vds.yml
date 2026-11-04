@@ -35,6 +35,12 @@ on:
         default: ""
         type: string
 
+      profile_qa_numbers:
+        description: "Explicit TEST purchase numbers, comma-separated, for bounded existing profile classifier QA; no lessons"
+        required: false
+        default: ""
+        type: string
+
       refresh_estimates:
         description: "TEST maintenance: preview or apply accepted requirements to untouched legacy lines; no deployment"
         required: false
@@ -234,6 +240,7 @@ jobs:
       SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
       SSH_USER: deploy
       INSPECT_NUMBER: ${{ inputs.inspect_tender_number }}
+      PROFILE_QA_NUMBERS: ${{ inputs.profile_qa_numbers }}
     steps:
       - uses: actions/checkout@v4
       - name: Configure strict SSH
@@ -250,6 +257,13 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = profile-qa ]]; then
+            [[ "$PROFILE_QA_NUMBERS" =~ ^[0-9]{19}(,[0-9]{19})*$ ]]
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e PROFILE_QA_NUMBERS=$PROFILE_QA_NUMBERS -e PROFILE_QA_BUDGET=3.12 test-web python -" < scripts/verify_intake_profile.py
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = profile-test || "$INSPECT_NUMBER" = acceptance-test ]]; then
             extra=""
             budget=45

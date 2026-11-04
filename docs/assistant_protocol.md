@@ -1939,3 +1939,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — bounded large-cohort verification ceiling, 2026-11-04.** TEST operator acceptance uses the normal10RUB whole-refresh cap for a single large source instead of its arbitrary6RUB test cap. Persistent group cap45RUB unchanged and prior profile QA allocation5RUB unchanged: approved total50RUB cannot increase. Does not enable any automatic/PROD spending.
+
+
+**CODE_ONLY — bounded existing-classifier negative QA, 2026-11-04.** Operator can supply explicit existing TEST purchase numbers to the same profile_triage executor, using only remaining3.12RUB of the5RUB profile allocation. No lessons, category rules, imports into PROD or manual decisions; status/review preservation checked. QA cohorts supplied at execution, never embedded in code. Persistent full-run45RUB ceiling unchanged. Must account actual provider spending before any repeated QA.
