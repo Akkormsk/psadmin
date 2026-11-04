@@ -29,7 +29,7 @@ def json_from_model(content: str) -> dict:
     raise AIGatewayError("Модель вернула ответ в неожиданном формате.") from last_error
 
 
-def chat_json(system: str, user: str, *, model: str, max_tokens: int, timeout: int = 90) -> dict:
+def chat_json(system: str, user: str, *, model: str, max_tokens: int, timeout: int = 90, thinking=None, reasoning_effort=None) -> dict:
     """Возвращает {'data': dict, 'usage': dict}."""
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
@@ -39,6 +39,10 @@ def chat_json(system: str, user: str, *, model: str, max_tokens: int, timeout: i
         "model": model, "temperature": 0, "max_tokens": max_tokens,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
+    if thinking:
+        body["thinking"] = thinking
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     request = Request(
         f"{base_url}/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST",
@@ -54,4 +58,9 @@ def chat_json(system: str, user: str, *, model: str, max_tokens: int, timeout: i
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
         raise AIGatewayError("AI Gateway вернул ответ без содержимого.") from exc
-    return {"data": json_from_model(content), "usage": data.get("usage", {})}
+    try:
+        parsed = json_from_model(content)
+    except AIGatewayError as exc:
+        exc.usage = data.get("usage", {})
+        raise
+    return {"data": parsed, "usage": data.get("usage", {})}

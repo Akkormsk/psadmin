@@ -81,5 +81,8 @@ class Command(BaseCommand):
             self.stdout.write('INTAKE_ACCEPTANCE ' + json.dumps(report, ensure_ascii=False, default=str))
             if not excluded and not proof['all_complete']:
                 raise CommandError('First incomplete result saved; paid batch stopped for diagnosis')
+        final = intake_readiness_for(actor)
         self.stdout.write('INTAKE_ACCEPTANCE_COMPLETE ' + json.dumps({'run_id': run_id, 'processed': len(rows),
-            'readiness': intake_readiness_for(actor)}, ensure_ascii=False, default=str))
+            'readiness': final}, ensure_ascii=False, default=str))
+        if not final['all_complete']:
+            raise CommandError('Current incoming cohort is not fully verified; background rollout remains blocked')

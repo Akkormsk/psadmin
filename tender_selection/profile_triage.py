@@ -22,7 +22,7 @@ PROFILE = """Компания поставляет полиграфию, сув�
 и стерилизация, электромонтаж и маркировка электрооборудования, строительство,
 поставка оборудования, программное обеспечение и хозяйственные товары — даже
 если в названии случайно встретились слова «пакет», «нанесение» или «печать»."""
-MODEL = os.getenv("INCOMING_PROFILE_MODEL", "gemini/gemini-3.1-flash-lite")
+MODEL = os.getenv("INCOMING_PROFILE_MODEL", "anthropic/claude-haiku-5-5")
 BATCH_SIZE = 10
 CONTRACT = "profile-evidence-v1"
 _VERDICTS = {"fit": Tender.PROFILE_SIGNAL_CLEAR, "review": Tender.PROFILE_SIGNAL_DOUBT, "not_fit": Tender.PROFILE_SIGNAL_NOT_PROFILE}
@@ -70,7 +70,7 @@ def _answers(batch: list[Tender], settings: FilterSettings, *, max_cost_rub=None
     )
     from tenders.gateway_budget import spend_rub
     states = [_state(tender, settings) for tender in batch]
-    output_limit = min(6000, 800 + 300 * len(batch) + 80 * sum(len(state['objects']) for state in states))
+    output_limit = min(8000, 1800 + 300 * len(batch) + 80 * sum(len(state['objects']) for state in states))
     bound = spend_rub({'prompt_tokens': len(prompt.encode('utf-8')) + 4096, 'completion_tokens': output_limit}, MODEL)
     reserved = Decimal(str(bound)) * Decimal('1.25') if bound is not None else None
     if diagnostics is not None:
@@ -81,7 +81,8 @@ def _answers(batch: list[Tender], settings: FilterSettings, *, max_cost_rub=None
         diagnostics.update(model=MODEL, reserved_cost_rub=str(reserved), provider_call_happened=True, started_at=timezone.now().isoformat())
     response = chat_json(
         "Ты аккуратно классифицируешь закупки. Не придумывай товары, которых нет в тексте.",
-        prompt, model=MODEL, max_tokens=output_limit, timeout=60,
+        prompt, model=MODEL, max_tokens=output_limit, timeout=90,
+        **({"thinking": {"type": "adaptive"}, "reasoning_effort": "low"} if MODEL.startswith("anthropic/") else {}),
     )
     if diagnostics is not None:
         usage = response.get('usage') or {}
@@ -167,6 +168,10 @@ def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostic
         try:
             answers = _answers(batch, selection, max_cost_rub=Decimal(str(max_cost_rub)) - spent if max_cost_rub is not None else None, diagnostics=metrics)
         except AIGatewayError as exc:
+            usage = getattr(exc, 'usage', {})
+            if usage:
+                from tenders.gateway_budget import intake_spend_rub
+                metrics.update(usage=usage, cost_rub=str(intake_spend_rub(usage, MODEL) or 0))
             if not metrics.get('provider_call_happened') and len(batch) > 1:
                 middle = len(batch) // 2
                 batches[0:0] = [batch[:middle], batch[middle:]]

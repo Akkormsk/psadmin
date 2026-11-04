@@ -29,7 +29,7 @@ class ProfileTriageTests(TestCase):
         self.assertEqual(doubt.profile_signal, Tender.PROFILE_SIGNAL_DOUBT)
         self.assertEqual(unrelated.profile_signal, Tender.PROFILE_SIGNAL_NOT_PROFILE)
         self.assertIsNotNone(unrelated.profile_checked_at)
-        self.assertEqual(unrelated.profile_model, "gemini/gemini-3.1-flash-lite")
+        self.assertEqual(unrelated.profile_model, "anthropic/claude-haiku-5-5")
         self.assertIn("Оборудование", unrelated.profile_reason)
         self.assertEqual(unrelated.status, Tender.NEW)
 
