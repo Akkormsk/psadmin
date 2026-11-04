@@ -47,6 +47,12 @@ def _state(tender: Tender, settings: FilterSettings) -> dict:
     }
 
 
+def _input_hash(state):
+    # Source version identifiers are provenance, not a changed procurement.
+    canonical = {**state, 'objects': [{key: value for key, value in item.items() if key != 'source_item_id'} for item in state['objects']]}
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def _answers(batch: list[Tender], settings: FilterSettings, *, max_cost_rub=None, diagnostics=None) -> list[dict]:
     prompt = (
         f"Коммерческий профиль:\n{PROFILE}\n\n"
@@ -145,7 +151,7 @@ def _valid_answer(item: object, states: dict, diagnostics=None):
         verdict = 'review'
     assessment = {'contract': CONTRACT, 'verdict': verdict, 'title': state['title'],
         'object_info': state['object_info'], 'basis': verified,
-        'input_hash': hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+        'input_hash': _input_hash(state)}
     return tender_id, _VERDICTS[verdict], confidence, reason, assessment
 
 
@@ -165,7 +171,29 @@ def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostic
         pk__in=ids, status=Tender.NEW, review=Tender.UNREVIEWED,
     ).only("pk", "title", "object_info", "okpd2", "notification_raw", "profile_assessment"))
     selection = FilterSettings.load()
-    tenders = [tender for tender in tenders if force or (tender.profile_assessment or {}).get("contract") != CONTRACT or (tender.profile_assessment or {}).get("input_hash") != hashlib.sha256(json.dumps(_state(tender, selection), sort_keys=True, ensure_ascii=False).encode()).hexdigest()]
+    pending = []
+    for tender in tenders:
+        state = _state(tender, selection)
+        assessment = tender.profile_assessment or {}
+        if not force and not assessment.get('stale') and assessment.get('contract') == CONTRACT and assessment.get('input_hash') == _input_hash(state):
+            basis, valid = [], True
+            for proof in assessment.get('basis', []):
+                proof = dict(proof)
+                if proof.get('field') == 'objects':
+                    index = proof.get('index')
+                    if type(index) is not int or not 0 <= index < len(state['objects']):
+                        valid = False; break
+                    source = state['objects'][index]
+                    if ' '.join(str(proof.get('quote') or '').split()).casefold() not in ' '.join(json.dumps(source, ensure_ascii=False).split()).casefold():
+                        valid = False; break
+                    proof['source_item_id'] = source.get('source_item_id')
+                basis.append(proof)
+            if valid:
+                if basis != assessment.get('basis', []):
+                    Tender.objects.filter(pk=tender.pk, review=Tender.UNREVIEWED).update(profile_assessment={**assessment, 'basis': basis})
+                continue
+        pending.append(tender)
+    tenders = pending
     # A changed canonical input invalidates an old signal even if the new call fails.
     for tender in tenders:
         if tender.profile_assessment:

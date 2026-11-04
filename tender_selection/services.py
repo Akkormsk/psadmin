@@ -2177,7 +2177,10 @@ def _staged_document_analysis(job, enricher):
             batches = [requested[offset:offset + 20] for offset in range(0, len(requested), 20)] if len(requested) > 20 else []
             if batches:
                 rows, children = [], []
-                for index, batch in enumerate(batches, 1):
+                queue = list(batches)
+                while queue:
+                    batch = queue.pop(0)
+                    index = len(children) + 1
                     child = f'{name}:{index}'
                     subset = {**task}
                     if name == 'structure':
@@ -2188,9 +2191,16 @@ def _staged_document_analysis(job, enricher):
                         for field in ('baseline_facts', 'notification_evidence'):
                             if field in subset:
                                 subset[field] = {key: value for key, value in subset[field].items() if key in keys}
-                    job.diagnostics['refresh']['label'] = f'{label} {index}/{len(batches)}'
+                    job.diagnostics['refresh']['label'] = f'{label} {index}/{len(children) + len(queue) + 1}'
                     _publish_intake(job)
-                    reply, metrics = enricher.ask_stage(job, child, instruction, subset, output_tokens=limit)
+                    try:
+                        reply, metrics = enricher.ask_stage(job, child, instruction, subset, output_tokens=limit)
+                    except ValueError:
+                        if stages.get(child, {}).get('provider_call_happened') is False and len(batch) > 1:
+                            middle = len(batch) // 2
+                            queue[:0] = [batch[:middle], batch[middle:]]
+                            continue
+                        raise
                     stages[child] = metrics
                     children.append(child)
                     rows.extend(reply)
@@ -2215,6 +2225,12 @@ def _staged_document_analysis(job, enricher):
     goods = ask('structure', 'Определяем товары и состав наборов…', structure_instruction, {}, enricher.reconcile_structure, min(16000, 5000 + len(sources)*600), lambda: enricher.reconcile_structure([]))
     job.diagnostics['analysis_gaps'].extend(enricher.validation_gaps)
     job.diagnostics["structure_requires_review"] = [good["source_id"] for good in goods if good["kind"] == "unclear"]
+    if stages['structure'].get('outcome') == 'source_only':
+        # No verified replacement exists: retain the previous working facts/proposals.
+        job.diagnostics.update(enrichment_state='structure_incomplete', staged_input_fingerprint=fingerprint,
+            intake_contract=enricher.STAGED_CONTRACT)
+        _publish_intake(job)
+        return {'created': [], 'state': 'structure_incomplete', 'diagnostics': []}
     enricher.prepared_entries(goods)
     result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
     if result['state'] in {'validation_failure', 'system_extraction_failure'}:
@@ -2395,7 +2411,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             _refresh_phase(job, "national_regime", "Проверяем требования 1875…")
             from .national_regime import tender_items
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
-        if not routes_only:
+        if not routes_only and result.get('created'):
             _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
             profile_cost += Decimal(str(job.diagnostics.get('stages', {}).get('profile_after_tz', {}).get('cost_rub', 0)))
             from .profile_triage import profile_disposition

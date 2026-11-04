@@ -123,3 +123,20 @@ class ProfileTriageTests(TestCase):
         valid = _valid_answer(answer, {tender.pk: state})
         self.assertEqual(valid[1], Tender.PROFILE_SIGNAL_CLEAR)
         self.assertEqual(valid[-1]['basis'][0]['quote'], tender.title)
+
+
+class ProfileVersionCacheTests(TestCase):
+    def test_unchanged_facts_reuse_verdict_and_rebind_source_reference(self):
+        from .profile_triage import triage_tenders
+        settings = FilterSettings.load(); settings.profile_triage_enabled = True; settings.save()
+        tender = Tender.objects.create(purchase_number='profile-version-cache', title='Печать бланков')
+        state = {'id': tender.pk, 'title': tender.title, 'object_info': '', 'objects': [{'source_item_id': 7, 'name': 'Бланк', 'characteristics': []}]}
+        answer = {'data': {'items': [{'id': tender.pk, 'verdict': 'fit', 'confidence': .95, 'reason': 'Полиграфия', 'basis': [{'field': 'objects', 'index': 0}]}]}, 'usage': {}}
+        with patch('tender_selection.profile_triage._state', return_value=state), patch('tender_selection.profile_triage.chat_json', return_value=answer) as gateway:
+            self.assertEqual(triage_tenders([tender.pk]), 1)
+            state['objects'][0]['source_item_id'] = 42
+            gateway.reset_mock()
+            self.assertEqual(triage_tenders([tender.pk]), 0)
+            gateway.assert_not_called()
+        tender.refresh_from_db()
+        self.assertEqual(tender.profile_assessment['basis'][0]['source_item_id'], 42)

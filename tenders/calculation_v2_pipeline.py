@@ -299,9 +299,13 @@ class GatewayDocumentEnricher:
         notice = copy.deepcopy(tender.notification_raw)
         objects = _dig(notice or {}, 'source', 'notificationInfo', 'purchaseObjectsInfo', 'notDrugPurchaseObjectsInfo', default={})
         raw_items = _as_list(objects.get('purchaseObject')) if isinstance(objects, dict) else []
-        self.notification_items = {source.pk: {'source_id': source.pk,
-            'notification_index': source.metadata['notification_index'], 'value': raw_items[source.metadata['notification_index']]}
-            for source in sources if type(source.metadata.get('notification_index')) is int and 0 <= source.metadata['notification_index'] < len(raw_items)}
+        from .document_enrichment import notification_origin
+        self.notification_items = {}
+        for source in sources:
+            origin = notification_origin(source)
+            index = (origin.metadata or {}).get('notification_index') if origin else None
+            if type(index) is int and 0 <= index < len(raw_items):
+                self.notification_items[source.pk] = {'source_id': source.pk, 'notification_index': index, 'value': raw_items[index]}
         if raw_items:
             objects['purchaseObject'] = {'location': 'task.notification_items; complete original records for the requested positions',
                 'unassigned': [{'notification_index': index, 'value': value} for index, value in enumerate(raw_items) if index not in {row['notification_index'] for row in self.notification_items.values()}]}

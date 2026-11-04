@@ -254,6 +254,9 @@ class LargeIntakeStageTests(TestCase):
         by_id = {source.pk: source for source in sources}
         def answer(_job, stage, instruction, task, **kwargs):
             if stage.startswith('structure'):
+                if len(task['requested_source_ids']) > 10:
+                    _job.diagnostics['stages'][stage] = {'state': 'failed', 'provider_call_happened': False}
+                    raise ValueError('Preflight budget refusal; no provider call')
                 rows = [{'source_id': pk, 'kind': 'finished', 'name': by_id[pk].original_text, 'reason': 'Один товар', 'evidence': [{'doc_id': 1, 'quote': by_id[pk].original_text}], 'goods': [{'name': by_id[pk].original_text, 'quantity_per_parent': 1, 'unit': by_id[pk].unit}]} for pk in task['requested_source_ids']]
             elif stage.startswith('national_regime'):
                 rows = [{'key': good['key'], 'status': 'unknown', 'basis': []} for good in task['goods']]
@@ -264,7 +267,7 @@ class LargeIntakeStageTests(TestCase):
             _staged_document_analysis(job, engine)
         self.assertEqual(len(job.diagnostics['stages']['structure']['result']), 21)
         self.assertNotIn('document_analysis_reused', job.diagnostics)
-        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [20, 1])
+        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [20, 10, 10, 1])
         self.assertEqual(len(job.diagnostics['stages']['tz']['result']), 21)
         self.assertEqual(job.diagnostics['analysis_gaps'], [])
         self.assertEqual(len(engine.notification_items), 21)
@@ -279,6 +282,27 @@ class LargeIntakeStageTests(TestCase):
         raw = tender.notification_raw['source']['notificationInfo']['purchaseObjectsInfo']['notDrugPurchaseObjectsInfo']['purchaseObject']
         self.assertEqual([row['value'] for row in task['notification_items']], raw[:2])
         self.assertTrue(all(job.diagnostics['stages'][name]['state'] == 'complete' for name in ('structure','national_regime','tz')))
+
+    def test_failed_structure_does_not_replace_previous_verified_proposals(self):
+        from .models import Tender
+        from .services import _staged_document_analysis
+        from tenders.models import TenderSourceItem
+        from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, ingest_source_items
+        from tenders.test_calculation_v2_pipeline import notification, raw_item
+        tender = Tender.objects.create(purchase_number='failed-structure-preservation', notification_raw=notification([raw_item('Товар', '1')]))
+        source = ingest_source_items(tender)[0]
+        prior = TenderSourceItem.objects.create(tender=tender, parent=source, source_key='verified-prior', source_type='document_proposal', is_active=False,
+            original_text='Товар', requirements={'characteristics': [{'name': 'Материал', 'value': 'металл'}]})
+        job = TenderComputeJob.objects.create(tender=tender, status='running')
+        engine = GatewayDocumentEnricher(max_cost_rub='1')
+        with patch('tender_selection.services.documents_html'), patch.object(engine, 'ask_stage', side_effect=ValueError('Preflight blocked')):
+            result = _staged_document_analysis(job, engine)
+        prior.refresh_from_db()
+        self.assertEqual(prior.source_type, 'document_proposal')
+        self.assertEqual(prior.requirements['characteristics'][0]['value'], 'металл')
+        self.assertEqual(result['created'], [])
+        self.assertEqual(result['state'], 'structure_incomplete')
+        self.assertNotIn('tz', job.diagnostics['stages'])
 
     def test_context_compaction_preserves_full_original_data(self):
         import json
