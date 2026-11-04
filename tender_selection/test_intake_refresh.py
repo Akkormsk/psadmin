@@ -267,6 +267,17 @@ class LargeIntakeStageTests(TestCase):
         self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [20, 1])
         self.assertEqual(len(job.diagnostics['stages']['tz']['result']), 21)
         self.assertEqual(job.diagnostics['analysis_gaps'], [])
+        self.assertEqual(len(engine.notification_items), 21)
+        self.assertIn('source_context', __import__('json').loads(engine.shared_context))
+        import json
+        selected = [sources[0].pk, sources[1].pk]
+        with patch('tenders.services._ai_gateway_json', return_value=({'items': []}, {'prompt_tokens': 1, 'completion_tokens': 1})) as gateway:
+            engine.ask_stage(job, 'scope_probe', 'Read', {'requested_source_ids': selected}, output_tokens=200)
+        task = json.loads(gateway.call_args.args[0].split('\n', 1)[1])
+        self.assertEqual([row['source_id'] for row in task['notification_items']], selected)
+        self.assertEqual([row['source_id'] for row in task['working_items']], selected)
+        raw = tender.notification_raw['source']['notificationInfo']['purchaseObjectsInfo']['notDrugPurchaseObjectsInfo']['purchaseObject']
+        self.assertEqual([row['value'] for row in task['notification_items']], raw[:2])
         self.assertTrue(all(job.diagnostics['stages'][name]['state'] == 'complete' for name in ('structure','national_regime','tz')))
 
     def test_context_compaction_preserves_full_original_data(self):

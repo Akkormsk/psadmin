@@ -294,8 +294,22 @@ class GatewayDocumentEnricher:
         self.document_lookup = {index: doc for index, doc in enumerate(self.stage_documents, 1)}
         self.baseline_sources = {source.pk: effective_item_requirements(source).get('characteristics', []) for source in sources}
         self.baselines = {source.pk: [{'id': i, 'name': fact['name'], 'value': fact['value']} for i, fact in enumerate(effective_item_requirements(source).get('characteristics', []))] for source in sources}
-        self.shared_context = compact_intake_context({'notification': tender.notification_raw,
-            'working_items': [{'source_id': source.pk, 'name': source.original_text, 'quantity': str(source.quantity), 'unit': source.unit, 'baseline_facts': self.baselines[source.pk]} for source in sources],
+        import copy
+        from tender_selection.notification import _dig, _as_list
+        notice = copy.deepcopy(tender.notification_raw)
+        objects = _dig(notice or {}, 'source', 'notificationInfo', 'purchaseObjectsInfo', 'notDrugPurchaseObjectsInfo', default={})
+        raw_items = _as_list(objects.get('purchaseObject')) if isinstance(objects, dict) else []
+        self.notification_items = {source.pk: {'source_id': source.pk,
+            'notification_index': source.metadata['notification_index'], 'value': raw_items[source.metadata['notification_index']]}
+            for source in sources if type(source.metadata.get('notification_index')) is int and 0 <= source.metadata['notification_index'] < len(raw_items)}
+        if raw_items:
+            objects['purchaseObject'] = {'location': 'task.notification_items; complete original records for the requested positions',
+                'unassigned': [{'notification_index': index, 'value': value} for index, value in enumerate(raw_items) if index not in {row['notification_index'] for row in self.notification_items.values()}]}
+        self.working_context = {source.pk: {'source_id': source.pk, 'name': source.original_text,
+            'quantity': str(source.quantity), 'unit': source.unit, 'baseline_facts': self.baselines[source.pk]} for source in sources}
+        self.shared_context = compact_intake_context({'notification': notice,
+            'working_items': [{key: value for key, value in self.working_context[source.pk].items() if key != 'baseline_facts'} for source in sources],
+            'source_context': 'All documents and the complete item index are shared. task.working_items and task.notification_items supply complete facts and original EIS objects for the requested positions; other positions are processed separately with the same documents.',
             'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes'], **({'visual_pages': doc['visual_pages']} if doc.get('visual_pages') else {})} for index, doc in self.document_lookup.items()]})
         return {'documents': considered, 'context_characters': len(self.shared_context), 'contract': self.STAGED_CONTRACT}
 
@@ -311,6 +325,12 @@ class GatewayDocumentEnricher:
     def ask_stage(self, job, stage, instruction, task, *, output_tokens):
         from .services import _ai_gateway_json
         from .gateway_budget import spend_rub, intake_spend_rub
+        if hasattr(self, 'working_context'):
+            selected = task.get('requested_source_ids')
+            if selected is None:
+                selected = list(dict.fromkeys(good['source_id'] for good in task['goods'])) if task.get('goods') else list(self.stage_sources)
+            task = {**task, 'working_items': [self.working_context[pk] for pk in selected],
+                'notification_items': [self.notification_items[pk] for pk in selected if pk in self.notification_items]}
         prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
         fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
         history = TenderComputeJob.objects.filter(tender=job.tender, **{
