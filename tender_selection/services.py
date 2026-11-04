@@ -73,9 +73,15 @@ def visible_found_tenders(queryset, *, min_price, include_words, exclude_words, 
         queryset = queryset.exclude(expired_filter)
     include = parse_terms(include_words)
     exclude = parse_terms(exclude_words)
+    from .profile_triage import profile_disposition
+    use_profile = bool(FilterSettings.objects.filter(pk=1).values_list("profile_triage_enabled", flat=True).first())
     rows, hidden = [], 0
     for tender in queryset:
         passes, hits = match_title(tender.title or tender.object_info, include, exclude)
+        if use_profile and tender.status == Tender.NEW and tender.review == Tender.UNREVIEWED:
+            disposition = profile_disposition(tender)
+            if disposition in {"fit", "not_fit"}:
+                passes = disposition == "fit"
         if passes or show_all or (include_board_pins and tender.kanban_visible_until and tender.kanban_visible_until > now):
             tender.match_hits = hits
             tender.filtered_out = not passes
@@ -98,13 +104,8 @@ def visible_incoming_tender_queryset():
 
 
 def clear_tender_document_previews(tender) -> None:
-    """Shared side effect of hiding a tender from every entry point."""
-    from .notification import parse_notification
-
-    card = parse_notification(tender.notification_raw) if tender.notification_raw else None
-    urls = [doc.get("url") for doc in (card or {}).get("documents", []) if doc.get("url")]
-    if urls:
-        DocumentPreview.objects.filter(url__in=urls).delete()
+    """Retain source evidence and manual file replacements when a tender is hidden."""
+    return None
 
 # служебные слова в названии организации -> в аббревиатуру / выкинуть
 _ORG_ABBR = [
@@ -647,10 +648,14 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
         tender.notification_error = "Источник вернул неполные данные; сохранённое извещение не заменено."
         tender.save(update_fields=["notification_checked_at", "notification_error"])
         return None
+    changed_profile_input = tender.notification_raw != payload
     tender.notification_raw = payload
+    if changed_profile_input:
+        tender.profile_assessment = {}
+        tender.profile_checked_at = None
     tender.notification_checked_at = timezone.now()
     tender.notification_error = ""
-    tender.save(update_fields=["notification_raw", "notification_checked_at", "notification_error"])
+    tender.save(update_fields=["notification_raw", "notification_checked_at", "notification_error", "profile_assessment", "profile_checked_at"])
     from tenders.calculation_v2_pipeline import trigger_visible_tender
     trigger_visible_tender(tender)
 
@@ -849,7 +854,10 @@ def purge_stale() -> dict:
         archived_incoming = Tender.objects.filter(id__in=to_archive_ids).update(
             status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
         )
-        expired_incoming, _ = Tender.objects.filter(id__in=to_delete_ids).delete()
+        archived_incoming += Tender.objects.filter(id__in=to_delete_ids).update(
+            status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
+        )
+        expired_incoming = 0
         archived_evaluation = Tender.objects.filter(
             status=Tender.NEW, review=Tender.INTERESTING,
             collecting_finished_at__lt=now,
@@ -1911,11 +1919,11 @@ def run_profile_triage(user):
     from .filtering import match_title, parse_terms
     from .profile_triage import start_profile_triage_in_background
 
-    candidates = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED, profile_checked_at__isnull=True)
+    candidates = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
     ids = []
     include, exclude = parse_terms(settings.include_words), parse_terms(settings.exclude_words)
     for tender in candidates.order_by("pk"):
-        if match_title(tender.title, include, exclude)[0]:
+        if match_title(tender.title, include, [])[0]:
             ids.append(tender.pk)
         if len(ids) == 100:
             break
@@ -2243,6 +2251,25 @@ def _staged_document_analysis(job, enricher):
     return result
 
 
+def _refresh_intake_profile(job, *, stage='profile', max_cost_rub=None):
+    """The existing profile agent consumes the same notice and verified working facts."""
+    from .profile_triage import profile_disposition, triage_tenders
+    if not FilterSettings.load().profile_triage_enabled or job.tender.review != Tender.UNREVIEWED:
+        return 'review'
+    _refresh_phase(job, stage, 'Проверяем соответствие профилю…')
+    metrics = {}
+    triage_tenders([job.tender_id], max_cost_rub=max_cost_rub, diagnostics=metrics)
+    job.tender.refresh_from_db(fields=['profile_signal','profile_reason','profile_model','profile_assessment','profile_checked_at'])
+    calls = metrics.get('calls') or []
+    job.diagnostics.setdefault('stages', {})[stage] = {
+        'state': 'complete', **(calls[0] if len(calls) == 1 else {}),
+        'cost_rub': metrics.get('cost_rub', '0'), 'result': {'verdict': profile_disposition(job.tender)}}
+    if metrics.get('warning'):
+        job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'profile', 'reason': metrics['warning']})
+    _publish_intake(job)
+    return profile_disposition(job.tender)
+
+
 def _run_document_analysis(job_id, *, enricher=None, router=None):
     """One existing background job: notification → documents/TZ → 1875 → saved routes."""
     import json
@@ -2274,6 +2301,11 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         job.error = {}
         job.save(update_fields=["started_at", "completed_at", "error"])
         warnings = []
+        total_cap = job.diagnostics.get('max_total_cost_rub')
+        total_cap = Decimal(str(total_cap)) if total_cap is not None else None
+        if total_cap is not None and (not total_cap.is_finite() or total_cap <= 0):
+            raise ValueError('Не задан положительный бюджет проверки.')
+        profile_cost = Decimal('0')
         routes_only = bool(job.diagnostics.get("routes_only"))
         if not routes_only:
             _refresh_phase(job, "notification", "Обновляем извещение…")
@@ -2295,8 +2327,17 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         result = {"created": [], "state": "no_change", "diagnostics": []}
         job.diagnostics.setdefault('stages', {})['notification'] = {'state': 'complete', 'cost_rub': '0'}
         _publish_intake(job)
+        if not routes_only:
+            disposition = _refresh_intake_profile(job, max_cost_rub=min(Decimal('2'), total_cap / 2) if total_cap is not None else Decimal('2'))
+            profile_cost = Decimal(str(job.diagnostics.get('stages', {}).get('profile', {}).get('cost_rub', 0)))
+            if disposition == 'not_fit' and job.trigger != 'manual_document_refresh':
+                job.status, job.error = 'ready', {}
+                job.diagnostics.update(profile_excluded=True, refresh={'stage': 'complete', 'label': 'Не по профилю', 'warnings': []})
+                return job
         if not routes_only and (enricher is None or isinstance(enricher, GatewayDocumentEnricher)):
             budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
+            if total_cap is not None:
+                budget = min(budget, max(Decimal('0'), total_cap - profile_cost - min(Decimal('1'), total_cap / 4)))
             enricher = enricher or GatewayDocumentEnricher(max_cost_rub=budget)
             result = _staged_document_analysis(job, enricher)
         elif not routes_only:
@@ -2324,8 +2365,17 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             _refresh_phase(job, "national_regime", "Проверяем требования 1875…")
             from .national_regime import tender_items
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
+        if not routes_only:
+            _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=min(Decimal('2'), max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)) - min(Decimal('1'), total_cap / 4))) if total_cap is not None else Decimal('2'))
+            profile_cost += Decimal(str(job.diagnostics.get('stages', {}).get('profile_after_tz', {}).get('cost_rub', 0)))
+            from .profile_triage import profile_disposition
+            if profile_disposition(job.tender) == 'not_fit' and job.trigger != 'manual_document_refresh':
+                job.status, job.error = 'ready', {}
+                job.diagnostics.update(profile_excluded=True, refresh={'stage': 'complete', 'label': 'Не по профилю', 'warnings': []})
+                return job
         _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
-        router = router or GatewayBatchRouter()
+        route_cap = None if total_cap is None else min(Decimal('2'), max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
+        router = router or GatewayBatchRouter(**({'max_cost_rub': route_cap} if route_cap is not None else {}))
         routing_started = timezone.now()
         from tenders.services import TenderAIError
         try:
@@ -2336,6 +2386,12 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
                 'reason': 'Данные сохранены, но маршрут пока не сформирован: ' + str(exc)})
         job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'complete', **getattr(router, 'diagnostics', {}), 'started_at': routing_started.isoformat(), 'result': {'position_count': len(decisions)}}
         _publish_intake(job)
+        if any(not decision.process_ids for decision in decisions):
+            job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'reason': 'Для части позиций не получен маршрут; они не считаются готовыми.'})
+        if not routes_only and FilterSettings.load().profile_triage_enabled and job.tender.review == Tender.UNREVIEWED:
+            from .profile_triage import profile_disposition
+            if profile_disposition(job.tender) == 'review':
+                job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'profile', 'reason': 'Соответствие профилю пока не подтверждено исходными сведениями.'})
         job.diagnostics.update(source_item_count=len(sources), derived_item_count=len(result["created"]), enrichment_used=bool(result["created"]), routing_item_count=len(decisions), routing=getattr(router, "diagnostics", {}), routes_only=routes_only)
         from django.conf import settings
         if settings.CALCULATION_V2_PREPARATION_ENABLED:
@@ -2369,7 +2425,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             saved = TenderComputeJob.objects.filter(pk=job.pk).values_list("diagnostics", flat=True).first() or {}
             reroute_user_id = saved.get("reroute_requested_by")
             job.diagnostics.pop("reroute_requested_by", None)
-            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0)) + Decimal(str(getattr(router, "cost_rub", 0) or 0))
+            job.total_cost = Decimal(str(getattr(enricher, "cost_rub", 0) or 0)) + Decimal(str(getattr(router, "cost_rub", 0) or 0)) + sum((Decimal(str(job.diagnostics.get("stages", {}).get(stage, {}).get("cost_rub", 0))) for stage in ("profile", "profile_after_tz")), Decimal("0"))
             job.completed_at = timezone.now()
             from tenders.gateway_budget import reconcile_intake_billing
             reconcile_intake_billing(job)
@@ -2475,3 +2531,17 @@ def source_route_for(user, tender_id, source_item_id):
     if route is None:
         raise ValueError("Позиция не найдена в текущем списке товаров")
     return route
+
+
+def intake_readiness_for(user):
+    """The same all-incoming completion summary for the website, assistant and release check."""
+    _require_tender_admin(user)
+    from .intake_readiness import summarize
+    selection = FilterSettings.objects.filter(pk=1).first()
+    if selection is None:
+        return summarize([])
+    heavy = [field.name for field in Tender._meta.concrete_fields if field.name.endswith('_raw')]
+    rows, _, _ = visible_found_tenders(
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).defer(*heavy),
+        min_price=selection.min_price, include_words=selection.include_words, exclude_words=selection.exclude_words)
+    return summarize(rows)

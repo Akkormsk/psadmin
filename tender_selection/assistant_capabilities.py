@@ -8,7 +8,7 @@ from .services import (
     answer_tender_owner_question, change_forecast_inclusion, create_tender_estimate, hide_tender,
     decide_document_proposals, list_tender_documents, preview_tender_document, record_tender_outcome,
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
-    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number, source_route_for, tender_refresh_status_for,
+    update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number, source_route_for, tender_refresh_status_for, intake_readiness_for,
 )
 
 
@@ -239,4 +239,12 @@ register_tool(AssistantTool(
     {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "source_item_id": {"type": "integer", "required": True, "label": "Товарная позиция", "reference": {"model": "tenders.TenderSourceItem", "label": ["original_text"]}}},
     True, False, True, lambda user, payload: _tender_action(source_route_for, user, payload, "tender_id", "source_item_id"),
     source="tender_selection.services.source_route_for",
+))
+
+
+register_tool(AssistantTool(
+    "tender.intake_readiness", "Готовность всех входящих",
+    "Читает общий счётчик всех текущих входящих: завершённые этапы, подтверждение профиля, готовые маршруты и причины незавершённости. Ничего не запускает и не изменяет.",
+    {}, True, False, True, lambda user, payload: intake_readiness_for(user),
+    source="tender_selection.services.intake_readiness_for",
 ))

@@ -107,7 +107,8 @@ class ConfiguredBehaviourTests(TestCase):
 
         services.purge_stale()
 
-        self.assertEqual(list(Tender.objects.values_list("purchase_number", flat=True)), ["fresh"])
+        self.assertEqual(list(Tender.objects.filter(status=Tender.NEW).values_list("purchase_number", flat=True)), ["fresh"])
+        self.assertEqual(Tender.objects.get(purchase_number="old").status, Tender.DISMISSED)
 
     def test_expired_evaluation_and_calculation_leave_the_kanban(self):
         from datetime import timedelta

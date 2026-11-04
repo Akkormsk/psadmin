@@ -20,8 +20,7 @@ class IncomingTraceTests(TestCase):
     def test_purge_archives_shown_tenders_and_traces_only_the_hidden_ones(self):
         """Показанные (прошли плюс/минус-фильтр) — источник статистики по
         торгам, поэтому архивируются насовсем, а не удаляются. Скрытые
-        фильтром по-прежнему удаляются, для них остаётся только след
-        IncomingTrace (для аудита слов)."""
+        фильтром тоже сохраняются в архиве со следом IncomingTrace."""
         _settings()
         now = timezone.now()
         Tender.objects.create(purchase_number="1", title="Футболки хлопковые", collecting_finished_at=now - timedelta(days=30))
@@ -32,7 +31,7 @@ class IncomingTraceTests(TestCase):
         shown = Tender.objects.get(purchase_number="1")
         self.assertEqual(shown.status, Tender.DISMISSED)
         self.assertIsNotNone(shown.archived_at)
-        self.assertFalse(Tender.objects.filter(purchase_number="2").exists())
+        self.assertEqual(Tender.objects.get(purchase_number="2").status, Tender.DISMISSED)
         self.assertFalse(IncomingTrace.objects.filter(purchase_number="1").exists())
         trace = IncomingTrace.objects.get(purchase_number="2")
         self.assertTrue(trace.filtered_out)

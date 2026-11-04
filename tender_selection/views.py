@@ -1581,6 +1581,11 @@ def import_by_number(request):
 @require_GET
 @never_cache
 def analysis_status(request):
+    if request.GET.get('coverage') == '1':
+        from .services import intake_readiness_for
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        return JsonResponse({'coverage': intake_readiness_for(request.user)})
     from tenders.analysis_presentation import resolve_tender_analysis_statuses
     from .services import tender_refresh_status_for
     values = request.GET.get('ids', '').split(',')

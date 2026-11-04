@@ -34,6 +34,13 @@
       </div>
     </div>
 
+    {% if request.user.is_superuser %}
+    <div class="ts-sub" data-intake-readiness data-url="{% url 'tender_selection:analysis_status' %}?coverage=1" style="margin:10px 0 16px">
+      <span data-intake-summary>Проверяем готовность входящих…</span>
+      <details data-intake-pending hidden><summary>Не завершены</summary><ul data-intake-items></ul></details>
+    </div>
+    {% endif %}
+
     <div class="ts-toolbar">
       <form method="get" class="ts-search" role="search">
         <input type="hidden" name="view" value="list">
@@ -84,7 +91,7 @@
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
             {% if tender.notification_missing %}<span class="ts-flag ts-flag--data" title="Не удалось загрузить извещение — товары и документы недоступны">⚠ нет данных</span>{% endif %}
             {% if tender.has_complaint %}<span class="ts-flag" title="По закупке есть жалоба в ФАС">⚠ жалоба</span>{% endif %}
-            {% if tender.profile_signal == "doubt" %}<span class="ts-flag ts-flag--profile" title="Jev не уверен, что закупка соответствует вашему профилю">✦ проверить профиль</span>{% elif tender.profile_signal == "not_profile" %}<span class="ts-flag ts-flag--profile" title="Jev считает тему, вероятно, не вашей; решение остаётся за вами">✦ возможно не по профилю</span>{% endif %}
+            {% if tender.profile_signal == "doubt" %}<span class="ts-flag ts-flag--profile" title="{{ tender.profile_reason|default:'Недостаточно сведений о предмете закупки' }}">✦ проверить профиль</span>{% elif tender.profile_signal == "not_profile" %}<span class="ts-flag ts-flag--profile" title="{{ tender.profile_reason|default:'Вероятно, не по профилю' }}">✦ возможно не по профилю</span>{% endif %}
           </span>
           {% if tender.org.city or tender.region_label or tender.match_hits %}
           <span class="ts-row__sub">
@@ -244,6 +251,37 @@
     } catch (error) { status.textContent = error.message || 'Не удалось получить ответ. Повторите поиск по номеру.'; }
     finally { button.disabled = false; }
   });
+})();
+</script>
+<script>
+(function () {
+  const root = document.querySelector('[data-intake-readiness]');
+  if (!root) return;
+  let loading = false;
+  async function updateCoverage() {
+    if (loading || document.hidden) return;
+    loading = true;
+    try {
+      const response = await fetch(root.dataset.url, {credentials: 'same-origin', cache: 'no-store'});
+      if (!response.ok) throw new Error('coverage');
+      const {coverage} = await response.json();
+      root.querySelector('[data-intake-summary]').textContent = `Разобрано ${coverage.complete} из ${coverage.total} · Маршруты ${coverage.routes_ready} из ${coverage.positions}` + (coverage.unresolved_lists ? ` · Без перечня: ${coverage.unresolved_lists}` : '') + (coverage.background_enabled ? '' : ' · Авторазбор выключен');
+      const details = root.querySelector('[data-intake-pending]');
+      details.hidden = !coverage.pending.length;
+      details.querySelector('summary').textContent = `Не завершены: ${coverage.pending.length}`;
+      const list = root.querySelector('[data-intake-items]');
+      list.replaceChildren(...coverage.pending.map(item => {
+        const row = document.createElement('li'), link = document.createElement('a');
+        link.href = item.url; link.textContent = item.number; link.setAttribute('data-workspace-open', '');
+        row.append(link, document.createTextNode(' — ' + item.reason));
+        return row;
+      }));
+    } catch (_) {
+      root.querySelector('[data-intake-summary]').textContent = 'Не удалось обновить готовность входящих';
+    } finally { loading = false; }
+  }
+  updateCoverage(); setInterval(updateCoverage, 15000);
+  document.addEventListener('visibilitychange', updateCoverage);
 })();
 </script>
 {% endblock %}
