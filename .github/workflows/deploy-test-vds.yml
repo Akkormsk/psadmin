@@ -229,7 +229,7 @@ jobs:
   inspect:
     if: github.event_name == 'workflow_dispatch' && inputs.inspect_tender_number != '' && (github.ref == 'refs/heads/test-server' || github.ref == 'refs/heads/feature/m3-agent-simple')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     env:
       SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
       SSH_USER: deploy
@@ -250,6 +250,18 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = profile-test || "$INSPECT_NUMBER" = acceptance-test ]]; then
+            extra=""
+            budget=45
+            if [[ "$INSPECT_NUMBER" = profile-test ]]; then extra="--profile-only"; budget=5; fi
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" 'cat /home/deploy/psadmin-test/.twin-version'
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py verify_intake_batch --max-cost-rub $budget --max-job-cost-rub 6 --run-id intake-acceptance-20261104 --limit 100 $extra"
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = backup-prod ]]; then
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
