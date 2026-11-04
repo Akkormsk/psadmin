@@ -1942,3 +1942,6 @@ Reproduced TWO remaining adapter/compiler defects on current56f9592 using its sy
 
 
 **CODE_ONLY — bounded existing-classifier negative QA, 2026-11-04.** Operator can supply explicit existing TEST purchase numbers to the same profile_triage executor, using only remaining3.12RUB of the5RUB profile allocation. No lessons, category rules, imports into PROD or manual decisions; status/review preservation checked. QA cohorts supplied at execution, never embedded in code. Persistent full-run45RUB ceiling unchanged. Must account actual provider spending before any repeated QA.
+
+
+**CODE_ONLY — read-only source QA across differing TEST inventory, 2026-11-04.** Initial QA0RUB correctly refused absent TEST examples. Revised operator streams explicitly selected existing PROD notice fields into TEST inference without persisting/importing tenders. Source and target PostgreSQL sessions are READ ONLY, scheduler off; unsaved negative DTO IDs cannot accidentally pick unrelated TEST positions. Uses the same _answers/_state/_valid_answer functions, no new classifier/lessons/decisions. Private source payload remains inside server pipe; CI prints bounded verdict/billing only. Single remaining profile allocation3.12RUB unchanged; full-run cap45 unchanged. Actual QA pending.

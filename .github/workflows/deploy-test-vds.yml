@@ -259,9 +259,17 @@ jobs:
           set -euo pipefail
           if [[ "$INSPECT_NUMBER" = profile-qa ]]; then
             [[ "$PROFILE_QA_NUMBERS" =~ ^[0-9]{19}(,[0-9]{19})*$ ]]
+            python - <<'PYCOMMAND' > /tmp/profile-qa-command
+          import os, shlex
+          from pathlib import Path
+          numbers = shlex.quote(os.environ['PROFILE_QA_NUMBERS'])
+          source = shlex.quote(Path('scripts/read_profile_qa_sources.py').read_text())
+          target = shlex.quote(Path('scripts/verify_intake_profile.py').read_text())
+          print(f'(cd /home/deploy/psadmin/deploy/vds && docker compose -f compose.yml exec -T -e PROFILE_QA_NUMBERS={numbers} web python -c {source}) | (cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python -c {target})')
+          PYCOMMAND
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-              "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e PROFILE_QA_NUMBERS=$PROFILE_QA_NUMBERS -e PROFILE_QA_BUDGET=3.12 test-web python -" < scripts/verify_intake_profile.py
+              "$SSH_USER@$SSH_HOST" "$(cat /tmp/profile-qa-command)"
             exit 0
           fi
           if [[ "$INSPECT_NUMBER" = profile-test || "$INSPECT_NUMBER" = acceptance-test ]]; then
