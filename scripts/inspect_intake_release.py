@@ -45,7 +45,10 @@ def main():
         qs = Tender.objects.all()
         emit('TENDER_COUNTS', list(qs.values('status','review').annotate(count=Count('pk')).order_by('status','review')))
         wanted = [name for name in ('pk','purchase_number','title','object_info','okpd2','status','review','collecting_finished_at','profile_signal','profile_confidence','profile_reason','profile_model') if name in fields]
-        from tender_selection.services import visible_found_tenders
+        try:
+            from tender_selection.services import visible_found_tenders
+        except ImportError:
+            from tender_selection.views import _visible_found_tenders as visible_found_tenders
         incoming = qs.filter(status=Tender.NEW, review=Tender.UNREVIEWED).defer(*[name for name in ('notification_raw','extras_raw') if name in fields])
         visible, hidden, expired = visible_found_tenders(incoming, min_price=selection.min_price,
             include_words=selection.include_words, exclude_words=selection.exclude_words)
