@@ -235,7 +235,15 @@ class StagedCanonicalAcceptanceTests(TestCase):
         completed = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-test', status='needs_review',
             completed_at=timezone.now(), diagnostics={'intake_contract': engine.STAGED_CONTRACT, 'enrichment_state': 'needs_review',
             'stages': {name: {'state': 'complete', 'result': []} for name in ('structure', 'national_regime', 'tz')}})
+        from tender_selection.services import _document_input_fingerprint
+        completed.diagnostics['document_input_fingerprint'] = _document_input_fingerprint(self.tender)
+        completed.save()
+        for proposal in proposals:
+            proposal.metadata['analysis_job_id'] = completed.pk
+            proposal.save(update_fields=['metadata'])
         decide_all_document_proposals(self.admin, self.tender.pk, 'accept', [item.pk for item in proposals])
+        completed.refresh_from_db()
+        self.assertEqual(completed.diagnostics['document_input_fingerprint'], _document_input_fingerprint(self.tender))
         proposals[0].refresh_from_db()
         check_card()
         job = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-test', status='ready')

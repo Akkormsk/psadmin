@@ -64,6 +64,18 @@ class IntakeWorkerTests(TestCase):
         self.assertEqual(job.total_cost, Decimal('2'))
         self.assertEqual(TenderComputeJob.objects.filter(diagnostics__continuation_of=job.pk, status='queued').count(), 1)
 
+    def test_truncated_response_continues_only_when_closed_records_made_progress(self):
+        job = self.job(status='needs_review', attempt_count=1)
+        job.diagnostics['stages'] = {'tz:1': {'state': 'failed', 'incomplete_response': {
+            'finish_reason': 'length', 'content': '{"items":[{"key":"1:0","characteristics":[]}, {"key":'}}}
+        job.save()
+        child = queue_continuation(job)
+        self.assertIsNotNone(child)
+        child.diagnostics['stages'] = job.diagnostics['stages']
+        child.status = 'needs_review'
+        child.save()
+        self.assertIsNone(queue_continuation(child))
+
     @override_settings(CALCULATION_V2_ENABLED=True)
     def test_manual_update_uses_durable_worker_when_enabled(self):
         from django.contrib.auth import get_user_model

@@ -61,13 +61,14 @@ def claim_budgeted_job(daily_budget):
 
 
 def _coverage(job):
+    from .calculation_v2_pipeline import closed_stage_records
     covered = set()
     for name, stage in job.diagnostics.get('stages', {}).items():
         phase = name.split(':', 1)[0]
-        if phase not in {'structure','national_regime','tz'} or stage.get('outcome') == 'source_only' or stage.get('state') not in {'complete','pending_validation'}:
+        if phase not in {'structure','national_regime','tz'} or stage.get('outcome') == 'source_only':
             continue
         field, kind = ('source_id', int) if phase == 'structure' else ('key', str)
-        rows = stage.get('result')
+        rows = stage.get('result') if stage.get('state') in {'complete','pending_validation'} else closed_stage_records((stage.get('incomplete_response') or {}).get('content'))
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict) and type(row.get(field)) is kind:
                 covered.add((phase, row[field]))
@@ -79,7 +80,8 @@ def queue_continuation(job, *, interrupted=False):
     if job.attempt_count >= 3:
         return None
     stages = list(job.diagnostics.get('stages', {}).values()) + [job.diagnostics.get('routing', {})]
-    budget_limited = any(stage.get('provider_call_happened') is False and stage.get('reserved_cost_rub') is not None for stage in stages)
+    budget_limited = any((stage.get('provider_call_happened') is False and stage.get('reserved_cost_rub') is not None)
+        or (stage.get('incomplete_response') or {}).get('finish_reason') in {'length', 'max_tokens'} for stage in stages)
     parent_id = job.diagnostics.get('continuation_of')
     parent = TenderComputeJob.objects.filter(pk=parent_id).first() if parent_id else None
     if not interrupted and (not budget_limited or not _coverage(job) - (_coverage(parent) if parent else set())):
