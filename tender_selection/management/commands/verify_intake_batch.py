@@ -39,7 +39,9 @@ class Command(BaseCommand):
             raise CommandError('No active administrator')
         cohort = intake_readiness_for(actor)
         # Prove small independent cards first within the owner's remaining QA budget.
-        pending = sorted(cohort['pending'], key=lambda row: row['positions'])
+        from tender_selection.notification import parse_notification
+        notices = dict(Tender.objects.filter(pk__in=[row['tender_id'] for row in cohort['pending']]).values_list('pk', 'notification_raw'))
+        pending = sorted(cohort['pending'], key=lambda row: max(row['positions'], len(parse_notification(notices[row['tender_id']] or {}).get('items', []))))
         ids = [row['tender_id'] for row in pending][:options['limit']]
         selection = FilterSettings.objects.get(pk=1)
         selection.profile_triage_enabled = True

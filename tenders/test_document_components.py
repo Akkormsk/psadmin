@@ -241,9 +241,11 @@ class StagedCanonicalAcceptanceTests(TestCase):
         for proposal in proposals:
             proposal.metadata['analysis_job_id'] = completed.pk
             proposal.save(update_fields=['metadata'])
+        cached_repeat = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-cache', status='needs_review',
+            completed_at=timezone.now(), diagnostics={**completed.diagnostics, 'document_analysis_reused': completed.pk})
         decide_all_document_proposals(self.admin, self.tender.pk, 'accept', [item.pk for item in proposals])
-        completed.refresh_from_db()
-        self.assertEqual(completed.diagnostics['document_input_fingerprint'], _document_input_fingerprint(self.tender))
+        cached_repeat.refresh_from_db()
+        self.assertEqual(cached_repeat.diagnostics['document_input_fingerprint'], _document_input_fingerprint(self.tender))
         proposals[0].refresh_from_db()
         check_card()
         job = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-test', status='ready')
@@ -258,7 +260,7 @@ class StagedCanonicalAcceptanceTests(TestCase):
         reused_job = TenderComputeJob.objects.create(tender=self.tender, version='v2-canonical-repeat', status='ready')
         with patch('tender_selection.services.documents_html'), patch.object(GatewayDocumentEnricher, 'ask_stage', side_effect=AssertionError('Accepted facts were reanalyzed')):
             _staged_document_analysis(reused_job, GatewayDocumentEnricher())
-        self.assertEqual(reused_job.diagnostics['document_analysis_reused'], completed.pk)
+        self.assertEqual(reused_job.diagnostics['document_analysis_reused'], cached_repeat.pk)
 
 
 class IntakeProposalHistoryTests(TestCase):

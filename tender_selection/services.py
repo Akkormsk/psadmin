@@ -2008,8 +2008,7 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
         raise ValueError("Сверка ТЗ ещё не завершена; предварительные изменения нельзя согласовать")
     from tenders.models import TenderComputeJob
     verified_job = TenderComputeJob.objects.filter(tender_id=tender_id).order_by('-pk').first()
-    if not (verified_job and verified_job.diagnostics.get('document_input_fingerprint') == _document_input_fingerprint(parent.tender)
-            and all(item.metadata.get('analysis_job_id') == verified_job.pk for item in proposals)):
+    if not (verified_job and verified_job.diagnostics.get('document_input_fingerprint') == _document_input_fingerprint(parent.tender)):
         verified_job = None
     if decision == "accept":
         from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
