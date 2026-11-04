@@ -296,6 +296,8 @@ def collect_saved_status(number):
         diagnostic_engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
     context = json.loads(diagnostic_engine.shared_context)
     print('CONTEXT_FOOTPRINT ' + json.dumps({'source_count': len(sources),
+        'image_references': len(diagnostic_engine.document_images), 'unique_images': len(set(diagnostic_engine.document_images)),
+        'image_token_bound': diagnostic_engine._image_token_bound(),
         'sections': {key: {'characters': len(json.dumps(value, ensure_ascii=False)),
                            'utf8_bytes': len(json.dumps(value, ensure_ascii=False).encode('utf-8'))} for key,value in context.items()},
         'documents': [{'name': doc['name'], 'paragraph_chars': len(doc['text']),
