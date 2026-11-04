@@ -262,6 +262,15 @@ jobs:
               "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py verify_intake_batch --max-cost-rub $budget --max-job-cost-rub 6 --run-id intake-acceptance-20261104 --limit 100 $extra"
             exit 0
           fi
+          if [[ "$INSPECT_NUMBER" = rehearse-prod ]]; then
+            scp -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              scripts/verify_restored_data.py "$SSH_USER@$SSH_HOST:/tmp/verify_restored_data.py"
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" 'python3 -' < scripts/rehearse_production_migration.py
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = backup-prod ]]; then
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
