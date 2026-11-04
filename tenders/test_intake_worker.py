@@ -23,6 +23,14 @@ class IntakeWorkerTests(TestCase):
         self.assertEqual(job.status, 'queued')
         self.assertEqual(job.attempt_count, 0)
 
+    def test_intake_consumer_leaves_other_queued_calculation_jobs_untouched(self):
+        other = TenderComputeJob.objects.create(tender=self.tender)
+        intake = self.job()
+        self.assertEqual(claim_budgeted_job(10).pk, intake.pk)
+        other.refresh_from_db()
+        self.assertEqual(other.status, 'queued')
+        self.assertEqual(other.attempt_count, 0)
+
     def test_active_reservations_prevent_daily_budget_race(self):
         first = self.job()
         first = claim_budgeted_job(Decimal('15'))

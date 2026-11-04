@@ -98,12 +98,12 @@ def plan_preparations(work_unit: TenderComputeWorkUnit, registry: EngineRegistry
     return preparations
 
 
-def claim_next_job() -> TenderComputeJob | None:
+def claim_next_job(*, job_id=None) -> TenderComputeJob | None:
     """Atomically claim one queued job; SKIP LOCKED makes competing workers safe."""
     with transaction.atomic():
         job = (
             TenderComputeJob.objects.select_for_update(skip_locked=True)
-            .filter(status=TenderComputeJob.Status.QUEUED)
+            .filter(status=TenderComputeJob.Status.QUEUED, **({'pk': job_id} if job_id is not None else {}))
             .order_by("created_at", "pk")
             .first()
         )

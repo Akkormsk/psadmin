@@ -34,7 +34,7 @@ def claim_budgeted_job(daily_budget):
         return None
     FilterSettings.load()
     FilterSettings.objects.select_for_update().get(pk=1)
-    job = TenderComputeJob.objects.select_for_update(skip_locked=True).filter(status='queued').order_by('created_at','pk').first()
+    job = TenderComputeJob.objects.select_for_update(skip_locked=True).filter(status='queued', diagnostics__intake_refresh=True).order_by('created_at','pk').first()
     if not job:
         return None
     root = job.diagnostics.get('refresh_root_id') or job.pk
@@ -50,7 +50,7 @@ def claim_budgeted_job(daily_budget):
     available_day = daily_budget - _spending(TenderComputeJob.objects.filter(diagnostics__auto_budget_date=today))
     if available_day < cap:
         return None
-    claimed = claim_next_job()
+    claimed = claim_next_job(job_id=job.pk)
     if not claimed or claimed.pk != job.pk:
         raise RuntimeError('Intake claim changed under the budget lock')
     claimed.diagnostics.update(refresh_root_id=root, refresh_flow_limit_rub=str(flow_limit),

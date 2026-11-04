@@ -38,7 +38,9 @@ class Command(BaseCommand):
         if not actor:
             raise CommandError('No active administrator')
         cohort = intake_readiness_for(actor)
-        ids = [row['tender_id'] for row in cohort['pending']][:options['limit']]
+        # Prove small independent cards first within the owner's remaining QA budget.
+        pending = sorted(cohort['pending'], key=lambda row: row['positions'])
+        ids = [row['tender_id'] for row in pending][:options['limit']]
         selection = FilterSettings.objects.get(pk=1)
         selection.profile_triage_enabled = True
         selection.save(update_fields=['profile_triage_enabled'])
