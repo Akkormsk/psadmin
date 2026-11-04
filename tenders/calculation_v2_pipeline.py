@@ -396,7 +396,7 @@ class GatewayDocumentEnricher:
             if low >= min(2048, requested_output_tokens):
                 output_tokens = low
         import math
-        minimum_output = min(requested_output_tokens, max(2048, math.ceil(item_count * max(400, densities.get(phase, 0) * 1.5))))
+        minimum_output = min(requested_output_tokens, max(2048, math.ceil(item_count * densities.get(phase, 400) * 1.5)))
         reserve = spend_rub({'prompt_tokens': input_bound, 'completion_tokens': output_tokens}, self.model)
         if output_tokens < minimum_output or reserve is None or Decimal(str(reserve)) * Decimal('1.25') > remaining:
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'provider_call_happened': False,
