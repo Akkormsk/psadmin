@@ -140,6 +140,10 @@ def analysis_issues(job) -> list[str]:
     entries = diagnostics.get("enrichment") or []
     entries = [entries] if isinstance(entries, dict) else entries if isinstance(entries, list) else []
     issues = []
+    for gap in diagnostics.get('analysis_gaps', []):
+        name = gap.get('name') or ''
+        reason = gap.get('reason') or 'Сведения требуют проверки.'
+        issues.append(f"{name}: {reason}" if name else reason)
     if job.error:
         error = job.error.get("message") or job.error.get("detail") or "Ошибка анализа; подробности в журнале." if isinstance(job.error, dict) else job.error
         issues.append(str(error))
@@ -197,15 +201,17 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         code = "ANALYSIS_INCOMPLETE"
     elif job.status in _ACTIVE:
         code = "PROCESSING"
+    elif job.diagnostics.get("analysis_gaps"):
+        code = "CHECKED_WITH_GAPS"
     elif question_count or pending_count:
         code = "NEEDS_OWNER_INPUT"
     else:
         code = "ENRICHED" if has_enriched_items else "CHECKED_NO_CHANGES"
-    label, kind = _STATUS[code]
+    label, kind = ("Обновлено · есть замечания", "warning") if code == "CHECKED_WITH_GAPS" else _STATUS[code]
     if code == "NEEDS_OWNER_INPUT":
         label = f"{label} · {question_count}" if question_count else f"Нужно проверить правки ТЗ · {pending_count}"
     issues = tuple(analysis_issues(job))
-    reason = issues[0] if code == "ANALYSIS_INCOMPLETE" else ""
+    reason = issues[0] if code in {"ANALYSIS_INCOMPLETE", "CHECKED_WITH_GAPS"} and issues else ""
     from django.utils import timezone
     now = timezone.now()
     refresh = (job.diagnostics or {}).get("refresh", {}) if job else {}
@@ -227,6 +233,10 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     labels = {'notification': 'Извещение', 'documents': 'Документы', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
     ledger = (job.diagnostics or {}).get('stages', {}) if job else {}
     progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
+    gap_stages = {gap.get('stage') for gap in (job.diagnostics or {}).get('analysis_gaps', [])} if job else set()
+    for step in progress['steps']:
+        if step['id'] in gap_stages and step['state'] == 'complete':
+            step['state'] = 'warning'
     stamp = str(job.diagnostics["published_revision"]) if job and "published_revision" in job.diagnostics else job.updated_at.isoformat() if job and job.updated_at else ""
     revision = f"{job.pk if job else 0}:{stamp}:{code}:{question_count}:{pending_count}"
     return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=active, issues=issues, progress=progress, cost=analysis_cost(job))

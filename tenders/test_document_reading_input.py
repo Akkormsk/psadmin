@@ -639,3 +639,68 @@ class StagedResponseCacheTests(TestCase):
         self.assertEqual(gateway.call_count, 1)
         self.assertLess(Decimal(metrics['reserved_cost_rub']), self.engine.max_cost_rub)
         self.assertLessEqual(Decimal(str(self.engine.cost_rub)), self.engine.max_cost_rub)
+
+class ResilientIntakeTests(TestCase):
+    def setUp(self):
+        self.tender = Tender.objects.create(purchase_number='resilient-intake', title='Поставка изделия')
+        self.source = TenderSourceItem.objects.create(tender=self.tender, source_key='notice:0',
+            original_text='Изделие', quantity=1, unit='шт', requirements={'characteristics': [
+                {'name': 'Количество персон', 'value': '1'}, {'name': 'Материал', 'value': 'металл'}]})
+        self.engine = GatewayDocumentEnricher()
+        self.engine.stage_sources = {self.source.pk: self.source}
+        self.engine.baselines = {self.source.pk: [{'id': i, **fact} for i, fact in enumerate(self.source.requirements['characteristics'])]}
+        self.engine.document_lookup = {1: {'url': 'https://example.test/spec', 'evidence_text': 'Цвет синий', 'tables': []}}
+        self.good = {'key': f'{self.source.pk}:0', 'source_id': self.source.pk, 'kind': 'finished'}
+
+    def test_one_bad_addition_and_unlinked_omit_do_not_discard_originals_or_good_additions(self):
+        rows = [{'key': self.good['key'], 'characteristics': [
+            {'name': 'Количество персон', 'value': '1', 'resolution': 'omit', 'baseline_refs': [], 'reason': 'Нет id'},
+            {'name': 'Выдуманное', 'value': '999', 'resolution': 'new', 'baseline_refs': []},
+            {'name': 'Цвет', 'value': 'синий', 'resolution': 'new', 'baseline_refs': [], 'doc_id': 1, 'quote': 'Цвет синий'},
+        ]}]
+        result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+        self.assertEqual([(x['name'], x['value']) for x in result], [('Количество персон', '1'), ('Материал', 'металл'), ('Цвет', 'синий')])
+        self.assertEqual(len(self.engine.specification_gaps), 1)
+        self.assertEqual(result[0]['source'], 'notification')
+        self.assertEqual(result[-1]['source'], 'document')
+
+    def test_no_model_additions_retains_every_original_fact(self):
+        result = self.engine.reconcile_specifications([], [self.good])[self.good['key']]
+        self.assertEqual(len(result['characteristics']), 2)
+        self.assertTrue(self.engine.specification_gaps)
+
+    def test_bad_structure_retains_position_without_inventing_components(self):
+        goods = self.engine.reconcile_structure([{'source_id': self.source.pk, 'kind': 'kit', 'goods': []}])
+        self.assertEqual(len(goods), 1)
+        self.assertEqual(goods[0]['kind'], 'unclear')
+        self.assertEqual(goods[0]['name'], self.source.original_text)
+        self.assertTrue(self.engine.validation_gaps)
+
+    @patch('tender_selection.services.documents_html')
+    def test_unreadable_attachment_does_not_block_readable_documents(self, fetch):
+        DocumentPreview.objects.create(url='https://example.test/spec', kind='pdf', html='<p>Цвет синий</p>')
+        DocumentPreview.objects.create(url='https://example.test/missing', kind='pdf', html='<p data-document-warning="unreadable-page">Недоступен</p>')
+        prepared = self.engine.prepare_stages(self.tender, [self.source], [
+            {'url': 'https://example.test/spec', 'name': 'ТЗ'}, {'url': 'https://example.test/missing', 'name': 'Протокол'}])
+        self.assertEqual(len(self.engine.stage_documents), 1)
+        self.assertEqual(self.engine.input_gaps[0]['name'], 'Протокол')
+        self.assertEqual(len(prepared['documents']), 2)
+
+    def test_scanned_pdf_pages_are_sent_as_images_with_page_provenance(self):
+        import pypdfium2 as pdfium
+        from tender_selection.documents import _pdf_html
+        doc = pdfium.PdfDocument.new()
+        doc.new_page(100, 100)
+        data = io.BytesIO(); doc.save(data); doc.close()
+        html = _pdf_html(data.getvalue())
+        self.assertIn('data:image/jpeg;base64,', html)
+        DocumentPreview.objects.create(url='https://example.test/scan', kind='pdf', html=html)
+        available, considered = self.engine._bounded_documents([{'url': 'https://example.test/scan', 'name': 'Скан'}], compact=True)
+        self.assertEqual(considered[0]['reading_status'], 'read')
+        self.assertEqual(available[0]['visual_pages'], [1])
+        self.engine.document_lookup = {1: {**available[0], 'evidence_text': ''}}
+        proof = self.engine.stage_quote({'doc_id': 1, 'quote': 'Распознанный текст', 'section': 'Страница 1'})
+        self.assertEqual(proof['verification'], 'visual')
+        self.assertTrue(proof['requires_review'])
+        with self.assertRaises(ValueError):
+            self.engine.stage_quote({'doc_id': 1, 'quote': 'Текст', 'section': 'Страница 2'})

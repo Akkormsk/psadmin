@@ -43,8 +43,9 @@ class ManualDocumentAnalysisTests(TestCase):
         self.tender.notification_raw = notification([raw_item("Товар", "1")])
         self.tender.save()
         job = TenderComputeJob.objects.create(tender=self.tender, version='v2-document-manual', status='preparing_input')
-        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tenders.calculation_v2_pipeline.GatewayDocumentEnricher') as gateway, patch('tenders.calculation_v2_pipeline.enrich_suspicious_tender', return_value={'created': [], 'state': 'no_data', 'diagnostics': []}), patch('tenders.calculation_v2_pipeline.route_tender_batch') as route:
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tenders.calculation_v2_pipeline.GatewayDocumentEnricher') as gateway, patch('tender_selection.services._staged_document_analysis', return_value={'created': [], 'state': 'no_data', 'diagnostics': []}), patch('tenders.calculation_v2_pipeline.route_tender_batch') as route:
             gateway.return_value.cost_rub = 0
+            route.return_value = []
             _run_document_analysis(job.pk)
         job.refresh_from_db()
         self.assertEqual(job.status, 'ready')

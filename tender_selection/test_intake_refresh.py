@@ -168,8 +168,8 @@ class IntakeRefreshTests(TestCase):
         self.router.route.side_effect = lambda **kwargs: [RouteDecision(item.pk, (self.stage.pk,), Decimal('.5'), {}, True, 'Укажите цвет изделия.', 'missing_information', ('Цвет',)) for item in kwargs['items']]
         self.run_job(self.create_job())
         response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]), {'analysis_snapshot': '1', 'workspace': '1'})
-        self.assertContains(response, 'Укажите цвет изделия.')
-        self.assertContains(response, 'Маршрут · нужно уточнение')
+        self.assertContains(response, 'Маршрут · допущение')
+        self.assertEqual(source_route_for(self.user, self.tender.pk, self.source.pk)['state'], 'ready')
 
     def test_full_card_snapshot_is_read_only_and_does_not_call_ai(self):
         self.run_job(self.create_job())
@@ -180,3 +180,52 @@ class IntakeRefreshTests(TestCase):
         self.assertContains(response, 'data-source-route=')
         self.assertTrue(all(q['sql'].lstrip().upper().startswith('SELECT') for q in queries))
         gateway.assert_not_called()
+
+
+class ResilientIntakeFlowTests(TestCase):
+    setUp = IntakeRefreshTests.setUp
+    create_job = IntakeRefreshTests.create_job
+    def test_unreadable_document_and_bad_model_reply_still_reach_saved_route(self):
+        from tenders.analysis_presentation import resolve_tender_analysis_status
+        from .models import DocumentPreview
+        self.tender.notification_raw['source']['attachmentsInfo'] = {'attachmentInfo': [
+            {'url': 'https://zakupki.gov.ru/unreadable', 'fileName': 'Протокол.pdf'}]}
+        self.tender.save()
+        DocumentPreview.objects.create(url='https://zakupki.gov.ru/unreadable', kind='pdf', html='<p data-document-warning="unreadable">Не прочитан</p>')
+        job = self.create_job()
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', return_value=({'items': []}, {})):
+            _run_document_analysis(job.pk, router=self.router)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'needs_review')
+        self.assertFalse(job.error)
+        self.assertEqual(job.diagnostics['refresh']['stage'], 'complete')
+        self.assertEqual(job.diagnostics['stages']['routing']['state'], 'complete')
+        from tenders.calculation_v2_pipeline import source_route_snapshots
+        self.assertTrue(source_route_snapshots(self.tender))
+        self.assertTrue(all(route['state'] == 'ready' for route in source_route_snapshots(self.tender).values()))
+        self.assertEqual(resolve_tender_analysis_status(self.tender).code, 'CHECKED_WITH_GAPS')
+        self.assertTrue(job.diagnostics['analysis_gaps'])
+        self.assertFalse(self.tender.estimates.exists())
+
+    def test_provider_failure_retains_source_and_routes_with_available_information(self):
+        from tenders.services import TenderAIError
+        job = self.create_job()
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=TenderAIError('Модель недоступна')):
+            _run_document_analysis(job.pk, router=self.router)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'needs_review')
+        self.assertFalse(job.error)
+        self.assertEqual(source_route_for(self.user, self.tender.pk, self.source.pk)['state'], 'ready')
+        self.assertTrue(self.source.is_active)
+
+    def test_document_only_notice_has_subject_without_invented_quantity(self):
+        from tenders.calculation_v2_pipeline import ingest_source_items
+        self.tender.title = 'Изготовление продукции по приложенной спецификации'
+        self.tender.notification_raw = {'source': {'attachmentsInfo': {'attachmentInfo': [
+            {'url': 'https://zakupki.gov.ru/spec', 'fileName': 'ТЗ.docx'}]}}}
+        self.tender.save()
+        source = ingest_source_items(self.tender)[0]
+        self.assertEqual(source.original_text, self.tender.title)
+        self.assertIsNone(source.quantity)
+        self.assertEqual(source.provenance, {'kind': 'tender_subject', 'field': 'title'})
+        self.assertFalse(source.requirements['characteristics'])

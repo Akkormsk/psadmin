@@ -398,7 +398,7 @@
               });
               document.querySelectorAll('[data-analysis-steps="' + id + '"]').forEach(node => {
                 const steps = progress?.steps || [];
-                node.textContent = steps.map(step => step.label + (step.state === 'complete' ? ' ✓' : step.state === 'failed' ? ' !' : step.state === 'running' ? ' …' : '')).join(' · ');
+                node.textContent = steps.map(step => step.label + (step.state === 'complete' ? ' ✓' : (step.state === 'failed' || step.state === 'warning') ? ' !' : step.state === 'running' ? ' …' : '')).join(' · ');
                 node.title = steps.map(step => step.label + ': ' + (step.reused ? 'из кэша' : step.seconds != null ? step.seconds + ' с' : step.state === 'pending' ? 'ожидает' : '') + (data.cost?.steps?.[step.id] ? ' · ' + data.cost.steps[step.id] + ' ₽' : '')).join('\n');
               });
               if (data.cost) document.querySelectorAll('[data-analysis-cost="' + id + '"]').forEach(node => {

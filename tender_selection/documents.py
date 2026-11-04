@@ -251,12 +251,30 @@ def _pdf_html(data: bytes) -> str:
 
     reader = PdfReader(io.BytesIO(data))
     parts = []
+    visual_document = None
     for page_no, page in enumerate(reader.pages[:MAX_PDF_PAGES], start=1):
         text = (page.extract_text() or "").strip()
         if text:
             parts.append("<section class='ts-doc-page'><small class='ts-doc-page__number'>Страница " + str(page_no) + "</small><p>" + "<br>".join(escape(line) for line in text.splitlines() if line.strip()) + "</p></section>")
-        elif page.images:
-            parts.append('<p data-document-warning="unreadable-page">Страница без текстового слоя.</p>')
+        else:
+            try:
+                import pypdfium2 as pdfium
+                if visual_document is None:
+                    visual_document = pdfium.PdfDocument(data)
+                visual_page = visual_document[page_no - 1]
+                bitmap = visual_page.render(scale=2)
+                image = bitmap.to_pil().convert("RGB")
+                image.thumbnail((1600, 1600))
+                output = io.BytesIO()
+                image.save(output, format="JPEG", quality=85, optimize=True)
+                encoded = base64.b64encode(output.getvalue()).decode("ascii")
+                parts.append(f'<section class="ts-doc-page" data-document-page="{page_no}"><small class="ts-doc-page__number">Страница {page_no}</small><img data-document-page="{page_no}" src="data:image/jpeg;base64,{encoded}" alt="Страница {page_no}"></section>')
+                bitmap.close()
+                visual_page.close()
+            except Exception:
+                parts.append(f'<p data-document-warning="unreadable-page">Страница {page_no} недоступна для чтения.</p>')
+    if visual_document is not None:
+        visual_document.close()
     if len(reader.pages) > MAX_PDF_PAGES:
         parts.append('<p data-document-warning="truncated">…</p>')
     if not parts:

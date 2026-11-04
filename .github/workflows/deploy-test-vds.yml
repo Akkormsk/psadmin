@@ -207,6 +207,9 @@ jobs:
             tenders.test_document_components.StagedCanonicalAcceptanceTests \
             tenders.test_document_components.IntakeProposalHistoryTests \
             tenders.test_requirement_values \
+            tender_selection.test_intake_refresh.ResilientIntakeFlowTests \
+            tender_selection.test_notifications.FixedNotificationValueTests \
+            tenders.test_document_reading_input.ResilientIntakeTests \
             tenders.test_document_reading_input.StagedResponseCacheTests \
             tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \
             tenders.test_document_reading_input.StagedSingleSourceSelectionTests \

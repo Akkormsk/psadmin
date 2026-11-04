@@ -244,8 +244,8 @@ class GatewayDocumentEnricher:
         self.document_images = []
 
     STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
-    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v9-shared-values"
-    SPECIFICATION_ASSEMBLY = "shared-values-v1"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v10-resilient"
+    SPECIFICATION_ASSEMBLY = "verified-additions-v2"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
@@ -255,14 +255,15 @@ class GatewayDocumentEnricher:
         self.unit_aliases = _unit_aliases()
         self.stage_sources = {source.pk: source for source in sources}
         self.stage_documents, considered = self._bounded_documents(documents, compact=True)
-        if not self.stage_documents or any(doc['reading_status'] != 'read' for doc in considered):
-            raise ValueError('Документы ещё не прочитаны полностью; разбор не отправлен модели.')
+        self.input_gaps = [doc for doc in considered if doc['reading_status'] != 'read']
+        readable_urls = {doc['url'] for doc in considered if doc['reading_status'] != 'unreadable'}
+        self.stage_documents = [doc for doc in self.stage_documents if doc['url'] in readable_urls]
         self.document_lookup = {index: doc for index, doc in enumerate(self.stage_documents, 1)}
         self.baseline_sources = {source.pk: effective_item_requirements(source).get('characteristics', []) for source in sources}
         self.baselines = {source.pk: [{'id': i, 'name': fact['name'], 'value': fact['value']} for i, fact in enumerate(effective_item_requirements(source).get('characteristics', []))] for source in sources}
         self.shared_context = json.dumps({'notification': tender.notification_raw,
             'working_items': [{'source_id': source.pk, 'name': source.original_text, 'quantity': str(source.quantity), 'unit': source.unit, 'baseline_facts': self.baselines[source.pk]} for source in sources],
-            'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes']} for index, doc in self.document_lookup.items()]}, ensure_ascii=False, default=str)
+            'documents': [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes'], **({'visual_pages': doc['visual_pages']} if doc.get('visual_pages') else {})} for index, doc in self.document_lookup.items()]}, ensure_ascii=False, default=str)
         return {'documents': considered, 'context_characters': len(self.shared_context), 'contract': self.STAGED_CONTRACT}
 
     def _remember_context_usage(self, usage):
@@ -278,7 +279,7 @@ class GatewayDocumentEnricher:
         from .services import _ai_gateway_json
         from .gateway_budget import spend_rub, intake_spend_rub
         prompt = instruction + '\n' + json.dumps(task, ensure_ascii=False, default=str)
-        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort})
+        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': self.shared_context, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
         history = TenderComputeJob.objects.filter(tender=job.tender, **{
             f'diagnostics__stages__{stage}__input_fingerprint': fingerprint,
             f'diagnostics__stages__{stage}__state__in': ['complete', 'failed'],
@@ -305,7 +306,7 @@ class GatewayDocumentEnricher:
                 'result': rows, 'validation_version': self.STAGED_VALIDATION_VERSION, 'cost_rub': '0', 'duration_ms': 0}
         # Reserve the uncached cache-write price, not an assumed future cache hit.
         context_bound = getattr(self, '_context_token_bound', None)
-        input_bound = (context_bound + len(prompt.encode('utf-8')) + 4096) if context_bound else len((self.shared_context + prompt).encode('utf-8')) + 4096 + sum(len(value) for value in self.document_images)
+        input_bound = (context_bound + len(prompt.encode('utf-8')) + 4096) if context_bound else len((self.shared_context + prompt).encode('utf-8')) + 4096 + self._image_token_bound()
         requested_output_tokens = output_tokens
         remaining = self.max_cost_rub - Decimal(str(self.cost_rub)) if self.max_cost_rub is not None else Decimal('10')
         def reservation(limit):
@@ -417,12 +418,17 @@ class GatewayDocumentEnricher:
                         break
                 if verified:
                     break
+        visual = False
+        if not verified and doc and quote and doc.get('visual_pages'):
+            pages = [int(n) for n in re.findall(r'(?:страниц[аеуы]?|page)\s*(\d+)', section, flags=re.I)]
+            visual = bool(pages and all(page in doc['visual_pages'] for page in pages))
+            verified = visual
         if not verified:
             if required:
                 excerpt = quote[:120].replace('\n', ' ')
                 raise ValueError(f'Результат не подтверждён цитатой из документа (doc_id={row.get("doc_id")}, фрагмент={excerpt!r}).')
             return {}
-        return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
+        return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000], 'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT, **({'verification': 'visual', 'requires_review': True} if visual else {})}
 
     def validate_structure(self, rows):
         seen, goods = set(), []
@@ -459,6 +465,70 @@ class GatewayDocumentEnricher:
         if seen != set(self.stage_sources):
             raise ValueError('Модель пропустила исходные позиции при проверке состава.')
         return goods
+
+    def reconcile_structure(self, rows):
+        """Validate each source independently; never invent a missing kit breakdown."""
+        goods, sources = [], self.stage_sources
+        self.validation_gaps = []
+        rows = rows if isinstance(rows, list) else []
+        for source_id, source in sources.items():
+            matching = [row for row in rows if isinstance(row, dict) and row.get('source_id') == source_id]
+            try:
+                if len(matching) != 1:
+                    raise ValueError('Состав позиции не определён однозначно.')
+                self.stage_sources = {source_id: source}
+                goods.extend(self.validate_structure(matching))
+            except ValueError as exc:
+                self.validation_gaps.append({'stage': 'structure', 'source_id': source_id, 'reason': str(exc)})
+                goods.append({'key': f'{source_id}:0', 'source_id': source_id, 'name': source.original_text,
+                    'kind': 'unclear', 'unit': source.unit, 'quantity_per_parent': '1',
+                    'parent_name': source.original_text, 'reason': 'Состав требует проверки; исходная позиция сохранена целиком.',
+                    'provenance': {}})
+            finally:
+                self.stage_sources = sources
+        return goods
+
+    def reconcile_specifications(self, rows, goods):
+        """Compile verified additions atomically; originals are retained by the backend."""
+        pending = {good['key']: [] for good in goods}
+        self.specification_gaps = []
+
+        def compile_current():
+            records = []
+            for good in goods:
+                facts = pending[good['key']]
+                covered = {ref for fact in facts for ref in (fact.get('baseline_refs') or [])}
+                keep = [] if good['kind'] == 'kit' else [i for i in range(len(self.baselines[good['source_id']])) if i not in covered]
+                records.append({'key': good['key'], 'keep_refs': keep, 'characteristics': facts})
+            return self.validate_specifications(records, goods)
+
+        result = compile_current()
+        seen = set()
+        for row in rows if isinstance(rows, list) else []:
+            key = row.get('key') if isinstance(row, dict) else None
+            if key not in pending or key in seen:
+                self.specification_gaps.append({'stage': 'tz', 'reason': 'Лишняя или повторная товарная позиция в ответе не применена.'})
+                continue
+            seen.add(key)
+            for fact in row.get('characteristics', []) if isinstance(row.get('characteristics'), list) else []:
+                # The model cannot remove source data. Missing keep/omit links are
+                # irrelevant to backend preservation, not a reason to stop the job.
+                good = next(good for good in goods if good['key'] == key)
+                if not isinstance(fact, dict):
+                    self.specification_gaps.append({'stage': 'tz', 'key': key, 'reason': 'Некорректная характеристика не применена.'})
+                    continue
+                if fact.get('resolution') == 'omit' or (fact.get('resolution') == 'keep' and good['kind'] != 'kit'):
+                    continue
+                pending[key].append(fact)
+                try:
+                    result = compile_current()
+                except (ValueError, TypeError, KeyError) as exc:
+                    pending[key].pop()
+                    self.specification_gaps.append({'stage': 'tz', 'key': key,
+                        'name': fact.get('name', '') if isinstance(fact, dict) else '', 'reason': str(exc)})
+        for key in pending.keys() - seen:
+            self.specification_gaps.append({'stage': 'tz', 'key': key, 'reason': 'Дополнения не получены; исходные требования сохранены.'})
+        return result
 
     def prepared_entries(self, goods, specifications=None, national=None):
         from tender_selection.national_regime import document_item
@@ -630,44 +700,54 @@ class GatewayDocumentEnricher:
             url = doc.get("url")
             if not url:
                 continue
-            cached = DocumentPreview.objects.filter(url=url).values("html", "kind", "error").first() or {}
-            html = cached.get("html") or ""
-            if len(html.encode("utf-8")) > MAX_BYTES:
-                raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
-            root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
-            image_nodes = root.xpath(".//img")
-            image_indexes = []
-            for node in image_nodes:
-                image_url = node.get("src", "")
-                if not re.fullmatch(r"data:image/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+", image_url):
-                    continue
-                try:
-                    import base64
-                    import io
-                    from PIL import Image
-                    with Image.open(io.BytesIO(base64.b64decode(image_url.split(",", 1)[1], validate=True))) as image:
-                        image.verify()
-                except Exception:
-                    continue
-                self.document_images.append(image_url)
-                image_indexes.append(len(self.document_images))
-            missing_images = len(image_nodes) != len(image_indexes)
-            warning = missing_images or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
-            warnings = [" ".join(node.itertext()).strip()[:500] for node in root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]")]
-            if missing_images:
-                warnings.append("Некоторые изображения недоступны для визуального чтения.")
-            for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-info] | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
-                node.drop_tree()
-            compact_tables = document_table_payload(html_parser.tostring(root, encoding="unicode"), table_limit=None, cell_limit=None, expand=False) if compact else None
-            evidence_text = " ".join(" ".join(root.itertext()).split())
-            if compact:
-                for table in root.xpath(".//table"):
-                    if table.getparent() is not None:
-                        table.drop_tree()
-            content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
-            text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
-            candidates.append({"url": url, "name": doc.get("name", ""), "text": text,
-                               "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes, "compact_tables": compact_tables, "evidence_text": evidence_text})
+            image_start = len(self.document_images)
+            try:
+                cached = DocumentPreview.objects.filter(url=url).values("html", "kind", "error").first() or {}
+                html = cached.get("html") or ""
+                if len(html.encode("utf-8")) > MAX_BYTES:
+                    raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
+                root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
+                image_nodes = root.xpath(".//img")
+                image_indexes = []
+                visual_pages = []
+                for node in image_nodes:
+                    image_url = node.get("src", "")
+                    if not re.fullmatch(r"data:image/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+", image_url):
+                        continue
+                    try:
+                        import base64
+                        import io
+                        from PIL import Image
+                        with Image.open(io.BytesIO(base64.b64decode(image_url.split(",", 1)[1], validate=True))) as image:
+                            image.verify()
+                    except Exception:
+                        continue
+                    self.document_images.append(image_url)
+                    image_indexes.append(len(self.document_images))
+                    if str(node.get("data-document-page", "")).isdigit():
+                        visual_pages.append(int(node.get("data-document-page")))
+                missing_images = len(image_nodes) != len(image_indexes)
+                warning = missing_images or bool(root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]"))
+                warnings = [" ".join(node.itertext()).strip()[:500] for node in root.xpath(".//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')]")]
+                if missing_images:
+                    warnings.append("Некоторые изображения недоступны для визуального чтения.")
+                for node in root.xpath(".//script | .//style | .//img | .//*[@data-document-info] | .//*[@data-document-warning] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-sub ')] | .//*[contains(concat(' ', normalize-space(@class), ' '), ' ts-doc-page__number ')]"):
+                    node.drop_tree()
+                compact_tables = document_table_payload(html_parser.tostring(root, encoding="unicode"), table_limit=None, cell_limit=None, expand=False) if compact else None
+                evidence_text = " ".join(" ".join(root.itertext()).split())
+                if compact:
+                    for table in root.xpath(".//table"):
+                        if table.getparent() is not None:
+                            table.drop_tree()
+                content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
+                text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
+                candidates.append({"url": url, "name": doc.get("name", ""), "text": text,
+                                   "html": html_parser.tostring(root, encoding="unicode"), "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes, "visual_pages": visual_pages, "compact_tables": compact_tables, "evidence_text": evidence_text})
+            except (ValueError, TypeError, OSError) as exc:
+                del self.document_images[image_start:]
+                candidates.append({'url': url, 'name': doc.get('name', ''), 'text': '', 'html': '',
+                    'error': str(exc), 'warnings': [], 'warning': True, 'cache_kind': '',
+                    'image_indexes': [], 'visual_pages': [], 'compact_tables': [], 'evidence_text': ''})
         if not candidates:
             return [], []
         available, considered = [], []
@@ -675,6 +755,7 @@ class GatewayDocumentEnricher:
             text = candidate["text"]
             status = "unreadable" if not text and not candidate["image_indexes"] and not candidate.get("compact_tables") else "partial" if candidate["error"] or candidate["warning"] else "read"
             entry = {"url": candidate["url"], "name": candidate["name"], "text": text, "image_indexes": candidate["image_indexes"]}
+            entry["visual_pages"] = candidate["visual_pages"]
             entry["tables"] = candidate["compact_tables"] if compact else document_table_payload(candidate["html"]) if text else []
             if compact:
                 entry["evidence_text"] = candidate["evidence_text"]
@@ -684,6 +765,17 @@ class GatewayDocumentEnricher:
                                "table_count": len(entry.get("tables", [])), "reading_status": status,
                                "error": candidate["error"], "warnings": candidate["warnings"], "cache_kind": candidate["cache_kind"], "image_count": len(candidate["image_indexes"])})
         return available, considered
+
+    def _image_token_bound(self):
+        """Conservative vision allowance by pixels, never by base64 byte count."""
+        import base64
+        import io
+        from PIL import Image
+        total = 0
+        for url in self.document_images:
+            with Image.open(io.BytesIO(base64.b64decode(url.split(',', 1)[1]))) as image:
+                total += 4096 + (image.width * image.height + 127) // 128
+        return total
 
     def _preflight_cost(self, prompt):
         """Return a conservative upper estimate, or None when the tariff is unknown."""
@@ -697,8 +789,8 @@ class GatewayDocumentEnricher:
         }
         if self.max_cost_rub is not None:
             usage["prompt_tokens"] = len(prompt.encode("utf-8")) + 4096
-        # Reserve encoded image bytes as an additional conservative input allowance.
-        usage["prompt_tokens"] += sum(len(value.encode("ascii")) for value in self.document_images)
+        # Image encoding bytes are not language tokens; reserve by decoded pixels.
+        usage["prompt_tokens"] += self._image_token_bound()
         return spend_rub(usage, self.model), usage
 
     def _record_gateway_failure(self, exc, *, usage, phase, started):
@@ -1014,9 +1106,15 @@ def queue_existing_recheck(*, limit: int) -> list[TenderComputeJob]:
 
 
 def _notification_rows(tender: Tender) -> list[dict]:
-    if not tender.notification_raw:
-        return []
-    return parse_notification(tender.notification_raw).get("items", [])
+    parsed = parse_notification(tender.notification_raw or {})
+    items = parsed.get("items", [])
+    if items:
+        return items
+    # A document-only notice has a real subject, not an invented product/quantity.
+    subject = str(tender.title or tender.object_info or '').strip()
+    if parsed.get('documents') and subject:
+        return [{'name': subject, 'quantity': None, 'unit': '', 'characteristics': [], 'document_subject': True}]
+    return []
 
 
 def _source_key(row: dict, index: int) -> str:
@@ -1044,7 +1142,7 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
         raw_requirements = {"characteristics": row.get("characteristics") or []}
         requirements = {"characteristics": [normalized_fact(fact, aliases=_unit_aliases()) for fact in raw_requirements['characteristics']]}
         payload = {"name": name, "quantity": row.get("quantity"), "unit": row.get("unit"), "requirements": raw_requirements, "code": row.get("code") or ""}
-        source_key = _source_key(row, index)
+        source_key = ("document_subject:" if row.get("document_subject") else "") + _source_key(row, index)
         fingerprint = _fingerprint(payload)
         current = TenderSourceItem.objects.filter(tender=tender, source_key__startswith=source_key, is_active=True).order_by("-pk").first()
         if current and current.metadata.get("source_fingerprint") == fingerprint:
@@ -1060,10 +1158,10 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
         item, _ = TenderSourceItem.objects.get_or_create(
             tender=tender, source_key=key,
             defaults={
-                "source_type": "notification", "original_text": name, "quantity": _as_decimal(row.get("quantity")),
+                "source_type": "document_subject" if row.get("document_subject") else "notification", "original_text": name, "quantity": _as_decimal(row.get("quantity")),
                 "unit": str(row.get("unit") or ""), "requirements": requirements,
                 "metadata": {"source_fingerprint": fingerprint, "notification_index": index, "code": row.get("code") or ""},
-                "provenance": {"kind": "notification", "notification_index": index}, "supersedes": current,
+                "provenance": {"kind": "tender_subject", "field": "title" if tender.title else "object_info"} if row.get("document_subject") else {"kind": "notification", "notification_index": index}, "supersedes": current,
             },
         )
         result.append(item)

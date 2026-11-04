@@ -44,6 +44,9 @@ def _person(info: dict) -> str:
 def _characteristic_value_text(value: dict) -> str:
     if value.get("qualityDescription") not in (None, ""):
         return str(value["qualityDescription"])
+    concrete = _dig(value, "valueSet", "concreteValue")
+    if concrete is not None:
+        return ", ".join(str(item) for item in _as_list(concrete) if item is not None and item != "")
     operators = {"greaterOrEqual": "не менее", "greater": "более", "lessOrEqual": "не более", "less": "менее", "equal": "равно"}
     ranges = []
     for bounds in _as_list(_dig(value, "rangeSet", "valueRange")):

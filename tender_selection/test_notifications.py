@@ -94,3 +94,10 @@ class RetryPendingNotificationsTests(TestCase):
 
         tender.refresh_from_db()
         self.assertEqual(tender.notification_error, "429")
+
+class FixedNotificationValueTests(SimpleTestCase):
+    def test_fixed_values_zero_and_alternatives_are_not_lost(self):
+        from .notification import _characteristic_value_text
+        self.assertEqual(_characteristic_value_text({'valueSet': {'concreteValue': '1'}}), '1')
+        self.assertEqual(_characteristic_value_text({'valueSet': {'concreteValue': 0}}), '0')
+        self.assertEqual(_characteristic_value_text({'valueSet': {'concreteValue': ['1', '2']}}), '1, 2')
