@@ -4,7 +4,7 @@ from django.urls import reverse
 
 from tenders.calculation_v2_pipeline import source_route_snapshots
 from tenders.models import TenderComputeJob
-from .profile_triage import profile_disposition
+from .profile_triage import profile_disposition, profile_is_current
 
 PHASES = ('notification', 'documents', 'structure', 'national_regime', 'tz', 'routing')
 ACTIVE = {'queued', 'running', 'preparing_input', 'routing', 'preparing'}
@@ -24,7 +24,8 @@ def summarize(tenders):
         missing = [name for name in PHASES if stages.get(name, {}).get('state') != 'complete' or stages.get(name, {}).get('outcome') == 'source_only']
         gaps = job.diagnostics.get('analysis_gaps', []) if job else []
         profile = profile_disposition(tender)
-        complete = bool(job and job.status not in ACTIVE and not job.error and not missing and not gaps and profile == 'fit' and routes and ready == len(routes))
+        profile_done = tender.review == tender.INTERESTING or (profile_is_current(tender) and profile in {'fit', 'review'})
+        complete = bool(job and job.status not in ACTIVE and not job.error and not missing and not gaps and profile_done and routes and ready == len(routes))
         if complete:
             reason = ''
         elif job and job.status in ACTIVE:
@@ -37,7 +38,7 @@ def summarize(tenders):
             reason = 'Не все этапы анализа завершены'
         elif gaps:
             reason = str(gaps[0].get('reason') or 'Есть непроверенные сведения')
-        elif profile != 'fit':
+        elif not profile_done:
             reason = 'Профиль закупки не подтверждён'
         else:
             reason = f'Нет готового маршрута у {len(routes) - ready} позиций' if routes else 'Не получены товарные позиции'

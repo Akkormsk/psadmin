@@ -2155,7 +2155,8 @@ def _staged_document_analysis(job, enricher):
     previous = next((candidate for candidate in candidates if all(
         candidate.diagnostics.get('stages', {}).get(name, {}).get('state') == 'complete'
         and candidate.diagnostics['stages'][name].get('outcome') != 'source_only'
-        for name in ('structure', 'national_regime', 'tz'))), None)
+        for name in ('structure', 'national_regime', 'tz'))
+        and not any(gap.get('stage') in {'structure', 'national_regime', 'tz'} for gap in candidate.diagnostics.get('analysis_gaps', []))), None)
     if previous:
         job.diagnostics["analysis_gaps"].extend(gap for gap in previous.diagnostics.get("analysis_gaps", []) if gap.get("stage") in {"structure", "national_regime", "tz"})
         for key in ('structure', 'national_regime', 'tz'):
@@ -2174,9 +2175,62 @@ def _staged_document_analysis(job, enricher):
             instruction += '\nИзображения приложены в порядке image_indexes. Прочитай их вместе с текстом. Для цитаты со скана укажи section: «Страница N» из visual_pages; для встроенного рисунка — «Изображение N» из image_indexes. Не выдавай предположение по изображению за установленное требование.'
         try:
             requested = list(enricher.stage_sources) if name == 'structure' else task.get('goods', [])
-            batches = [requested[offset:offset + 20] for offset in range(0, len(requested), 20)] if len(requested) > 20 else []
-            if batches:
-                rows, children = [], []
+            identity = (lambda item: item) if name == 'structure' else (lambda item: item['key'])
+            field = 'source_id' if name == 'structure' else 'key'
+            wanted = {identity(item) for item in requested}
+            order = {identity(item): index for index, item in enumerate(requested)}
+            def record_id(row):
+                value = row.get(field) if isinstance(row, dict) else None
+                return value if type(value) is (int if name == 'structure' else str) else None
+            def ordered(rows):
+                return sorted(rows, key=lambda row: order.get(record_id(row), len(order)))
+            saved, origins = {}, {}
+            history = type(job).objects.filter(tender=job.tender, diagnostics__staged_input_fingerprint=fingerprint).exclude(pk=job.pk).order_by('-pk')
+            for prior in history:
+                old_stages = prior.diagnostics.get('stages', {})
+                parent_stage = old_stages.get(name, {})
+                compatible_sources = None
+                if name != 'structure':
+                    old_structure = old_stages.get('structure', {})
+                    if old_structure.get('state') != 'complete' or old_structure.get('outcome') == 'source_only':
+                        continue
+                    def structures(rows):
+                        return {row['source_id']: (row.get('kind'), row.get('goods')) for row in (rows if isinstance(rows, list) else [])
+                            if isinstance(row, dict) and type(row.get('source_id')) is int}
+                    structure_gaps = [gap for gap in prior.diagnostics.get('analysis_gaps', []) if gap.get('stage') == 'structure']
+                    if any(type(gap.get('source_id')) is not int for gap in structure_gaps):
+                        continue
+                    invalid_sources = {gap['source_id'] for gap in structure_gaps}
+                    before = structures(old_structure.get('result'))
+                    after = structures(stages.get('structure', {}).get('result'))
+                    compatible_sources = {good['key'] for good in task.get('goods', [])
+                        if good['source_id'] not in invalid_sources and before.get(good['source_id']) == after.get(good['source_id'])
+                        and before.get(good['source_id'], (None,))[0] == good['kind']}
+                # Source-only fallback gaps describe missing replies, not the intact saved pieces.
+                invalid = [gap for gap in prior.diagnostics.get('analysis_gaps', []) if gap.get('stage') == name] if parent_stage.get('outcome') != 'source_only' else []
+                if any(type(gap.get(field)) is not (int if name == 'structure' else str) for gap in invalid):
+                    continue
+                rejected = {gap[field] for gap in invalid}
+                for key, segment in old_stages.items():
+                    if key != name and not key.startswith(name + ':'):
+                        continue
+                    if segment.get('state') not in {'complete', 'pending_validation'} or segment.get('outcome') == 'source_only':
+                        continue
+                    records = segment.get('result')
+                    if not isinstance(records, list):
+                        continue
+                    for row in records:
+                        identity_key = record_id(row)
+                        if identity_key in wanted - rejected and identity_key not in saved and (compatible_sources is None or identity_key in compatible_sources):
+                            saved[identity_key], origins[str(identity_key)] = row, prior.pk
+            remaining = [item for item in requested if identity(item) not in saved]
+            batches = [remaining[offset:offset + 20] for offset in range(0, len(remaining), 20)] if len(requested) > 20 or saved else []
+            if saved and not remaining:
+                rows = [saved[identity(item)] for item in requested]
+                stages[name] = {'state': 'pending_validation', 'result': rows, 'reused_records': origins, 'cost_rub': '0'}
+                validated = validator(rows)
+            elif batches:
+                rows, children = list(saved.values()), []
                 queue = list(batches)
                 while queue:
                     batch = queue.pop(0)
@@ -2205,7 +2259,8 @@ def _staged_document_analysis(job, enricher):
                     children.append(child)
                     rows.extend(reply)
                     _publish_intake(job)
-                stages[name] = {'state': 'pending_validation', 'result': rows, 'batches': children, 'cost_rub': '0'}
+                stages[name] = {'state': 'pending_validation', 'result': rows, 'batches': children, 'reused_records': origins, 'cost_rub': '0'}
+                rows[:] = ordered(rows)
                 validated = validator(rows)
                 for child in children:
                     stages[child]['state'] = 'complete'
@@ -2435,9 +2490,9 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         if any(not decision.process_ids for decision in decisions):
             job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'reason': 'Для части позиций не получен маршрут; они не считаются готовыми.'})
         if not routes_only and FilterSettings.load().profile_triage_enabled and job.tender.review == Tender.UNREVIEWED:
-            from .profile_triage import profile_disposition
-            if profile_disposition(job.tender) == 'review':
-                job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'profile', 'reason': 'Соответствие профилю пока не подтверждено исходными сведениями.'})
+            from .profile_triage import profile_is_current
+            if not profile_is_current(job.tender):
+                job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'profile', 'reason': 'Проверка соответствия профилю не получена.'})
         job.diagnostics.update(source_item_count=len(sources), derived_item_count=len(result["created"]), enrichment_used=bool(result["created"]), routing_item_count=len(decisions), routing=getattr(router, "diagnostics", {}), routes_only=routes_only)
         from django.conf import settings
         if settings.CALCULATION_V2_PREPARATION_ENABLED:

@@ -237,6 +237,12 @@ class ResilientIntakeFlowTests(TransactionTestCase):
 
 class LargeIntakeStageTests(TestCase):
     def test_batches_keep_all_positions_and_do_not_reuse_source_only_result(self):
+        self._exercise_batches()
+
+    def test_repartitioned_requests_reuse_individual_complete_records(self):
+        self._exercise_batches(reuse=True)
+
+    def _exercise_batches(self, *, reuse=False):
         from decimal import Decimal
         from .models import Tender
         from .services import _staged_document_analysis, _staged_input_fingerprint
@@ -250,6 +256,14 @@ class LargeIntakeStageTests(TestCase):
         previous = TenderComputeJob.objects.create(tender=tender, status='needs_review', diagnostics={
             'staged_input_fingerprint': _staged_input_fingerprint(tender, engine), 'enrichment_state': 'no_change',
             'stages': {name: {'state': 'complete', 'outcome': 'source_only', 'result': []} for name in ('structure','national_regime','tz')}})
+        if reuse:
+            for chunk in range(2):
+                previous.diagnostics['stages'][f'structure:{chunk + 1}'] = {'state': 'pending_validation', 'result': [
+                    {'source_id': source.pk, 'kind': 'finished', 'name': source.original_text, 'reason': 'Один товар',
+                     'evidence': [{'doc_id': 1, 'quote': source.original_text}],
+                     'goods': [{'name': source.original_text, 'quantity_per_parent': 1, 'unit': source.unit}]}
+                    for source in sources[chunk * 10:(chunk + 1) * 10]]}
+            previous.save()
         job = TenderComputeJob.objects.create(tender=tender, status='running')
         by_id = {source.pk: source for source in sources}
         def answer(_job, stage, instruction, task, **kwargs):
@@ -267,7 +281,7 @@ class LargeIntakeStageTests(TestCase):
             _staged_document_analysis(job, engine)
         self.assertEqual(len(job.diagnostics['stages']['structure']['result']), 21)
         self.assertNotIn('document_analysis_reused', job.diagnostics)
-        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [20, 10, 10, 1])
+        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [1] if reuse else [20, 10, 10, 1])
         self.assertEqual(len(job.diagnostics['stages']['tz']['result']), 21)
         self.assertEqual(job.diagnostics['analysis_gaps'], [])
         self.assertEqual(len(engine.notification_items), 21)
@@ -282,6 +296,33 @@ class LargeIntakeStageTests(TestCase):
         raw = tender.notification_raw['source']['notificationInfo']['purchaseObjectsInfo']['notDrugPurchaseObjectsInfo']['purchaseObject']
         self.assertEqual([row['value'] for row in task['notification_items']], raw[:2])
         self.assertTrue(all(job.diagnostics['stages'][name]['state'] == 'complete' for name in ('structure','national_regime','tz')))
+
+    def test_cached_whole_product_facts_do_not_move_to_new_kit_components(self):
+        from .models import Tender, DocumentPreview
+        from .services import _staged_document_analysis, _staged_input_fingerprint
+        from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, ingest_source_items
+        from tenders.test_calculation_v2_pipeline import notification, raw_item
+        tender = Tender.objects.create(purchase_number='cache-decomposition', notification_raw=notification([raw_item('Товар', '1')], documents=[{'url': 'https://zakupki.gov.ru/cache-spec', 'fileName': 'spec.docx'}]))
+        DocumentPreview.objects.create(url='https://zakupki.gov.ru/cache-spec', kind='docx', html='<p>Товар содержит ручку и коробку.</p><p>Материал: картон</p>')
+        source = ingest_source_items(tender)[0]
+        engine = GatewayDocumentEnricher(max_cost_rub='5')
+        fingerprint = _staged_input_fingerprint(tender, engine)
+        row = {'source_id': source.pk, 'kind': 'finished', 'name': 'Товар', 'reason': 'Один товар', 'evidence': [{'doc_id': 1, 'quote': 'Товар содержит ручку и коробку.'}], 'goods': [{'name': 'Товар', 'unit': source.unit, 'quantity_per_parent': 1}]}
+        TenderComputeJob.objects.create(tender=tender, status='needs_review', diagnostics={'staged_input_fingerprint': fingerprint,
+            'stages': {'structure': {'state': 'complete', 'result': [row]}, 'tz:1': {'state': 'complete', 'result': [{'key': f'{source.pk}:0', 'characteristics': [{'name': 'Материал', 'value': 'картон', 'resolution': 'new', 'baseline_refs': [], 'doc_id': 1, 'quote': 'Материал: картон'}]}]}}})
+        current_structure = {**row, 'kind': 'kit', 'reason': 'Два самостоятельных изделия', 'goods': [{'name': 'Ручка', 'unit': source.unit, 'quantity_per_parent': 1}, {'name': 'Коробка', 'unit': source.unit, 'quantity_per_parent': 1}]}
+        TenderComputeJob.objects.create(tender=tender, status='needs_review', diagnostics={'staged_input_fingerprint': fingerprint,
+            'stages': {'structure': {'state': 'complete', 'result': [current_structure]}}})
+        job = TenderComputeJob.objects.create(tender=tender, status='running')
+        def answer(_job, stage, instruction, task, **kwargs):
+            self.assertEqual(stage, 'tz')
+            self.assertEqual(len(task['goods']), 2)
+            rows = [{'key': good['key'], 'characteristics': []} for good in task['goods']]
+            return rows, {'state': 'pending_validation', 'result': rows, 'cost_rub': '0'}
+        with patch('tender_selection.services.documents_html'), patch.object(engine, 'ask_stage', side_effect=answer) as ask:
+            _staged_document_analysis(job, engine)
+        ask.assert_called_once()
+        self.assertEqual(job.diagnostics['analysis_gaps'], [])
 
     def test_failed_structure_does_not_replace_previous_verified_proposals(self):
         from .models import Tender

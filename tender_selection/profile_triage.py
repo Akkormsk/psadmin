@@ -155,12 +155,16 @@ def _valid_answer(item: object, states: dict, diagnostics=None):
     return tender_id, _VERDICTS[verdict], confidence, reason, assessment
 
 
+def profile_is_current(tender):
+    assessment = tender.profile_assessment or {}
+    return bool(not assessment.get('stale') and assessment.get('contract') == CONTRACT
+        and assessment.get('title') == (tender.title or tender.object_info)
+        and assessment.get('object_info') == tender.object_info and assessment.get('verdict') in _VERDICTS)
+
+
 def profile_disposition(tender):
     """Read-only decision; legacy/changed signals cannot silently hide a tender."""
-    assessment = tender.profile_assessment or {}
-    if assessment.get('stale') or assessment.get('contract') != CONTRACT or assessment.get('title') != (tender.title or tender.object_info) or assessment.get('object_info') != tender.object_info:
-        return 'review'
-    return assessment.get('verdict', 'review')
+    return tender.profile_assessment['verdict'] if profile_is_current(tender) else 'review'
 
 
 def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostics=None) -> int:

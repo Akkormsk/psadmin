@@ -34,6 +34,15 @@ class IntakeReadinessTests(TestCase):
         gateway.assert_not_called()
         self.assertTrue(summary['all_complete'])
         self.assertEqual(summary['complete'], 1)
+        self.tender.profile_assessment['verdict'] = 'review'
+        self.tender.save(update_fields=['profile_assessment'])
+        self.assertTrue(intake_readiness_for(user)['all_complete'])
+        self.tender.profile_assessment['stale'] = True
+        self.tender.save(update_fields=['profile_assessment'])
+        self.assertFalse(intake_readiness_for(user)['all_complete'])
+        self.tender.profile_assessment.pop('stale')
+        self.tender.profile_assessment['verdict'] = 'fit'
+        self.tender.save(update_fields=['profile_assessment'])
         from tenders.assistant_tools import execute_tool
         self.assertEqual(execute_tool('tender.intake_readiness', user, {}), summary)
         self.client.force_login(user)

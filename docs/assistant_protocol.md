@@ -2020,3 +2020,12 @@ Read-only Actions41479064969 rendered the actual eight-item TEST card:HTTP200, e
 
 
 **CODE_ONLY — measured output density, 2026-11-04.** Use400tokens/item only until the phase has an observed output density; thereafter reserve1.5times its measured density with the minimum2048tokens. Short status/no-change responses must not retain the initial structural-response floor. No price ceiling or reasoning setting changes.
+
+
+**CODE_ONLY — position-granular reuse independent of batch partition, 2026-11-04.** Acceptance41860137994 repeated national-regime records because current budget changed request grouping from smaller historical pieces to larger batches. Cost6.81998805RUB, structure reused free,1875 partial,TZ not yet run, no fake readiness. Existing job diagnostics now index intact complete/pending-validation records by source_id/key under the same factual-input fingerprint, regardless of batch grouping. Reassemble in original order and apply the same full-stage validator; known rejected records excluded. No separate cache registry, relaxed source validation or new learning. Actual all-cohort completion pending. Shadow QA41858755307:3/3 clear foreign real PROD notices correctly rejected by current TEST classifier under READ ONLY on both sides, estimate0.1265RUB; no lessons/decisions/data imports.
+
+
+**CODE_ONLY — assessed uncertainty is not a failed analysis, 2026-11-04.** A current explicit profile review verdict is a completed classification with uncertainty: it keeps the tender visible and does not fabricate fit/foreign certainty. Distinguish it from missing/stale assessment. Readiness allows this current reviewed signal (or explicit manual interesting), still requires every factual phase/route and no real gaps. Missing classification stays incomplete. Manual decisions preserved; no stale result relabelled or unsupported green status.
+
+
+**CODE_ONLY — bind reusable item evidence to its actual decomposition, 2026-11-04.** Position-granular1875/TZ replay additionally requires matching verified structure (kind and entire component list including names/units/per-parent quantities). A whole-product key ending:0 must never transfer old facts to component:0 of a newly recognized kit. Current validators still run over the complete assembled response; record identity types checked at the cache boundary.
