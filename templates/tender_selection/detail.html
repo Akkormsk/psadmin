@@ -425,14 +425,6 @@
       <button type="button" class="modal-close" id="ts-doc-close" aria-label="Закрыть">&times;</button>
     </div>
     <div id="ts-doc-body" class="ts-doc-body"></div>
-    <div class="ts-doc-actions">
-      <button type="button" class="btn btn-secondary ts-doc-btn" id="ts-doc-replace">Обновить из файла</button>
-    </div>
-    <div class="ts-doc-fallback" id="ts-doc-fallback" hidden>
-      <p class="ts-sub">Выберите скачанный оригинал. Он заменит сохранённый предпросмотр этого документа.</p>
-      <input type="file" id="ts-doc-upload-input" accept=".docx,.xlsx,.pdf,.doc,.zip">
-      <p class="ts-doc-upload-status ts-sub" id="ts-doc-upload-status"></p>
-    </div>
   </div>
 </div>
 <form id="ts-csrf-form" hidden>{% csrf_token %}</form>
@@ -596,11 +588,6 @@
     var modal = document.getElementById("ts-doc-modal");
     var title = document.getElementById("ts-doc-title");
     var body = document.getElementById("ts-doc-body");
-    var fallback = document.getElementById("ts-doc-fallback");
-    var replaceButton = document.getElementById("ts-doc-replace");
-    var uploadInput = document.getElementById("ts-doc-upload-input");
-    var uploadStatus = document.getElementById("ts-doc-upload-status");
-    var csrfToken = document.querySelector("#ts-csrf-form [name=csrfmiddlewaretoken]").value;
     var currentIdx = null;
     var loadingTimer = null;
 
@@ -621,17 +608,10 @@
     function close() {
       stopLoadingHint();
       modal.classList.remove("is-open");
-      fallback.hidden = true;
-      uploadInput.value = "";
-      uploadStatus.textContent = "";
     }
     document.getElementById("ts-doc-close").addEventListener("click", close);
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
-    replaceButton.addEventListener("click", function () {
-      fallback.hidden = false;
-      uploadInput.click();
-    });
 
     var zipEntryUrlTpl = "{% url 'tender_selection:doc_zip_entry' tender.pk 999999 'ZZZPATHZZZ' %}";
 
@@ -648,11 +628,9 @@
       title.textContent = data.name || "Документ";
       if (data.error) {
         body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
-        fallback.hidden = false;
         return;
       }
       body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
-      fallback.hidden = true;
       if (data.zip_entries && data.zip_entries.length) {
         var list = document.createElement("ul");
         list.className = "ts-zip-entries";
@@ -670,15 +648,6 @@
       }
     }
 
-    function uploadBlob(blobOrFile, filename) {
-      var body2 = new FormData();
-      body2.append("csrfmiddlewaretoken", csrfToken);
-      body2.append("file", blobOrFile, filename);
-      return fetch("{% url 'tender_selection:doc_upload' tender.pk 999999 %}".replace("999999", currentIdx), {
-        method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" }, body: body2,
-      }).then(function (r) { return r.json(); });
-    }
-
     function viaServer() {
       return fetch("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx))
         .then(function (r) { return r.json(); });
@@ -689,9 +658,6 @@
         currentIdx = btn.dataset.docPreview;
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
-        fallback.hidden = true;
-        uploadInput.value = "";
-        uploadStatus.textContent = "";
         modal.classList.add("is-open");
         startLoadingHint();
 
@@ -705,7 +671,6 @@
           frame.style.cssText = "display:block;width:98%;height:100%;margin:0 auto;border:0";
           frame.src = "{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx) + "?format=pdf#view=FitH&navpanes=0";
           body.appendChild(frame);
-          fallback.hidden = false;
           return;
         }
         viaServer()
@@ -713,22 +678,10 @@
           .catch(function () {
             stopLoadingHint();
             body.innerHTML = '<p class="ts-sub">Не удалось загрузить предпросмотр.</p>';
-            fallback.hidden = false;
           });
       });
     });
 
-    uploadInput.addEventListener("change", function () {
-      var file = uploadInput.files[0];
-      if (!file || currentIdx === null) return;
-      uploadStatus.textContent = "Загружаю и разбираю…";
-      uploadBlob(file, file.name)
-        .then(function (data) {
-          uploadStatus.textContent = "";
-          showResult(data);
-        })
-        .catch(function () { uploadStatus.textContent = "Не удалось загрузить файл."; });
-    });
   })();
 
   (function () {
