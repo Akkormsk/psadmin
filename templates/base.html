@@ -398,7 +398,19 @@
               });
               document.querySelectorAll('[data-analysis-steps="' + id + '"]').forEach(node => {
                 const steps = progress?.steps || [];
-                node.textContent = steps.map(step => step.label + (step.state === 'complete' ? ' ✓' : (step.state === 'failed' || step.state === 'warning') ? ' !' : step.state === 'running' ? ' …' : '')).join(' · ');
+                node.replaceChildren();
+                steps.forEach((step, index) => {
+                  if (index) node.append(' · ');
+                  node.append(step.label);
+                  if (step.state === 'complete') node.append(' ✓');
+                  else if (step.state === 'failed' || step.state === 'warning') node.append(' !');
+                  else if (step.state === 'running') {
+                    const spinner = document.createElement('span');
+                    spinner.className = 'ts-step-spinner';
+                    spinner.setAttribute('aria-label', 'выполняется');
+                    node.append(' ', spinner);
+                  }
+                });
                 node.title = steps.map(step => step.label + ': ' + (step.reused ? 'из кэша' : step.seconds != null ? step.seconds + ' с' : step.state === 'pending' ? 'ожидает' : '') + (data.cost?.steps?.[step.id] ? ' · ' + data.cost.steps[step.id] + ' ₽' : '')).join('\n');
               });
               if (data.cost) document.querySelectorAll('[data-analysis-cost="' + id + '"]').forEach(node => {

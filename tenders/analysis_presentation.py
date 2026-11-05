@@ -253,13 +253,15 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         "worker_alive": not active or not job.started_at or (now - job.updated_at).total_seconds() < 45,
         "stage": refresh.get("stage", ""), "full_refresh": bool(refresh), "published_revision": (job.diagnostics or {}).get("published_revision", 0) if job else 0,
         "retryable": bool(active and (now - job.updated_at).total_seconds() > 900)}
-    labels = {'notification': 'Извещение', 'profile': 'Профиль', 'documents': 'Документы', 'source_reading': 'Чтение', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
+    labels = {'notification': 'Извещение', 'documents': 'Документы', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
     ledger = (job.diagnostics or {}).get('stages', {}) if job else {}
     progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
     gap_stages = {gap.get('stage') for gap in (job.diagnostics or {}).get('analysis_gaps', [])} if job else set()
     for step in progress['steps']:
         if step['id'] in gap_stages and step['state'] == 'complete':
             step['state'] = 'warning'
+        if active and step['id'] == refresh.get('stage'):
+            step['state'] = 'running'
     stamp = str(job.diagnostics["published_revision"]) if job and "published_revision" in job.diagnostics else job.updated_at.isoformat() if job and job.updated_at else ""
     revision = f"{job.pk if job else 0}:{stamp}:{code}:{question_count}:{pending_count}"
     return TenderAnalysisStatus(tender=tender, code=code, label=label, kind=kind, question_count=question_count, pending_count=pending_count, reason=reason, revision=revision, job_id=job.pk if job else 0, processing=active, issues=issues, progress=progress, cost=analysis_cost(job))
