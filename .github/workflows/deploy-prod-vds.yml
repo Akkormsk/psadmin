@@ -1,0 +1,55 @@
+name: Deploy production VDS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: psadmin-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+    steps:
+      - name: Configure existing VDS connection
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+
+      - name: Run existing production deploy and verify revision
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "deploy@$SSH_HOST" 'bash -se' <<'REMOTE'
+          cd /home/deploy/psadmin
+          test "$(git branch --show-current)" = main
+          test -z "$(git status --porcelain)"
+          bash deploy/vds/deploy.sh
+          deployed_sha=$(git rev-parse HEAD)
+          cd deploy/vds
+          container_sha=$(docker compose exec -T web cat /app/.release-sha)
+          test "$container_sha" = "$deployed_sha"
+          printf 'Deployed SHA: %s\n' "$deployed_sha"
+          curl --fail --silent --show-error --max-time 20 --resolve admin.psodin.ru:443:127.0.0.1 https://admin.psodin.ru/ > /dev/null
+          REMOTE
+
+      - name: Verify public production URL
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 20 https://admin.psodin.ru/ > /dev/null

@@ -11,6 +11,8 @@
 
 # Personal coding behavior
 
+Production trigger: `.github/workflows/deploy-prod-vds.yml` runs on every push to `main` and manually. GitHub Actions uses the existing shared VDS connection secrets (`PSADMIN_TEST_SSH_*`) to execute `/home/deploy/psadmin/deploy/vds/deploy.sh`; the agent does not need local SSH access. Check the workflow result, printed deployed SHA, container revision and public health before reporting success. Every authorized push to `main` is a production release trigger, including documentation-only changes.
+
 These rules apply to all coding work across projects on this machine. They are the sole repo-wide human/AI development instructions; do not introduce or require CLAUDE.md.
 
 ## 1. Think before coding

@@ -479,6 +479,8 @@ LLM проверяет их применимость к полному ТЗ. Э�
 
 ### Деплой, версия и сохранность состояния
 
+- Production automation: `.github/workflows/deploy-prod-vds.yml` triggers on push to `main` or manual dispatch. It uses the existing shared VDS GitHub secrets, checks the production checkout is clean and on `main`, runs the existing `deploy.sh` (build, backup, migrate, health), compares container `.release-sha` with the deployed checkout, then checks the public URL. A successful workflow and its printed SHA are required for release confirmation.
+
 - Протокол из `docs/twin_protocol.md` описывает **два независимых окружения**: `https://admin.psodin.ru` и `https://test.admin.psodin.ru`. Тестовая база изолирована, но массовое её обновление `refresh-db` **разрушительно для существующих тестовых данных**; только после отдельного разрешения владельца, не часть обычного тестового деплоя.
 - Нынешний файл workflow **разный по веткам**: `main/.github/workflows/deploy-test-vds.yml` запускается **вручную**, `test-server/.github/workflows/deploy-test-vds.yml` запускается **на каждый push в test-server** и вручную. Это значимое несоответствие! Не переносить blindly конфигурацию workflow и не считать merge чистой документации в `test-server` безоперационным: он может инициировать автодеплой.
 - `test-server` workflow пишет SHA в `/home/deploy/psadmin-test/.twin-version` и проверяет health; **сверять его фактическое значение и успешность последнего запуска** перед повышением до `TEST_VERIFIED`. Если меняется способ деплоя, сначала обновить `AGENTS.md` и протокол в том же PR, иначе описание небезопасно.
