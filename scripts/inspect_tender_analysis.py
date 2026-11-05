@@ -338,6 +338,36 @@ def verify_stage_cache(number):
         raise RuntimeError('Rollback verification is TEST-only')
     tender = Tender.objects.get(purchase_number=number)
     latest = TenderComputeJob.objects.filter(tender=tender).latest('pk')
+    if latest.diagnostics.get('source_reading'):
+        from tenders.calculation_v2_pipeline import document_analysis_sources, assess_quality
+        engine = GatewayDocumentEnricher(max_cost_rub='10')
+        before = (TenderComputeJob.objects.count(), TenderSourceItem.objects.count())
+        attempts = []
+        class ProbeStopped(TenderAIError):
+            pass
+        def blocked(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            memory = engine.source_memory
+            page_key = next(key for page, key in zip(memory.pages, memory.page_keys) if page == task['source_index'])
+            if any(memory.key(block['id'], page_key) in memory.records for block in task['blocks']):
+                raise AssertionError('Completed fragment was requested again')
+            attempts.append(len(task['blocks']))
+            raise ProbeStopped('Unread source deliberately blocked: zero provider calls')
+        with transaction.atomic():
+            sources = list(document_analysis_sources(tender)[0].values())
+            with patch('tender_selection.services.documents_html'), patch('tender_selection.services._fetch_doc_bytes', side_effect=AssertionError('Unexpected download')), patch('tenders.services._ai_gateway_json', side_effect=blocked):
+                engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+                probe = TenderComputeJob.objects.create(tender=tender, version='v2-memory-cache-verification', diagnostics={'refresh': {}})
+                try:
+                    engine.read_source_memory(probe)
+                except ProbeStopped:
+                    pass
+            state = engine.source_memory.snapshot()
+            transaction.set_rollback(True)
+        if before != (TenderComputeJob.objects.count(), TenderSourceItem.objects.count()):
+            raise AssertionError('Rollback verification changed stored row counts')
+        return {'provider_calls': 0, 'persisted_writes': False, 'read_reused': state['read'], 'total': state['total'],
+            'complete': state['complete'], 'unread_packet_blocked': attempts}
     old = latest.diagnostics['stages']
     intact = old.get('tz:1', {}).get('result', [])
     recovered = closed_stage_records((old.get('tz:2', {}).get('incomplete_response') or {}).get('content'))
