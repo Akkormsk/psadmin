@@ -358,7 +358,7 @@ def _archive_stem(path: str) -> str:
     stem = path.rsplit("/", 1)[-1].lower()
     while True:
         previous = stem
-        for extension in (".pdf", ".docx", ".xlsx", ".doc"):
+        for extension in (".pdf", ".docx", ".xlsx", ".doc", ".xls"):
             if stem.endswith(extension):
                 stem = stem.removesuffix(extension)
                 break
@@ -376,7 +376,7 @@ def extract_preview(data: bytes, filename: str) -> dict:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
-                office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "pdf")]
+                office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "xls", "pdf")]
                 if len(office) == 1:
                     return extract_preview(zf.read(office[0]), office[0])
                 if office and len({_archive_stem(path) for path in office}) == 1:
@@ -400,8 +400,18 @@ def extract_preview(data: bytes, filename: str) -> dict:
             return {"kind": "xlsx", "html": _xlsx_html(data)}
         if ext == "pdf" or data[:4] == b"%PDF":
             return {"kind": "pdf", "html": _pdf_html(data)}
-        if ext == "doc":
-            return {"kind": "doc", "html": _doc_html(data)}
+        if ext in {"doc", "xls"}:
+            from .office import convert_office
+            target = "docx" if ext == "doc" else "xlsx"
+            converted = convert_office(data, name, target)
+            return {"kind": ext, "html": _docx_html(converted) if target == "docx" else _xlsx_html(converted)}
     except Exception as exc:  # noqa: BLE001 — любой сбой парсинга -> мягкая ошибка
+        if ext in {"docx", "xlsx"}:
+            from .office import convert_office
+            try:
+                converted = convert_office(data, name, ext)
+                return {"kind": ext, "html": _docx_html(converted) if ext == "docx" else _xlsx_html(converted)}
+            except Exception:
+                pass
         return {"kind": ext or "?", "error": f"Не удалось разобрать файл: {exc}"}
     return {"kind": ext or "?", "error": "Формат не поддерживается для предпросмотра."}

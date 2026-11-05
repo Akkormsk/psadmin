@@ -7,7 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.template.loader import render_to_string
@@ -876,6 +876,28 @@ def doc_preview(request, pk, idx):
     if err:
         return err
     url, name = doc.get("url", ""), doc.get("name", "")
+
+    if request.GET.get("format") == "pdf":
+        from hashlib import sha256
+        from django.core.cache import cache
+        from .office import convert_office
+
+        try:
+            data = _fetch_doc_bytes(tender, url, name)
+            content = data if data.startswith(b"%PDF") else None
+            if content is None:
+                key = "office-pdf:v2:" + sha256(data).hexdigest()
+                content = cache.get(key)
+                if content is None:
+                    content = convert_office(data, name, "pdf")
+                    cache.set(key, content, 3600)
+        except DocumentError as exc:
+            return HttpResponse(str(exc), status=422, content_type="text/plain; charset=utf-8")
+        response = HttpResponse(content, content_type="application/pdf")
+        response["Content-Disposition"] = 'inline; filename="document.pdf"'
+        response["Cache-Control"] = "private, no-store"
+        response["X-Frame-Options"] = "SAMEORIGIN"
+        return response
 
     cached = DocumentPreview.objects.filter(url=url).first()
     if cached and request.GET.get("refresh") != "1":

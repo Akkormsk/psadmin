@@ -409,13 +409,17 @@ def _store_preview(url, name, data: bytes) -> str:
     return result.get("html", "")
 
 
+def _preview_needs_upgrade(kind, html):
+    return kind == "zip" or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
+
+
 def document_html(tender, url, name, **fetch_kwargs) -> str:
     """Разобранный документ извещения: из кэша предпросмотра, иначе с ЕИС — и сразу в кэш,
     чтобы следующий просмотр или оценка рисков не ходили в ЕИС повторно.
     Скачанный, но нечитаемый файл (архив, битый .doc) тоже в кэше — с пустым HTML,
     повторно за ним не ходим. DocumentError — документ сейчас не получить."""
     cached = DocumentPreview.objects.filter(url=url).first()
-    if cached and cached.kind != "zip":
+    if cached and not _preview_needs_upgrade(cached.kind, cached.html):
         return cached.html
     return _store_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs))
 
@@ -428,7 +432,7 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
     htmls = {
         url: html
         for url, kind, html in DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", "kind", "html")
-        if kind != "zip"
+        if not _preview_needs_upgrade(kind, html)
     }
     missing = [doc for doc in documents if doc["url"] not in htmls]
 

@@ -58,6 +58,31 @@ class DocumentHtmlTests(TestCase):
         self.assertEqual(html, "<p>контракт</p>")
         self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).kind, "pdf")
 
+    def test_old_doc_preview_is_reparsed_with_office_reader(self):
+        DocumentPreview.objects.create(url=CONTRACT_URL, filename="Описание.doc", kind="doc", html="<p>мГБ</p>")
+        with patch.object(services, "_fetch_doc_bytes", return_value=b"legacy"), \
+                patch.object(services, "extract_preview", return_value={"kind": "doc", "html": "<section class='ts-doc-page'><p>Нормальный текст</p></section>"}):
+            html = services.document_html(self.tender, CONTRACT_URL, "Описание.doc")
+        self.assertIn("Нормальный текст", html)
+
+
+class TenderOfficePreviewTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        self.admin = get_user_model().objects.create_superuser("office-admin", "office@example.test", "password")
+        self.tender = Tender.objects.create(purchase_number="office-1", notification_raw=_notification())
+
+    def test_legacy_document_is_served_as_private_inline_pdf(self):
+        self.client.force_login(self.admin)
+        with patch("tender_selection.views._fetch_doc_bytes", return_value=b"legacy"), \
+                patch("tender_selection.office.convert_office", return_value=b"%PDF-test"):
+            response = self.client.get(f"/tender-selection/{self.tender.pk}/doc/1/?format=pdf")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertEqual(response.content, b"%PDF-test")
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+
 
 class ArchivePreviewTests(TestCase):
     def test_zip_with_doc_and_pdf_copies_uses_pdf(self):

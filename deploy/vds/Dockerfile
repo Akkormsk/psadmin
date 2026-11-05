@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 # Modulbank and zakupki.gov.ru use certificates of the Russian Mintsifry CA, absent from Debian's store.
 COPY deploy/vds/certs/*.crt /usr/local/share/ca-certificates/
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc fonts-dejavu-core fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 RUN update-ca-certificates
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
