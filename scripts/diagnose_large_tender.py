@@ -27,3 +27,11 @@ with patch('tender_selection.services.documents_html'):
 goods=engine.reconcile_structure(job.diagnostics['stages']['structure']['result'])
 compiled=engine.reconcile_specifications(job.diagnostics['stages']['tz']['result'],goods)
 print('REPLAY_FACT',json.dumps({'baseline':engine.baselines.get(382),'item':compiled.get('382:0'),'gaps':[g for g in engine.specification_gaps if g.get('key')=='382:0']},ensure_ascii=False,default=str))
+last=TenderComputeJob.objects.get(pk=135)
+ids=last.lines.exclude(component_id=None).values_list('component_id',flat=True)
+current=list(CalculationComponent.objects.filter(pk__in=ids).select_related('source_item','commercial_item'))
+answers=_route_owner_answer_map([i.source_item for i in current]); counts=collections.Counter()
+for i in current:
+ key=json.dumps([i.name,str(i.effective_quantity),i.unit,GatewayBatchRouter._requirements_payload({**i.requirements,'owner_answers':answers[i.source_item_id]})],ensure_ascii=False,sort_keys=True,default=str)
+ counts[key]+=1
+print('CURRENT_ROUTE_CHECK',json.dumps({'components':len(current),'distinct_inputs':len(counts),'duplicates':sum(v-1 for v in counts.values()),'diagnostics':{k:v for k,v in last.diagnostics.items() if k in ['routing_equivalent_reused_count','routing_reused_count','routing_batch_count']}},ensure_ascii=False))
