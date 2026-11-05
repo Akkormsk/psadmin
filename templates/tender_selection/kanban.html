@@ -42,7 +42,7 @@
               {% if card.status_label and card.status_key != "draft" and card.status_key != "pending" and card.status_key != "won" and card.status_key != "lost" %}<span class="kb-card__status kb-card__status--{{ card.status_key }}">{{ card.status_label }}</span>{% endif %}
             </div>
             {% if card.customer %}<div class="kb-card__customer">{{ card.customer }}</div>{% endif %}
-            <div class="kb-card__meta">№ {{ card.purchase_number }}</div>
+            <div class="kb-card__meta">№ {{ card.purchase_number }}{% if card.method_label %} · <span>{{ card.method_label }}</span>{% endif %}</div>
             <div class="kb-card__row">
               <strong>{{ card.max_price|rub }}</strong>
               {% if card.deadline %}<small class="kb-card__deadline{% if card.is_soon %} is-soon{% endif %}">{% if card.is_soon %}⏰ {% endif %}до {{ card.deadline|timezone:"Europe/Moscow"|date:"d.m.Y H:i" }}</small>{% endif %}

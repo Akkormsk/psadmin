@@ -179,6 +179,19 @@ def _rejection_explanation(protocol) -> str:
     )
 
 
+def _procurement_method_label(tender):
+    if tender is None:
+        return ""
+    placing_way = parse_notification(tender.notification_raw).get("placing_way", "") if tender.notification_raw else ""
+    for fragment, label in (("котиров", "Запрос котировок"), ("аукцион", "Аукцион"), ("конкурс", "Конкурс"), ("предложен", "Запрос предложений")):
+        if fragment in placing_way.lower():
+            return label
+    for prefix, label in (("epNotificationEF", "Аукцион"), ("epNotificationEZK", "Запрос котировок"), ("epNotificationEOK", "Конкурс"), ("epNotificationEZP", "Запрос предложений")):
+        if (tender.purchase_type or "").startswith(prefix):
+            return label
+    return placing_way
+
+
 def _found_tender_card(tender):
     """Карточка «Входящие»/«Проверка» — тендер ещё не отправлен в расчёт.
 
@@ -203,6 +216,7 @@ def _found_tender_card(tender):
         "customer": customer,
         "law_label": tender.get_law_display(),
         "purchase_number": tender.purchase_number,
+        "method_label": _procurement_method_label(tender),
         "max_price": tender.max_price,
         "deadline": tender.collecting_finished_at,
         "is_soon": is_soon,
@@ -268,6 +282,7 @@ def _estimate_card(estimate):
             or (f"ИНН {tender.customer_inn}" if tender and tender.customer_inn else "")
         ),
         "purchase_number": tender.purchase_number if tender else estimate.tender_number,
+        "method_label": _procurement_method_label(tender),
         "tender_number": tender.purchase_number if tender else estimate.tender_number,
         "max_price": tender.max_price if tender else None,
         "deadline": tender.collecting_finished_at if tender else None,
