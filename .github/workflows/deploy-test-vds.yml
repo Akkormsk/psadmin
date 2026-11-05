@@ -257,6 +257,14 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = one-read:* ]]; then
+            proof_number="${INSPECT_NUMBER#one-read:}"
+            [[ "$proof_number" =~ ^[0-9]{19}$ ]]
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$proof_number test-web python -u -" < scripts/single_document_probe.py
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = profile-qa ]]; then
             [[ "$PROFILE_QA_NUMBERS" =~ ^[0-9]{19}(,[0-9]{19})*$ ]]
             python - <<'PYCOMMAND' > /tmp/profile-qa-command
