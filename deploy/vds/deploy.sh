@@ -6,7 +6,7 @@ main() {
   cd "$(dirname "$0")"
   git -C ../.. pull --ff-only origin main
   git -C ../.. log --oneline -1
-  docker compose build web
+  docker compose build --build-arg "GIT_SHA=$(git -C ../.. rev-parse HEAD)" web
   ./backup.sh
   docker compose run --rm -T web python manage.py migrate --noinput
   docker compose up -d

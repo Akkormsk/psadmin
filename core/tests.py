@@ -5,11 +5,19 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
+from unittest.mock import patch
 
 from .models import Profile
 
 
 class HealthCheckTests(TestCase):
+    def test_public_response_exposes_valid_release_revision(self):
+        revision = "a" * 40
+        with patch("mysite.middleware.release_revision", return_value=revision):
+            response = self.client.get("/")
+
+        self.assertEqual(response["X-PSADMIN-Revision"], revision)
+
     def test_private_timeweb_health_check_does_not_require_public_host(self):
         response = self.client.get("/", HTTP_HOST="172.18.0.5:8000", REMOTE_ADDR="172.18.0.1")
 

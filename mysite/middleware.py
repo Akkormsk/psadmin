@@ -1,6 +1,20 @@
 from ipaddress import ip_address
+from pathlib import Path
+import re
 
 from django.http import HttpResponse
+
+
+_RELEASE_SHA = Path(__file__).resolve().parent.parent / ".release-sha"
+_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def release_revision() -> str | None:
+    try:
+        revision = _RELEASE_SHA.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    return revision if _SHA_RE.fullmatch(revision) else None
 
 
 class InternalHealthCheckMiddleware:
@@ -27,6 +41,8 @@ class WorkspaceFrameOptionsMiddleware:
 
     def __call__(self, request):
         response = self.get_response(request)
+        if revision := release_revision():
+            response.headers["X-PSADMIN-Revision"] = revision
         if request.GET.get("workspace") == "1":
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
         return response
