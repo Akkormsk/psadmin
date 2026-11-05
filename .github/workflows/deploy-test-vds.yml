@@ -257,6 +257,12 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = find-large-tender ]]; then
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" 'cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py shell -c "from tenders.models import TenderComputeJob; j=TenderComputeJob.objects.select_related(\"tender\").get(pk=124); print(\"LARGE_TENDER\", j.tender.purchase_number)"'
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = one-full:* ]]; then
             proof_number="${INSPECT_NUMBER#one-full:}"
             [[ "$proof_number" =~ ^[0-9]{19}$ ]]
