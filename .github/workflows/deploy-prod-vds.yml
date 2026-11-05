@@ -42,11 +42,13 @@ jobs:
           cd /home/deploy/psadmin
           test "$(git branch --show-current)" = main
           test -z "$(git status --porcelain)"
-          bash deploy/vds/deploy.sh
+          git pull --ff-only origin main </dev/null
+          bash deploy/vds/deploy.sh </dev/null
           deployed_sha=$(git rev-parse HEAD)
           cd deploy/vds
           container_sha=$(docker compose exec -T web cat /app/.release-sha)
           test "$container_sha" = "$deployed_sha"
+          docker compose exec -T web libreoffice --version </dev/null
           printf 'Deployed SHA: %s\n' "$deployed_sha"
           curl --fail --silent --show-error --max-time 20 --resolve admin.psodin.ru:443:127.0.0.1 https://admin.psodin.ru/ > /dev/null
           REMOTE
