@@ -35,3 +35,19 @@ for i in current:
  key=json.dumps([i.name,str(i.effective_quantity),i.unit,GatewayBatchRouter._requirements_payload({**i.requirements,'owner_answers':answers[i.source_item_id]})],ensure_ascii=False,sort_keys=True,default=str)
  counts[key]+=1
 print('CURRENT_ROUTE_CHECK',json.dumps({'components':len(current),'distinct_inputs':len(counts),'duplicates':sum(v-1 for v in counts.values()),'diagnostics':{k:v for k,v in last.diagnostics.items() if k in ['routing_equivalent_reused_count','routing_reused_count','routing_batch_count']}},ensure_ascii=False))
+from django.db import transaction
+from decimal import Decimal
+from tenders.models import ComponentRoutePlan, ProcessDefinition
+from tenders.calculation_v2_pipeline import RouteDecision, route_tender_batch
+calls=[]
+class ProbeRouter:
+ def route(self, *, items, processes, **kwargs):
+  calls.append(len(items))
+  return [RouteDecision(i.pk,(processes[0].pk,),Decimal('0.9'),{}) for i in items]
+with transaction.atomic():
+ probe=TenderComputeJob.objects.create(tender=last.tender,version='v2-equivalence-probe')
+ for plan in ComponentRoutePlan.objects.filter(component__in=current,scope='component'):
+  plan.metadata={**plan.metadata,'input_fingerprint':'probe-invalidated'}; plan.save(update_fields=['metadata'])
+ decisions=route_tender_batch(probe,ProbeRouter(),_items=current)
+ print('ROUTE_REUSE_PROBE',json.dumps({'components':len(current),'router_inputs':calls,'decisions':len(decisions),'duplicates_reused':probe.diagnostics.get('routing_equivalent_reused_count'),'persisted':False}))
+ transaction.set_rollback(True)
