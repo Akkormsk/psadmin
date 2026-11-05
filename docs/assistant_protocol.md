@@ -26,6 +26,10 @@
 
 ## 1. Назначение системы
 
+TEST: пометка источника «Уточнено по документации» отображается отдельной спокойной строкой под названием товара, без цветной плашки; раскрытие сведений об источнике сохранено.
+
+На TEST из панели входящих удалена ручная кнопка «Проверить профиль»: при V2 её обработчик не запускал проверку. Сама проверка профиля остаётся этапом общего разбора тендера.
+
 TEST protocol table keeps the first ten participants and appends our bid after an ellipsis when it ranks lower. If a saved bid is absent in the retrieved protocol, it remains visible with an explicit unknown-place message. Protocol fetch reads subsequent EIS pages with deduplication (bounded at 100 pages), preserving actual ranks rather than deriving them from price.
 
 Карточки канбана показывают способ закупки серой подписью рядом с номером: «Аукцион», «Запрос котировок» и другие способы. Источник — placingWay извещения, запасной источник — purchase_type ГосПлана; при отсутствии сведений подпись скрыта. Изменение предназначено только для TEST.

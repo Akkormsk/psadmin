@@ -255,8 +255,9 @@ body.workspace-embedded .ts-detail--document .ts-linkchip {
 .ts-original-toggle, .ts-position-source { display: inline; }
 .ts-original-toggle > summary, .ts-position-source > summary { display: inline; cursor: pointer; }
 .ts-original-toggle > span { margin-left: 6px; color: var(--ink-3); font-size: 12px; }
-.ts-position-source { margin-left: 6px; }
+.ts-position-source { display: block; margin: 5px 0 0; }
 .ts-position-source .ts-position-mark { margin-left: 0; }
+.ts-position-source > summary.ts-position-mark { padding: 0; border: 0; border-radius: 0; background: none; color: var(--ink-3); font-size: 12px; font-weight: 400; }
 
 .ts-question-indicator { margin: 0 0 10px; }
 .ts-question-indicator a { color: var(--warning-ink); font-size: 13px; font-weight: 700; text-decoration: none; }
