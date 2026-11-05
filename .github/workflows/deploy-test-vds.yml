@@ -194,7 +194,7 @@ jobs:
           mkdir -p "$root/psadmin-test-backups"
           test_backup="$root/psadmin-test-backups/pre-release-$(date -u +%Y%m%dT%H%M%SZ).dump"
           docker compose -f "$app/deploy/vds/compose.test.yml" exec -T test-db \
-            pg_dump -U psadmin -d psadmin -Fc > "$test_backup"
+            pg_dump -U psadmin -d psadmin -Fc </dev/null > "$test_backup"
           test -s "$test_backup"
           docker compose -f "$app/deploy/vds/compose.test.yml" exec -T test-db \
             pg_restore --list < "$test_backup" > /dev/null
@@ -272,6 +272,17 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 20 "$TEST_URL" > /dev/null
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}'" <<'VERIFY'
+          set -euo pipefail
+          cd /home/deploy/psadmin-test
+          actual_sha="$(sed -n 's/^sha=//p' .twin-version)"
+          test "$actual_sha" = "$1"
+          cd deploy/vds
+          docker compose -f compose.test.yml exec -T test-web python -c \
+            'import os,sys; from pathlib import Path; os.environ.setdefault("DJANGO_SETTINGS_MODULE","mysite.settings"); from django.conf import settings; assert "sha="+sys.argv[1] in Path("/app/.twin-version").read_text().splitlines(); assert settings.CALCULATION_V2_SOURCE_MEMORY_ENABLED; print("Verified container SHA: "+sys.argv[1]+"; source memory enabled")' "$1" </dev/null
+          VERIFY
 
       - name: Collect diagnostics after failure
         if: ${{ failure() }}
