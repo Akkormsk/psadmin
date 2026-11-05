@@ -545,7 +545,11 @@
   .ts-doc-btn { min-height: 0; font-size: 12px; padding: 5px 12px; border-radius: 10px; flex: 0 0 auto; }
   .ts-zip-entries { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
   .ts-zip-entries .ts-doc-link { font-size: 13px; }
-  #ts-doc-modal .modal { width: min(920px, calc(100vw - 40px)); max-width: none; max-height: calc(100vh - 60px); overflow: auto; }
+  #ts-doc-modal { padding: 12px; }
+  #ts-doc-modal .modal { width: calc(100vw - 48px); max-width: 1400px; height: calc(100dvh - 40px); max-height: none; padding: 12px; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; }
+  #ts-doc-modal .modal-header { flex: 0 0 54px; display: flex; align-items: center; margin: -12px -12px 8px; padding: 0 12px; gap: 8px; border-bottom: 1px solid var(--separator); box-sizing: border-box; }
+  #ts-doc-modal .modal-header h2 { flex: 1; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ts-doc-modal .ts-doc-body { flex: 1 1 auto; min-height: 0; }
   .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
   .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
   .ts-doc-body h4 { margin: 16px 0 6px; }
@@ -698,7 +702,7 @@
           body.replaceChildren();
           var frame = document.createElement("iframe");
           frame.title = title.textContent;
-          frame.style.cssText = "width:100%;height:75vh;border:0";
+          frame.style.cssText = "display:block;width:98%;height:100%;margin:0 auto;border:0";
           frame.src = "{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx) + "?format=pdf#view=FitH&navpanes=0";
           body.appendChild(frame);
           fallback.hidden = false;

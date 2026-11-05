@@ -479,6 +479,8 @@ LLM проверяет их применимость к полному ТЗ. Э�
 
 ### Деплой, версия и сохранность состояния
 
+- Document viewer layout ported from TEST: viewport-sized modal (48px horizontal and 40px vertical allowance, max width 1400px), 12px padding, compact 54px header, and PDF iframe filling the remaining height at 98% width. Existing document actions remain available.
+
 - Production automation: `.github/workflows/deploy-prod-vds.yml` triggers on push to `main` or manual dispatch. It uses the existing shared VDS GitHub secrets, checks the production checkout is clean and on `main`, runs the existing `deploy.sh` (build, backup, migrate, health), compares container `.release-sha` with the deployed checkout, then checks the public URL. A successful workflow and its printed SHA are required for release confirmation.
 
 - Протокол из `docs/twin_protocol.md` описывает **два независимых окружения**: `https://admin.psodin.ru` и `https://test.admin.psodin.ru`. Тестовая база изолирована, но массовое её обновление `refresh-db` **разрушительно для существующих тестовых данных**; только после отдельного разрешения владельца, не часть обычного тестового деплоя.
