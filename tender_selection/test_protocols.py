@@ -16,6 +16,27 @@ from .models import Tender
 DATA = Path(__file__).parent / "test_data"
 
 
+class OurBidVisibilityTests(SimpleTestCase):
+    def test_our_twelfth_place_is_appended_after_top_ten(self):
+        from .views import _protocol_view
+        tender = Tender(bid_number="12", max_price=Decimal("1000"), protocol={
+            "participants": [{"id": str(n), "rank": n, "price": "500.00"} for n in range(1, 16)],
+        })
+        rows = _protocol_view(tender)["rows"]
+        self.assertEqual([r["rank"] for r in rows[:10]], list(range(1, 11)))
+        self.assertTrue(rows[10]["is_gap"])
+        self.assertEqual(rows[11]["rank"], 12)
+        self.assertTrue(rows[11]["is_ours"])
+
+    def test_missing_saved_bid_remains_visible_without_invented_rank(self):
+        from .views import _protocol_view
+        tender = Tender(bid_number="ours", protocol={"participants": [{"id": "other", "rank": 1}]})
+        row = _protocol_view(tender)["rows"][-1]
+        self.assertEqual(row["id"], "ours")
+        self.assertIsNone(row["rank"])
+        self.assertTrue(row["is_ours"])
+
+
 def _page(name):
     return (DATA / name).read_text(encoding="utf-8")
 

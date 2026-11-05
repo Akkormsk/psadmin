@@ -934,7 +934,16 @@ def _protocol_view(tender):
             "reduction": reduction_percent_from(nmck, price) if price is not None else None,
             "is_ours": participant is ours,
         })
-    return {**protocol, "rows": rows, "ours": ours}
+    visible = rows[:10]
+    our_row = next((row for row in rows[10:] if row["is_ours"]), None)
+    if our_row:
+        visible.extend([{"is_gap": True}, our_row])
+    elif not ours and (tender.bid_number or tender.bid_price):
+        visible.extend([{"is_gap": True}, {
+            "id": tender.bid_number or "Наша заявка", "price": tender.bid_price,
+            "rank": None, "is_ours": True, "result": "Место пока не получено из ЕИС",
+        }])
+    return {**protocol, "rows": visible, "ours": ours}
 
 
 def _tender_lifecycle(tender, estimate):
