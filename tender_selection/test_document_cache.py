@@ -92,6 +92,24 @@ class TenderOfficePreviewTests(TestCase):
 
 
 class ArchivePreviewTests(TestCase):
+    def test_archive_browser_returns_links_even_for_single_file(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("nested/spec.pdf", b"%PDF")
+        result = documents.extract_preview(archive.getvalue(), "docs.zip", browse_archive=True)
+        self.assertEqual(result["zip_entries"], ["nested/spec.pdf"])
+        self.assertEqual(documents.extract_zip_entry(archive.getvalue(), "nested/spec.pdf"), b"%PDF")
+
+    def test_nested_archive_can_be_read_without_extracting_paths(self):
+        nested = io.BytesIO()
+        with zipfile.ZipFile(nested, "w") as zf:
+            zf.writestr("terms.html", "<p>Terms</p>")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("nested.zip", nested.getvalue())
+        result = documents.extract_preview(archive.getvalue(), "docs.zip", read_archive=True)
+        self.assertIn("Terms", result["html"])
+
     def test_zip_with_doc_and_pdf_copies_uses_pdf(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zf:

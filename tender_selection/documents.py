@@ -371,6 +371,7 @@ def _doc_html(data: bytes) -> str:
 
 def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
     """Достаём один файл из архива по имени (провал внутрь многофайлового zip)."""
+    archive_data = normalize_archive(archive_data)
     try:
         with zipfile.ZipFile(io.BytesIO(archive_data)) as zf:
             info = zf.getinfo(path)
@@ -397,6 +398,38 @@ def _archive_stem(path: str) -> str:
                 break
         if stem == previous:
             return stem
+
+
+def normalize_archive(data: bytes) -> bytes:
+    """Read RAR in temporary storage without extracting paths onto the host."""
+    if not data.startswith(b"Rar!"):
+        return data
+    import tempfile
+    import rarfile
+
+    output = io.BytesIO()
+    with tempfile.TemporaryDirectory(prefix="psadmin-rar-") as directory:
+        from pathlib import Path
+        source = Path(directory) / "attachment.rar"
+        source.write_bytes(data)
+        try:
+            with rarfile.RarFile(source) as archive, zipfile.ZipFile(output, "w") as target:
+                total = 0
+                files = [info for info in archive.infolist() if not info.isdir()]
+                if len(files) > 50:
+                    raise DocumentError("В архиве более 50 файлов.")
+                for info in files:
+                    total += info.file_size
+                    if total > MAX_BYTES or info.needs_password():
+                        raise DocumentError("Архив защищён паролем или превышает предел 25 МБ.")
+                    with archive.open(info) as stream:
+                        content = stream.read(MAX_BYTES + 1)
+                    if len(content) > MAX_BYTES:
+                        raise DocumentError("Файл в архиве превышает предел 25 МБ.")
+                    target.writestr(info.filename, content)
+        except rarfile.Error as exc:
+            raise DocumentError("Не удалось прочитать RAR-архив.") from exc
+    return output.getvalue()
 
 
 def _archive_content(data: bytes, *, depth=0, budget=None) -> dict:
@@ -459,6 +492,12 @@ def _image_html(data: bytes) -> str:
 def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_archive=False) -> dict:
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
+    if data.startswith(b"Rar!"):
+        try:
+            data = normalize_archive(data)
+            name = name.rsplit(".", 1)[0] + ".zip"
+        except DocumentError as exc:
+            return {"kind": "rar", "error": str(exc)}
     is_zip = data[:2] == b"PK"
 
     if read_archive and is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):

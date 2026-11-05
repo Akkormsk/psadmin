@@ -900,7 +900,7 @@ def doc_preview(request, pk, idx):
         return response
 
     cached = DocumentPreview.objects.filter(url=url).first()
-    if cached and request.GET.get("refresh") != "1":
+    if cached and cached.kind not in {"zip", "zip-content", "rar"} and request.GET.get("refresh") != "1":
         return _result_json(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
 
     try:
@@ -959,10 +959,29 @@ def doc_zip_entry(request, pk, idx, entry):
     except DocumentError as exc:
         return _result_json(entry, {"error": str(exc)})
 
-    inner = extract_zip_entry(data, entry)
+    try:
+        if len(request.GET.getlist("parent")) > 5:
+            raise DocumentError("Превышена глубина вложенных архивов.")
+        for parent in request.GET.getlist("parent")[:5]:
+            data = extract_zip_entry(data, parent)
+            if data is None:
+                raise DocumentError("Архив не найден.")
+        inner = extract_zip_entry(data, entry)
+    except DocumentError as exc:
+        return _result_json(entry, {"error": str(exc)})
     if inner is None:
         return _result_json(entry, {"error": "Файл не найден в архиве."})
-    return _result_json(entry, extract_preview(inner, entry))
+    if request.GET.get("format") == "pdf":
+        from .office import convert_office
+        try:
+            content = inner if inner.startswith(b"%PDF") else convert_office(inner, entry, "pdf")
+        except DocumentError as exc:
+            return HttpResponse(str(exc), status=422, content_type="text/plain; charset=utf-8")
+        response = HttpResponse(content, content_type="application/pdf")
+        response["Cache-Control"] = "private, no-store"
+        response["X-Frame-Options"] = "SAMEORIGIN"
+        return response
+    return _result_json(entry, extract_preview(inner, entry, browse_archive=True))
 
 
 @superuser_required

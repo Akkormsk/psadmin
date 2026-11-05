@@ -542,6 +542,16 @@
   #ts-doc-modal .modal-header { flex: 0 0 54px; display: flex; align-items: center; margin: -12px -12px 8px; padding: 0 12px; gap: 8px; border-bottom: 1px solid var(--separator); box-sizing: border-box; }
   #ts-doc-modal .modal-header h2 { flex: 1; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #ts-doc-modal .ts-doc-body { flex: 1 1 auto; min-height: 0; }
+  .ts-archive-tools { display:flex; gap:12px; align-items:center; padding:10px 4px; }
+  .ts-archive-tools button { border:1px solid var(--border); border-radius:8px; padding:8px 12px; background:var(--surface); color:var(--ink); cursor:pointer; }
+  .ts-archive-search { width:100%; box-sizing:border-box; padding:12px; border:1px solid var(--border); border-radius:10px; margin-bottom:12px; font:inherit; }
+  .ts-zip-entries { list-style:none; padding:0; margin:0; display:grid; gap:6px; }
+  .ts-zip-entries .ts-doc-link { display:flex; align-items:center; gap:16px; width:100%; padding:16px; border:1px solid var(--border); border-radius:10px; background:var(--surface); text-decoration:none; }
+  .ts-zip-entries .ts-doc-link:hover { background:var(--tint-neutral); }
+  .ts-zip-entries .ts-doc-link small { flex:none; min-width:48px; color:var(--ink-3); font-size:11px; text-transform:uppercase; }
+  .ts-zip-entries .ts-doc-link span { flex:1; overflow-wrap:anywhere; }
+  #ts-doc-body img[data-document-page] { display:block; max-width:100%; height:auto; margin:auto; }
+  #ts-doc-body .ts-doc-page:has(img[data-document-page]) { padding:8px; }
   .ts-doc-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; overflow-x: auto; }
   .ts-doc-body p { margin: 0 0 8px; white-space: pre-wrap; }
   .ts-doc-body h4 { margin: 16px 0 6px; }
@@ -589,6 +599,8 @@
     var title = document.getElementById("ts-doc-title");
     var body = document.getElementById("ts-doc-body");
     var currentIdx = null;
+    var archiveParents = [];
+    var archiveName = "";
     var loadingTimer = null;
 
     // Сервер сначала пробует ЕИС SOAP (до 20с), потом прямую ссылку (до 15с) — итого
@@ -619,19 +631,62 @@
       body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
       var url = zipEntryUrlTpl.replace("999999", currentIdx)
         .replace("ZZZPATHZZZ", path.split("/").map(encodeURIComponent).join("/"));
+      var params = new URLSearchParams();
+      archiveParents.forEach(function (parent) { params.append("parent", parent); });
+      url += "?" + params.toString();
+      if (/\.(docx?|xlsx?|pdf)$/i.test(path)) {
+        showPdf(url, path);
+        return;
+      }
       fetch(url).then(function (r) { return r.json(); }).then(showResult)
         .catch(function () { stopLoadingHint(); body.innerHTML = '<p class="ts-sub">Не удалось открыть файл из архива.</p>'; });
     }
 
+    function archiveBack() {
+      var tools = document.createElement("div");
+      tools.className = "ts-archive-tools";
+      var back = document.createElement("button");
+      back.textContent = "← К файлам архива";
+      back.onclick = function () {
+        archiveParents = [];
+        viaServer().then(showResult);
+      };
+      tools.appendChild(back);
+      body.prepend(tools);
+    }
+
+    function showPdf(url, name) {
+      stopLoadingHint();
+      title.textContent = name;
+      body.replaceChildren();
+      body.style.display = "flex";
+      body.style.flexDirection = "column";
+      if (archiveName) archiveBack();
+      var frame = document.createElement("iframe");
+      frame.title = name;
+      frame.style.cssText = "display:block;width:98%;flex:1;min-height:0;margin:0 auto;border:0";
+      frame.src = url + (url.includes("?") ? "&" : "?") + "format=pdf#view=FitH&navpanes=0";
+      body.appendChild(frame);
+    }
+
     function showResult(data) {
       stopLoadingHint();
+      body.style.display = "block";
       title.textContent = data.name || "Документ";
       if (data.error) {
-        body.innerHTML = '<p class="ts-sub">' + data.error + '</p>';
+        body.textContent = data.error;
+        if (archiveName) archiveBack();
         return;
       }
       body.innerHTML = data.html || '<p class="ts-sub">Пусто.</p>';
       if (data.zip_entries && data.zip_entries.length) {
+        body.replaceChildren();
+        archiveName = archiveName || data.name;
+        var search = document.createElement("input");
+        search.className = "ts-archive-search";
+        search.placeholder = "Найти файл в архиве…";
+        search.setAttribute("aria-label", "Поиск файлов архива");
+        body.appendChild(search);
         var list = document.createElement("ul");
         list.className = "ts-zip-entries";
         data.zip_entries.forEach(function (path) {
@@ -639,13 +694,39 @@
           var btn = document.createElement("button");
           btn.type = "button";
           btn.className = "ts-doc-link";
-          btn.textContent = path;
-          btn.addEventListener("click", function () { loadZipEntry(path); });
+          var badge = document.createElement("small");
+          badge.textContent = path.split(".").pop();
+          var label = document.createElement("span");
+          label.textContent = path;
+          btn.append(badge, label, document.createTextNode("→"));
+          btn.addEventListener("click", function () {
+            if (/\.(zip|rar)$/i.test(path)) {
+              var parentPath = archiveParents.slice();
+              loadZipEntry(path);
+              archiveParents = parentPath.concat([path]);
+            } else loadZipEntry(path);
+          });
           li.appendChild(btn);
           list.appendChild(li);
         });
         body.appendChild(list);
+        search.oninput = function () {
+          Array.from(list.children).forEach(function (row) { row.hidden = !row.textContent.toLowerCase().includes(search.value.toLowerCase()); });
+        };
+        if (archiveParents.length) archiveBack();
+      } else if (archiveName) {
+        archiveBack();
       }
+      body.querySelectorAll("img[data-document-page]").forEach(function (img) {
+        img.style.cursor = "zoom-in";
+        img.title = "Нажмите, чтобы увеличить";
+        img.onclick = function () {
+          var expanded = img.dataset.expanded === "1";
+          img.dataset.expanded = expanded ? "0" : "1";
+          img.style.maxWidth = expanded ? "100%" : "none";
+          img.style.cursor = expanded ? "zoom-in" : "zoom-out";
+        };
+      });
     }
 
     function viaServer() {
@@ -656,6 +737,9 @@
     document.querySelectorAll("[data-doc-preview]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         currentIdx = btn.dataset.docPreview;
+        archiveParents = [];
+        archiveName = "";
+        body.style.display = "block";
         title.textContent = btn.dataset.docName || "Документ";
         body.innerHTML = '<p class="ts-doc-loading">Загружаю и разбираю файл…</p>';
         modal.classList.add("is-open");
@@ -664,13 +748,7 @@
         // сеть с сервера до ЕИС теперь есть — сервер качает и разбирает сам, без
         // скачивания в браузере пользователя. Ручная загрузка — только на крайний случай.
         if (/\.(docx?|xlsx?|pdf)$/i.test(btn.dataset.docName || "")) {
-          stopLoadingHint();
-          body.replaceChildren();
-          var frame = document.createElement("iframe");
-          frame.title = title.textContent;
-          frame.style.cssText = "display:block;width:98%;height:100%;margin:0 auto;border:0";
-          frame.src = "{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx) + "?format=pdf#view=FitH&navpanes=0";
-          body.appendChild(frame);
+          showPdf("{% url 'tender_selection:doc_preview' tender.pk 999999 %}".replace("999999", currentIdx), title.textContent);
           return;
         }
         viaServer()
