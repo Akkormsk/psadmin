@@ -720,6 +720,19 @@ class ResilientIntakeTests(TestCase):
         self.assertEqual(len(result['characteristics']), 2)
         self.assertTrue(self.engine.specification_gaps)
 
+    def test_notice_and_document_values_remain_separate_and_colored(self):
+        from .document_enrichment import characteristic_display
+        self.engine.document_lookup[1]['evidence_text'] = 'Материал пластик. Цвет синий.'
+        rows = [{'key': self.good['key'], 'characteristics': [
+            {'name': 'Материал', 'value': 'пластик', 'resolution': 'new', 'doc_id': 1, 'quote': 'Материал пластик'},
+            {'name': 'Цвет', 'value': 'синий', 'resolution': 'new', 'doc_id': 1, 'quote': 'Цвет синий'}]}]
+        result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+        displayed = [(row['name'], row['value'], characteristic_display(row)['name_added']) for row in result]
+        self.assertIn(('Материал', 'металл', False), displayed)
+        self.assertIn(('Материал', 'пластик', True), displayed)
+        self.assertIn(('Цвет', 'синий', True), displayed)
+        self.assertFalse(self.engine.specification_gaps)
+
     def test_bad_structure_retains_position_without_inventing_components(self):
         goods = self.engine.reconcile_structure([{'source_id': self.source.pk, 'kind': 'kit', 'goods': []}])
         self.assertEqual(len(goods), 1)

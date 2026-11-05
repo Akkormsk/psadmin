@@ -330,6 +330,8 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
     unique, values = {}, {}
     for fact in output:
         attribute = (" ".join(str(fact["name"]).casefold().split()), fact.get("scope", "product"))
+        if result.get('additive_sources'):
+            attribute += (json.dumps(fact.get('value'), ensure_ascii=False, sort_keys=True, default=str),)
         if attribute not in unique:
             unique[attribute] = fact
             values[attribute] = [fact["value"]]

@@ -344,7 +344,7 @@ class GatewayDocumentEnricher:
         self.diagnostics = {}
         self.document_images = []
 
-    STAGED_CONTRACT = "intake-steps-v2-source-reconciliation"
+    STAGED_CONTRACT = "intake-steps-v3-additive-specification"
     STAGED_VALIDATION_VERSION = "canonical-fact-sources-v10-resilient"
     SPECIFICATION_ASSEMBLY = "verified-additions-v2"
 
@@ -873,6 +873,28 @@ class GatewayDocumentEnricher:
                 if not isinstance(fact, dict):
                     self.specification_gaps.append({'stage': 'tz', 'key': key, 'reason': 'Некорректная характеристика не применена.'})
                     continue
+                if good['kind'] != 'kit':
+                    # Notice facts are retained unchanged. Each documented value
+                    # is an independent addition, never a replacement or inference.
+                    documented = [entry for entry in (fact.get('document_facts') or [])
+                                  if isinstance(entry, dict) and entry.get('doc_id') is not None]
+                    if not documented and fact.get('doc_id') is not None:
+                        documented = [{'doc_id': fact['doc_id'], 'quote': fact.get('quote'),
+                                       'section': fact.get('section'), 'value': fact.get('document_value', fact.get('value'))}]
+                    if not documented and fact.get('resolution') not in {'keep', 'omit'}:
+                        self.specification_gaps.append({'stage': 'tz', 'key': key, 'name': fact.get('name', ''),
+                            'reason': 'Дополнение не подтверждено документом; исходные сведения сохранены.'})
+                    for entry in documented:
+                        addition = {'name': fact.get('name'), 'value': entry.get('value'), 'resolution': 'new',
+                                    'baseline_refs': [], 'doc_id': entry.get('doc_id'), 'quote': entry.get('quote'),
+                                    'section': entry.get('section'), 'scope': fact.get('scope', 'product')}
+                        pending[key].append(addition)
+                        try:
+                            result = compile_current()
+                        except (ValueError, TypeError, KeyError) as exc:
+                            pending[key].pop()
+                            self.specification_gaps.append({'stage': 'tz', 'key': key, 'name': fact.get('name', ''), 'reason': str(exc)})
+                    continue
                 if fact.get('resolution') == 'omit' or (fact.get('resolution') == 'keep' and good['kind'] != 'kit'):
                     continue
                 pending[key].append(fact)
@@ -1048,7 +1070,7 @@ class GatewayDocumentEnricher:
             keep_refs = [] if keep_refs is None else keep_refs
             if not isinstance(keep_refs, list) or any(type(ref) is not int or not 0 <= ref < len(baseline) for ref in keep_refs):
                 raise ValueError('Некорректные ссылки на сохраняемые характеристики.')
-            result[key] = {'reconciled': True, 'keep_refs': [ref for ref in keep_refs if ref not in explicit_refs], 'characteristics': facts}
+            result[key] = {'reconciled': True, 'additive_sources': good['kind'] != 'kit', 'keep_refs': [ref for ref in keep_refs if ref not in explicit_refs], 'characteristics': facts}
             result[key] = merge_item_requirements({} if good['kind'] == 'kit' else effective_item_requirements(self.stage_sources[good['source_id']]), result[key], provenance=good.get('provenance'))
             from .requirement_values import normalized_fact
             result[key]['characteristics'] = [normalized_fact(fact, aliases=getattr(self, 'unit_aliases', None)) for fact in result[key].get('characteristics', [])]
