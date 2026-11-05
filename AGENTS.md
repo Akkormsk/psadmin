@@ -6,7 +6,7 @@
 - Git contains code, migrations, and curated test fixtures, not production database dumps, credentials, customer documents, or supplier exports.
 - The LLM interprets natural language. Calculations, validation, catalogue filtering, and ranking are performed by the backend.
 - Confirmed administrator feedback and superseded knowledge must remain versioned and recoverable.
-- Production changes are deployed through GitHub. Do not deploy or mutate Timeweb configuration without explicit authorization.
+- Production changes are deployed by the existing GitHub-integrated auto-deploy after an authorized fast-forward push to `main`. The ordinary production path is therefore: verify the intended commit, push it to `main`, then verify the deployed release. Do **not** substitute SSH, direct Timeweb actions, a new workflow, or a manual server script for this established path. If a push to `main` does not reach production, diagnose the existing GitHub auto-deploy integration; do not declare the deployment complete merely because the push succeeded.
 - Supplier integrations must not download images unless explicitly requested.
 
 # Personal coding behavior
