@@ -14,13 +14,13 @@ def _held_cost(rows):
     total = Decimal('0')
     for row in rows:
         actual = Decimal(str(row['total_cost'] or 0))
-        reserved = Decimal(str(row.get('diagnostics__auto_reservation_rub') or 0))
+        reserved = Decimal(str(row.get('diagnostics__auto_reservation_rub') or row.get('diagnostics__max_total_cost_rub') or 0))
         total += max(actual, reserved) if row['status'] in ACTIVE or row.get('diagnostics__billing_uncertain') else actual
     return total
 
 
 def _spending(queryset):
-    return _held_cost(queryset.values('total_cost', 'status', 'diagnostics__auto_reservation_rub', 'diagnostics__billing_uncertain'))
+    return _held_cost(queryset.values('total_cost', 'status', 'diagnostics__auto_reservation_rub', 'diagnostics__max_total_cost_rub', 'diagnostics__billing_uncertain'))
 
 
 def _flow_jobs(root):
@@ -63,7 +63,11 @@ def claim_budgeted_job(daily_budget):
 def _coverage(job):
     from .calculation_v2_pipeline import closed_stage_records
     covered = set()
+    covered.update(('source_reading', key) for key in job.diagnostics.get('source_reading', {}).get('records', {}))
+    covered.update(('routing', key) for key in job.diagnostics.get('routing', {}).get('completed_component_ids', []))
     for name, stage in job.diagnostics.get('stages', {}).items():
+        if stage.get('partial_window') and stage.get('state') in {'complete', 'pending_validation'}:
+            covered.add(('source_window', stage.get('input_fingerprint') or name))
         phase = name.split(':', 1)[0]
         if phase not in {'structure','national_regime','tz'} or stage.get('outcome') == 'source_only':
             continue

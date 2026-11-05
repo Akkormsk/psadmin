@@ -22,6 +22,8 @@ def summarize(tenders):
         routes = source_route_snapshots(tender)
         ready = sum(route['state'] == 'ready' and bool(route['steps']) for route in routes.values())
         missing = [name for name in PHASES if stages.get(name, {}).get('state') != 'complete' or stages.get(name, {}).get('outcome') == 'source_only']
+        if 'source_reading' in stages and stages['source_reading'].get('state') != 'complete':
+            missing.append('source_reading')
         gaps = job.diagnostics.get('analysis_gaps', []) if job else []
         profile = profile_disposition(tender)
         from .services import _document_input_fingerprint

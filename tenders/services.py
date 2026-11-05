@@ -775,7 +775,7 @@ def _json_from_model(content, *, strict_root=False):
     raise TenderAIError("Модель вернула ответ в неожиданном формате. Попробуйте ещё раз.") from last_error
 
 
-def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False, reasoning_effort=None, thinking=None, shared_context=None):
+def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image_data_urls=None, image_detail="high", timeout=90, network_attempts=3, json_attempts=2, model=None, response_contract="", capture_incomplete_response=False, reasoning_effort=None, thinking=None, shared_context=None, image_labels=None):
     api_key = os.getenv("TIMEWEB_AI_API_KEY", "").strip()
     base_url = os.getenv("TIMEWEB_AI_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
     model = (model or "").strip() or os.getenv("TIMEWEB_AI_MODEL", "gemini/gemini-3.1-flash-lite").strip()
@@ -785,7 +785,8 @@ def _ai_gateway_json(prompt, upload=None, scan_ocr=False, max_tokens=6000, image
 
     def referenced_images():
         content, seen = [], {}
-        for number, value in enumerate(image_data_urls or [], 1):
+        for position, value in enumerate(image_data_urls or [], 1):
+            number = image_labels[position - 1] if image_labels is not None else position
             original = seen.get(value)
             if original is not None:
                 content.append({'type': 'text', 'text': f'Изображение {number}: точная копия изображения {original}.'})

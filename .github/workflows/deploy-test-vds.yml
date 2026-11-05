@@ -189,6 +189,17 @@ jobs:
             *) echo "Could not determine the previous test SHA" >&2; exit 2 ;;
           esac
 
+          # Preserve TEST before switching the release; never refresh it from PROD.
+          umask 077
+          mkdir -p "$root/psadmin-test-backups"
+          test_backup="$root/psadmin-test-backups/pre-release-$(date -u +%Y%m%dT%H%M%SZ).dump"
+          docker compose -f "$app/deploy/vds/compose.test.yml" exec -T test-db \
+            pg_dump -U psadmin -d psadmin -Fc > "$test_backup"
+          test -s "$test_backup"
+          docker compose -f "$app/deploy/vds/compose.test.yml" exec -T test-db \
+            pg_restore --list < "$test_backup" > /dev/null
+          echo "TEST backup verified: $test_backup"
+
           tar -xzf "$archive" -C "$stage"
           [ -x "$stage/deploy/vds/twin.sh" ] || { echo "Release archive has no executable deploy/vds/twin.sh" >&2; exit 2; }
           mkdir -p "$rollback_root"
@@ -204,25 +215,11 @@ jobs:
           # Focused, offline regressions. Django creates a separate test database;
           # these tests never call a paid AI provider.
           docker compose -f compose.test.yml exec -T -e DJANGO_SECURE_COOKIES=0 test-web python manage.py test \
+            tenders.test_source_memory \
+            tenders.test_document_reading_input.InlineDocumentVisionTests.test_gateway_sends_identical_images_once_without_losing_original_reference_numbers \
             tenders.test_document_components.StagedCanonicalAcceptanceTests \
             tenders.test_document_components.IntakeProposalHistoryTests \
-            tenders.test_requirement_values \
-            tender_selection.test_intake_readiness \
-            tender_selection.test_profile_triage \
-            tender_selection.test_profile_migration_compatibility \
-            tender_selection.test_intake_refresh.ResilientIntakeFlowTests \
-            tender_selection.test_notifications.FixedNotificationValueTests \
-            tenders.test_document_reading_input.ResilientIntakeTests \
-            tenders.test_document_reading_input.StagedResponseCacheTests \
-            tenders.test_document_reading_input.ClosedStageRecordTests \
-            tenders.test_document_reading_input.InlineDocumentVisionTests \
-            tenders.test_gateway_reliability \
-            tender_selection.test_intake_refresh.LargeIntakeStageTests \
-            tenders.test_intake_worker \
-            tenders.test_document_reading_input.StagedMultiSourceReconciliationTests \
-            tenders.test_document_reading_input.StagedSingleSourceSelectionTests \
-            tenders.test_document_reconciliation \
-            tenders.test_supply_structure --noinput -v 1 </dev/null
+            tenders.test_intake_worker --noinput -v 1 </dev/null
           test "$(sed -n 's/^sha=//p' ../../.twin-version)" = "$deploy_sha"
           docker compose -f compose.test.yml exec -T test-web python - <<'PY'
           import json

@@ -2187,6 +2187,18 @@ def _staged_document_analysis(job, enricher):
         _publish_intake(job)
         return {'created': [], 'state': previous.diagnostics['enrichment_state'], 'diagnostics': []}
 
+    from django.conf import settings
+    if getattr(settings, 'CALCULATION_V2_SOURCE_MEMORY_ENABLED', False):
+        from tenders.services import TenderAIError
+        try:
+            enricher.read_source_memory(job)
+        except (ValueError, TenderAIError) as exc:
+            stages['source_reading'] = {**stages.get('source_reading', {}), 'state': 'failed', 'outcome': 'source_only', 'warning': str(exc)}
+            job.diagnostics['analysis_gaps'].append({'stage': 'source_reading', 'reason': str(exc)})
+            job.diagnostics.update(enrichment_state='reading_incomplete', staged_input_fingerprint=fingerprint)
+            _publish_intake(job)
+            return {'created': [], 'state': 'reading_incomplete', 'diagnostics': []}
+
     def ask(name, label, instruction, task, validator, limit, fallback):
         from tenders.services import TenderAIError
         _refresh_phase(job, name, label)
@@ -2270,8 +2282,9 @@ def _staged_document_analysis(job, enricher):
                 for key, segment in old_stages.items():
                     if key != name and not key.startswith(name + ':'):
                         continue
-                    enricher._remember_context_usage(segment.get('usage'))
-                    if segment.get('outcome') == 'source_only':
+                    if not hasattr(enricher, 'source_memory'):
+                        enricher._remember_context_usage(segment.get('usage'))
+                    if segment.get('outcome') == 'source_only' or segment.get('partial_window'):
                         continue
                     records = segment.get('result') if segment.get('state') in {'complete', 'pending_validation'} else recovered_records(segment)
                     if not isinstance(records, list):
@@ -2500,7 +2513,9 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         if not routes_only and (enricher is None or isinstance(enricher, GatewayDocumentEnricher)):
             budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
             if total_cap is not None:
-                budget = min(budget, max(Decimal('0'), total_cap - profile_cost - min(Decimal('1'), total_cap / 4)))
+                from django.conf import settings
+                route_reserve = Decimal('0') if settings.CALCULATION_V2_SOURCE_MEMORY_ENABLED else min(Decimal('1'), total_cap / 4)
+                budget = min(budget, max(Decimal('0'), total_cap - profile_cost - route_reserve))
             enricher = enricher or GatewayDocumentEnricher(max_cost_rub=budget)
             result = _staged_document_analysis(job, enricher)
         elif not routes_only:
@@ -2547,6 +2562,8 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             decisions = []
             job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing',
                 'reason': 'Данные сохранены, но маршрут пока не сформирован: ' + str(exc)})
+        if getattr(router, 'diagnostics', {}).get('billing_uncertain'):
+            job.diagnostics['billing_uncertain'] = True
         job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'complete', **getattr(router, 'diagnostics', {}), 'started_at': routing_started.isoformat(), 'result': {'position_count': len(decisions)}}
         _publish_intake(job)
         if any(not decision.process_ids for decision in decisions):

@@ -193,10 +193,10 @@ class InlineDocumentVisionTests(TestCase):
         response = {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"items":[]}'}}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1}}
         with patch.dict('os.environ', {'TIMEWEB_AI_API_KEY': 'synthetic-key'}), patch('tenders.services.urlopen', return_value=io.BytesIO(json.dumps(response).encode())) as request:
             _ai_gateway_json('Read both sources', shared_context='Same drawing occurs in two source documents',
-                image_data_urls=[self.image_url, self.image_url], network_attempts=1, json_attempts=1)
+                image_data_urls=[self.image_url, self.image_url], image_labels=[31, 51], network_attempts=1, json_attempts=1)
         content = json.loads(request.call_args.args[0].data)['messages'][1]['content']
         self.assertEqual(sum(part['type'] == 'image_url' for part in content), 1)
-        self.assertTrue(any(part.get('text') == 'Изображение 2: точная копия изображения 1.' for part in content))
+        self.assertTrue(any(part.get('text') == 'Изображение 51: точная копия изображения 31.' for part in content))
         engine = GatewayDocumentEnricher()
         engine.document_images = [self.image_url]
         single = engine._image_token_bound()

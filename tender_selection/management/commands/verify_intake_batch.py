@@ -6,7 +6,6 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
-from django.db.models import Sum
 
 from tender_selection.models import FilterSettings, Tender
 from tender_selection.services import _run_document_analysis, refresh_document_analysis, intake_readiness_for
@@ -24,6 +23,7 @@ class Command(BaseCommand):
         parser.add_argument('--run-id', required=True)
         parser.add_argument('--limit', type=int, default=100)
         parser.add_argument('--profile-only', action='store_true')
+        parser.add_argument('--tender-number', help='Verify one explicitly selected existing TEST tender')
 
     def handle(self, *args, **options):
         if connection.vendor != 'postgresql' or connection.settings_dict.get('HOST') != 'test-db':
@@ -37,12 +37,16 @@ class Command(BaseCommand):
         actor = get_user_model().objects.filter(is_superuser=True, is_active=True).first()
         if not actor:
             raise CommandError('No active administrator')
-        cohort = intake_readiness_for(actor)
-        # Prove small independent cards first within the owner's remaining QA budget.
-        from tender_selection.notification import parse_notification
-        notices = dict(Tender.objects.filter(pk__in=[row['tender_id'] for row in cohort['pending']]).values_list('pk', 'notification_raw'))
-        pending = sorted(cohort['pending'], key=lambda row: max(row['positions'], len(parse_notification(notices[row['tender_id']] or {}).get('items', []))))
-        ids = [row['tender_id'] for row in pending][:options['limit']]
+        if options['tender_number']:
+            ids = list(Tender.objects.filter(purchase_number=options['tender_number']).values_list('pk', flat=True))
+            if len(ids) != 1:
+                raise CommandError('Expected one existing TEST tender')
+        else:
+            cohort = intake_readiness_for(actor)
+            from tender_selection.notification import parse_notification
+            notices = dict(Tender.objects.filter(pk__in=[row['tender_id'] for row in cohort['pending']]).values_list('pk', 'notification_raw'))
+            pending = sorted(cohort['pending'], key=lambda row: max(row['positions'], len(parse_notification(notices[row['tender_id']] or {}).get('items', []))))
+            ids = [row['tender_id'] for row in pending][:options['limit']]
         selection = FilterSettings.objects.get(pk=1)
         selection.profile_triage_enabled = True
         selection.save(update_fields=['profile_triage_enabled'])
@@ -60,7 +64,8 @@ class Command(BaseCommand):
             return
         rows = []
         for pk in ids:
-            spent = TenderComputeJob.objects.filter(diagnostics__acceptance_run=run_id).aggregate(value=Sum('total_cost'))['value'] or Decimal('0')
+            from tenders.intake_worker import _spending
+            spent = _spending(TenderComputeJob.objects.filter(diagnostics__acceptance_run=run_id))
             remaining = budget - spent - Decimal('.01')
             if remaining <= 0:
                 raise CommandError('Acceptance spending ceiling reached; no further model request was made')
@@ -78,6 +83,8 @@ class Command(BaseCommand):
             proof = summarize([tender])
             excluded = bool(job.diagnostics.get('profile_excluded'))
             report = {'number': tender.purchase_number, 'job_id': job.pk, 'status': job.status,
+                'source_reading': {key: job.diagnostics.get('source_reading', {}).get(key) for key in ('version', 'read', 'total', 'complete')},
+                'max_context_bytes': max((stage.get('context_bytes', 0) for stage in job.diagnostics.get('stages', {}).values()), default=0),
                 'cost': analysis_cost(job), 'profile_excluded': excluded, 'readiness': proof,
                 'gaps': job.diagnostics.get('analysis_gaps', []),
                 'stages': {key: {field: value.get(field) for field in ('state','outcome','usage','cost_rub','model','started_at','reused_from')} for key,value in job.diagnostics.get('stages',{}).items()}}
@@ -85,7 +92,7 @@ class Command(BaseCommand):
             self.stdout.write('INTAKE_ACCEPTANCE ' + json.dumps(report, ensure_ascii=False, default=str))
             if not excluded and not proof['all_complete']:
                 raise CommandError('First incomplete result saved; paid batch stopped for diagnosis')
-        final = intake_readiness_for(actor)
+        final = summarize(Tender.objects.filter(pk__in=ids)) if options['tender_number'] else intake_readiness_for(actor)
         self.stdout.write('INTAKE_ACCEPTANCE_COMPLETE ' + json.dumps({'run_id': run_id, 'processed': len(rows),
             'readiness': final}, ensure_ascii=False, default=str))
         if not final['all_complete']:

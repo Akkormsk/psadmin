@@ -411,3 +411,10 @@ def reconcile_intake_billing(job):
                      billed_cache_read_tokens=row.get('cache_read_tokens'), billed_cache_write_tokens=row.get('cache_write_tokens'),
                      billed_cache_read_rub=row.get('cost_cache_read'), billed_cache_write_rub=row.get('cost_cache_write'))
         used.add(row['request_id'])
+def uncertain_billing_after_error(usage, error):
+    """A lost response is not evidence of a free provider request."""
+    from urllib.error import HTTPError
+    if any((usage or {}).get(key, 0) for key in ('prompt_tokens', 'completion_tokens')):
+        return False
+    cause = error.__cause__
+    return not (isinstance(cause, HTTPError) and 400 <= cause.code < 500)
