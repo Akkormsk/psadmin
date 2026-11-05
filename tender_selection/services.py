@@ -401,7 +401,7 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
 
 
 def _store_preview(url, name, data: bytes) -> str:
-    result = extract_preview(data, name)
+    result = extract_preview(data, name, read_archive=True)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),
@@ -410,7 +410,13 @@ def _store_preview(url, name, data: bytes) -> str:
 
 
 def _preview_needs_upgrade(kind, html):
-    return kind == "zip" or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
+    return (
+        (kind in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"} and not html)
+        or (kind == "pdf" and ("unreadable-page" in html or "Страница без текстового слоя" in html))
+        or kind == "zip"
+        or (kind == "zip-content" and 'data-document-archive-version="3"' not in html)
+        or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
+    )
 
 
 def document_html(tender, url, name, **fetch_kwargs) -> str:

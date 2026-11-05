@@ -909,7 +909,7 @@ def doc_preview(request, pk, idx):
         # сетевые сбои не кэшируем — на проде повтор может пройти
         return _result_json(name, {"error": str(exc)})
 
-    result = extract_preview(data, name)
+    result = extract_preview(data, name, browse_archive=True)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),
@@ -935,7 +935,7 @@ def doc_upload(request, pk, idx):
     if uploaded.size > MAX_BYTES:
         return _result_json(name, {"error": "Файл слишком большой для предпросмотра."})
 
-    result = extract_preview(uploaded.read(), name)
+    result = extract_preview(uploaded.read(), name, browse_archive=True)
     DocumentPreview.objects.update_or_create(url=url, defaults={
         "filename": name, "kind": result.get("kind", ""),
         "html": result.get("html", ""), "error": result.get("error", ""),

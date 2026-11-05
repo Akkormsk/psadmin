@@ -49,6 +49,13 @@ class DocumentHtmlTests(TestCase):
         self.assertEqual(html, "<p>текст</p>")
         self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).html, "<p>текст</p>")
 
+    def test_document_cache_uses_full_archive_reader(self):
+        with patch.object(services, "_fetch_doc_bytes", return_value=b"raw"), \
+                patch.object(services, "extract_preview", return_value={"kind": "zip-content", "html": "<p>контракт</p>"}) as parse:
+            services.document_html(self.tender, CONTRACT_URL, "Документы.zip")
+
+        self.assertTrue(parse.call_args.kwargs["read_archive"])
+
     def test_stale_zip_preview_is_reparsed(self):
         DocumentPreview.objects.create(url=CONTRACT_URL, filename="Проект контракта.doc.zip", kind="zip", html="<p>Архив</p>")
         with patch.object(services, "_fetch_doc_bytes", return_value=b"raw"), \
@@ -95,6 +102,41 @@ class ArchivePreviewTests(TestCase):
             result = documents.extract_preview(archive.getvalue(), "Контракт.doc.zip")
 
         self.assertEqual(result, {"kind": "pdf", "html": "<p>контракт</p>"})
+
+    def test_archive_content_reads_supported_files_with_bounded_reader(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("ТЗ.html", "<p>Техническое задание</p><script>alert(1)</script>")
+            zf.writestr("Подпись.sig", b"signature")
+
+        result = documents.extract_preview(archive.getvalue(), "Документы.zip", read_archive=True)
+
+        self.assertEqual(result["kind"], "zip-content")
+        self.assertIn("Техническое задание", result["html"])
+        self.assertIn("Электронная подпись", result["html"])
+        self.assertNotIn("alert(1)", result["html"])
+
+    def test_image_attachment_is_rendered_as_safe_reduced_page(self):
+        from PIL import Image
+
+        source = io.BytesIO()
+        Image.new("RGB", (10, 10), "white").save(source, format="PNG")
+        result = documents.extract_preview(source.getvalue(), "scan.png")
+
+        self.assertEqual(result["kind"], "png")
+        self.assertIn('data:image/jpeg;base64,', result["html"])
+
+    def test_html_attachment_keeps_only_safe_text_structure(self):
+        result = documents.extract_preview(
+            '<table><tr><td colspan="2">Условие</td></tr></table><iframe src="evil"></iframe><a href="evil">ссылка</a>'.encode(),
+            "terms.html",
+        )
+
+        self.assertEqual(result["kind"], "html")
+        self.assertIn('<td colspan="2">Условие</td>', result["html"])
+        self.assertIn("ссылка", result["html"])
+        self.assertNotIn("iframe", result["html"])
+        self.assertNotIn("href=", result["html"])
 
 
 class RiskAssessmentDocumentsTests(TestCase):

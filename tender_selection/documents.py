@@ -251,13 +251,37 @@ def _pdf_html(data: bytes) -> str:
 
     reader = PdfReader(io.BytesIO(data))
     parts = []
+    visual_document = None
     for page_no, page in enumerate(reader.pages[:MAX_PDF_PAGES], start=1):
         text = (page.extract_text() or "").strip()
         if text:
             parts.append("<section class='ts-doc-page'><small class='ts-doc-page__number'>Страница " + str(page_no) + "</small><p>" + "<br>".join(escape(line) for line in text.splitlines() if line.strip()) + "</p></section>")
+        else:
+            # Scanned PDF has no text layer.  Keep a reduced raster page for the
+            # viewer, as the TEST reader does; never run OCR or external code here.
+            try:
+                import pypdfium2 as pdfium
+                if visual_document is None:
+                    visual_document = pdfium.PdfDocument(data)
+                visual_page = visual_document[page_no - 1]
+                bitmap = visual_page.render(scale=2)
+                image = bitmap.to_pil().convert("RGB")
+                image.thumbnail((1600, 1600))
+                output = io.BytesIO()
+                image.save(output, format="JPEG", quality=85, optimize=True)
+                encoded = base64.b64encode(output.getvalue()).decode("ascii")
+                parts.append(f'<section class="ts-doc-page" data-document-page="{page_no}"><small class="ts-doc-page__number">Страница {page_no}</small><img data-document-page="{page_no}" src="data:image/jpeg;base64,{encoded}" alt="Страница {page_no}"></section>')
+                bitmap.close()
+                visual_page.close()
+            except Exception:
+                parts.append(f'<p data-document-warning="unreadable-page">Страница {page_no} недоступна для чтения.</p>')
+    if visual_document is not None:
+        visual_document.close()
     if len(reader.pages) > MAX_PDF_PAGES:
-        parts.append("<p>…</p>")
-    return "\n".join(parts) or "<p class='ts-sub'>В PDF нет извлекаемого текста (возможно, скан).</p>"
+        parts.append('<p data-document-warning="truncated">…</p>')
+    if not parts:
+        raise DocumentError("В PDF нет извлекаемого текста; возможно, требуется распознавание скана.")
+    return "\n".join(parts)
 
 
 _DOC_LETTER_RE = re.compile(r"[A-Za-zА-Яа-яЁё]")
@@ -349,8 +373,17 @@ def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
     """Достаём один файл из архива по имени (провал внутрь многофайлового zip)."""
     try:
         with zipfile.ZipFile(io.BytesIO(archive_data)) as zf:
-            return zf.read(path)
-    except (zipfile.BadZipFile, KeyError):
+            info = zf.getinfo(path)
+            if info.file_size > MAX_BYTES:
+                raise DocumentError("Файл внутри архива слишком большой.")
+            with zf.open(info) as source:
+                data = source.read(MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                raise DocumentError("Файл внутри архива слишком большой.")
+            return data
+    except DocumentError:
+        raise
+    except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError, OSError):
         return None
 
 
@@ -366,20 +399,80 @@ def _archive_stem(path: str) -> str:
             return stem
 
 
-def extract_preview(data: bytes, filename: str) -> dict:
+def _archive_content(data: bytes, *, depth=0, budget=None) -> dict:
+    """Read supported ZIP contents under bounded depth, count and total size."""
+    budget = budget if budget is not None else {"bytes": MAX_BYTES, "files": 50}
+    if depth >= 5:
+        return {"kind": "zip-content", "html": "", "error": "Превышена глубина вложенных архивов."}
+    parts, errors = [], []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                if budget["files"] <= 0:
+                    errors.append("Превышен предел количества вложений.")
+                    break
+                budget["files"] -= 1
+                if info.filename.lower().endswith((".sign", ".sig", ".p7s")):
+                    parts.append('<p data-document-info="signature">Электронная подпись: ' + escape(info.filename) + '</p>')
+                    continue
+                if info.file_size > budget["bytes"]:
+                    errors.append("Вложение превышает оставшийся предел размера.")
+                    continue
+                budget["bytes"] -= info.file_size
+                content = extract_zip_entry(data, info.filename)
+                if content is None:
+                    errors.append("Не удалось прочитать вложение.")
+                    continue
+                result = _archive_content(content, depth=depth + 1, budget=budget) if info.filename.lower().endswith(".zip") else extract_preview(content, info.filename)
+                if result.get("kind") == "zip":
+                    errors.append("Не прочитано содержимое вложенного архива.")
+                    continue
+                if result.get("html"):
+                    parts.append("<section><h4>" + escape(info.filename) + "</h4>" + result["html"] + "</section>")
+                if result.get("error"):
+                    errors.append(str(info.filename) + ": " + result["error"])
+    except (zipfile.BadZipFile, DocumentError, RuntimeError, OSError) as exc:
+        errors.append(str(exc))
+    return {"kind": "zip-content", "html": '<section data-document-archive-version="3">' + "\n".join(parts) + "</section>", "error": "; ".join(errors)[:2000]}
+
+
+def _image_html(data: bytes) -> str:
+    from PIL import Image, ImageOps, ImageSequence
+
+    parts = []
+    with Image.open(io.BytesIO(data)) as source:
+        for number, frame in enumerate(ImageSequence.Iterator(source), 1):
+            if number > MAX_PDF_PAGES:
+                parts.append('<p data-document-warning="truncated">Не все страницы изображения прочитаны.</p>')
+                break
+            image = ImageOps.exif_transpose(frame).convert("RGB")
+            image.thumbnail((1600, 1600))
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=85, optimize=True)
+            encoded = base64.b64encode(output.getvalue()).decode("ascii")
+            parts.append(f'<section class="ts-doc-page"><img data-document-page="{number}" src="data:image/jpeg;base64,{encoded}" alt="Страница {number}"></section>')
+    return "".join(parts)
+
+
+def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_archive=False) -> dict:
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
     is_zip = data[:2] == b"PK"
+
+    if read_archive and is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):
+        return _archive_content(data)
 
     # .zip-обёртка: достаём единственный вложенный файл
     if is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
-                office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "xls", "pdf")]
-                if len(office) == 1:
+                office = [n for n in names if n.lower().rsplit(".", 1)[-1] in ("docx", "xlsx", "doc", "xls", "pdf", "jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff")]
+                if len(office) == 1 and not browse_archive:
                     return extract_preview(zf.read(office[0]), office[0])
-                if office and len({_archive_stem(path) for path in office}) == 1:
+                if not browse_archive and office and len({_archive_stem(path) for path in office}) == 1:
                     priority = {".pdf": 0, ".docx": 1, ".xlsx": 2, ".doc": 3}
                     selected = min(office, key=lambda path: priority.get("." + path.rsplit(".", 1)[-1].lower(), 4))
                     return extract_preview(zf.read(selected), selected)
@@ -388,16 +481,40 @@ def extract_preview(data: bytes, filename: str) -> dict:
                     clickable |= {n for n in names if n.lower().endswith(".zip")}
                     listing = "".join(f"<li>{escape(n)}</li>" for n in names[:50])
                     return {"kind": "zip", "html": f"<p>Архив, файлы внутри:</p><ul>{listing}</ul>",
-                            "zip_entries": [n for n in names if n in clickable]}
+                            "zip_entries": names if browse_archive else [n for n in names if n in clickable]}
         except zipfile.BadZipFile:
             pass
 
     ext = _ext(name)
     try:
+        if ext in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"}:
+            return {"kind": ext, "html": _image_html(data)}
         if ext == "docx" or (is_zip and b"word/document.xml" in data[:4000] + data[-4000:]):
             return {"kind": "docx", "html": _docx_html(data)}
         if ext == "xlsx":
             return {"kind": "xlsx", "html": _xlsx_html(data)}
+        if ext in {"html", "htm"}:
+            from lxml import html as html_parser
+            # EIS HTML attachments are normally UTF-8; decode explicitly so an
+            # absent charset declaration cannot turn Russian text into mojibake.
+            root = html_parser.fromstring(data.decode("utf-8", errors="replace"))
+            for node in root.xpath(".//script | .//style | .//iframe | .//object | .//noscript"):
+                node.drop_tree()
+
+            def clean(node):
+                content = escape(node.text or "") + "".join(clean(child) + escape(child.tail or "") for child in node)
+                tag = node.tag.lower() if isinstance(node.tag, str) else ""
+                if tag in {"table", "thead", "tbody", "tr", "td", "th", "p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4"}:
+                    attrs = ""
+                    if tag in {"td", "th"}:
+                        for key in ("colspan", "rowspan"):
+                            value = node.get(key, "")
+                            if value.isdigit() and 0 < int(value) < 1000:
+                                attrs += f' {key}="{value}"'
+                    return f"<{tag}{attrs}>{content}</{tag}>"
+                return content
+
+            return {"kind": "html", "html": clean(root)}
         if ext == "pdf" or data[:4] == b"%PDF":
             return {"kind": "pdf", "html": _pdf_html(data)}
         if ext in {"doc", "xls"}:
