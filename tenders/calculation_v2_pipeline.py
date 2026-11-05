@@ -934,6 +934,17 @@ class GatewayDocumentEnricher:
                     if not isinstance(supplied, dict):
                         raise ValueError('Некорректное основание характеристики.')
                     proof = dict(supplied)
+                    # The model may repeat an explicitly referenced notice value in
+                    # document_facts. It is already grounded by the baseline; do not
+                    # pretend it is a document or discard genuinely ungrounded facts.
+                    if proof.get('doc_id') is None and not proof.get('source_url'):
+                        refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
+                        from .requirement_values import equivalent, unit_from_label
+                        if any(type(ref) is int and 0 <= ref < len(baseline)
+                               and equivalent(proof.get('value'), baseline[ref]['value'],
+                                              unit=unit_from_label(baseline[ref]['name']), aliases=getattr(self, 'unit_aliases', None))
+                               for ref in refs):
+                            continue
                     if proof.get('doc_id') is None:
                         proof['doc_id'] = next((index for index, doc in self.document_lookup.items() if doc['url'] == proof.get('source_url')), None)
                     proof['quote'] = proof.get('quote') or proof.get('evidence')
@@ -1955,8 +1966,23 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
         else:
             pending.append(item)
     if pending and processes:
+        # Reuse only when every input actually sent to the router is identical.
+        # Quantity and owner decisions remain part of the key; names alone are
+        # insufficient to prove that two production routes can be shared.
+        groups = {}
+        for item in pending:
+            route_input = {'name': item.name, 'quantity': str(item.effective_quantity), 'unit': item.unit,
+                           'requirements': GatewayBatchRouter._requirements_payload(item.requirements)}
+            groups.setdefault(_fingerprint(route_input), []).append(item)
+        representatives = [group[0] for group in groups.values()]
         try:
-            fresh = router.route(tender=job.tender, items=pending, processes=processes, knowledge=knowledge)
+            representative_decisions = router.route(tender=job.tender, items=representatives, processes=processes, knowledge=knowledge)
+            by_representative = {decision.component_id: decision for decision in representative_decisions}
+            if len(representative_decisions) != len(representatives) or set(by_representative) != {item.pk for item in representatives}:
+                raise ValueError('Batch router must return exactly one decision per calculation component')
+            fresh = [replace(by_representative[group[0].pk], component_id=item.pk)
+                     for group in groups.values() for item in group]
+            job.diagnostics['routing_equivalent_reused_count'] = len(pending) - len(representatives)
         except ValueError:
             from django.conf import settings
             if not (settings.CALCULATION_V2_SOURCE_MEMORY_ENABLED and isinstance(router, GatewayBatchRouter)

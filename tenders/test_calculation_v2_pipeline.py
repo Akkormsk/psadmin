@@ -143,6 +143,22 @@ class CalculationV2PipelineTests(TestCase):
 
 
 class OwnerQuestionEvidenceTests(TestCase):
+    def test_identical_route_inputs_share_a_decision_but_other_quantity_does_not(self):
+        tender = Tender.objects.create(purchase_number='route-equivalence', title='Items', notification_raw=notification([
+            raw_item('Item', '10', 'a'), raw_item('Item', '10', 'b'), raw_item('Item', '20', 'c')]))
+        ingest_source_items(tender)
+        job = TenderComputeJob.objects.create(tender=tender)
+        process = ProcessDefinition.objects.create(name='Production', role=ProcessDefinition.ROLE_PRODUCTION)
+        calls = []
+        class Router:
+            def route(self, *, items, **kwargs):
+                calls.append(len(items))
+                return [RouteDecision(item.pk, (process.pk,), Decimal('.9'), {}) for item in items]
+        decisions = route_tender_batch(job, Router())
+        self.assertEqual(calls, [2])
+        self.assertEqual(len(decisions), 3)
+        self.assertEqual(job.diagnostics['routing_equivalent_reused_count'], 1)
+
     def component(self, requirements, *, quantity="1", commercial_requirements=None):
         tender = Tender.objects.create(
             purchase_number=f"question-evidence-{Tender.objects.count() + 1}",
