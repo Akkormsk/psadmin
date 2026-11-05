@@ -256,6 +256,7 @@
       <thead><tr><th>Место</th><th>Заявка</th><th>Цена</th><th>Снижение</th><th>Решение комиссии</th></tr></thead>
       <tbody>
       {% for row in protocol.rows %}
+        {% if row.is_gap %}<tr><td colspan="5" class="ts-sub" aria-label="Пропущенные участники">…</td></tr>{% else %}
         <tr{% if row.is_ours %} class="ts-protocol__ours"{% endif %}>
           <td>{% if row.rank %}{{ row.rank }}{% else %}—{% endif %}</td>
           <td>{{ row.id }}{% if row.is_ours %} · мы{% endif %}</td>
@@ -263,6 +264,7 @@
           <td>{% if row.reduction is not None %}{{ row.reduction }}%{% else %}—{% endif %}</td>
           <td>{% if row.rejected %}Отклонена: {{ row.reject_reason }}{% else %}{{ row.result|default:"—" }}{% endif %}</td>
         </tr>
+        {% endif %}
       {% endfor %}
       </tbody>
     </table></div>

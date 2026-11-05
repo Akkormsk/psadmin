@@ -19,7 +19,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 from urllib.request import Request, urlopen
 
 EIS_ORIGIN = "https://zakupki.gov.ru"
@@ -186,7 +186,23 @@ def fetch_protocol(eis_url: str) -> dict | None:
     bids_page = _get(bid_list_url(found["url"]))
     if not bids_page:
         return None
-    return {**found, **parse_bid_list(bids_page)}
+    parsed = parse_bid_list(bids_page)
+    participants = parsed["participants"]
+    seen = {p["id"] for p in participants}
+    total = parsed.get("applications_total") or len(participants)
+    parts = urlsplit(bid_list_url(found["url"]))
+    query = dict(parse_qsl(parts.query))
+    for page_number in range(2, min((total + 9) // 10, 100) + 1):
+        query.update(pageNumber=str(page_number), pageSize="10")
+        page = _get(urlunsplit(parts._replace(query=urlencode(query))))
+        if not page:
+            break
+        additional = [p for p in parse_bid_list(page)["participants"] if p["id"] not in seen]
+        if not additional:
+            break
+        participants.extend(additional)
+        seen.update(p["id"] for p in additional)
+    return {**found, **parsed}
 
 
 def winner(protocol: dict) -> dict | None:
