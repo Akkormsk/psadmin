@@ -272,6 +272,14 @@ jobs:
               "$SSH_USER@$SSH_HOST" "$(cat /tmp/profile-qa-command)"
             exit 0
           fi
+          if [[ "$INSPECT_NUMBER" = memory-proof:* ]]; then
+            proof_number="${INSPECT_NUMBER#memory-proof:}"
+            [[ "$proof_number" =~ ^[0-9]{19}$ ]]
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "cat /home/deploy/psadmin-test/.twin-version; cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py verify_intake_batch --max-cost-rub 47.98 --max-job-cost-rub 10 --run-id intake-acceptance-20261104 --limit 1 --tender-number $proof_number"
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = profile-test || "$INSPECT_NUMBER" = acceptance-test ]]; then
             extra=""
             budget=47.98
