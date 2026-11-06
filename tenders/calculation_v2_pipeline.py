@@ -344,7 +344,7 @@ class GatewayDocumentEnricher:
         self.diagnostics = {}
         self.document_images = []
 
-    STAGED_CONTRACT = "intake-steps-v3-additive-specification"
+    STAGED_CONTRACT = "intake-steps-v4-anchored-specification"
     STAGED_VALIDATION_VERSION = "canonical-fact-sources-v10-resilient"
     SPECIFICATION_ASSEMBLY = "verified-additions-v2"
 
@@ -394,9 +394,48 @@ class GatewayDocumentEnricher:
             payload['notification'] = self.notification_summary
             self.shared_context = json.dumps(payload, ensure_ascii=False, default=str)
         else:
-            payload['documents'] = [{'doc_id': index, 'name': doc['name'], 'paragraphs': doc['text'], 'tables': doc['tables'], 'image_indexes': doc['image_indexes'], **({'visual_pages': doc['visual_pages']} if doc.get('visual_pages') else {})} for index, doc in self.document_lookup.items()]
+            self.source_fragments = {}
+            payload['documents'] = [self._indexed_document(index, doc) for index, doc in self.document_lookup.items()]
             self.shared_context = compact_intake_context(payload)
         return {'documents': considered, 'context_characters': len(self.shared_context), 'contract': self.STAGED_CONTRACT}
+
+    def _indexed_document(self, doc_id, doc):
+        """Attach source addresses without dropping text or changing table cells."""
+        paragraphs, text = [], doc.get('text') or ''
+        offset = 0
+        while offset < len(text):
+            end = min(len(text), offset + 2400)
+            if end < len(text):
+                boundary = text.rfind(' ', offset + 1200, end)
+                if boundary > offset:
+                    end = boundary
+            fragment_id = f'd{doc_id}p{len(paragraphs) + 1}'
+            fragment = text[offset:end]
+            self.source_fragments[fragment_id] = {'doc_id': doc_id, 'text': fragment, 'section': ''}
+            paragraphs.append({'fragment_id': fragment_id, 'text': fragment})
+            if end == len(text):
+                break
+            offset = max(offset + 1, end - 120)
+        tables = []
+        for table_no, table in enumerate(doc.get('tables', []), 1):
+            row_ids = []
+            for row_no, row in enumerate(table.get('rows', []), 1):
+                fragment_id = f'd{doc_id}t{table_no}r{row_no}'
+                cells = [cell if isinstance(cell, str) else str(cell.get('text', '')) for cell in row]
+                self.source_fragments[fragment_id] = {'doc_id': doc_id, 'text': ' | '.join(cells),
+                    'section': f'Таблица {table_no}, строка {row_no}'}
+                row_ids.append(fragment_id)
+            tables.append({**table, 'row_fragment_ids': row_ids})
+        image_fragments = []
+        pages = doc.get('visual_pages', [])
+        for position, image_index in enumerate(doc.get('image_indexes', [])):
+            fragment_id = f'd{doc_id}i{image_index}'
+            section = f'Страница {pages[position]}' if len(pages) == len(doc['image_indexes']) else f'Изображение {image_index}'
+            self.source_fragments[fragment_id] = {'doc_id': doc_id, 'text': '', 'section': section, 'visual': True}
+            image_fragments.append({'fragment_id': fragment_id, 'image_index': image_index, 'section': section})
+        return {'doc_id': doc_id, 'name': doc['name'], 'paragraphs': paragraphs, 'tables': tables,
+                'image_indexes': doc.get('image_indexes', []), 'image_fragments': image_fragments,
+                **({'visual_pages': doc['visual_pages']} if doc.get('visual_pages') else {})}
 
     def _remember_context_usage(self, usage):
         tokens = (usage or {}).get('prompt_tokens')
@@ -712,7 +751,15 @@ class GatewayDocumentEnricher:
                 return {}
             sources = [self.stage_quote(part) for part in row['evidence']]
             return {**sources[0], 'evidence': '\n'.join(source['evidence'] for source in sources), 'evidence_sources': sources}
-        doc = self.document_lookup.get(row.get('doc_id'))
+        anchor = row.get('fragment_id')
+        if anchor is not None:
+            fragment = getattr(self, 'source_fragments', {}).get(anchor) if isinstance(anchor, str) else None
+            if not fragment:
+                raise ValueError('Фрагмент источника не найден; дополнение не применено.')
+            doc = self.document_lookup[fragment['doc_id']]
+        else:
+            fragment = None
+            doc = self.document_lookup.get(row.get('doc_id'))
         quote = str(row.get('quote') or '').strip()
         def normalize(value):
             # Document converters and LLM output use equivalent mathematical glyphs.
@@ -736,8 +783,23 @@ class GatewayDocumentEnricher:
                 text = re.sub(r'(?<!\w)' + full + r'(?!\w)', short, text)
             return text
 
+        section = str((fragment or {}).get('section') or row.get('section') or '')[:300]
+        if fragment:
+            if fragment.get('visual'):
+                if not quote:
+                    raise ValueError('Для изображения не указан подтверждающий текст.')
+                return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000],
+                    'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT,
+                    'verification': 'visual', 'requires_review': True}
+            source_text = normalize(fragment['text'])
+            if not quote or normalize(quote) not in source_text:
+                raise ValueError('Цитата отсутствует в выбранном фрагменте источника.')
+            value = row.get('value')
+            if value not in (None, '', [], {}) and (not isinstance(value, (str, int, float)) or normalize(value) not in source_text):
+                raise ValueError('Значение не найдено в выбранном фрагменте источника.')
+            return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000],
+                    'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
         verified = bool(doc and quote and normalize(quote) in normalize(doc.get('evidence_text', '')))
-        section = str(row.get('section') or '')[:300]
         if doc and quote and not verified:
             # Match pipe-delimited excerpts inside ONE source row. Some converters
             # keep label and value in one cell; others split them into columns.
@@ -877,16 +939,16 @@ class GatewayDocumentEnricher:
                     # Notice facts are retained unchanged. Each documented value
                     # is an independent addition, never a replacement or inference.
                     documented = [entry for entry in (fact.get('document_facts') or [])
-                                  if isinstance(entry, dict) and entry.get('doc_id') is not None]
-                    if not documented and fact.get('doc_id') is not None:
-                        documented = [{'doc_id': fact['doc_id'], 'quote': fact.get('quote'),
+                                  if isinstance(entry, dict) and (entry.get('fragment_id') or entry.get('doc_id') is not None)]
+                    if not documented and (fact.get('fragment_id') or fact.get('doc_id') is not None):
+                        documented = [{'doc_id': fact.get('doc_id'), 'fragment_id': fact.get('fragment_id'), 'quote': fact.get('quote'),
                                        'section': fact.get('section'), 'value': fact.get('document_value', fact.get('value'))}]
                     if not documented and fact.get('resolution') not in {'keep', 'omit'}:
                         self.specification_gaps.append({'stage': 'tz', 'key': key, 'name': fact.get('name', ''),
                             'reason': 'Дополнение не подтверждено документом; исходные сведения сохранены.'})
                     for entry in documented:
                         addition = {'name': fact.get('name'), 'value': entry.get('value'), 'resolution': 'new',
-                                    'baseline_refs': [], 'doc_id': entry.get('doc_id'), 'quote': entry.get('quote'),
+                                    'baseline_refs': [], 'doc_id': entry.get('doc_id'), 'fragment_id': entry.get('fragment_id'), 'quote': entry.get('quote'),
                                     'section': entry.get('section'), 'scope': fact.get('scope', 'product')}
                         pending[key].append(addition)
                         try:
@@ -943,7 +1005,7 @@ class GatewayDocumentEnricher:
                     raise ValueError('Некорректная характеристика ТЗ')
                 fact = {key: deepcopy(value) for key, value in raw.items() if key in {
                     'name', 'value', 'resolution', 'baseline_refs', 'notification_refs', 'reason',
-                    'doc_id', 'quote', 'section', 'scope', 'document_value', 'document_facts'}}
+                    'doc_id', 'fragment_id', 'quote', 'section', 'scope', 'document_value', 'document_facts'}}
                 if not str(fact.get('name') or '').strip() or fact.get('value') in (None, '', [], {}):
                     raise ValueError('В ТЗ получена пустая характеристика.')
                 mode = fact.get('resolution')
@@ -959,7 +1021,7 @@ class GatewayDocumentEnricher:
                     # The model may repeat an explicitly referenced notice value in
                     # document_facts. It is already grounded by the baseline; do not
                     # pretend it is a document or discard genuinely ungrounded facts.
-                    if proof.get('doc_id') is None and not proof.get('source_url'):
+                    if proof.get('doc_id') is None and not proof.get('fragment_id') and not proof.get('source_url'):
                         refs = (fact.get('baseline_refs') or []) + (fact.get('notification_refs') or [])
                         from .requirement_values import equivalent, unit_from_label
                         if any(type(ref) is int and 0 <= ref < len(baseline)
@@ -995,7 +1057,7 @@ class GatewayDocumentEnricher:
                 if refs and mode == 'keep':
                     mode = fact['resolution'] = 'new'
                 if mode not in {'keep', 'omit'}:
-                    has_primary_document = fact.get('doc_id') is not None and bool(str(fact.get('quote') or '').strip())
+                    has_primary_document = (fact.get('doc_id') is not None or bool(fact.get('fragment_id'))) and bool(str(fact.get('quote') or '').strip())
                     has_document = has_primary_document or bool(verified_documents)
                     has_baseline = good['kind'] != 'kit' and bool(baseline_refs)
                     if not has_document and not refs and not has_baseline:

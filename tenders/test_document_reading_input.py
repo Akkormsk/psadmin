@@ -733,6 +733,25 @@ class ResilientIntakeTests(TestCase):
         self.assertIn(('Цвет', 'синий', True), displayed)
         self.assertFalse(self.engine.specification_gaps)
 
+    def test_fragment_address_attaches_correct_document_and_checks_table_value(self):
+        self.engine.source_fragments = {}
+        first = {'url': 'https://example.test/first', 'name': 'Первый', 'text': 'Другой документ', 'tables': [], 'image_indexes': []}
+        second = {'url': 'https://example.test/second', 'name': 'Второй', 'text': '', 'tables': [{'rows': [['Гарантия', 'Нет'], ['Цвет', 'Синий']]}], 'image_indexes': []}
+        self.engine.document_lookup = {1: first, 2: second}
+        indexed = self.engine._indexed_document(2, second)
+        fragment = indexed['tables'][0]['row_fragment_ids'][0]
+        rows = [{'key': self.good['key'], 'characteristics': [{'name': 'Гарантия', 'value': 'Нет',
+            'resolution': 'new', 'fragment_id': fragment, 'doc_id': 1, 'quote': 'Гарантия'}]}]
+        result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+        added = next(row for row in result if row['name'] == 'Гарантия')
+        self.assertEqual(added['provenance']['document_url'], second['url'])
+        self.assertEqual(added['provenance']['page_or_section'], 'Таблица 1, строка 1')
+        self.assertFalse(self.engine.specification_gaps)
+        rows[0]['characteristics'][0]['value'] = 'Да'
+        result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+        self.assertFalse(any(row['name'] == 'Гарантия' for row in result))
+        self.assertTrue(self.engine.specification_gaps)
+
     def test_bad_structure_retains_position_without_inventing_components(self):
         goods = self.engine.reconcile_structure([{'source_id': self.source.pk, 'kind': 'kit', 'goods': []}])
         self.assertEqual(len(goods), 1)
