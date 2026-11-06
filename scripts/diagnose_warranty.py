@@ -69,3 +69,10 @@ for anchor,fragment in getattr(engine,'source_fragments',{}).items():
    found.append({'anchor':anchor,'section':result['page_or_section'],'correct_document':result['document_url']==engine.document_lookup[5]['url']})
   except ValueError: pass
 print('FRAGMENT_WARRANTY_PROOF',json.dumps({'matches':found},ensure_ascii=False))
+job=TenderComputeJob.objects.filter(pk=144,tender=tender).first()
+if job:
+ for r in job.diagnostics.get('stages',{}).get('tz',{}).get('result') or []:
+  for f in r.get('characteristics',[]) if isinstance(r,dict) else []:
+   if f.get('name') in ['Режим поставки','Гарантия качества товара','Экспертиза','Изображение на циферблате (требование макета)']:
+    ref=f.get('fragment_id'); source=getattr(engine,'source_fragments',{}).get(ref,{})
+    print('LIVE_FRAGMENT_FACT',json.dumps({'key':r.get('key'),'fact':f,'fragment':source},ensure_ascii=False,default=str))
