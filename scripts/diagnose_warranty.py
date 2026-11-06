@@ -28,3 +28,8 @@ with transaction.atomic():
   txt=doc.get('evidence_text','')
   hits=[txt[max(0,m.start()-110):m.start()+250] for m in list(re.finditer('гарант',txt,re.I))[:4]]
   print('DOCUMENT',json.dumps({'id':i,'name':doc['name'],'exact_quote_present':'требуется гарантия качества товара, работы, услуги' in txt.lower(),'excerpts':hits},ensure_ascii=False))
+for n in (141,142):
+ job=TenderComputeJob.objects.filter(pk=n,tender=tender).first()
+ if not job: continue
+ d=(job.diagnostics.get('stages',{}).get('documents',{}).get('result') or {}).get('documents') or []
+ print('SAVED_MANIFEST',json.dumps({'job':n,'contract':job.diagnostics.get('intake_contract'),'docs':[{'id':i+1,'name':x.get('name'),'reading_status':x.get('reading_status')} for i,x in enumerate(d)]},ensure_ascii=False))
