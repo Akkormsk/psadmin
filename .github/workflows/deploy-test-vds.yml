@@ -257,6 +257,14 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = fragment-check:* ]]; then
+            proof_number="${INSPECT_NUMBER#fragment-check:}"
+            [[ "$proof_number" =~ ^[0-9]{19}$ ]]
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "cat /home/deploy/psadmin-test/.twin-version; cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py verify_intake_batch --max-cost-rub 15 --max-job-cost-rub 5 --run-id full-test-20261105 --limit 1 --tender-number $proof_number"
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = diagnose-warranty ]]; then
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
