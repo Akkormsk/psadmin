@@ -257,6 +257,12 @@ jobs:
       - name: Inspect deployed TEST data without writes
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_NUMBER" = inspect-prod-document ]]; then
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" 'cd /home/deploy/psadmin/deploy/vds && docker compose -f compose.yml exec -T web python -u -' < scripts/inspect_prod_document.py
+            exit 0
+          fi
           if [[ "$INSPECT_NUMBER" = diagnose-large ]]; then
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
