@@ -60,3 +60,12 @@ for row in (job.diagnostics.get('stages',{}).get('tz',{}).get('result') or []):
    if ' '.join(value.casefold().split()) not in ' '.join(quote.casefold().split()): c['value_not_literal_quote']+=1
   if stated not in candidates and len(examples)<4: examples.append({'name':fact.get('name'),'stated':stated,'candidates':candidates})
 print('SAVED_FACT_REVIEW',json.dumps({'counts':c,'examples':examples},ensure_ascii=False))
+found=[]
+for anchor,fragment in getattr(engine,'source_fragments',{}).items():
+ text=' '.join(fragment.get('text','').casefold().split())
+ if 'требуется гарантия качества товара, работы, услуги' in text and 'нет' in text:
+  try:
+   result=engine.stage_quote({'fragment_id':anchor,'doc_id':4,'quote':'Требуется гарантия качества товара, работы, услуги','value':'Нет'})
+   found.append({'anchor':anchor,'section':result['page_or_section'],'correct_document':result['document_url']==engine.document_lookup[5]['url']})
+  except ValueError: pass
+print('FRAGMENT_WARRANTY_PROOF',json.dumps({'matches':found},ensure_ascii=False))
