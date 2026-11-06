@@ -900,7 +900,8 @@ def doc_preview(request, pk, idx):
         return response
 
     cached = DocumentPreview.objects.filter(url=url).first()
-    if cached and cached.kind not in {"zip", "zip-content", "rar"} and request.GET.get("refresh") != "1":
+    is_archive = name.lower().endswith((".zip", ".rar"))
+    if cached and not is_archive and cached.kind not in {"zip", "zip-content", "rar"} and request.GET.get("refresh") != "1":
         return _result_json(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
 
     try:
