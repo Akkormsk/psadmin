@@ -74,6 +74,16 @@ class DocumentHtmlTests(TestCase):
 
 
 class TenderOfficePreviewTests(TestCase):
+    def test_archive_filename_bypasses_legacy_pdf_text_cache(self):
+        self.client.force_login(self.admin)
+        DocumentPreview.objects.create(url=CONTRACT_URL, kind="pdf", html="old extracted text")
+        with patch("tender_selection.views._doc_by_idx", return_value=({"url": CONTRACT_URL, "name": "spec.docx.zip"}, None)), \
+                patch("tender_selection.views._fetch_doc_bytes", return_value=b"archive"), \
+                patch("tender_selection.views.extract_preview", return_value={"kind": "zip", "zip_entries": ["spec.docx"]}) as parse:
+            response = self.client.get(f"/tender-selection/{self.tender.pk}/doc/1/")
+        self.assertEqual(response.json()["zip_entries"], ["spec.docx"])
+        self.assertTrue(parse.call_args.kwargs["browse_archive"])
+
     def setUp(self):
         from django.contrib.auth import get_user_model
 
