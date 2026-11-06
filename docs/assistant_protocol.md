@@ -465,6 +465,8 @@ LLM проверяет их применимость к полному ТЗ. Э�
 
 ### Документы тендера, ручной ZIP-импорт и защищённое обучение
 
+- ZIP browser repairs legacy CP866/UTF-8 filename display while retaining exact archive entry paths for extraction. Detached signatures are labelled as signatures and do not offer document opening.
+
 - Archive preview cache is bypassed based on the original `.zip`/`.rar` filename as well as cached kind: historical single-document archives may have been cached as `docx`/`pdf`, which otherwise hides the file browser and renders extracted text instead of the PDF viewer.
 
 - Attachment viewer: ZIP cache listings are rebuilt with actionable entry links; nested ZIP/RAR can be browsed with a return-to-archive action and filename search. Office/PDF entries use the shared PDF viewer; raster scans use reduced images with click-to-zoom; sanitized HTML retains text/tables. RAR uses rarfile/unar in temporary storage with a 50-file/25MB limit and rejects encrypted entries. Archive browsing never writes member paths to the host. This extends earlier ZIP-only support; server acceptance requires successful deployment and revision verification.

@@ -866,7 +866,8 @@ def _clear_tender_document_previews(tender):
 def _result_json(name, result):
     return JsonResponse({"name": name, "kind": result.get("kind", ""),
                          "html": result.get("html", ""), "error": result.get("error", ""),
-                         "zip_entries": result.get("zip_entries", [])})
+                         "zip_entries": result.get("zip_entries", []),
+                         "zip_labels": result.get("zip_labels", {})})
 
 
 @tender_viewer_required

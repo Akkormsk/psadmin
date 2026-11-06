@@ -697,8 +697,13 @@
           var badge = document.createElement("small");
           badge.textContent = path.split(".").pop();
           var label = document.createElement("span");
-          label.textContent = path;
+          label.textContent = (data.zip_labels || {})[path] || path;
           btn.append(badge, label, document.createTextNode("→"));
+          if (/\.(sig|sign|p7s)$/i.test(path)) {
+            btn.disabled = true;
+            btn.lastChild.textContent = "Электронная подпись";
+            btn.style.cursor = "default";
+          }
           btn.addEventListener("click", function () {
             if (/\.(zip|rar)$/i.test(path)) {
               var parentPath = archiveParents.slice();

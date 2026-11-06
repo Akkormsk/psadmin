@@ -388,6 +388,20 @@ def extract_zip_entry(archive_data: bytes, path: str) -> bytes | None:
         return None
 
 
+def archive_display_name(name: str, flags: int) -> str:
+    if flags & 0x800 or any("А" <= char <= "я" or char in "Ёё" for char in name):
+        return name
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        return name
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        candidate = raw.decode("cp866")
+        return candidate if any("А" <= char <= "я" or char in "Ёё" for char in candidate) else name
+
+
 def _archive_stem(path: str) -> str:
     stem = path.rsplit("/", 1)[-1].lower()
     while True:
@@ -520,7 +534,9 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
                     clickable |= {n for n in names if n.lower().endswith(".zip")}
                     listing = "".join(f"<li>{escape(n)}</li>" for n in names[:50])
                     return {"kind": "zip", "html": f"<p>Архив, файлы внутри:</p><ul>{listing}</ul>",
-                            "zip_entries": names if browse_archive else [n for n in names if n in clickable]}
+                            "zip_entries": names if browse_archive else [n for n in names if n in clickable],
+                            "zip_labels": {info.filename: archive_display_name(info.filename, info.flag_bits)
+                                           for info in zf.infolist() if not info.is_dir()}}
         except zipfile.BadZipFile:
             pass
 

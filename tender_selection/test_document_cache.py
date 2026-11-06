@@ -102,6 +102,12 @@ class TenderOfficePreviewTests(TestCase):
 
 
 class ArchivePreviewTests(TestCase):
+    def test_legacy_russian_archive_name_is_decoded_for_display_only(self):
+        original = "Описание объекта закупки.docx"
+        stored = original.encode("cp866").decode("cp437")
+        self.assertEqual(documents.archive_display_name(stored, 0), original)
+        self.assertEqual(documents.archive_display_name(original, 0x800), original)
+
     def test_archive_browser_returns_links_even_for_single_file(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zf:
