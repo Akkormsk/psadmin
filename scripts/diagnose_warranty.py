@@ -80,3 +80,12 @@ if job:
  goods=engine.reconcile_structure(job.diagnostics['stages']['structure'].get('result') or [])
  compiled=engine.reconcile_specifications(job.diagnostics['stages']['tz'].get('result') or [],goods)
  print('FRAGMENT_REAL_REPLAY',json.dumps({'goods':len(goods),'compiled':len(compiled),'gaps':engine.specification_gaps,'warranties':[{'key':key,'value':fact.get('value'),'source':fact.get('provenance',{}).get('document_url')} for key,data in compiled.items() for fact in data.get('characteristics',[]) if fact.get('name')=='Гарантия качества товара']},ensure_ascii=False))
+job=TenderComputeJob.objects.filter(pk=145,tender=tender).first()
+if job:
+ stages=job.diagnostics.get('stages',{})
+ structure=stages.get('structure',{}).get('result') or []
+ print('CURRENT_STRUCTURE',json.dumps([{'source_id':x.get('source_id'),'kind':x.get('kind'),'name':x.get('name'),'goods':[g.get('name') for g in x.get('goods',[])]} for x in structure if isinstance(x,dict)],ensure_ascii=False))
+ print('CURRENT_GAPS',json.dumps(job.diagnostics.get('analysis_gaps',[]),ensure_ascii=False))
+ previous=TenderComputeJob.objects.filter(pk=144,tender=tender).first()
+ if previous:
+  print('FRESH_USAGE',json.dumps({k:{'cost_rub':v.get('cost_rub'),'duration_ms':v.get('duration_ms'),'usage':v.get('usage')} for k,v in previous.diagnostics.get('stages',{}).items() if k in ['structure','tz','national_regime','routing']},ensure_ascii=False))
