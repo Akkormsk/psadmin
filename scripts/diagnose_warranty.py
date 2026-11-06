@@ -33,3 +33,30 @@ for n in (141,142):
  if not job: continue
  d=(job.diagnostics.get('stages',{}).get('documents',{}).get('result') or {}).get('documents') or []
  print('SAVED_MANIFEST',json.dumps({'job':n,'contract':job.diagnostics.get('intake_contract'),'docs':[{'id':i+1,'name':x.get('name'),'reading_status':x.get('reading_status')} for i,x in enumerate(d)]},ensure_ascii=False))
+from collections import Counter
+from copy import deepcopy
+from django.core.exceptions import ObjectDoesNotExist
+job=TenderComputeJob.objects.get(pk=141,tender=tender)
+engine.document_lookup={key:{**value,'image_indexes':[]} for key,value in engine.document_lookup.items()}
+c=Counter(); examples=[]
+for row in (job.diagnostics.get('stages',{}).get('tz',{}).get('result') or []):
+ for fact in row.get('characteristics',[]) if isinstance(row,dict) else []:
+  quote=str(fact.get('quote') or '').strip()
+  if not quote: c['without_quote']+=1; continue
+  c['with_quote']+=1
+  candidates=[]
+  for doc_id in engine.document_lookup:
+   try: engine.stage_quote({'doc_id':doc_id,'quote':quote}); candidates.append(doc_id)
+   except ValueError: pass
+  stated=fact.get('doc_id')
+  if stated in candidates: c['matches_stated']+=1
+  elif candidates:
+   c['wrong_id_but_found']+=1
+   if len(candidates)>1: c['wrong_id_ambiguous']+=1
+  else: c['not_found_in_text']+=1
+  value=fact.get('value')
+  if isinstance(value,str) and value.strip():
+   c['string_value']+=1
+   if ' '.join(value.casefold().split()) not in ' '.join(quote.casefold().split()): c['value_not_literal_quote']+=1
+  if stated not in candidates and len(examples)<4: examples.append({'name':fact.get('name'),'stated':stated,'candidates':candidates})
+print('SAVED_FACT_REVIEW',json.dumps({'counts':c,'examples':examples},ensure_ascii=False))
