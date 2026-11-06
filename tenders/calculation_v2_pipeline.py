@@ -422,7 +422,7 @@ class GatewayDocumentEnricher:
             for row_no, row in enumerate(table.get('rows', []), 1):
                 fragment_id = f'd{doc_id}t{table_no}r{row_no}'
                 cells = [cell if isinstance(cell, str) else str(cell.get('text', '')) for cell in row]
-                self.source_fragments[fragment_id] = {'doc_id': doc_id, 'text': ' | '.join(cells),
+                self.source_fragments[fragment_id] = {'doc_id': doc_id, 'text': ' | '.join(cells), 'cells': cells,
                     'section': f'Таблица {table_no}, строка {row_no}'}
                 row_ids.append(fragment_id)
             tables.append({**table, 'row_fragment_ids': row_ids})
@@ -795,10 +795,19 @@ class GatewayDocumentEnricher:
             if not quote or normalize(quote) not in source_text:
                 raise ValueError('Цитата отсутствует в выбранном фрагменте источника.')
             value = row.get('value')
+            source_value = None
             if value not in (None, '', [], {}) and (not isinstance(value, (str, int, float)) or normalize(value) not in source_text):
-                raise ValueError('Значение не найдено в выбранном фрагменте источника.')
+                cells = [cell.strip() for cell in fragment.get('cells', []) if cell.strip()]
+                matching = [i for i, cell in enumerate(cells) if normalize(quote) in normalize(cell)]
+                if len(matching) == 1 and matching[0] + 1 < len(cells):
+                    source_value = ' · '.join(cells[matching[0] + 1:])
+                elif not cells and normalize(quote) != normalize(row.get('name') or ''):
+                    source_value = quote
+                else:
+                    raise ValueError('Значение не найдено в выбранном фрагменте источника.')
             return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000],
-                    'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT}
+                    'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT,
+                    **({'source_value': source_value} if source_value else {})}
         verified = bool(doc and quote and normalize(quote) in normalize(doc.get('evidence_text', '')))
         if doc and quote and not verified:
             # Match pipe-delimited excerpts inside ONE source row. Some converters
@@ -1013,6 +1022,12 @@ class GatewayDocumentEnricher:
                 supplied_documents = [] if supplied_documents is None else supplied_documents
                 if not isinstance(supplied_documents, list):
                     raise ValueError('Некорректные основания характеристики.')
+                if hasattr(self, 'source_fragments'):
+                    if fact.get('doc_id') is not None and not fact.get('fragment_id'):
+                        raise ValueError('Не указан фрагмент документа для дополнения.')
+                    if any(isinstance(proof, dict) and proof.get('doc_id') is not None and not proof.get('fragment_id')
+                           for proof in supplied_documents):
+                        raise ValueError('Не указан фрагмент документа для дополнения.')
                 verified_documents = []
                 for supplied in supplied_documents:
                     if not isinstance(supplied, dict):
@@ -1033,7 +1048,7 @@ class GatewayDocumentEnricher:
                         proof['doc_id'] = next((index for index, doc in self.document_lookup.items() if doc['url'] == proof.get('source_url')), None)
                     proof['quote'] = proof.get('quote') or proof.get('evidence')
                     evidence = self.stage_quote(proof)
-                    verified_documents.append({'value': supplied.get('value') or evidence['evidence'], '_source_provenance': evidence})
+                    verified_documents.append({'value': evidence.get('source_value') or supplied.get('value') or evidence['evidence'], '_source_provenance': evidence})
                 if verified_documents:
                     fact['document_facts'] = verified_documents
                 baseline_refs = fact.get('baseline_refs')
@@ -1075,6 +1090,8 @@ class GatewayDocumentEnricher:
                         fact['reason'] = fact.get('reason') or 'Документ уточняет исходные сведения.'
                     if has_document:
                         evidence = self.stage_quote(fact) if has_primary_document else verified_documents[0]['_source_provenance']
+                        if evidence.get('source_value'):
+                            fact['value'] = evidence['source_value']
                         fact['source_url'] = evidence['document_url']
                         fact['_source_provenance'] = evidence
                         fact['page_or_section'] = evidence['page_or_section']

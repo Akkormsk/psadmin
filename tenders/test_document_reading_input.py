@@ -749,8 +749,8 @@ class ResilientIntakeTests(TestCase):
         self.assertFalse(self.engine.specification_gaps)
         rows[0]['characteristics'][0]['value'] = 'Да'
         result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
-        self.assertFalse(any(row['name'] == 'Гарантия' for row in result))
-        self.assertTrue(self.engine.specification_gaps)
+        self.assertEqual(next(row for row in result if row['name'] == 'Гарантия')['value'], 'Нет')
+        self.assertFalse(self.engine.specification_gaps)
 
     def test_bad_structure_retains_position_without_inventing_components(self):
         goods = self.engine.reconcile_structure([{'source_id': self.source.pk, 'kind': 'kit', 'goods': []}])
