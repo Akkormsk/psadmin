@@ -2193,7 +2193,7 @@ def _staged_document_analysis(job, enricher):
         try:
             enricher.read_source_memory(job)
         except (ValueError, TenderAIError) as exc:
-            stages['source_reading'] = {**stages.get('source_reading', {}), 'state': 'failed', 'outcome': 'source_only', 'warning': str(exc)}
+            stages['source_reading'] = {**stages.get('source_reading', {}), 'state': 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'failed', 'outcome': 'source_only', 'warning': str(exc)}
             job.diagnostics['analysis_gaps'].append({'stage': 'source_reading', 'reason': str(exc)})
             job.diagnostics.update(enrichment_state='reading_incomplete', staged_input_fingerprint=fingerprint)
             _publish_intake(job)
@@ -2242,9 +2242,6 @@ def _staged_document_analysis(job, enricher):
                     if first is None:
                         return []
                     candidates = [task]
-                    for start in range(max(0, first - 19), first + 1):
-                        for end in range(first + 1, min(len(requested), start + 20) + 1):
-                            candidates.append(subset_task(requested[start:end]))
                     matched = next((candidate for candidate in candidates
                         if enricher.stage_request(name, instruction, candidate)[1] == segment.get('input_fingerprint')), None)
                     if matched is None:
@@ -2253,6 +2250,9 @@ def _staged_document_analysis(job, enricher):
                 return rows if all(record_id(row) in scope for row in rows) else []
             saved, origins, ambiguous = {}, {}, set()
             history = type(job).objects.filter(tender=job.tender, diagnostics__staged_input_fingerprint=fingerprint).exclude(pk=job.pk).order_by('-pk')
+            if hasattr(enricher, 'source_memory'):
+                # Addressed requests reuse their own content fingerprints in ask_stage.
+                history = type(job).objects.filter(tender=job.tender).exclude(pk=job.pk).order_by('-pk')
             for prior in history:
                 old_stages = prior.diagnostics.get('stages', {})
                 parent_stage = old_stages.get(name, {})
@@ -2289,8 +2289,12 @@ def _staged_document_analysis(job, enricher):
                     records = segment.get('result') if segment.get('state') in {'complete', 'pending_validation'} else recovered_records(segment)
                     if not isinstance(records, list):
                         continue
+                    expected_fingerprints = enricher.record_fingerprints(name, instruction, task, segment.get('dependencies', [])) if hasattr(enricher, 'source_memory') else {}
                     for row in records:
                         identity_key = record_id(row)
+                        if hasattr(enricher, 'source_memory'):
+                            if segment.get('record_fingerprints', {}).get(str(identity_key)) != expected_fingerprints.get(str(identity_key)) or str(identity_key) not in expected_fingerprints:
+                                continue
                         scope = segment.get('requested_keys')
                         if scope is not None and identity_key not in scope:
                             continue
@@ -2303,7 +2307,8 @@ def _staged_document_analysis(job, enricher):
                     if identity_key not in saved and identity_key not in ambiguous:
                         saved[identity_key], origins[str(identity_key)] = row, prior.pk
             remaining = [item for item in requested if identity(item) not in saved]
-            batches = [remaining[offset:offset + 20] for offset in range(0, len(remaining), 20)] if len(requested) > 20 or saved else []
+            batches = (enricher.plan_stage_tasks(instruction, subset_task, remaining, limit)
+                       if remaining and hasattr(enricher, 'source_memory') else [remaining] if remaining else [])
             if saved and not remaining:
                 rows = [saved[identity(item)] for item in requested]
                 stages[name] = {'state': 'pending_validation', 'result': rows, 'reused_records': origins, 'cost_rub': '0'}
@@ -2314,7 +2319,7 @@ def _staged_document_analysis(job, enricher):
                 while queue:
                     batch = queue.pop(0)
                     index = len(children) + 1
-                    child = f'{name}:{index}'
+                    child = name if not children and not queue and not saved else f'{name}:{index}'
                     subset = subset_task(batch)
                     job.diagnostics['refresh']['label'] = f'{label} {index}/{len(children) + len(queue) + 1}'
                     _publish_intake(job)
@@ -2326,11 +2331,11 @@ def _staged_document_analysis(job, enricher):
                             queue[:0] = [batch[:middle], batch[middle:]]
                             continue
                         raise
-                    stages[child] = metrics
+                    stages[child] = {**metrics, 'completed_tasks': len(children) + 1, 'remaining_tasks': len(queue)}
                     children.append(child)
                     rows.extend(reply)
                     _publish_intake(job)
-                stages[name] = {'state': 'pending_validation', 'result': rows, 'batches': children, 'reused_records': origins, 'cost_rub': '0'}
+                stages[name] = {**(stages.get(name, {}) if children == [name] else {'cost_rub': '0'}), 'state': 'pending_validation', 'result': rows, 'batches': [child for child in children if child != name], 'reused_records': origins}
                 rows[:] = ordered(rows)
                 validated = validator(rows)
                 for child in children:
@@ -2344,7 +2349,7 @@ def _staged_document_analysis(job, enricher):
             job.diagnostics['analysis_gaps'].append({'stage': name, 'reason': str(exc)})
             stages[name] = {**stages.get(name, {}), 'outcome': 'source_only', 'warning': str(exc)}
             validated = fallback()
-        stages[name]['state'] = 'complete'
+        stages[name]['state'] = 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'complete'
         return validated
 
     structure_instruction = '''Задача только структуры поставки. Прочитай извещение И ВСЕ документы; для КАЖДОГО working_item верни ровно одну запись; если task.requested_source_ids передан, верни ТОЛЬКО эти позиции, остальные будут разобраны отдельно с теми же документами. Раздели готовое изделие с комплектностью и набор самостоятельных товаров по смыслу, а не по слову в названии. Принадлежности, расходники, документы и штатная упаковка основного готового изделия — его комплектность. Набор разных самостоятельных изделий — kit, каждый товар отдельным элементом goods, включая отдельно описанную изготовляемую упаковку набора. Не требуй буквального слова «самостоятельные» в документе. Прежние характеристики могут ошибочно содержать разные товары как вложенные словари: обязательно переоцени такую структуру. Нельзя отвечать items:[] или пропускать позиции, даже если нет новых характеристик. Если данных недостаточно — unclear с объяснением, одна целая позиция. Количество внутри набора бери из документа с обоснованием, не выдумывай единицу при отсутствии основания. Не извлекай все характеристики и 1875 на этом шаге. Формат {"items":[{"source_id":integer,"kind":"finished|kit|unclear","name":"краткое название исходной поставки","reason":"обоснование структуры","evidence":[{"doc_id":integer,"quote":"ОДИН дословный непрерывный фрагмент ячейки/абзаца","section":"раздел/таблица"}],"goods":[{"name":"товар","quantity_per_parent":number,"unit":"единица"}]}]}. Для evidence копируй текст дословно, не соединяй разные ячейки через двоеточия/тире/точки с запятой и не вставляй многоточия. Если основания в разных местах — отдельные объекты evidence. Для unclear evidence может быть пустым. Для finished/unclear goods содержит один готовый товар, его название можно нормализовать; для kit перечисли ВСЕ составляющие. Цена принадлежит исходной поставке, цены частей не придумывай.'''
@@ -2587,6 +2592,9 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         job.status = "needs_review" if pending or job.diagnostics.get("analysis_gaps") or any(item.needs_review for item in decisions) else "ready"
         job.error = {}
         job.diagnostics["refresh"] = {"stage": "complete", "label": "Обновлено", "warnings": warnings}
+        if job.diagnostics.get('awaiting_budget'):
+            job.status = 'partial'
+            job.diagnostics['refresh'] = {'stage': 'paused', 'label': 'Прогресс сохранён · ожидает продолжения'}
     except Exception as exc:
         logger.exception("Tender refresh failed for job %s", job_id)
         job = job or TenderComputeJob.objects.get(pk=job_id)

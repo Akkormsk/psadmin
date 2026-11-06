@@ -1,0 +1,44 @@
+{
+  "method": "synthetic deterministic context construction; extraction records are fixtures, not model output",
+  "results": [
+    {
+      "fixture_items": 1,
+      "original_bytes": 7661,
+      "context_builds": 1,
+      "legacy_whole_source_bytes_if_repeated": 7661,
+      "addressed_context_bytes": 905,
+      "original_blocks_read": 1,
+      "original_blocks": 1,
+      "repeated_raw_blocks_after_reading": 0,
+      "paid_calls": 0,
+      "actual_tokens": null,
+      "actual_cost_rub": null
+    },
+    {
+      "fixture_items": 90,
+      "original_bytes": 689810,
+      "context_builds": 4,
+      "legacy_whole_source_bytes_if_repeated": 2759240,
+      "addressed_context_bytes": 27682,
+      "original_blocks_read": 90,
+      "original_blocks": 90,
+      "repeated_raw_blocks_after_reading": 0,
+      "paid_calls": 0,
+      "actual_tokens": null,
+      "actual_cost_rub": null
+    },
+    {
+      "fixture_items": 300,
+      "original_bytes": 2300260,
+      "context_builds": 12,
+      "legacy_whole_source_bytes_if_repeated": 27603120,
+      "addressed_context_bytes": 92106,
+      "original_blocks_read": 300,
+      "original_blocks": 300,
+      "repeated_raw_blocks_after_reading": 0,
+      "paid_calls": 0,
+      "actual_tokens": null,
+      "actual_cost_rub": null
+    }
+  ]
+}
