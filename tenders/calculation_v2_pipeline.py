@@ -798,9 +798,12 @@ class GatewayDocumentEnricher:
             source_value = None
             if value not in (None, '', [], {}) and (not isinstance(value, (str, int, float)) or normalize(value) not in source_text):
                 cells = [cell.strip() for cell in fragment.get('cells', []) if cell.strip()]
-                matching = [i for i, cell in enumerate(cells) if normalize(quote) in normalize(cell)]
+                matching = [i for i, cell in enumerate(cells) if normalize(quote) == normalize(cell)]
+                if len(matching) != 1:
+                    matching = [i for i, cell in enumerate(cells) if normalize(quote) in normalize(cell)]
                 if len(matching) == 1 and matching[0] + 1 < len(cells):
-                    source_value = ' · '.join(cells[matching[0] + 1:])
+                    start = 1 if matching[0] == 0 else matching[0]
+                    source_value = ' · '.join(cells[start:])
                 elif not cells and normalize(quote) != normalize(row.get('name') or ''):
                     source_value = quote
                 else:

@@ -751,6 +751,13 @@ class ResilientIntakeTests(TestCase):
         result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
         self.assertEqual(next(row for row in result if row['name'] == 'Гарантия')['value'], 'Нет')
         self.assertFalse(self.engine.specification_gaps)
+        second['tables'][0]['rows'].append(['Товар', 'Заказчик', 'Проверка заказчиком', '5 дней'])
+        indexed = self.engine._indexed_document(2, second)
+        rows[0]['characteristics'][0].update(name='Проверка', value='Заказчик в течение 5 дней',
+            fragment_id=indexed['tables'][0]['row_fragment_ids'][2], quote='Заказчик')
+        result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+        self.assertEqual(next(row for row in result if row['name'] == 'Проверка')['value'], 'Заказчик · Проверка заказчиком · 5 дней')
+        self.assertFalse(self.engine.specification_gaps)
 
     def test_bad_structure_retains_position_without_inventing_components(self):
         goods = self.engine.reconcile_structure([{'source_id': self.source.pk, 'kind': 'kit', 'goods': []}])
