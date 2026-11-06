@@ -76,3 +76,7 @@ if job:
    if f.get('name') in ['Режим поставки','Гарантия качества товара','Экспертиза','Изображение на циферблате (требование макета)']:
     ref=f.get('fragment_id'); source=getattr(engine,'source_fragments',{}).get(ref,{})
     print('LIVE_FRAGMENT_FACT',json.dumps({'key':r.get('key'),'fact':f,'fragment':source},ensure_ascii=False,default=str))
+if job:
+ goods=engine.reconcile_structure(job.diagnostics['stages']['structure'].get('result') or [])
+ compiled=engine.reconcile_specifications(job.diagnostics['stages']['tz'].get('result') or [],goods)
+ print('FRAGMENT_REAL_REPLAY',json.dumps({'goods':len(goods),'compiled':len(compiled),'gaps':engine.specification_gaps,'warranties':[{'key':key,'value':fact.get('value'),'source':fact.get('provenance',{}).get('document_url')} for key,data in compiled.items() for fact in data.get('characteristics',[]) if fact.get('name')=='Гарантия качества товара']},ensure_ascii=False))
