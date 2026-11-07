@@ -93,6 +93,17 @@ def document_blocks(documents, images=()):
     return blocks
 
 
+def normalize_reading_scope(row, source_ids):
+    """An unknown association is unresolved evidence, not an invented item link."""
+    if not isinstance(row, dict) or row.get('scope') != 'item':
+        return row
+    refs = row.get('source_ids')
+    if not isinstance(refs, list) or not refs or any(type(ref) is not int or ref not in source_ids for ref in refs):
+        return {**row, 'scope': 'unassigned', 'source_ids': [],
+                'reason': 'Связь с конкретной позицией не подтверждена; сохранены исходные сведения.'}
+    return row
+
+
 def validate_reading(rows, blocks, source_ids):
     if not isinstance(rows, list):
         raise ValueError('Не получено состояние прочитанных фрагментов.')

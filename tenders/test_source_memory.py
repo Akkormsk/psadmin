@@ -101,6 +101,33 @@ class SourceMemoryPipelineTests(TestCase):
             self.engine().read_source_memory(job)
         self.assertTrue(job.diagnostics['source_reading']['complete'])
 
+    def test_saved_unlinked_paid_rows_are_repaired_without_another_model_call(self):
+        engine = self.engine()
+        old_memory = SourceMemory(document_blocks(engine.document_lookup, engine.document_images),
+                                  [{'source_id': self.source.pk}], engine.model)
+        rows = [{'id': block['id'], 'scope': 'item', 'source_ids': [],
+                 'facts': [{'quote': block['text']}]} for block in old_memory.blocks.values()]
+        TenderComputeJob.objects.create(tender=self.tender, diagnostics={'source_reading': old_memory.snapshot(),
+            'stages': {'reading:paid': {'state': 'pending_validation', 'result': rows}}})
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid content repeated')) as gateway:
+            self.engine().read_source_memory(job)
+        gateway.assert_not_called()
+        self.assertEqual(job.diagnostics['source_reading']['read'], 30)
+        self.assertTrue(job.diagnostics['source_reading']['complete'])
+
+    def test_missing_item_link_is_retained_as_unassigned_without_repeating_reading(self):
+        engine = self.engine()
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            return {'items': [{'ids': [block['id'] for block in task['blocks']], 'scope': 'item',
+                               'source_ids': [], 'reason': 'Требования без подтверждённой привязки'}]}, {}
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            engine.read_source_memory(job)
+        self.assertTrue(job.diagnostics['source_reading']['complete'])
+        self.assertTrue(all(row['scope'] == 'unassigned' for row in job.diagnostics['source_reading']['records'].values()))
+
     def test_grouped_references_attach_exact_originals_without_model_copying_text(self):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         def answer(prompt, **kwargs):
