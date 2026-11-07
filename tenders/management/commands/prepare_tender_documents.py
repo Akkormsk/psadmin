@@ -166,7 +166,8 @@ class Command(BaseCommand):
             raise CommandError('Route allocation must be positive, below total budget and at most 2 RUB')
         doc_limit = min(Decimal('10'), budget - route_budget if route_budget is not None else budget * Decimal('0.8'))
         route_limit = min(Decimal('2'), budget - doc_limit)
-        config = {'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
+        config = {'CALCULATION_V2_INTAKE_MAX_COST_RUB': str(budget),
+                  'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
                   'CALCULATION_V2_ROUTE_MAX_COST_RUB': str(route_limit)}
         first_routes = None
         with patch.dict(os.environ, config):
@@ -194,7 +195,10 @@ class Command(BaseCommand):
                     'routes': {key: {'state': row['state'], 'step_count': len(row['steps']),
                                     'has_question': bool(row.get('question'))} for key, row in routes.items()}}
                 self.stdout.write(json.dumps(report, ensure_ascii=False, default=str))
-                if job.status not in {'ready', 'needs_review'} or not routes or any(row['state'] not in {'ready', 'needs_review'} for row in routes.values()):
+                complete = all(job.diagnostics.get('stages', {}).get(name, {}).get('state') == 'complete'
+                    and job.diagnostics['stages'][name].get('outcome') != 'source_only'
+                    for name in ('documents', 'structure', 'national_regime', 'tz', 'routing'))
+                if not complete or job.diagnostics.get('analysis_gaps') or job.status not in {'ready', 'needs_review'} or not routes or any(row['state'] not in {'ready', 'needs_review'} for row in routes.values()):
                     raise CommandError('Full refresh failed; no paid repeat was started')
                 if attempt and (job.total_cost or route_ids != first_routes):
                     raise CommandError('Cached repeat changed routes or incurred model cost')

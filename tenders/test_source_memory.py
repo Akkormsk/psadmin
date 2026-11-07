@@ -83,6 +83,28 @@ class SourceMemoryPipelineTests(TestCase):
         gateway.assert_not_called()
         self.assertTrue(third.diagnostics['source_reading']['complete'])
 
+    def test_partial_reading_continues_without_repeating_confirmed_sources(self):
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        confirmed = set()
+        calls = []
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            blocks = task['blocks']
+            self.assertTrue(all('occurrences' not in block and 'version' not in block for block in blocks))
+            self.assertFalse(confirmed.intersection(block['text'] for block in blocks))
+            self.assertTrue(all(len(block['id']) < 8 for block in blocks))
+            selected = blocks[:1] if not calls else blocks
+            rows = [{'id': block['id'], 'scope': 'item', 'source_ids': [self.source.pk],
+                     'facts': [{'quote': block['text']}]} for block in selected]
+            confirmed.update(block['text'] for block in selected)
+            calls.append(len(blocks))
+            return {'items': rows}, {}
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            self.engine().read_source_memory(job)
+        self.assertGreater(len(calls), 1)
+        self.assertTrue(job.diagnostics['source_reading']['complete'])
+        self.assertEqual(len(confirmed), 30)
+
     @override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True, CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 30000, 'max_output_tokens': 32000}})
     def test_large_route_batches_persist_before_interruption_and_are_not_requested_again(self):
         from .models import ProcessDefinition, ComponentRoutePlan
