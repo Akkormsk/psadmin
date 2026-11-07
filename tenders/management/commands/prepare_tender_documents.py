@@ -166,7 +166,8 @@ class Command(BaseCommand):
             raise CommandError('Route allocation must be positive, below total budget and at most 2 RUB')
         doc_limit = min(Decimal('10'), budget - route_budget if route_budget is not None else budget * Decimal('0.8'))
         route_limit = min(Decimal('2'), budget - doc_limit)
-        config = {'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
+        config = {'CALCULATION_V2_INTAKE_MAX_COST_RUB': str(budget),
+                  'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
                   'CALCULATION_V2_ROUTE_MAX_COST_RUB': str(route_limit)}
         first_routes = None
         with patch.dict(os.environ, config):

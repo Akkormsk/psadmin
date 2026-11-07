@@ -238,7 +238,8 @@ def main():
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
-        print(json.dumps(collect_report(number), ensure_ascii=False, default=str))
+        from tender_selection.models import Tender
+        print(json.dumps({'source_reading_history': source_reading_history(Tender.objects.get(purchase_number=number))}, ensure_ascii=False, default=str), flush=True)
 
 
 if __name__ == '__main__':
