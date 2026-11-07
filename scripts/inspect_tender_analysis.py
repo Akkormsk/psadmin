@@ -117,11 +117,12 @@ def source_reading_history(tender):
                 except ValueError as exc:
                     errors[str(exc)] += 1
                     if len(samples) < 2:
-                        samples.append({'error': str(exc), 'row': row, 'source': block.get('text'), 'location': block.get('location')})
+                        samples.append({'error': str(exc), 'id': row.get('id'), 'source_excerpt': block.get('text', '')[:300], 'location': block.get('location')})
         read_ids = {row.get('id') for row in memory.get('records', {}).values()}
         scopes = Counter(row.get('scope') for row in memory.get('records', {}).values())
         history.append({'job_id': job.pk, 'gaps': job.diagnostics.get('analysis_gaps'),
-            'scopes': dict(scopes), 'remaining': [{'id': key, 'location': block.get('location'), 'bytes': len(block.get('text', '').encode())} for key, block in blocks.items() if key not in read_ids],
+            'scopes': dict(scopes), 'remaining_count': len(blocks) - len(read_ids),
+            'largest_remaining': sorted([{'id': key, 'location': block.get('location'), 'bytes': len(block.get('text', '').encode())} for key, block in blocks.items() if key not in read_ids], key=lambda row: row['bytes'], reverse=True)[:3],
             'coverage': {key: memory.get(key) for key in ('total', 'read', 'complete')},
             'validation_errors': dict(errors), 'samples': samples})
     return history
