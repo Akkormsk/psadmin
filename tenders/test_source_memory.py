@@ -83,6 +83,24 @@ class SourceMemoryPipelineTests(TestCase):
         gateway.assert_not_called()
         self.assertTrue(third.diagnostics['source_reading']['complete'])
 
+    def test_table_row_text_is_not_resent_as_cells_and_its_own_header(self):
+        text = 'Исходный текст ячейки'
+        preview = DocumentPreview.objects.get(url=self.documents[0]['url'])
+        preview.html = f'<table><tr><td colspan="2">{text}</td></tr></table>'
+        preview.save(update_fields=['html'])
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            wire = json.dumps(task, ensure_ascii=False)
+            self.assertEqual(wire.count(text), 1)
+            block = task['blocks'][0]
+            self.assertNotIn('table_start', block['table_context'])
+            self.assertEqual(block['table_context']['cell_spans'][0]['colspan'], 2)
+            return {'items': [{'ids': [block['id']], 'scope': 'global', 'source_ids': [], 'reason': 'Требование'}]}, {}
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            self.engine().read_source_memory(job)
+        self.assertTrue(job.diagnostics['source_reading']['complete'])
+
     def test_grouped_references_attach_exact_originals_without_model_copying_text(self):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         def answer(prompt, **kwargs):
