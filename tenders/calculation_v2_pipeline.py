@@ -353,6 +353,9 @@ class GatewayDocumentEnricher:
         self.cost_rub = 0.0
         self.diagnostics = {}
         self.document_images = []
+        from django.conf import settings
+        if settings.CALCULATION_V2_SOURCE_MEMORY_ENABLED:
+            self.STAGED_CONTRACT = "intake-addressed-facts-v1"
 
     STAGED_CONTRACT = "intake-steps-v4-anchored-specification"
     STAGED_VALIDATION_VERSION = "canonical-fact-sources-v10-resilient"
@@ -401,7 +404,6 @@ class GatewayDocumentEnricher:
             'source_context': 'All documents and the complete item index are shared. task.working_items and task.notification_items supply complete facts and original EIS objects for the requested positions; other positions are processed separately with the same documents.',
             'documents': [{'doc_id': index, 'name': doc['name']} for index, doc in self.document_lookup.items()]}
         if settings.CALCULATION_V2_SOURCE_MEMORY_ENABLED:
-            self.STAGED_CONTRACT = 'intake-addressed-facts-v1'
             payload['notification'] = self.notification_summary
             self.shared_context = json.dumps(payload, ensure_ascii=False, default=str)
         else:
