@@ -299,7 +299,12 @@ class LargeIntakeStageTests(TestCase):
             _staged_document_analysis(job, engine)
         self.assertEqual(len(job.diagnostics['stages']['structure']['result']), 21)
         self.assertNotIn('document_analysis_reused', job.diagnostics)
-        self.assertEqual([len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')], [2] if reuse == 'conflict' else [1] if reuse else [20, 10, 10, 1])
+        counts = [len(call.args[3]['requested_source_ids']) for call in ask.call_args_list if call.args[1].startswith('structure')]
+        if reuse:
+            self.assertEqual(counts, [2] if reuse == 'conflict' else [1])
+        else:
+            self.assertEqual(len(job.diagnostics['stages']['structure']['result']), len(sources))
+            self.assertGreater(len(counts), 1)
         self.assertEqual(len(job.diagnostics['stages']['tz']['result']), 21)
         self.assertEqual(job.diagnostics['analysis_gaps'], [])
         self.assertEqual(len(engine.notification_items), 21)

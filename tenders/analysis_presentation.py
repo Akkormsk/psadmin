@@ -239,6 +239,8 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         label = "Маршруты обновлены" if job.diagnostics.get("routes_only") else "Обновлено"
     elif refresh and code == "ANALYSIS_INCOMPLETE":
         label = "Обновление не завершено"
+    if job and not active and job.diagnostics.get('awaiting_budget'):
+        label = 'Прогресс сохранён · ожидает продолжения'
     started = (job.started_at or job.created_at) if job else None
     if job and job.diagnostics.get('refresh_started_at'):
         from datetime import datetime

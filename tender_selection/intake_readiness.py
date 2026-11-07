@@ -38,6 +38,8 @@ def summarize(tenders):
             reason = 'Ещё не разобран'
         elif job.error:
             reason = str(job.error.get('message') or 'Этап анализа не завершён')
+        elif job.diagnostics.get('awaiting_budget'):
+            reason = 'Прогресс сохранён; ожидает продолжения в пределах бюджета'
         elif missing:
             reason = 'Не все этапы анализа завершены'
         elif gaps:

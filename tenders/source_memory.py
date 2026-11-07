@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-VERSION = 'source-memory-v1'
+VERSION = 'source-memory-v2'
 MAX_INPUT_BYTES = 24000
 
 
@@ -48,12 +48,14 @@ def document_blocks(documents, images=()):
         version = signature([doc.get('source_html'), doc.get('evidence_text'), doc.get('tables'), [signature(images[i - 1]) for i in doc.get('image_indexes', [])]])
         root = html.fragment_fromstring(doc.get('source_html') or '<div/>', create_parent='div')
         entries, section, paragraph_no, table_no = [], '', 0, 0
+        table_contexts = {}
         tables = doc.get('tables', [])
         def add_table(number, heading):
             table = tables[number - 1]
-            table_start = table.get('rows', [])[:2]
             for row_no, row in enumerate(table.get('rows', []), 1):
-                entries.append(('table', f'{heading} / Таблица {number}, строка {row_no}', json.dumps({'table_start': table_start, 'row': row}, ensure_ascii=False)))
+                location = f'{heading} / Таблица {number}, строка {row_no}'
+                table_contexts[location] = {'table_start': table.get('rows', [])[:1], 'row_cells': row}
+                entries.append(('table', location, ' | '.join(cell if isinstance(cell, str) else str(cell.get('text', '')) for cell in row)))
         for node in root.xpath('.//p[not(ancestor::table)] | .//li[not(ancestor::table) and not(.//p)] | .//h1 | .//h2 | .//h3 | .//h4 | .//table[not(ancestor::table)]'):
             if node.tag == 'table':
                 table_no += 1
@@ -66,16 +68,20 @@ def document_blocks(documents, images=()):
             if text:
                 paragraph_no += 1
                 entries.append(('paragraph', f'{section} / Абзац {paragraph_no}', text))
+        outside = ' '.join(root.xpath('.//text()[not(ancestor::p or ancestor::li or ancestor::h1 or ancestor::h2 or ancestor::h3 or ancestor::h4 or ancestor::table)]')).strip()
+        if entries and outside:
+            entries.append(('paragraph', 'Прочий текст документа', outside))
         if not entries and doc.get('text'):
             entries.append(('paragraph', 'Абзац 1', doc['text']))
         for number in range(table_no + 1, len(tables) + 1):
             add_table(number, section)
         for kind, location, text in entries:
-            for part, fragment in enumerate(text_parts(text), 1):
+            parts = [text] if kind == 'table' else text_parts(text)
+            for part, fragment in enumerate(parts, 1):
                 anchor = signature([doc['url'], kind, fragment])
                 occurrence = occurrences.get(anchor, 0)
                 occurrences[anchor] = occurrence + 1
-                blocks.append({'id': f'{anchor}:{occurrence}', 'version': version, 'doc_id': doc_id, 'location': f'{location}, часть {part}', 'text': fragment})
+                blocks.append({'id': f'{anchor}:{occurrence}', 'version': version, 'doc_id': doc_id, 'location': f'{location}, часть {part}', 'text': fragment, **({'table_context': table_contexts[location]} if location in table_contexts else {})})
         image_indexes = doc.get('image_indexes', [])
         pages = doc.get('visual_pages', [])
         for offset, image_no in enumerate(image_indexes):
@@ -83,7 +89,7 @@ def document_blocks(documents, images=()):
             if len(pages) == len(image_indexes):
                 location = f'Страница {pages[offset]} / {location}'
             blocks.append({'id': signature([doc['url'], 'image', image_no, signature(images[image_no - 1])]), 'doc_id': doc_id,
-                'version': version, 'location': location, 'image_index': image_no, 'text': ''})
+                'version': version, 'location': location, 'image_index': image_no, 'image_digest': signature(images[image_no - 1]), 'text': ''})
     return blocks
 
 
@@ -110,31 +116,50 @@ def validate_reading(rows, blocks, source_ids):
     return rows
 
 
+def validate_extracted_facts(rows, blocks):
+    by_id = {block['id']: block for block in blocks}
+    normalize = lambda text: ' '.join(str(text).casefold().split())
+    for row in rows:
+        facts = row.get('facts')
+        if not isinstance(facts, list) or (row['scope'] != 'irrelevant' and not facts):
+            raise ValueError('Не получены факты источника; исходный блок остаётся необработанным.')
+        block = by_id[row['id']]
+        for fact in facts:
+            if not isinstance(fact, dict) or not isinstance(fact.get('quote'), str) or not fact['quote'].strip():
+                raise ValueError('Факт не связан с исходной цитатой.')
+            if not block.get('image_index') and normalize(fact['quote']) not in normalize(block['text']):
+                raise ValueError('Цитата факта отсутствует в исходном блоке.')
+
+
 class SourceMemory:
+    """Read source content once; retain occurrences separately from applicability."""
     def __init__(self, blocks, inventory, model, source_versions=None):
-        self.blocks = {block['id']: block for block in blocks}
-        self.pages = list(packets(inventory, 12000)) or [[]]
-        self.page_keys = [signature([VERSION, model, page, [(source['source_id'], (source_versions or {}).get(source['source_id'])) for source in page]]) for page in self.pages]
+        self.blocks = {}
+        for block in blocks:
+            identity = signature([block.get('text'), block.get('table_context'), block.get('image_digest'), bool(block.get('image_index'))])
+            occurrence = {key: value for key, value in block.items() if key not in {'text', 'occurrences'}}
+            if identity not in self.blocks:
+                self.blocks[identity] = {**block, 'id': identity, 'occurrences': []}
+            self.blocks[identity]['occurrences'].append(occurrence)
+        # A single compact inventory, never blocks × inventory pages.
+        self.pages = [inventory]
+        self.page_keys = [signature([VERSION, model, inventory, source_versions or {}])]
         self.records = {}
 
     def restore(self, state):
-        if state.get('version') != VERSION:
-            return
-        for key, row in state.get('records', {}).items():
-            # The key binds the exact block and inventory page, not a document-wide hash.
-            if key not in self.records:
-                self.records[key] = row
+        if state.get('version') == VERSION:
+            self.records.update({key: row for key, row in state.get('records', {}).items() if key not in self.records})
 
     def key(self, block_id, page_key):
-        return signature([block_id, self.blocks[block_id].get('version'), page_key])
+        block = self.blocks[block_id]
+        return signature([block_id, page_key, [(o.get('doc_id'), o.get('version')) for o in block['occurrences']]])
 
-    def pending(self):
-        for page, page_key in zip(self.pages, self.page_keys):
-            missing = [block for block in self.blocks.values() if self.key(block['id'], page_key) not in self.records]
-            # Keep image input bounded as well as text; identical images are deduplicated by gateway.
-            for batch in packets(missing, 6500):
-                for offset in range(0, len(batch), 12):
-                    yield page, page_key, batch[offset:offset + 12]
+    def pending(self, limit=None):
+        page, page_key = self.pages[0], self.page_keys[0]
+        missing = (block for block in self.blocks.values() if self.key(block['id'], page_key) not in self.records)
+        for batch in packets(missing, limit) if limit is not None else [list(missing)]:
+            if batch:
+                yield page, page_key, batch
 
     def save(self, rows, blocks, page, page_key):
         validate_reading(rows, blocks, {source['source_id'] for source in page})
@@ -142,7 +167,7 @@ class SourceMemory:
             self.records[self.key(row['id'], page_key)] = row
 
     def snapshot(self):
-        current = {self.key(block_id, page_key) for block_id in self.blocks for page_key in self.page_keys}
+        current = {self.key(block_id, self.page_keys[0]) for block_id in self.blocks}
         records = {key: row for key, row in self.records.items() if key in current}
         return {'version': VERSION, 'fragments': self.blocks, 'source_map': getattr(self, 'source_map', {}),
             'records': records, 'total': len(current), 'read': len(records),
@@ -150,10 +175,58 @@ class SourceMemory:
 
     def relevant(self, source_ids):
         for block_id, block in self.blocks.items():
-            rows = [self.records.get(self.key(block_id, key)) for key in self.page_keys]
-            rows = [row for row in rows if row]
-            linked = {ref for row in rows if row['scope'] == 'item' for ref in row['source_ids']}
-            global_scope = any(row['scope'] == 'global' for row in rows)
-            uncertain = not linked and any(row['scope'] == 'unassigned' for row in rows)
-            if global_scope or uncertain or linked.intersection(source_ids):
+            row = self.records.get(self.key(block_id, self.page_keys[0]))
+            if not row:
+                # Unread material can never be treated as evidence of absence.
                 yield block
+                continue
+            if row['scope'] in {'global', 'unassigned'} or set(row['source_ids']).intersection(source_ids):
+                yield block
+
+    def context(self, source_ids):
+        """Only verified extracted facts; originals remain addressable by block ID."""
+        for block in self.relevant(source_ids):
+            row = self.records.get(self.key(block['id'], self.page_keys[0]))
+            if not row:
+                raise ValueError('Источник ещё не обработан; факты не готовы.')
+            yield {'fragment_id': block['id'], 'doc_id': block['doc_id'], 'section': block['location'],
+                   'facts': row.get('facts', []), 'occurrences': [{key: value for key, value in occurrence.items() if key in {'doc_id', 'location'}} for occurrence in block['occurrences']]}
+
+
+def token_bound(value):
+    """UTF-8 byte upper bound, not an advertised exact provider token count."""
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode())
+
+
+def plan_packets(values, fits):
+    """Greedy atomic packets sized by the full request, never by product count."""
+    batch = []
+    for value in values:
+        if batch and not fits(batch + [value]):
+            yield batch
+            batch = []
+        if not fits([value]):
+            raise ValueError('Один связанный блок не помещается в доступный контекст/бюджет.')
+        batch.append(value)
+    if batch:
+        yield batch
+
+class RequestLimits:
+    """Provider limits and an uncached reservation; no token count claimed as exact."""
+    def __init__(self, model, remaining, output_limit):
+        from django.conf import settings
+        from .gateway_budget import model_catalog
+        override = getattr(settings, 'CALCULATION_V2_CONTEXT_LIMITS', {}).get(model)
+        row = override or next((entry for entry in model_catalog() if entry['id'] == model), {})
+        self.input_limit = row.get('max_input_tokens')
+        self.output_limit = min(output_limit, row.get('max_output_tokens') or output_limit)
+        if not isinstance(self.input_limit, int) or self.input_limit <= 0:
+            raise ValueError('Шлюз не сообщил размер контекста модели; задание сохранено для продолжения.')
+        self.model, self.remaining = model, remaining
+
+    def fits(self, input_tokens, output_tokens):
+        from decimal import Decimal
+        from .gateway_budget import spend_rub
+        cost = spend_rub({'prompt_tokens': input_tokens, 'completion_tokens': output_tokens}, self.model)
+        return (output_tokens <= self.output_limit and input_tokens + output_tokens <= self.input_limit
+                and cost is not None and Decimal(str(cost)) * Decimal('1.25') <= self.remaining)
