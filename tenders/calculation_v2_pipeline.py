@@ -502,7 +502,7 @@ class GatewayDocumentEnricher:
             list(dict.fromkeys(block['image_index'] for block in blocks if block.get('image_index'))))
 
     def read_source_memory(self, job):
-        from .source_memory import SourceMemory, VERSION, document_blocks, validate_reading, validate_extracted_facts, plan_packets, token_bound, RequestLimits
+        from .source_memory import SourceMemory, VERSION, document_blocks, validate_reading, validate_extracted_facts, normalize_reading_scope, plan_packets, token_bound, RequestLimits
         self.all_document_images = list(self.document_images)
         inventory = [{'source_id': pk, 'label': row['name']} for pk, row in self.working_context.items()]
         source_versions = {pk: _fingerprint(self.normalized_notification_items.get(pk)) for pk in self.stage_sources}
@@ -510,7 +510,24 @@ class GatewayDocumentEnricher:
             _fingerprint([self.model, self.thinking, self.reasoning_effort]), source_versions)
         memory.source_map = {doc_id: {'url': doc['url'], 'name': doc['name']} for doc_id, doc in self.document_lookup.items()}
         for prior in TenderComputeJob.objects.filter(tender=job.tender, diagnostics__source_reading__version=VERSION).exclude(pk=job.pk).order_by('-pk').values_list('diagnostics', flat=True):
-            memory.restore(prior.get('source_reading', {}))
+            state = prior.get('source_reading', {})
+            memory.restore(state)
+            # Repair only unlinked paid rows whose exact original/version still exists.
+            for name, stage in prior.get('stages', {}).items():
+                if not name.startswith('reading:'):
+                    continue
+                for row in stage.get('result') or []:
+                    if not isinstance(row, dict) or row.get('scope') != 'item' or row.get('source_ids') != []:
+                        continue
+                    block = memory.blocks.get(row.get('id'))
+                    if block is None or block.get('image_index') or state.get('fragments', {}).get(row['id']) != block or memory.key(row['id'], memory.page_keys[0]) in memory.records:
+                        continue
+                    repaired = normalize_reading_scope(row, {source['source_id'] for source in inventory})
+                    try:
+                        validate_extracted_facts([repaired], [block])
+                        memory.save([repaired], [block], memory.pages[0], memory.page_keys[0])
+                    except ValueError:
+                        continue
         memory.restore(job.diagnostics.get('source_reading', {}))
         self.source_memory = memory
         self.source_fragments = {key: {'doc_id': block['doc_id'], 'text': block['text'], 'section': block['location'],
@@ -589,7 +606,7 @@ class GatewayDocumentEnricher:
                         block = memory.blocks.get(identity)
                         if 'ids' in row and block is not None and not block.get('image_index'):
                             record['facts'] = [] if row.get('scope') == 'irrelevant' else [{'quote': block['text']}]
-                        resolved.append(record)
+                        resolved.append(normalize_reading_scope(record, set(self.stage_sources)))
                 return resolved
             try:
                 rows, metrics = self.ask_stage(job, stage, instruction, {'source_index': page, 'blocks': reading_payload(batch)},
