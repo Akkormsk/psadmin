@@ -118,7 +118,10 @@ def source_reading_history(tender):
                     errors[str(exc)] += 1
                     if len(samples) < 2:
                         samples.append({'error': str(exc), 'row': row, 'source': block.get('text'), 'location': block.get('location')})
+        read_ids = {row.get('id') for row in memory.get('records', {}).values()}
+        scopes = Counter(row.get('scope') for row in memory.get('records', {}).values())
         history.append({'job_id': job.pk, 'gaps': job.diagnostics.get('analysis_gaps'),
+            'scopes': dict(scopes), 'remaining': [{'id': key, 'location': block.get('location'), 'bytes': len(block.get('text', '').encode())} for key, block in blocks.items() if key not in read_ids],
             'coverage': {key: memory.get(key) for key in ('total', 'read', 'complete')},
             'validation_errors': dict(errors), 'samples': samples})
     return history
