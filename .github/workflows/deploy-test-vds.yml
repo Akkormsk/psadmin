@@ -293,7 +293,7 @@ jobs:
             "$SSH_USER@$SSH_HOST" 'docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml ps; docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml logs --tail 100 test-web' || true
 
   inspect:
-    if: github.event_name == 'workflow_dispatch' && inputs.inspect_tender_number != '' && (github.ref == 'refs/heads/test-server' || github.ref == 'refs/heads/feature/m3-agent-simple')
+    if: github.event_name == 'workflow_dispatch' && inputs.inspect_tender_number != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:

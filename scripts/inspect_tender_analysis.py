@@ -92,6 +92,38 @@ def document_input_profile(tender):
     return report
 
 
+def source_reading_history(tender):
+    from collections import Counter
+    from tenders.models import TenderComputeJob
+    from tenders.source_memory import validate_extracted_facts, validate_reading
+    history = []
+    jobs = TenderComputeJob.objects.filter(tender=tender, diagnostics__source_reading__isnull=False).order_by('-pk')[:3]
+    for job in jobs:
+        memory = job.diagnostics.get('source_reading') or {}
+        blocks = memory.get('fragments') or {}
+        source_ids = set(tender.v2_source_items.values_list('pk', flat=True))
+        errors, samples = Counter(), []
+        for name, stage in job.diagnostics.get('stages', {}).items():
+            if not name.startswith('reading:'):
+                continue
+            for row in stage.get('result') or []:
+                block = blocks.get(row.get('id'))
+                if block is None:
+                    errors['Unknown fragment'] += 1
+                    continue
+                try:
+                    validate_reading([row], [block], source_ids)
+                    validate_extracted_facts([row], [block])
+                except ValueError as exc:
+                    errors[str(exc)] += 1
+                    if len(samples) < 2:
+                        samples.append({'error': str(exc), 'row': row, 'source': block.get('text'), 'location': block.get('location')})
+        history.append({'job_id': job.pk, 'gaps': job.diagnostics.get('analysis_gaps'),
+            'coverage': {key: memory.get(key) for key in ('total', 'read', 'complete')},
+            'validation_errors': dict(errors), 'samples': samples})
+    return history
+
+
 def collect_report(number):
     from tender_selection.models import Tender
     from tender_selection.notification import parse_notification
@@ -189,7 +221,7 @@ def collect_report(number):
             if isinstance(entry, dict):
                 for rejection in (entry.get('extraction') or {}).get('rejections', []):
                     failures[str(rejection.get('reason'))] += 1
-    return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'tender_number': number, 'national_regime_fields': national_fields, 'read_only': True, 'model_called': False, 'latest_job': latest,
+    return {'failed_tenders': [{'number': row['tender__purchase_number'], 'title': row['tender__title'], 'issues': analysis_issues(SimpleNamespace(**row)), 'usage': [entry.get('usage') for entry in (row['diagnostics'].get('enrichment') or []) if isinstance(entry, dict)]} for row in recent if row['status'] in {'partial', 'failed'}], 'failure_issue_counts': dict(Counter(issue for row in recent if row['status'] in {'partial', 'failed'} for issue in analysis_issues(SimpleNamespace(**row)))), 'latest_job_status_counts': dict(Counter(row['status'] for row in recent)), 'rejection_counts': dict(failures), 'source_reading_history': source_reading_history(tender), 'tender_number': number, 'national_regime_fields': national_fields, 'read_only': True, 'model_called': False, 'latest_job': latest,
             'document_input_profile': document_input_profile(tender), 'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
