@@ -199,7 +199,7 @@ class Command(BaseCommand):
                 self.stdout.write(json.dumps(report, ensure_ascii=False, default=str))
                 complete = all(job.diagnostics.get('stages', {}).get(name, {}).get('state') == 'complete'
                     and job.diagnostics['stages'][name].get('outcome') != 'source_only'
-                    for name in (('documents', 'source_reading', 'source_binding', 'structure', 'tz') if items_only else ('documents', 'structure', 'national_regime', 'tz', 'routing')))
+                    for name in (('documents', 'source_reading', 'source_binding', 'tz') if items_only else ('documents', 'structure', 'national_regime', 'tz', 'routing')))
                 gaps = [gap for gap in job.diagnostics.get('analysis_gaps', []) if not items_only or gap.get('stage') != 'source_binding']
                 if not complete or gaps or job.status not in {'ready', 'needs_review'} or (not items_only and (not routes or any(row['state'] not in {'ready', 'needs_review'} for row in routes.values()))):
                     raise CommandError('Full refresh failed; no paid repeat was started')
