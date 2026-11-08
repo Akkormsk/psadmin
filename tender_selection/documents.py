@@ -174,6 +174,7 @@ def _docx_html(data: bytes) -> str:
     from docx import Document
     from docx.oxml.ns import qn
     from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     doc = Document(io.BytesIO(data))
     out, count = ["<section class='ts-doc-page'>"], 0
@@ -188,7 +189,21 @@ def _docx_html(data: bytes) -> str:
                 out.append("</section><section class='ts-doc-page'>")
             text = "".join(node.text or "" for node in child.iter(qn("w:t"))).strip()
             if text:
-                out.append(f"<p>{escape(text)}</p>")
+                paragraph = Paragraph(child, doc)
+                style, level, seen = paragraph.style, None, set()
+                props = [paragraph._p.pPr]
+                while style is not None and style.style_id not in seen:
+                    seen.add(style.style_id)
+                    props.append(style.element.pPr)
+                    style = style.base_style
+                for prop in props:
+                    outline = prop.find(qn('w:outlineLvl')) if prop is not None else None
+                    if outline is not None:
+                        value = outline.get(qn('w:val'), '')
+                        level = int(value) + 1 if value.isdigit() and int(value) < 9 else None
+                        break
+                attributes = f' data-outline-level="{level}"' if level is not None else ''
+                out.append(f"<p{attributes}>{escape(text)}</p>")
                 count += 1
         elif child.tag == qn("w:tbl"):
             html = _docx_table_html(Table(child, doc), doc)

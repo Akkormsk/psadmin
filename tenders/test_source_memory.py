@@ -231,6 +231,7 @@ class AddressedContextTests(SimpleTestCase):
 class SourceRetrievalTests(TestCase):
     setUp = SourceMemoryPipelineTests.setUp
     engine = SourceMemoryPipelineTests.engine
+    @override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True)
     def test_addressed_document_pipeline_completes_without_repeating_original_documents(self):
         for count in (1, 90):
             for i in range(TenderSourceItem.objects.filter(tender=self.tender).count(), count):
@@ -261,6 +262,11 @@ class SourceRetrievalTests(TestCase):
             self.assertTrue(all(job.diagnostics['stages'][name]['state'] == 'complete' for name in ('structure', 'national_regime', 'tz')))
             self.assertFalse(job.diagnostics.get('analysis_gaps'))
             self.assertEqual(sum('blocks' in task for task, context in calls), 1)
+            repeat = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+            with override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True), patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid repeat')):
+                _staged_document_analysis(repeat, GatewayDocumentEnricher(max_cost_rub=10))
+            self.assertEqual(repeat.diagnostics.get('tender_conditions'), job.diagnostics.get('tender_conditions'))
+            self.assertTrue(repeat.diagnostics['source_reading']['complete'])
 
     def test_item_fingerprint_survives_repartition_and_changes_with_its_source(self):
         engine = self.engine()
@@ -310,3 +316,122 @@ class SourceRetrievalTests(TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(rows[0]['key'], 'good')
         self.assertTrue(metrics['dependencies'])
+
+class ItemEvidenceBindingTests(SimpleTestCase):
+    def memory(self):
+        blocks = [{'id': str(i), 'version': 'v', 'doc_id': 1, 'location': 'ТЗ / Таблица 1', 'text': text}
+                  for i, text in enumerate(['Кружка белая 350 мл', 'Футболка хлопок', 'Доставка одной партией'])]
+        memory = SourceMemory(blocks, [{'source_id': 1}, {'source_id': 2}], 'model')
+        for page, key, batch in memory.pending():
+            memory.save([{'id': b['id'], 'scope': 'unassigned', 'source_ids': [], 'facts': [{'quote': b['text']}]} for b in batch], batch, page, key)
+        return memory
+
+    def test_positions_receive_only_their_evidence_and_delivery_stays_on_tender(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        ids = list(memory.blocks)
+        memory.assign([{'id': ids[0], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']},
+                       {'id': ids[1], 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']},
+                       {'id': ids[2], 'scope': 'global', 'source_ids': [], 'purposes': ['delivery']}], list(memory.blocks.values()))
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context({1}, 'tz')], ['Кружка белая 350 мл'])
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context({2}, 'tz')], ['Футболка хлопок'])
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context(set(), 'delivery')], ['Доставка одной партией'])
+
+    def test_assignment_resume_preserves_reading_and_invalidates_changed_inventory_only(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        block = next(iter(memory.blocks.values()))
+        memory.assign([{'id': block['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']}], [block])
+        restored = self.memory()
+        restored.restore(memory.snapshot())
+        restored.begin_assignment({'inventory': [1, 2]})
+        self.assertEqual(len(restored.pending_assignments()), 2)
+        restored.begin_assignment({'inventory': [1, 2, 3]})
+        self.assertEqual(len(restored.pending_assignments()), 3)
+        self.assertTrue(restored.snapshot()['complete'])
+
+    def test_unresolved_binding_cannot_silently_complete_a_position(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        with self.assertRaisesMessage(ValueError, 'Привязка источников'):
+            list(memory.context({1}, 'tz'))
+
+    def test_heading_hierarchy_is_retained_without_changing_existing_addresses(self):
+        docs = {1: {'url': 'spec', 'source_html': '<h1>ТЗ</h1><h2>Спецификация</h2><p>Материал</p>', 'tables': []}}
+        blocks = document_blocks(docs)
+        self.assertEqual(blocks[-1]['structure']['headings'], ['ТЗ', 'Спецификация'])
+        original = SourceMemory(blocks, [{'source_id': 1}], 'model')
+        stripped = SourceMemory([{k: v for k, v in b.items() if k != 'structure'} for b in blocks], [{'source_id': 1}], 'model')
+        self.assertEqual(list(original.blocks), list(stripped.blocks))
+
+@override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 10000, 'max_output_tokens': 4096}})
+class ItemBindingResumeTests(TestCase):
+    setUp = SourceMemoryPipelineTests.setUp
+    engine = SourceMemoryPipelineTests.engine
+
+    def prepared(self, state=None):
+        engine = self.engine()
+        memory = SourceMemory(document_blocks(engine.document_lookup), [{'source_id': self.source.pk, 'label': self.source.original_text}], 'model')
+        for page, key, batch in memory.pending():
+            memory.save([{'id': b['id'], 'scope': 'unassigned', 'source_ids': [], 'facts': [{'quote': b['text']}]} for b in batch], batch, page, key)
+        if state:
+            memory.restore(state)
+        engine.source_memory, engine.all_document_images = memory, []
+        return engine
+
+    def test_interrupted_binding_resumes_without_repaying_confirmed_associations(self):
+        from .services import TenderAIError
+        first = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        seen, calls = set(), []
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            calls.append(task)
+            if len(calls) == 2:
+                raise TenderAIError('Stopped')
+            seen.update(b['text'] for b in task['blocks'])
+            return {'items': [{'ids': [b['id'] for b in task['blocks']], 'scope': 'item',
+                              'source_ids': [self.source.pk], 'purposes': ['tz']}]}, {'prompt_tokens': 100, 'completion_tokens': 20}
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            with self.assertRaises(TenderAIError):
+                self.prepared().bind_source_memory(first)
+        first.refresh_from_db()
+        state = first.diagnostics['source_reading']
+        self.assertTrue(state['complete'])
+        self.assertGreater(len(state['assignments']), 0)
+        second = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        def rest(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            self.assertFalse(seen.intersection(b['text'] for b in task['blocks']))
+            self.assertEqual(task['inventory'][0]['quantity'], '1')
+            seen.update(b['text'] for b in task['blocks'])
+            return {'items': [{'ids': [b['id'] for b in task['blocks']], 'scope': 'item',
+                              'source_ids': [self.source.pk], 'purposes': ['tz']}]}, {'prompt_tokens': 100, 'completion_tokens': 20}
+        with patch('tenders.services._ai_gateway_json', side_effect=rest):
+            engine = self.prepared(state)
+            engine.bind_source_memory(second)
+        self.assertEqual(len(seen), 30)
+        self.source.refresh_from_db()
+        self.assertEqual(len(self.source.metadata['evidence_links']['fragment_ids']), 30)
+        self.assertEqual(self.source.metadata['evidence_links']['job_id'], second.pk)
+        self.assertEqual(second.diagnostics['stages']['source_binding']['state'], 'complete')
+        self.assertEqual(second.diagnostics['tender_conditions'], {'delivery': [], 'conditions': []})
+        third = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid repeat')):
+            self.prepared(second.diagnostics['source_reading']).bind_source_memory(third)
+
+
+class WordOutlineTests(SimpleTestCase):
+    def test_word_outline_survives_without_new_visible_markup(self):
+        import io
+        from docx import Document
+        from tender_selection.documents import _docx_html
+        doc = Document()
+        doc.add_heading('Техническое задание', level=1)
+        doc.add_heading('Спецификация', level=2)
+        doc.add_paragraph('Материал: керамика')
+        stream = io.BytesIO()
+        doc.save(stream)
+        html = _docx_html(stream.getvalue())
+        self.assertNotIn('<h1', html)
+        blocks = document_blocks({1: {'url': 'word', 'source_html': html, 'tables': []}})
+        self.assertEqual(blocks[-1]['structure']['headings'], ['Техническое задание', 'Спецификация'])

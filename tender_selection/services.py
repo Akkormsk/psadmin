@@ -2177,6 +2177,9 @@ def _staged_document_analysis(job, enricher):
         for name in ('structure', 'national_regime', 'tz'))
         and not any(gap.get('stage') in {'structure', 'national_regime', 'tz'} for gap in candidate.diagnostics.get('analysis_gaps', []))), None)
     if previous:
+        for key in ('source_reading', 'tender_conditions'):
+            if key in previous.diagnostics:
+                job.diagnostics[key] = previous.diagnostics[key]
         job.diagnostics["analysis_gaps"].extend(gap for gap in previous.diagnostics.get("analysis_gaps", []) if gap.get("stage") in {"structure", "national_regime", "tz"})
         for key in ('structure', 'national_regime', 'tz'):
             old = previous.diagnostics.get('stages', {}).get(key)
@@ -2190,14 +2193,18 @@ def _staged_document_analysis(job, enricher):
     from django.conf import settings
     if getattr(settings, 'CALCULATION_V2_SOURCE_MEMORY_ENABLED', False):
         from tenders.services import TenderAIError
+        active_stage = 'source_reading'
         try:
             enricher.read_source_memory(job)
+            active_stage = 'source_binding'
+            enricher.bind_source_memory(job)
         except (ValueError, TenderAIError) as exc:
-            stages['source_reading'] = {**stages.get('source_reading', {}), 'state': 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'failed', 'outcome': 'source_only', 'warning': str(exc)}
-            job.diagnostics['analysis_gaps'].append({'stage': 'source_reading', 'reason': str(exc)})
-            job.diagnostics.update(enrichment_state='reading_incomplete', staged_input_fingerprint=fingerprint)
+            stages[active_stage] = {**stages.get(active_stage, {}), 'state': 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'failed', 'outcome': 'source_only', 'warning': str(exc)}
+            job.diagnostics['analysis_gaps'].append({'stage': active_stage, 'reason': str(exc)})
+            state = 'reading_incomplete' if active_stage == 'source_reading' else 'binding_incomplete'
+            job.diagnostics.update(enrichment_state=state, staged_input_fingerprint=fingerprint)
             _publish_intake(job)
-            return {'created': [], 'state': 'reading_incomplete', 'diagnostics': []}
+            return {'created': [], 'state': state, 'diagnostics': []}
 
     def ask(name, label, instruction, task, validator, limit, fallback):
         from tenders.services import TenderAIError
@@ -2307,7 +2314,7 @@ def _staged_document_analysis(job, enricher):
                     if identity_key not in saved and identity_key not in ambiguous:
                         saved[identity_key], origins[str(identity_key)] = row, prior.pk
             remaining = [item for item in requested if identity(item) not in saved]
-            batches = (enricher.plan_stage_tasks(instruction, subset_task, remaining, limit)
+            batches = (enricher.plan_stage_tasks(instruction, subset_task, remaining, limit, purpose=name)
                        if remaining and hasattr(enricher, 'source_memory') else [remaining] if remaining else [])
             if saved and not remaining:
                 rows = [saved[identity(item)] for item in requested]
