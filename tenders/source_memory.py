@@ -271,7 +271,7 @@ class SourceMemory:
             self.assignments[self.key(row['id'], self.page_keys[0])] = row
 
     def relevant(self, source_ids, purpose=None):
-        if self.assignment_policy is not None and (self.pending_assignments() or any(r['scope'] == 'unassigned' for r in self.assignments.values())):
+        if self.assignment_policy is not None and self.pending_assignments():
             raise ValueError('Привязка источников к позициям не завершена; исходные сведения сохранены.')
         for block_id, block in self.blocks.items():
             row = self.records.get(self.key(block_id, self.page_keys[0]))
@@ -281,6 +281,8 @@ class SourceMemory:
                 continue
             if self.assignment_policy is not None:
                 row = self.assignments.get(self.key(block_id, self.page_keys[0]), row)
+                if row['scope'] == 'unassigned':
+                    continue
                 if purpose is not None and purpose not in row.get('purposes', []):
                     continue
             if row['scope'] in {'global', 'unassigned'} or set(row['source_ids']).intersection(source_ids):

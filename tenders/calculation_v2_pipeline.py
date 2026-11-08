@@ -736,7 +736,10 @@ class GatewayDocumentEnricher:
                         continue
                     raise
                 publish('running')
-            # Unresolved evidence must not disappear from a completed analysis.
+            unresolved = [row for row in memory.assignments.values() if row.get('scope') == 'unassigned']
+            if unresolved:
+                job.diagnostics.setdefault('analysis_gaps', []).extend(
+                    {'stage': 'source_binding', 'fragment_id': row['id'], 'reason': row.get('reason', '')} for row in unresolved)
             list(memory.context(set(), 'conditions'))
             job.diagnostics['tender_conditions'] = {purpose: list(memory.context(set(), purpose))
                                                     for purpose in ('delivery', 'conditions')}

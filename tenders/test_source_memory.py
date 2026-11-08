@@ -378,6 +378,16 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, 'Привязка источников'):
             list(memory.context({1}, 'tz'))
 
+    def test_unassigned_does_not_block_or_attach_to_unrelated_goods(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        blocks = list(memory.blocks.values())
+        memory.assign([{'id': blocks[0]['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']},
+                       {'id': blocks[1]['id'], 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']},
+                       {'id': blocks[2]['id'], 'scope': 'unassigned', 'source_ids': [], 'purposes': ['tz'], 'reason': 'Неясно'}], blocks)
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context({1}, 'tz')], ['Кружка белая 350 мл'])
+        self.assertEqual(memory.assignments[memory.key(blocks[2]['id'], memory.page_keys[0])]['scope'], 'unassigned')
+
     def test_reading_assignments_do_not_require_second_binding(self):
         memory = self.memory()
         blocks = list(memory.blocks.values())

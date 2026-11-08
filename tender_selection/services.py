@@ -2175,7 +2175,7 @@ def _staged_document_analysis(job, enricher):
         candidate.diagnostics.get('stages', {}).get(name, {}).get('state') == 'complete'
         and candidate.diagnostics['stages'][name].get('outcome') != 'source_only'
         for name in ('structure', 'national_regime', 'tz'))
-        and not any(gap.get('stage') in {'structure', 'national_regime', 'tz'} for gap in candidate.diagnostics.get('analysis_gaps', []))), None)
+        and not any(gap.get('stage') in {'source_binding', 'structure', 'national_regime', 'tz'} for gap in candidate.diagnostics.get('analysis_gaps', []))), None)
     if previous:
         for key in ('source_reading', 'tender_conditions'):
             if key in previous.diagnostics:
