@@ -239,7 +239,12 @@ class SourceMemory:
         for identity in self.blocks:
             key = self.key(identity, self.page_keys[0])
             row = self.records.get(key, {})
-            if row.get('scope') == 'item' and row.get('source_ids'):
+            purposes = row.get('purposes')
+            valid_purposes = isinstance(purposes, list) and bool(purposes) and all(
+                isinstance(p, str) and p in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for p in purposes)
+            if valid_purposes and (row.get('scope') == 'item' and row.get('source_ids') or row.get('scope') == 'global' and not row.get('source_ids')):
+                self.assignments.setdefault(key, row)
+            elif row.get('scope') == 'item' and row.get('source_ids'):
                 self.assignments.setdefault(key, {**row, 'purposes': ['structure', 'tz', 'national_regime', 'delivery', 'conditions']})
 
     def pending_assignments(self):
@@ -251,18 +256,22 @@ class SourceMemory:
         validate_reading(rows, blocks, {row['source_id'] for row in self.inventory})
         for row in rows:
             purposes = row.get('purposes')
+            if row['scope'] == 'irrelevant':
+                if row['source_ids']:
+                    raise ValueError('Посторонний текст не должен привязываться к позиции.')
+                continue
             if row['scope'] == 'unassigned' and (not isinstance(row.get('reason'), str) or not row['reason'].strip()):
                 raise ValueError('Для неясной привязки требуется объяснение.')
             if row['scope'] == 'global' and row['source_ids']:
                 raise ValueError('Общие условия не должны подменять отдельную позицию.')
-            if row['scope'] == 'irrelevant' or not isinstance(purposes, list) or not purposes or any(
+            if not isinstance(purposes, list) or not purposes or any(
                     not isinstance(purpose, str) or purpose not in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for purpose in purposes):
                 raise ValueError('Не определено назначение сведений позиции.')
         for row in rows:
             self.assignments[self.key(row['id'], self.page_keys[0])] = row
 
     def relevant(self, source_ids, purpose=None):
-        if self.assignment_policy is not None and (self.pending_assignments() or any(r['scope'] == 'unassigned' for r in self.assignments.values())):
+        if self.assignment_policy is not None and self.pending_assignments():
             raise ValueError('Привязка источников к позициям не завершена; исходные сведения сохранены.')
         for block_id, block in self.blocks.items():
             row = self.records.get(self.key(block_id, self.page_keys[0]))
@@ -272,6 +281,8 @@ class SourceMemory:
                 continue
             if self.assignment_policy is not None:
                 row = self.assignments.get(self.key(block_id, self.page_keys[0]), row)
+                if row['scope'] == 'unassigned':
+                    continue
                 if purpose is not None and purpose not in row.get('purposes', []):
                     continue
             if row['scope'] in {'global', 'unassigned'} or set(row['source_ids']).intersection(source_ids):

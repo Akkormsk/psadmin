@@ -378,6 +378,37 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, 'Привязка источников'):
             list(memory.context({1}, 'tz'))
 
+    def test_unassigned_does_not_block_or_attach_to_unrelated_goods(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        blocks = list(memory.blocks.values())
+        memory.assign([{'id': blocks[0]['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']},
+                       {'id': blocks[1]['id'], 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']},
+                       {'id': blocks[2]['id'], 'scope': 'unassigned', 'source_ids': [], 'purposes': ['tz'], 'reason': 'Неясно'}], blocks)
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context({1}, 'tz')], ['Кружка белая 350 мл'])
+        self.assertEqual(memory.assignments[memory.key(blocks[2]['id'], memory.page_keys[0])]['scope'], 'unassigned')
+
+    def test_reading_assignments_do_not_require_second_binding(self):
+        memory = self.memory()
+        blocks = list(memory.blocks.values())
+        for block, scope, ids, purposes in ((blocks[0], 'item', [1], ['tz']), (blocks[1], 'item', [2], ['tz']), (blocks[2], 'global', [], ['delivery'])):
+            key = memory.key(block['id'], memory.page_keys[0])
+            memory.records[key].update(scope=scope, source_ids=ids, purposes=purposes)
+        memory.begin_assignment({'inventory': [1, 2]})
+        self.assertFalse(memory.pending_assignments())
+        self.assertEqual(len(list(memory.context({1}, 'tz'))), 1)
+        self.assertEqual(len(list(memory.context(set(), 'delivery'))), 1)
+
+    def test_irrelevant_text_does_not_block_item_evidence(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        blocks = list(memory.blocks.values())
+        memory.assign([{'id': blocks[0]['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']},
+                       {'id': blocks[1]['id'], 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']},
+                       {'id': blocks[2]['id'], 'scope': 'irrelevant', 'source_ids': [], 'purposes': [], 'reason': 'Не относится к товарам'}], blocks)
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context({1}, 'tz')], ['Кружка белая 350 мл'])
+        self.assertEqual(len(memory.snapshot()['assignments']), 3)
+
     def test_heading_hierarchy_is_retained_without_changing_existing_addresses(self):
         docs = {1: {'url': 'spec', 'source_html': '<h1>ТЗ</h1><h2>Спецификация</h2><p>Материал</p>', 'tables': []}}
         blocks = document_blocks(docs)
@@ -386,7 +417,7 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         stripped = SourceMemory([{k: v for k, v in b.items() if k != 'structure'} for b in blocks], [{'source_id': 1}], 'model')
         self.assertEqual(list(original.blocks), list(stripped.blocks))
 
-@override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 10000, 'max_output_tokens': 4096}})
+@override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 12000, 'max_output_tokens': 4096}})
 class ItemBindingResumeTests(TestCase):
     setUp = SourceMemoryPipelineTests.setUp
     engine = SourceMemoryPipelineTests.engine
