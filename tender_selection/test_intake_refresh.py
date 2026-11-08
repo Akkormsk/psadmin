@@ -54,6 +54,20 @@ class IntakeRefreshTests(TestCase):
         job.refresh_from_db()
         return notification, enrich
 
+    def test_incomplete_source_binding_does_not_run_routes(self):
+        from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
+        job = self.create_job()
+        def incomplete(job, engine):
+            job.diagnostics['analysis_gaps'] = [{'stage': 'source_binding', 'reason': 'Не завершена привязка'}]
+            return {'created': [], 'state': 'binding_incomplete', 'diagnostics': []}
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services._refresh_intake_profile', return_value='fit'), patch('tender_selection.services._staged_document_analysis', side_effect=incomplete):
+            _run_document_analysis(job.pk, enricher=GatewayDocumentEnricher(max_cost_rub=10), router=self.router)
+        job.refresh_from_db()
+        self.router.route.assert_not_called()
+        self.assertEqual(job.status, 'partial')
+        self.assertIsNotNone(job.completed_at)
+        self.assertEqual(job.diagnostics['refresh']['stage'], 'paused')
+
     def test_one_refresh_loads_notification_then_routes_without_estimate_or_provider_calculators(self):
         job = self.create_job()
         with patch('tenders.provider_execution.calculate_routed_provider_lines') as calculate:
