@@ -81,6 +81,20 @@ class IntakeRefreshTests(TestCase):
         self.assertEqual(profile.call_count, 1)
         self.assertEqual(job.status, 'partial')
 
+    def test_item_collection_only_skips_profile_and_routing(self):
+        from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
+        job = self.create_job()
+        def collected(job, engine):
+            job.diagnostics.setdefault('stages', {})['tz'] = {'state': 'complete'}
+            return {'created': [], 'state': 'no_change', 'diagnostics': []}
+        with patch.dict('os.environ', {'PSADMIN_ITEM_COLLECTION_ONLY': '1'}), patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services._refresh_intake_profile') as profile, patch('tender_selection.services._staged_document_analysis', side_effect=collected):
+            _run_document_analysis(job.pk, enricher=GatewayDocumentEnricher(max_cost_rub=10), router=self.router)
+        job.refresh_from_db()
+        profile.assert_not_called()
+        self.router.route.assert_not_called()
+        self.assertTrue(job.diagnostics['items_only'])
+        self.assertEqual(job.diagnostics['stages']['routing']['state'], 'deferred')
+
     def test_one_refresh_loads_notification_then_routes_without_estimate_or_provider_calculators(self):
         job = self.create_job()
         with patch('tenders.provider_execution.calculate_routed_provider_lines') as calculate:
