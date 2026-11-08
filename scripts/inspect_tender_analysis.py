@@ -273,6 +273,51 @@ def inspect_binding_request(tender):
     return report
 
 
+def probe_binding(number, budget):
+    from decimal import Decimal
+    from collections import Counter
+    from unittest.mock import patch
+    from tender_selection.models import Tender, DocumentPreview
+    from tender_selection.notification import parse_notification
+    from tenders.models import TenderComputeJob
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, ingest_source_items
+    from tenders.source_memory import SourceMemory, document_blocks
+    if not budget.is_finite() or not Decimal('0') < budget <= Decimal('1.4331875'):
+        raise ValueError('Probe exceeds remaining approved budget')
+    tender = Tender.objects.get(purchase_number=number)
+    sources = ingest_source_items(tender)
+    docs = parse_notification(tender.notification_raw or {}).get('documents', [])
+    cached = set(DocumentPreview.objects.exclude(html='').values_list('url', flat=True))
+    docs = [d for d in docs if d.get('url') in cached]
+    if not docs:
+        raise ValueError('No cached document; no provider call made')
+    engine = GatewayDocumentEnricher(max_cost_rub=budget)
+    with patch('tender_selection.services.documents_html'):
+        engine.prepare_stages(tender, sources, docs)
+    if engine.document_images:
+        raise ValueError('This isolated probe requires textual sources')
+    memory = SourceMemory(document_blocks(engine.document_lookup),
+        [{'source_id':s.pk, 'label':s.original_text} for s in sources], engine.model)
+    memory.source_map = {key:{'url':d['url'], 'name':d['name']} for key,d in engine.document_lookup.items()}
+    for page, key, blocks in memory.pending():
+        memory.save([{'id':b['id'], 'scope':'unassigned', 'source_ids':[], 'facts':[{'quote':b['text']}]} for b in blocks], blocks, page, key)
+    engine.source_memory, engine.all_document_images = memory, []
+    job = TenderComputeJob.objects.create(tender=tender, version='v2-isolated-binding-probe', diagnostics={'refresh':{}})
+    error = None
+    try:
+        engine.bind_source_memory(job)
+    except Exception as exc:
+        error = str(exc)
+    rows = list(memory.assignments.values())
+    print(json.dumps({'binding_probe':True, 'number':number, 'documents':[d.get('name') for d in docs],
+        'items':len(sources), 'fragments':len(memory.blocks), 'assigned':len(rows), 'pending':len(memory.pending_assignments()),
+        'scopes':dict(Counter(r['scope'] for r in rows)), 'error':error,
+        'per_item':[{'name':s.original_text, 'fragments':sum(s.pk in r.get('source_ids',[]) for r in rows)} for s in sources],
+        'unresolved':[{'reason':r.get('reason'), 'fragment_id':r['id']} for r in rows if r['scope']=='unassigned'],
+        'cost_rub':str(engine.cost_rub), 'provider_calls':sum(bool(r.get('usage')) for k,r in job.diagnostics.get('stages',{}).items() if k.startswith('binding:')),
+        'persisted_writes':False, 'scope':'production binding method on cached textual documents; no reading model, composition or routes'}, ensure_ascii=False), flush=True)
+
+
 def main():
     import django
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
@@ -284,6 +329,11 @@ def main():
     if connection.vendor != 'postgresql':
         raise RuntimeError('Live inspection requires PostgreSQL read-only transaction')
     with transaction.atomic():
+        if os.environ.get('BINDING_PROBE_BUDGET_RUB'):
+            from decimal import Decimal
+            probe_binding(number, Decimal(os.environ['BINDING_PROBE_BUDGET_RUB']))
+            transaction.set_rollback(True)
+            return
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
