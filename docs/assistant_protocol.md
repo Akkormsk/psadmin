@@ -6,8 +6,9 @@
 
 | Проверка | Подтверждённый результат |
 |---|---|
-| TEST release | `b5313c85efb1209364bc4dd73cd6879f2f70c363`; deploy `42353381662`: backup, actual container SHA/source-memory flag, health/public URL, 25 offline checks PASS |
-| Последний контроль | Pilot `42353382025`, job 152; read-only inspection `42353620369` |
+| Функциональный контроль до уборки | `b5313c85efb1209364bc4dd73cd6879f2f70c363`; deploy `42353381662`: backup, actual container SHA/source-memory flag, health/public URL, 25 offline checks PASS |
+| Документационная выкладка уборки | `896fcf935de6c0cb37ad291748e119d27e8d404e`, Actions `42444804471`: backup, container SHA/flag, health/public URL, 25 offline checks PASS; приложение не менялось |
+| Последний контроль чтения | Pilot `42353382025`, job 152; read-only inspection `42353620369` |
 | Покрытие | 483/746 фрагментов; 263 осталось; сохранённые записи без ошибок валидации |
 | Остановка | `waiting_budget`: следующий атомарный блок не помещается в доступный контекст/бюджет; крупнейшая непрочитанная строка 24 935 UTF-8 bytes |
 | Полнота | Состав/1875/ТЗ не завершены; 90 прежних маршрутов сохранены и не доказывают новый полный анализ |
@@ -24,7 +25,7 @@
 3. Повторить Update с заблокированными платными вызовами; доказать reuse полного результата.
 4. Зафиксировать фактическую стоимость завершённого цикла, затем предъявить на приёмку. Неудачные прошлые версии не являются steady-state ценой или доказательством экономии.
 
-Последний отчёт переносится из `fix/intake-unassigned-reading` до удаления ветки. Уборка не запускает paid pilot, consumer, backfill или refresh TEST-базы. В 2026-11-08 рабочее cloud-окружение не восстановилось (ERS readiness timeout); публикация документации доступна через GitHub API, удаление веток ожидает рабочего Git-доступа.
+Последний отчёт переносится из `fix/intake-unassigned-reading` до удаления ветки. Уборка не запускает paid pilot, consumer, backfill или refresh TEST-базы. В 2026-11-08 рабочее cloud-окружение не восстановилось (ERS readiness timeout); уборка выполнена через GitHub API и одноразовую задачу Actions, без обхода штатного server deploy.
 
 ## 1. Назначение и границы
 
@@ -482,3 +483,12 @@ TEST `workflow_dispatch` с `inspect_tender_number` использует `script
 - Agent-plan line: `970be3d0d5e4e3a29b0ba8657db7a6a06ae3745f:docs/assistant_protocol.md`.
 
 Чтение: `git show <SHA>:docs/assistant_protocol.md`. Старые методички также восстанавливаются из истории, без второго действующего протокола. Новый результат обновляет снимок и тематический контракт, не создаёт очередную копию прошлого. Сам текст/commit не подтверждает deploy; фактический SHA проверять по Actions/серверу. Не создавать бесконечные документационные деплои ради записи собственного release SHA.
+
+
+### Завершённая уборка репозитория — 2026-11-08
+
+- PR #47 обновил только AGENTS.md/протокол; приложение, миграции, server workflows и flags не менялись. Предыдущая документационная выкладка `896fcf9`/Actions `42444804471` подтверждена: backup, container SHA, source-memory flag, public health и 25 offline checks PASS. Эта запись готовится после той проверки; SHA следующей документационной выкладки сверяется в Actions, не выдумывается заранее.
+- Одноразовая задача `42456289976` проверила сохранность каждого exact head (достижимость из main/TEST либо точный head слитого PR без последующих изменений), отсутствие открытых PR и выполнила atomic Git deletion с leases. Удалены 20 завершённых старых веток, слитая maintenance/documentation-cleanup и собственная одноразовая ветка. Сохраняемые SHA проверены до/после, постоянный cleanup workflow в TEST/PROD не добавлялся.
+- Остались main, test-server, feature/m3-agent-simple, feature/agent-plan-finish-970be3d и maintenance/prod-documentation-cleanup (PR #48). Feature-ветки имеют уникальную работу; удалять/сливать её автоматически нельзя.
+- Правила и тематические протоколы двух feature-веток обновлены отдельно, без переноса их кода в TEST: `2084f91968009250e432684be73b808167a71487` и `3a3c76ffa823d9e062e202e64a9019b86b3e0cd7`. Общий AGENTS.md одинаков; branch-specific состояние и архивные SHA сохранены.
+- PROD-документация подготовлена в PR #48. Слияние оставлено до прямого разрешения владельца, потому что push в main запускает production release даже для документации. Paid pilot/consumer/backfill не запускались; чтение тендера остаётся на checkpoint 483/746.
