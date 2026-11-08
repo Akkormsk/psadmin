@@ -287,20 +287,14 @@ def main():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
-        from django.db.models import Count
         from tender_selection.notification import parse_notification
         from tender_selection.models import DocumentPreview
-        from tenders.models import TenderComputeJob
-        saved = list(TenderComputeJob.objects.exclude(tender__purchase_number=number).filter(diagnostics__source_reading__complete=True).order_by('-pk').values('pk','tender__purchase_number','diagnostics__source_reading__total')[:10])
-        candidates = []
-        tenders = Tender.objects.exclude(purchase_number=number).filter(v2_source_items__is_active=True, v2_source_items__source_type='notification').annotate(item_count=Count('v2_source_items')).filter(item_count__lte=8).order_by('-pk')[:80]
-        for tender in tenders:
-            docs = parse_notification(tender.notification_raw or {}).get('documents', [])
-            urls = [doc['url'] for doc in docs if doc.get('url')]
-            previews = list(DocumentPreview.objects.filter(url__in=urls).exclude(html='').values('url','kind','html'))
-            if previews:
-                candidates.append({'number': tender.purchase_number, 'items':tender.item_count, 'cached_documents':len(previews), 'html_bytes':sum(len(p['html'].encode()) for p in previews), 'kinds':list({p['kind'] for p in previews})})
-        print(json.dumps({'other_read_tenders':saved, 'candidates':sorted(candidates,key=lambda r:r['html_bytes'])[:8]}, ensure_ascii=False), flush=True)
+        from lxml import html
+        tender = Tender.objects.get(purchase_number=number)
+        notice = parse_notification(tender.notification_raw or {})
+        docs = notice.get('documents', [])
+        previews = {p.url:p for p in DocumentPreview.objects.filter(url__in=[d.get('url') for d in docs])}
+        print(json.dumps({'number':number, 'items':notice.get('items', []), 'documents':[{'name':d.get('name'), 'cached':d.get('url') in previews, 'text':html.fromstring(previews[d['url']].html).text_content() if d.get('url') in previews and previews[d['url']].html else None} for d in docs]}, ensure_ascii=False, default=str), flush=True)
 
 
 if __name__ == '__main__':
