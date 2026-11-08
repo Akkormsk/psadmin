@@ -401,12 +401,30 @@ class ItemBindingResumeTests(TestCase):
         engine.source_memory, engine.all_document_images = memory, []
         return engine
 
+    def test_inventory_fact_references_preserve_exact_values(self):
+        engine = self.prepared()
+        facts = [{'id': 0, 'name': 'Размер', 'value': '≥ 10 × 20 мм'},
+                 {'id': 1, 'name': 'Размер', 'value': '≥ 10 × 20 мм'}]
+        engine.working_context[self.source.pk]['baseline_facts'] = facts
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            expanded = [task['inventory_facts'][ref] for ref in task['inventory'][0]['baseline_facts']]
+            self.assertEqual(expanded, [{k: v for k, v in fact.items() if k != 'id'} for fact in facts])
+            self.assertEqual(len(task['inventory_facts']), 1)
+            return {'items': [{'ids': [b['id'] for b in task['blocks']], 'scope': 'item',
+                'source_ids': [self.source.pk], 'purposes': ['tz']}]}, {}
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            engine.bind_source_memory(job)
+
+    @override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 16000, 'max_output_tokens': 4096}})
     def test_empty_binding_response_is_saved_and_remaining_packet_is_split(self):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         sizes = []
         def answer(prompt, **kwargs):
             task = json.loads(prompt.rsplit('\n', 1)[1])
             sizes.append(len(task['blocks']))
+            self.assertTrue(all(b['id'].startswith('b') for b in task['blocks']))
             if len(sizes) == 1:
                 return {'items': []}, {'prompt_tokens': 100, 'completion_tokens': 9}
             return {'items': [{'ids': [b['id'] for b in task['blocks']], 'scope': 'item',
