@@ -417,6 +417,10 @@ class ItemBindingResumeTests(TestCase):
         stages = [row for name, row in job.diagnostics['stages'].items() if name.startswith('binding:')]
         self.assertTrue(any(row.get('result') == [] and row.get('state') == 'failed' for row in stages))
         self.assertEqual(job.diagnostics['stages']['source_binding']['state'], 'complete')
+        repeated = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid repeat')):
+            self.prepared().bind_source_memory(repeated)
+        self.assertEqual(repeated.diagnostics['stages']['source_binding']['state'], 'complete')
 
     def test_interrupted_binding_resumes_without_repaying_confirmed_associations(self):
         from .services import TenderAIError
