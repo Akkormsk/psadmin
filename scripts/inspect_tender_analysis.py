@@ -325,6 +325,17 @@ def collect_saved_status(number):
         'routes': {key: {'state': value.get('state'), 'steps': len(value.get('steps', [])), 'plan_id': value.get('plan_id'), 'assumption': value.get('assumption'), 'working_choice': value.get('interaction')} for key, value in source_route_snapshots(tender).items()}}
 
 
+def verify_unread_source_packet(engine, task):
+    memory = engine.source_memory
+    identities = engine.context_fragment_ids
+    if len(identities) != len(task['blocks']) or len(set(identities)) != len(identities):
+        raise AssertionError('Source packet addresses do not match')
+    page_key = next(key for page, key in zip(memory.pages, memory.page_keys) if page == task['source_index'])
+    if any(memory.key(identity, page_key) in memory.records for identity in identities):
+        raise AssertionError('Completed fragment was requested again')
+    return len(identities)
+
+
 def verify_stage_cache(number):
     """Exercise the real stage executor on saved sources, with all writes rolled back."""
     from django.db import connection, transaction
@@ -347,11 +358,7 @@ def verify_stage_cache(number):
             pass
         def blocked(prompt, **kwargs):
             task = json.loads(prompt.rsplit('\n', 1)[1])
-            memory = engine.source_memory
-            page_key = next(key for page, key in zip(memory.pages, memory.page_keys) if page == task['source_index'])
-            if any(memory.key(block['id'], page_key) in memory.records for block in task['blocks']):
-                raise AssertionError('Completed fragment was requested again')
-            attempts.append(len(task['blocks']))
+            attempts.append(verify_unread_source_packet(engine, task))
             raise ProbeStopped('Unread source deliberately blocked: zero provider calls')
         with transaction.atomic():
             sources = list(document_analysis_sources(tender)[0].values())

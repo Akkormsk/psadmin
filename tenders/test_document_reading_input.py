@@ -13,6 +13,35 @@ from .calculation_v2_pipeline import GatewayDocumentEnricher
 from .models import TenderComputeJob, TenderSourceItem
 
 
+class SourceResumeInspectionTests(SimpleTestCase):
+    def packet(self, identity):
+        from types import SimpleNamespace
+        memory = SimpleNamespace(
+            pages=[[{'source_id': 1}]], page_keys=['inventory'], records={'read-key': {}},
+            key=lambda block_id, page: {'saved-fragment': 'read-key', 'pending-fragment': 'pending-key'}[block_id],
+        )
+        engine = SimpleNamespace(source_memory=memory, context_fragment_ids=[identity])
+        return engine, {'source_index': memory.pages[0], 'blocks': [{'id': '0'}]}
+
+    def test_request_local_reference_is_checked_using_its_durable_address(self):
+        from scripts.inspect_tender_analysis import verify_unread_source_packet
+        engine, task = self.packet('pending-fragment')
+        self.assertEqual(verify_unread_source_packet(engine, task), 1)
+
+    def test_previously_saved_fragment_is_rejected_before_a_provider_call(self):
+        from scripts.inspect_tender_analysis import verify_unread_source_packet
+        engine, task = self.packet('saved-fragment')
+        with self.assertRaisesMessage(AssertionError, 'Completed fragment was requested again'):
+            verify_unread_source_packet(engine, task)
+
+    def test_mismatched_packet_addresses_cannot_pass_verification(self):
+        from scripts.inspect_tender_analysis import verify_unread_source_packet
+        engine, task = self.packet('pending-fragment')
+        engine.context_fragment_ids = []
+        with self.assertRaisesMessage(AssertionError, 'Source packet addresses do not match'):
+            verify_unread_source_packet(engine, task)
+
+
 class DocumentReadingInputTests(TestCase):
     @patch('tenders.services._ai_gateway_json')
     def test_incomplete_answer_is_kept_in_private_diagnostics_without_creating_items(self, gateway):
