@@ -243,6 +243,36 @@ def collect_report(number):
             'document_input_profile': document_input_profile(tender), 'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
+def inspect_binding_request(tender):
+    from unittest.mock import patch
+    from tenders.models import TenderComputeJob
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, document_analysis_sources, assess_quality
+    job = TenderComputeJob.objects.filter(tender=tender).latest('pk')
+    saved = {name: {key: row.get(key) for key in ('state', 'result', 'error', 'fragment_ids', 'usage')}
+             for name, row in job.diagnostics.get('stages', {}).items() if name.startswith('binding:')}
+    job.save = lambda **kwargs: None
+    engine = GatewayDocumentEnricher(max_cost_rub='3.6558815')
+    report = {'saved': saved}
+    class Captured(RuntimeError):
+        pass
+    def capture(job, stage, instruction, task, **kwargs):
+        report.update(stage=stage, inventory_count=len(task['inventory']), block_count=len(task['blocks']),
+            block_id_count=len({row['id'] for row in task['blocks']}),
+            samples=[{key: row.get(key) for key in ('id', 'text', 'structure', 'table_start')} for row in task['blocks'][:2]],
+            instruction=instruction, output_tokens=kwargs['output_tokens'])
+        raise Captured()
+    with patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Diagnostic called provider')):
+        sources = list(document_analysis_sources(tender)[0].values())
+        engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+        engine.read_source_memory(job)
+        with patch.object(engine, 'ask_stage', side_effect=capture):
+            try:
+                engine.bind_source_memory(job)
+            except Captured:
+                pass
+    return report
+
+
 def main():
     import django
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
@@ -258,7 +288,8 @@ def main():
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
         print(json.dumps({'source_reading_history': source_reading_history(Tender.objects.get(purchase_number=number))}, ensure_ascii=False, default=str), flush=True)
-        print(json.dumps(collect_report(number), ensure_ascii=False, default=str), flush=True)
+        tender = Tender.objects.get(purchase_number=number)
+        print(json.dumps({'binding_request': inspect_binding_request(tender)}, ensure_ascii=False, default=str), flush=True)
 
 
 if __name__ == '__main__':

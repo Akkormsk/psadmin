@@ -401,6 +401,23 @@ class ItemBindingResumeTests(TestCase):
         engine.source_memory, engine.all_document_images = memory, []
         return engine
 
+    def test_empty_binding_response_is_saved_and_remaining_packet_is_split(self):
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        sizes = []
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            sizes.append(len(task['blocks']))
+            if len(sizes) == 1:
+                return {'items': []}, {'prompt_tokens': 100, 'completion_tokens': 9}
+            return {'items': [{'ids': [b['id'] for b in task['blocks']], 'scope': 'item',
+                'source_ids': [self.source.pk], 'purposes': ['tz']}]}, {'prompt_tokens': 100, 'completion_tokens': 30}
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            self.prepared().bind_source_memory(job)
+        self.assertLess(sizes[1], sizes[0])
+        stages = [row for name, row in job.diagnostics['stages'].items() if name.startswith('binding:')]
+        self.assertTrue(any(row.get('result') == [] and row.get('state') == 'failed' for row in stages))
+        self.assertEqual(job.diagnostics['stages']['source_binding']['state'], 'complete')
+
     def test_interrupted_binding_resumes_without_repaying_confirmed_associations(self):
         from .services import TenderAIError
         first = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})

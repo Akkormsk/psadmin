@@ -677,6 +677,7 @@ class GatewayDocumentEnricher:
                 rows.append(row)
             return {'inventory': inventory, 'table_starts': starts, 'blocks': rows}
         publish('running')
+        packet_limit = None
         try:
             while memory.pending_assignments():
                 remaining = (self.max_cost_rub if self.max_cost_rub is not None else Decimal('10')) - Decimal(str(self.cost_rub))
@@ -684,7 +685,8 @@ class GatewayDocumentEnricher:
                 def output(batch):
                     return max(2048, token_bound([{'ids': [str(i)], 'scope': 'item', 'source_ids': [1],
                         'purposes': ['structure', 'tz'], 'reason': 'Связь по позиции и характеристикам'} for i, _ in enumerate(batch)]) + 2048)
-                batch = next(plan_packets(memory.pending_assignments(), lambda values: limits.fits(
+                pending = memory.pending_assignments()
+                batch = next(plan_packets(pending[:packet_limit], lambda values: limits.fits(
                     token_bound(payload(values)) + len(instruction.encode()) + 4608, output(values))))
                 self._use_context('Привязка сохранённых источников к позициям тендера.', [])
                 self._context_token_bound = None
@@ -696,13 +698,15 @@ class GatewayDocumentEnricher:
                         raise ValueError('Привязка не вернула допустимые ссылки на источники.')
                     return [{**row, 'id': aliases.get(ref, ref)} for row in rows for ref in row['ids']]
                 assigned = []
+                rows = None
                 before = len(memory.assignments)
                 try:
                     rows, metrics = self.ask_stage(job, stage, instruction, payload(batch), output_tokens=output(batch))
+                    job.diagnostics['stages'][stage] = metrics
                     assigned = resolve(rows)
                     memory.assign(assigned, batch)
                     job.diagnostics['stages'][stage] = {**metrics, 'state': 'complete'}
-                except (ValueError, TenderAIError):
+                except (ValueError, TenderAIError) as exc:
                     if not assigned:
                         incomplete = job.diagnostics.get('stages', {}).get(stage, {}).get('incomplete_response') or {}
                         assigned = resolve(closed_stage_records(incomplete.get('content')))
@@ -715,6 +719,11 @@ class GatewayDocumentEnricher:
                                 pass
                     publish('running')
                     if len(memory.assignments) > before:
+                        continue
+                    if rows is not None and len(batch) > 1:
+                        job.diagnostics['stages'][stage].update(state='failed', validation_error=str(exc), split_required=True)
+                        packet_limit = max(1, len(batch) // 2)
+                        publish('running')
                         continue
                     raise
                 publish('running')
@@ -917,7 +926,7 @@ class GatewayDocumentEnricher:
             if previous.get('state') == 'complete':
                 completed = completed or (cached.pk, rows)
                 continue
-            if recoverable is None and (previous.get('state') == 'pending_validation' or (previous.get('state') == 'failed' and previous.get('validation_version') != self.STAGED_VALIDATION_VERSION)):
+            if recoverable is None and (previous.get('state') == 'pending_validation' or previous.get('split_required') or (previous.get('state') == 'failed' and previous.get('validation_version') != self.STAGED_VALIDATION_VERSION)):
                 recoverable = (cached.pk, rows)
         if completed:
             source_id, rows = completed
@@ -1035,6 +1044,7 @@ class GatewayDocumentEnricher:
         if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
             job.diagnostics.setdefault('stages', {})[stage] = {**job.diagnostics['stages'].get(stage, {}), 'state': 'failed', 'error': 'Не получен полный список результатов'}
             raise ValueError('Этап не вернул полный список результатов.')
+        job.diagnostics['stages'][stage]['result'] = raw['items']
         field = 'source_id' if phase == 'structure' else 'key'
         if requested_keys and any(not isinstance(row, dict) or row.get(field) not in requested_keys for row in raw['items']):
             job.diagnostics.setdefault('stages', {})[stage] = {'state': 'failed', 'model': self.model, 'usage': usage,
