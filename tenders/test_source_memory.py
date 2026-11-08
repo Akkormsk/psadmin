@@ -261,7 +261,7 @@ class SourceRetrievalTests(TestCase):
             self.assertTrue(job.diagnostics['source_reading']['complete'])
             self.assertTrue(all(job.diagnostics['stages'][name]['state'] == 'complete' for name in ('structure', 'national_regime', 'tz')))
             self.assertFalse(job.diagnostics.get('analysis_gaps'))
-            self.assertEqual(sum('blocks' in task for task, context in calls), 1)
+            self.assertEqual(sum('blocks' in task for task, context in calls), 1 if count == 1 else 0)
             repeat = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
             with override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True), patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid repeat')):
                 _staged_document_analysis(repeat, GatewayDocumentEnricher(max_cost_rub=10))
@@ -347,8 +347,30 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         restored.begin_assignment({'inventory': [1, 2]})
         self.assertEqual(len(restored.pending_assignments()), 2)
         restored.begin_assignment({'inventory': [1, 2, 3]})
-        self.assertEqual(len(restored.pending_assignments()), 3)
+        self.assertEqual(len(restored.pending_assignments()), 2)
         self.assertTrue(restored.snapshot()['complete'])
+
+    def test_inventory_correction_reuses_exact_quotes_and_retained_links(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        blocks = list(memory.blocks.values())
+        memory.assign([{'id': blocks[0]['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']},
+                       {'id': blocks[1]['id'], 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']},
+                       {'id': blocks[2]['id'], 'scope': 'unassigned', 'source_ids': [], 'purposes': ['delivery'], 'reason': 'Unclear'}], blocks)
+        originals = [{**block, **block['occurrences'][0]} for block in blocks]
+        corrected = SourceMemory(originals, [{'source_id': 1}, {'source_id': 3}], 'model')
+        corrected.restore(memory.snapshot())
+        self.assertFalse(list(corrected.pending()))
+        corrected.begin_assignment({'inventory': [1, 3]})
+        self.assertEqual(len(corrected.assignments), 1)
+        self.assertEqual({block['id'] for block in corrected.pending_assignments()}, {blocks[1]['id'], blocks[2]['id']})
+
+    def test_inventory_correction_does_not_reuse_changed_document(self):
+        memory = self.memory()
+        blocks = [{**block, 'version': 'changed'} for block in memory.blocks.values()]
+        corrected = SourceMemory(blocks, [{'source_id': 1}], 'model')
+        corrected.restore(memory.snapshot())
+        self.assertEqual(len([block for _, _, batch in corrected.pending() for block in batch]), 3)
 
     def test_unresolved_binding_cannot_silently_complete_a_position(self):
         memory = self.memory()
@@ -384,6 +406,8 @@ class ItemBindingResumeTests(TestCase):
         first = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         seen, calls = set(), []
         def answer(prompt, **kwargs):
+            self.assertEqual(kwargs['thinking'], {'type': 'disabled'})
+            self.assertIsNone(kwargs['reasoning_effort'])
             task = json.loads(prompt.rsplit('\n', 1)[1])
             calls.append(task)
             if len(calls) == 2:

@@ -169,8 +169,36 @@ class SourceMemory:
     def restore(self, state):
         if state.get('version') == VERSION:
             self.records.update({key: row for key, row in state.get('records', {}).items() if key not in self.records})
+            source_ids = {row['source_id'] for row in self.inventory}
+            # Reading facts survive an inventory correction; applicability is checked separately.
+            for row in state.get('records', {}).values():
+                identity = row.get('id')
+                block = self.blocks.get(identity)
+                if block is None or state.get('fragments', {}).get(identity) != block:
+                    continue
+                key = self.key(identity, self.page_keys[0])
+                if key in self.records:
+                    continue
+                row = normalize_reading_scope(row, source_ids)
+                try:
+                    validate_reading([row], [block], source_ids)
+                    validate_extracted_facts([row], [block])
+                except ValueError:
+                    continue
+                self.records[key] = row
             if state.get('assignment_policy'):
-                self.assignment_states.append((state['assignment_policy'], state.get('assignments', {})))
+                rows = {}
+                for row in state.get('assignments', {}).values():
+                    identity = row.get('id')
+                    block = self.blocks.get(identity)
+                    if block is None or state.get('fragments', {}).get(identity) != block:
+                        continue
+                    try:
+                        validate_reading([row], [block], source_ids)
+                    except ValueError:
+                        continue
+                    rows[self.key(identity, self.page_keys[0])] = row
+                self.assignment_states.append((state['assignment_policy'], rows))
                 if self.assignment_policy is None:
                     self.assignment_policy = state['assignment_policy']
                     self.assignments = dict(state.get('assignments', {}))
@@ -203,8 +231,8 @@ class SourceMemory:
         self.assignment_policy = signature(['item-evidence-v1', policy])
         self.assignments = {}
         for saved_policy, rows in self.assignment_states:
-            if saved_policy == self.assignment_policy:
-                for key, row in rows.items():
+            for key, row in rows.items():
+                if saved_policy == self.assignment_policy or row.get('scope') in {'item', 'global'}:
                     self.assignments.setdefault(key, row)
         current = {self.key(identity, self.page_keys[0]) for identity in self.blocks}
         self.assignments = {key: row for key, row in self.assignments.items() if key in current}

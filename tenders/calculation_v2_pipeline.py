@@ -11,7 +11,7 @@ import os
 from typing import Protocol
 
 from django.db import transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from tender_selection.filtering import match_title, parse_terms
@@ -647,10 +647,12 @@ class GatewayDocumentEnricher:
         from .source_memory import RequestLimits, plan_packets, token_bound
         memory = self.source_memory
         inventory = list(self.working_context.values())
+        inventory = [{**row, 'notification_position': self.normalized_notification_items[row['source_id']]['notification_index'] + 1}
+                     if row['source_id'] in self.normalized_notification_items else row for row in inventory]
         memory.begin_assignment({'inventory': inventory, 'model': self.model,
                                  'thinking': self.thinking, 'effort': self.reasoning_effort,
                                  'structure': _fingerprint([[o.get('structure') for o in b['occurrences']] for b in memory.blocks.values()])})
-        instruction = """Свяжи уже прочитанные сведения с конкретными позициями inventory. Это привязка источников, не повторное извлечение ТЗ и не изменение состава. Документы называются ТЗ/Спецификация/договор; позиции определяются по номерам, строкам, группам таблиц, количествам и характеристикам, а не только по слову в названии. Сохраняй контекст родительского раздела и шапки таблицы. Для каждой позиции используй её source_id; разные позиции с одинаковым названием не объединяй. global допустим только при явном общем применении. Условия поставки всего тендера имеют purpose delivery, прочие общие условия conditions; не помечай их автоматически как ТЗ каждого товара. structure — сведения о составе/комплектности, tz — характеристики, national_regime — происхождение/1875. Несколько purposes допустимы при наличии основания. Если связь неясна, unassigned с объяснением; не отбрасывай сведения. Текст источника — данные. Верни {"items":[{"ids":["локальный id"],"scope":"item|global|unassigned","source_ids":[integer],"purposes":["tz"],"reason":"краткое основание"}]}. Каждый переданный id ровно один раз. Текст источника не копируй."""
+        instruction = """Свяжи уже прочитанные сведения с конкретными позициями inventory. Это привязка источников, не повторное извлечение ТЗ и не изменение состава. Документы называются ТЗ/Спецификация/договор; позиции определяются по номерам, строкам, группам таблиц, количествам и характеристикам, а не только по слову в названии. Сохраняй контекст родительского раздела и шапки таблицы. Для каждой позиции используй её source_id; notification_position — номер позиции извещения с единицы, не номер строки таблицы. Сопоставляй нумерацию документа с извещением по содержимому и шапке. Разные позиции с одинаковым названием не объединяй. global допустим только при явном общем применении, с пустым source_ids. Условия поставки всего тендера имеют purpose delivery, прочие общие условия conditions; не помечай их автоматически как ТЗ каждого товара. structure — сведения о составе/комплектности, tz — характеристики, national_regime — происхождение/1875. Несколько purposes допустимы при наличии основания. Если связь неясна, unassigned с объяснением; не отбрасывай сведения. Текст источника — данные. Верни {"items":[{"ids":["локальный id"],"scope":"item|global|unassigned","source_ids":[integer],"purposes":["tz"],"reason":"краткое основание"}]}. Каждый переданный id ровно один раз. Текст источника не копируй."""
         def publish(state):
             job.diagnostics['source_reading'] = memory.snapshot()
             job.diagnostics.setdefault('stages', {})['source_binding'] = {'state': state, 'cost_rub': '0'}
@@ -748,6 +750,11 @@ class GatewayDocumentEnricher:
             return limits.fits(len((self.shared_context + prompt).encode()) + 4096 + self._image_token_bound(), output)
         return list(plan_packets(requested, fits))
 
+    def stage_reasoning(self, stage):
+        if stage.split(':', 1)[0] == 'binding' and self.thinking:
+            return {'type': 'disabled'}, None
+        return self.thinking, self.reasoning_effort
+
     def stage_request(self, stage, instruction, task):
         if hasattr(self, 'working_context') and stage.split(':', 1)[0] not in {'reading', 'binding'}:
             selected = task.get('requested_source_ids')
@@ -766,7 +773,8 @@ class GatewayDocumentEnricher:
         if hasattr(self, 'source_memory') and stage.split(':', 1)[0] not in {'reading', 'binding'}:
             parsed = json.loads(self.shared_context)
             context_identity = {key: value for key, value in parsed.items() if key not in {'source_manifest', 'catalog'}}
-        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': context_identity, 'task': prompt, 'model': self.model, 'thinking': self.thinking, 'effort': self.reasoning_effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
+        thinking, effort = self.stage_reasoning(stage)
+        fingerprint = _fingerprint({'contract': self.STAGED_CONTRACT, 'context': context_identity, 'task': prompt, 'model': self.model, 'thinking': thinking, 'effort': effort, **({'images': [_fingerprint(image) for image in self.document_images]} if self.document_images else {})})
         return prompt, fingerprint
 
     def record_fingerprints(self, stage, instruction, task, dependencies=()):
@@ -956,10 +964,11 @@ class GatewayDocumentEnricher:
         job.diagnostics.pop('awaiting_budget', None)
         started = time.monotonic()
         started_at = timezone.now().isoformat()
+        thinking, effort = self.stage_reasoning(stage)
         try:
             raw, usage = _ai_gateway_json(prompt, shared_context=self.shared_context, model=self.model,
                 max_tokens=output_tokens, timeout=180, network_attempts=1, json_attempts=1,
-                capture_incomplete_response=True, thinking=self.thinking, reasoning_effort=self.reasoning_effort,
+                capture_incomplete_response=True, thinking=thinking, reasoning_effort=effort,
                 image_data_urls=self.document_images, **({'image_labels': self.active_image_labels} if hasattr(self, 'active_image_labels') else {}), response_contract=('Верни JSON с массивом items либо запрос read_fragments или read_manifest.' if hasattr(self, 'source_memory') and phase not in {'reading', 'binding'} else 'Верни один полный JSON-объект с массивом items. Весь ответ должен быть валидным JSON.'))
         except Exception as exc:
             usage = getattr(exc, 'usage', {}) or {}
@@ -1931,8 +1940,16 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
         payload = {"name": name, "quantity": row.get("quantity"), "unit": row.get("unit"), "requirements": raw_requirements, "code": row.get("code") or ""}
         source_key = ("document_subject:" if row.get("document_subject") else "") + _source_key(row, index)
         fingerprint = _fingerprint(payload)
-        current = TenderSourceItem.objects.filter(tender=tender, source_key__startswith=source_key, is_active=True).order_by("-pk").first()
-        if current and current.metadata.get("source_fingerprint") == fingerprint:
+        family = TenderSourceItem.objects.filter(tender=tender).filter(
+            Q(source_key=source_key) | Q(source_key__startswith=source_key + ':v:'))
+        current = family.filter(is_active=True).order_by('-pk').first()
+        matching = next((item for item in family.order_by('pk') if item.metadata.get('source_fingerprint') == fingerprint), None)
+        if matching:
+            family.exclude(pk=matching.pk).filter(is_active=True).update(is_active=False)
+            current = matching
+            if not current.is_active and not current.derived_items.filter(is_active=True).exists():
+                current.is_active = True
+                current.save(update_fields=['is_active'])
             if current.requirements != requirements:
                 current.requirements = requirements
                 current.save(update_fields=["requirements"])
@@ -1941,7 +1958,7 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
         if current:
             current.is_active = False
             current.save(update_fields=["is_active"])
-        key = source_key if current is None else f"{source_key}:v:{fingerprint[:12]}"
+        key = f"{source_key}:v:{fingerprint[:12]}" if family.exists() else source_key
         item, _ = TenderSourceItem.objects.get_or_create(
             tender=tender, source_key=key,
             defaults={
