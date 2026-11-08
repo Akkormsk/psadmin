@@ -48,13 +48,14 @@ def document_blocks(documents, images=()):
         version = signature([doc.get('source_html'), doc.get('evidence_text'), doc.get('tables'), [signature(images[i - 1]) for i in doc.get('image_indexes', [])]])
         root = html.fragment_fromstring(doc.get('source_html') or '<div/>', create_parent='div')
         entries, section, paragraph_no, table_no = [], '', 0, 0
-        table_contexts = {}
+        table_contexts, structures, headings = {}, {}, []
         tables = doc.get('tables', [])
         def add_table(number, heading):
             table = tables[number - 1]
             for row_no, row in enumerate(table.get('rows', []), 1):
                 location = f'{heading} / Таблица {number}, строка {row_no}'
                 table_contexts[location] = {'table_start': table.get('rows', [])[:1], 'row_cells': row}
+                structures[location] = {'headings': [label for _, label in headings], 'table': number, 'row': row_no}
                 entries.append(('table', location, ' | '.join(cell if isinstance(cell, str) else str(cell.get('text', '')) for cell in row)))
         for node in root.xpath('.//p[not(ancestor::table)] | .//li[not(ancestor::table) and not(.//p)] | .//h1 | .//h2 | .//h3 | .//h4 | .//table[not(ancestor::table)]'):
             if node.tag == 'table':
@@ -63,11 +64,15 @@ def document_blocks(documents, images=()):
                     add_table(table_no, section)
                 continue
             text = ' '.join(node.itertext()).strip()
-            if node.tag in {'h1', 'h2', 'h3', 'h4'}:
+            level = int(node.tag[1]) if node.tag in {'h1', 'h2', 'h3', 'h4'} else int(node.get('data-outline-level')) if node.get('data-outline-level', '').isdigit() else None
+            if level is not None:
+                headings = [(depth, label) for depth, label in headings if depth < level] + [(level, text)]
                 section = text[:160]
             if text:
                 paragraph_no += 1
-                entries.append(('paragraph', f'{section} / Абзац {paragraph_no}', text))
+                location = f'{section} / Абзац {paragraph_no}'
+                structures[location] = {'headings': [label for _, label in headings]}
+                entries.append(('paragraph', location, text))
         outside = ' '.join(root.xpath('.//text()[not(ancestor::p or ancestor::li or ancestor::h1 or ancestor::h2 or ancestor::h3 or ancestor::h4 or ancestor::table)]')).strip()
         if entries and outside:
             entries.append(('paragraph', 'Прочий текст документа', outside))
@@ -81,7 +86,7 @@ def document_blocks(documents, images=()):
                 anchor = signature([doc['url'], kind, fragment])
                 occurrence = occurrences.get(anchor, 0)
                 occurrences[anchor] = occurrence + 1
-                blocks.append({'id': f'{anchor}:{occurrence}', 'version': version, 'doc_id': doc_id, 'location': f'{location}, часть {part}', 'text': fragment, **({'table_context': table_contexts[location]} if location in table_contexts else {})})
+                blocks.append({'id': f'{anchor}:{occurrence}', 'version': version, 'doc_id': doc_id, 'location': f'{location}, часть {part}', 'text': fragment, 'structure': structures.get(location, {}), **({'table_context': table_contexts[location]} if location in table_contexts else {})})
         image_indexes = doc.get('image_indexes', [])
         pages = doc.get('visual_pages', [])
         for offset, image_no in enumerate(image_indexes):
@@ -156,10 +161,19 @@ class SourceMemory:
         self.pages = [inventory]
         self.page_keys = [signature([VERSION, model, inventory, source_versions or {}])]
         self.records = {}
+        self.inventory = inventory
+        self.assignment_states = []
+        self.assignment_policy = None
+        self.assignments = {}
 
     def restore(self, state):
         if state.get('version') == VERSION:
             self.records.update({key: row for key, row in state.get('records', {}).items() if key not in self.records})
+            if state.get('assignment_policy'):
+                self.assignment_states.append((state['assignment_policy'], state.get('assignments', {})))
+                if self.assignment_policy is None:
+                    self.assignment_policy = state['assignment_policy']
+                    self.assignments = dict(state.get('assignments', {}))
 
     def key(self, block_id, page_key):
         block = self.blocks[block_id]
@@ -182,26 +196,67 @@ class SourceMemory:
         records = {key: row for key, row in self.records.items() if key in current}
         return {'version': VERSION, 'fragments': self.blocks, 'source_map': getattr(self, 'source_map', {}),
             'records': records, 'total': len(current), 'read': len(records),
-            'complete': len(current) == len(records), 'sources': len(self.blocks)}
+            'complete': len(current) == len(records), 'sources': len(self.blocks),
+                'assignment_policy': self.assignment_policy, 'assignments': self.assignments}
 
-    def relevant(self, source_ids):
+    def begin_assignment(self, policy):
+        self.assignment_policy = signature(['item-evidence-v1', policy])
+        self.assignments = {}
+        for saved_policy, rows in self.assignment_states:
+            if saved_policy == self.assignment_policy:
+                for key, row in rows.items():
+                    self.assignments.setdefault(key, row)
+        current = {self.key(identity, self.page_keys[0]) for identity in self.blocks}
+        self.assignments = {key: row for key, row in self.assignments.items() if key in current}
+        for identity in self.blocks:
+            key = self.key(identity, self.page_keys[0])
+            row = self.records.get(key, {})
+            if row.get('scope') == 'item' and row.get('source_ids'):
+                self.assignments.setdefault(key, {**row, 'purposes': ['structure', 'tz', 'national_regime', 'delivery', 'conditions']})
+
+    def pending_assignments(self):
+        return [block for identity, block in self.blocks.items()
+                if self.records.get(self.key(identity, self.page_keys[0]), {}).get('scope') != 'irrelevant'
+                and self.key(identity, self.page_keys[0]) not in self.assignments]
+
+    def assign(self, rows, blocks):
+        validate_reading(rows, blocks, {row['source_id'] for row in self.inventory})
+        for row in rows:
+            purposes = row.get('purposes')
+            if row['scope'] == 'unassigned' and (not isinstance(row.get('reason'), str) or not row['reason'].strip()):
+                raise ValueError('Для неясной привязки требуется объяснение.')
+            if row['scope'] == 'global' and row['source_ids']:
+                raise ValueError('Общие условия не должны подменять отдельную позицию.')
+            if row['scope'] == 'irrelevant' or not isinstance(purposes, list) or not purposes or any(
+                    not isinstance(purpose, str) or purpose not in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for purpose in purposes):
+                raise ValueError('Не определено назначение сведений позиции.')
+        for row in rows:
+            self.assignments[self.key(row['id'], self.page_keys[0])] = row
+
+    def relevant(self, source_ids, purpose=None):
+        if self.assignment_policy is not None and (self.pending_assignments() or any(r['scope'] == 'unassigned' for r in self.assignments.values())):
+            raise ValueError('Привязка источников к позициям не завершена; исходные сведения сохранены.')
         for block_id, block in self.blocks.items():
             row = self.records.get(self.key(block_id, self.page_keys[0]))
             if not row:
                 # Unread material can never be treated as evidence of absence.
                 yield block
                 continue
+            if self.assignment_policy is not None:
+                row = self.assignments.get(self.key(block_id, self.page_keys[0]), row)
+                if purpose is not None and purpose not in row.get('purposes', []):
+                    continue
             if row['scope'] in {'global', 'unassigned'} or set(row['source_ids']).intersection(source_ids):
                 yield block
 
-    def context(self, source_ids):
+    def context(self, source_ids, purpose=None):
         """Only verified extracted facts; originals remain addressable by block ID."""
-        for block in self.relevant(source_ids):
+        for block in self.relevant(source_ids, purpose):
             row = self.records.get(self.key(block['id'], self.page_keys[0]))
             if not row:
                 raise ValueError('Источник ещё не обработан; факты не готовы.')
             yield {'fragment_id': block['id'], 'doc_id': block['doc_id'], 'section': block['location'],
-                   'facts': row.get('facts', []), 'occurrences': [{key: value for key, value in occurrence.items() if key in {'doc_id', 'location'}} for occurrence in block['occurrences']]}
+                   'facts': row.get('facts', []), 'occurrences': [{key: value for key, value in occurrence.items() if key in {'doc_id', 'location', 'structure'}} for occurrence in block['occurrences']]}
 
 
 def token_bound(value):

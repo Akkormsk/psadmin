@@ -129,6 +129,18 @@
       {% if is_fz223 and tender.okpd2 %}<div><dt>ОКПД2</dt><dd class="ts-sub">{{ tender.okpd2|join:", " }}</dd></div>{% endif %}
     </dl>
 
+    <div data-card-refresh="tender-conditions">
+      {% if v2_job.diagnostics.tender_conditions.delivery or v2_job.diagnostics.tender_conditions.conditions %}
+      <details class="ts-item-tz"><summary>Поставка и общие условия</summary>
+        {% for purpose, blocks in v2_job.diagnostics.tender_conditions.items %}{% if blocks %}
+        <h4>{% if purpose == "delivery" %}Поставка{% else %}Общие условия{% endif %}</h4>
+        <ul>{% for block in blocks %}<li>{% for fact in block.facts %}{{ fact.quote }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+          <span class="ts-sub">· {{ block.section }}{% if block.document %} · <button type="button" class="ts-doc-link" data-doc-preview="{{ block.document.index }}" data-doc-name="{{ block.document.name }}">{{ block.document.name }}</button>{% endif %}</span>
+        </li>{% endfor %}</ul>
+        {% endif %}{% endfor %}
+      </details>{% endif %}
+    </div>
+
     {% include "tender_selection/_analysis_result.html" %}
   </details>
 
