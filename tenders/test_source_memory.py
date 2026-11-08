@@ -378,6 +378,17 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, 'Привязка источников'):
             list(memory.context({1}, 'tz'))
 
+    def test_reading_assignments_do_not_require_second_binding(self):
+        memory = self.memory()
+        blocks = list(memory.blocks.values())
+        for block, scope, ids, purposes in ((blocks[0], 'item', [1], ['tz']), (blocks[1], 'item', [2], ['tz']), (blocks[2], 'global', [], ['delivery'])):
+            key = memory.key(block['id'], memory.page_keys[0])
+            memory.records[key].update(scope=scope, source_ids=ids, purposes=purposes)
+        memory.begin_assignment({'inventory': [1, 2]})
+        self.assertFalse(memory.pending_assignments())
+        self.assertEqual(len(list(memory.context({1}, 'tz'))), 1)
+        self.assertEqual(len(list(memory.context(set(), 'delivery'))), 1)
+
     def test_irrelevant_text_does_not_block_item_evidence(self):
         memory = self.memory()
         memory.begin_assignment({'inventory': [1, 2]})

@@ -239,7 +239,12 @@ class SourceMemory:
         for identity in self.blocks:
             key = self.key(identity, self.page_keys[0])
             row = self.records.get(key, {})
-            if row.get('scope') == 'item' and row.get('source_ids'):
+            purposes = row.get('purposes')
+            valid_purposes = isinstance(purposes, list) and bool(purposes) and all(
+                isinstance(p, str) and p in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for p in purposes)
+            if valid_purposes and (row.get('scope') == 'item' and row.get('source_ids') or row.get('scope') == 'global' and not row.get('source_ids')):
+                self.assignments.setdefault(key, row)
+            elif row.get('scope') == 'item' and row.get('source_ids'):
                 self.assignments.setdefault(key, {**row, 'purposes': ['structure', 'tz', 'national_regime', 'delivery', 'conditions']})
 
     def pending_assignments(self):
