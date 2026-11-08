@@ -47,6 +47,12 @@ on:
         default: false
         type: boolean
 
+      document_pilot_items_only:
+        description: "Collect and verify product evidence and specifications only"
+        required: false
+        default: false
+        type: boolean
+
       inspect_tender_number:
         description: "Read-only inspection of one deployed TEST tender; skips deployment and model calls"
         required: false
@@ -126,6 +132,7 @@ jobs:
           DOCUMENT_PILOT_TENDER: ${{ inputs.document_pilot_tender || '' }}
           DOCUMENT_PILOT_CHECK_ONLY: ${{ inputs.document_pilot_check_only && '1' || '0' }}
           DOCUMENT_PILOT_FULL_REFRESH: ${{ inputs.document_pilot_full_refresh && '1' || '0' }}
+          DOCUMENT_PILOT_ITEMS_ONLY: ${{ inputs.document_pilot_items_only && '1' || '0' }}
           DOCUMENT_PILOT_ROUTE_BUDGET_RUB: ${{ inputs.document_pilot_route_budget_rub || '' }}
           DOCUMENT_PILOT_BUDGET_RUB: ${{ inputs.document_pilot_budget_rub || '14' }}
         run: |
@@ -142,7 +149,7 @@ jobs:
           fi
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY' '$DOCUMENT_PILOT_FULL_REFRESH' '$DOCUMENT_PILOT_BUDGET_RUB' '$RESTORE_BOARD_TENDER' '$DOCUMENT_PILOT_ROUTE_BUDGET_RUB'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '${{ steps.source.outputs.sha }}' '$REMOTE_ARCHIVE' '$DOCUMENT_PILOT_TENDER' '$DOCUMENT_PILOT_CHECK_ONLY' '$DOCUMENT_PILOT_FULL_REFRESH' '$DOCUMENT_PILOT_BUDGET_RUB' '$RESTORE_BOARD_TENDER' '$DOCUMENT_PILOT_ROUTE_BUDGET_RUB' '$DOCUMENT_PILOT_ITEMS_ONLY'" <<'REMOTE'
           set -euo pipefail
 
           deploy_sha="$1"
@@ -152,6 +159,7 @@ jobs:
           pilot_full_refresh="${5:-0}"
           pilot_budget="${6:-14}"
           pilot_route_budget="${8:-}"
+          pilot_items_only="${9:-0}"
           restore_board_tender="${7:-}"
           root=/home/deploy
           app="$root/psadmin-test"
@@ -255,6 +263,7 @@ jobs:
             if [ "$pilot_check_only" = 1 ]; then pilot_mode=--preflight; fi
             pilot_extra=()
             if [ "$pilot_full_refresh" = 1 ]; then pilot_extra=(--full-refresh); fi
+            if [ "$pilot_items_only" = 1 ]; then pilot_extra+=(--items-only); fi
             if [ -n "$pilot_route_budget" ]; then pilot_extra+=(--route-budget-rub "$pilot_route_budget"); fi
             docker compose -f compose.test.yml exec -T test-web python manage.py prepare_tender_documents \
               --tender-number "$pilot_tender" --max-cost-rub "$pilot_budget" --max-output-tokens 32000 "$pilot_mode" "${pilot_extra[@]}" </dev/null

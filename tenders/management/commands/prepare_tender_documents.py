@@ -23,12 +23,13 @@ class Command(BaseCommand):
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--preflight", action="store_true")
         parser.add_argument("--route-budget-rub", type=Decimal, help="Reserve part of the same total pilot budget for routes")
+        parser.add_argument('--items-only', action='store_true', help='Collect item evidence and specifications only')
         parser.add_argument("--full-refresh", action="store_true", help="Verify the normal Update service and one cache-only repeat for this tender")
 
     def handle(self, *args, **options):
         budget = options["max_cost_rub"]
-        if not budget.is_finite() or not Decimal("0") < budget <= Decimal("14"):
-            raise CommandError("Pilot budget must be positive and no greater than 14 RUB")
+        if not budget.is_finite() or not Decimal("0") < budget <= Decimal("50" if options["items_only"] else "14"):
+            raise CommandError("Pilot budget is outside the allowed range")
         if not 256 <= options["max_output_tokens"] <= 32000:
             raise CommandError("Output limit must be between 256 and 32000 tokens")
         tender = Tender.objects.filter(purchase_number=options["tender_number"]).first()
@@ -37,7 +38,7 @@ class Command(BaseCommand):
         if options["full_refresh"]:
             if not options["apply"] or options["preflight"]:
                 raise CommandError("Full refresh requires apply and cannot use preflight")
-            return self.verify_full_refresh(tender, budget, route_budget=options["route_budget_rub"])
+            return self.verify_full_refresh(tender, budget, route_budget=options["route_budget_rub"], items_only=options["items_only"])
         if options["preflight"]:
             if options["apply"]:
                 raise CommandError("Preflight cannot be combined with apply")
@@ -148,7 +149,7 @@ class Command(BaseCommand):
                                           "relationship": item.metadata.get("relationship"), "quantity_per_parent": item.metadata.get("quantity_per_parent")}
                                          for item in TenderSourceItem.objects.filter(pk__in=job.diagnostics.get("proposal_ids", [])).select_related("parent")]}, ensure_ascii=False, default=str))
 
-    def verify_full_refresh(self, tender, budget, *, route_budget=None):
+    def verify_full_refresh(self, tender, budget, *, route_budget=None, items_only=False):
         """Operator acceptance uses the exact UI/assistant executor, never a second pipeline."""
         import os
         import time
@@ -164,9 +165,9 @@ class Command(BaseCommand):
             raise CommandError('No active administrator; nothing was called')
         if route_budget is not None and (not route_budget.is_finite() or not Decimal('0') < route_budget < budget or route_budget > Decimal('2')):
             raise CommandError('Route allocation must be positive, below total budget and at most 2 RUB')
-        doc_limit = min(Decimal('10'), budget - route_budget if route_budget is not None else budget * Decimal('0.8'))
+        doc_limit = budget if items_only else min(Decimal('10'), budget - route_budget if route_budget is not None else budget * Decimal('0.8'))
         route_limit = min(Decimal('2'), budget - doc_limit)
-        config = {'CALCULATION_V2_INTAKE_MAX_COST_RUB': str(budget),
+        config = {'PSADMIN_ITEM_COLLECTION_ONLY': '1' if items_only else '0', 'CALCULATION_V2_INTAKE_MAX_COST_RUB': str(budget),
                   'CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB': str(doc_limit),
                   'CALCULATION_V2_ROUTE_MAX_COST_RUB': str(route_limit)}
         first_routes = None
@@ -191,15 +192,17 @@ class Command(BaseCommand):
                     'status': job.status, 'error': job.error, 'cost': status.get('cost'),
                     'steps': {name: {key: row.get(key) for key in ('state', 'model', 'usage', 'duration_ms', 'cost_rub', 'actual_cost_rub', 'billed_cache_read_tokens', 'billed_cache_write_tokens', 'reused_from', 'billing_request_id')} for name, row in job.diagnostics.get('stages', {}).items()},
                     'progress': status['progress'], 'document_reused': job.diagnostics.get('document_analysis_reused'),
+                    'analysis_gaps': [{'stage': gap.get('stage'), 'reason': gap.get('reason')} for gap in job.diagnostics.get('analysis_gaps', [])],
                     'active_stages': ProcessDefinition.objects.filter(is_active=True).count(),
                     'routes': {key: {'state': row['state'], 'step_count': len(row['steps']),
                                     'has_question': bool(row.get('question'))} for key, row in routes.items()}}
                 self.stdout.write(json.dumps(report, ensure_ascii=False, default=str))
                 complete = all(job.diagnostics.get('stages', {}).get(name, {}).get('state') == 'complete'
                     and job.diagnostics['stages'][name].get('outcome') != 'source_only'
-                    for name in ('documents', 'structure', 'national_regime', 'tz', 'routing'))
-                if not complete or job.diagnostics.get('analysis_gaps') or job.status not in {'ready', 'needs_review'} or not routes or any(row['state'] not in {'ready', 'needs_review'} for row in routes.values()):
+                    for name in (('documents', 'source_reading', 'source_binding', 'structure', 'tz') if items_only else ('documents', 'structure', 'national_regime', 'tz', 'routing')))
+                gaps = [gap for gap in job.diagnostics.get('analysis_gaps', []) if not items_only or gap.get('stage') != 'source_binding']
+                if not complete or gaps or job.status not in {'ready', 'needs_review'} or (not items_only and (not routes or any(row['state'] not in {'ready', 'needs_review'} for row in routes.values()))):
                     raise CommandError('Full refresh failed; no paid repeat was started')
-                if attempt and (job.total_cost or route_ids != first_routes):
+                if attempt and (job.total_cost or (not items_only and route_ids != first_routes)):
                     raise CommandError('Cached repeat changed routes or incurred model cost')
                 first_routes = route_ids

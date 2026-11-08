@@ -2376,47 +2376,52 @@ def _staged_document_analysis(job, enricher):
     _save_intake_proposals(job, result, incomplete=True)
     _publish_intake(job)
 
-    originals = parse_notification(job.tender.notification_raw or {}).get('items', [])
-    native = {}
-    for good in goods:
-        from tenders.document_enrichment import notification_origin
-        origin = notification_origin(enricher.stage_sources[good['source_id']])
-        index = (origin.metadata or {}).get('notification_index') if origin else None
-        native[good['key']] = originals[index].get('national_regime') if type(index) is int and 0 <= index < len(originals) else None
-    national = {}
-    _refresh_phase(job, 'national_regime', 'Проверяем требования 1875…')
-    if any('1875' in doc.get('evidence_text', '') for doc in enricher.stage_documents):
-        def verify_national(rows):
-            if any(not isinstance(row, dict) or not isinstance(row.get('key'), str)
-                    or row.get('status') not in {'ban', 'restriction', 'advantage', 'none', 'unknown'}
-                    or not isinstance(row.get('basis'), list) or any(not isinstance(basis, dict) for basis in row['basis']) for row in rows):
-                raise ValueError('Проверка 1875 вернула некорректный формат позиций или оснований.')
-            mapped = {row.get('key'): row for row in rows}
-            if len(mapped) != len(rows) or set(mapped) != {good['key'] for good in goods}:
-                raise ValueError('Проверка 1875 пропустила товарные позиции.')
-            documents = {doc['url']: {**doc, 'text': doc.get('evidence_text', '')} for doc in enricher.stage_documents}
-            result = {}
-            for good in goods:
-                row = mapped[good['key']]
-                evidence = row.get('basis', [])
-                for basis in evidence:
-                    doc = enricher.document_lookup.get(basis.get('doc_id'))
-                    basis['source_url'] = doc['url'] if doc else ''
-                result[good['key']] = document_item({'status': row.get('status'), 'basis': evidence}, documents, name=good['name'], component=good['kind']=='kit')
-            return result
-        national = ask('national_regime', 'Проверяем требования 1875…',
-            '''Определи только подтверждённые требования заказчика по ПП1875 для каждого переданного товара. Не делай вывод по коду/названию или общему знанию закона. Если явного требования нет — unknown. Формат {"items":[{"key":"ключ товара","status":"ban|restriction|advantage|none|unknown","basis":[{"doc_id":integer,"quote":"точная цитата с требованием, 1875 и названием товара либо явным применением ко всем товарам","page_or_section":"раздел","scope":"item|all_items"}]}]}. Не переноси требование к набору автоматически на части. Для unknown basis пустой.''',
-            {'goods': goods, 'notification_evidence': native}, verify_national, min(16000, 10000 + len(goods)*400), lambda: {})
+    if os.getenv('PSADMIN_ITEM_COLLECTION_ONLY') != '1':
+        originals = parse_notification(job.tender.notification_raw or {}).get('items', [])
+        native = {}
+        for good in goods:
+            from tenders.document_enrichment import notification_origin
+            origin = notification_origin(enricher.stage_sources[good['source_id']])
+            index = (origin.metadata or {}).get('notification_index') if origin else None
+            native[good['key']] = originals[index].get('national_regime') if type(index) is int and 0 <= index < len(originals) else None
+        national = {}
+        _refresh_phase(job, 'national_regime', 'Проверяем требования 1875…')
+        if any('1875' in doc.get('evidence_text', '') for doc in enricher.stage_documents):
+            def verify_national(rows):
+                if any(not isinstance(row, dict) or not isinstance(row.get('key'), str)
+                        or row.get('status') not in {'ban', 'restriction', 'advantage', 'none', 'unknown'}
+                        or not isinstance(row.get('basis'), list) or any(not isinstance(basis, dict) for basis in row['basis']) for row in rows):
+                    raise ValueError('Проверка 1875 вернула некорректный формат позиций или оснований.')
+                mapped = {row.get('key'): row for row in rows}
+                if len(mapped) != len(rows) or set(mapped) != {good['key'] for good in goods}:
+                    raise ValueError('Проверка 1875 пропустила товарные позиции.')
+                documents = {doc['url']: {**doc, 'text': doc.get('evidence_text', '')} for doc in enricher.stage_documents}
+                result = {}
+                for good in goods:
+                    row = mapped[good['key']]
+                    evidence = row.get('basis', [])
+                    for basis in evidence:
+                        doc = enricher.document_lookup.get(basis.get('doc_id'))
+                        basis['source_url'] = doc['url'] if doc else ''
+                    result[good['key']] = document_item({'status': row.get('status'), 'basis': evidence}, documents, name=good['name'], component=good['kind']=='kit')
+                return result
+            national = ask('national_regime', 'Проверяем требования 1875…',
+                '''Определи только подтверждённые требования заказчика по ПП1875 для каждого переданного товара. Не делай вывод по коду/названию или общему знанию закона. Если явного требования нет — unknown. Формат {"items":[{"key":"ключ товара","status":"ban|restriction|advantage|none|unknown","basis":[{"doc_id":integer,"quote":"точная цитата с требованием, 1875 и названием товара либо явным применением ко всем товарам","page_or_section":"раздел","scope":"item|all_items"}]}]}. Не переноси требование к набору автоматически на части. Для unknown basis пустой.''',
+                {'goods': goods, 'notification_evidence': native}, verify_national, min(16000, 10000 + len(goods)*400), lambda: {})
+        else:
+            stages['national_regime'] = {'state': 'complete', 'result': [], 'cost_rub': '0'}
+        # Only evidence verified by the existing national-regime service can be persisted.
+        national = {good['key']: resolve_item(native.get(good['key']), national.get(good['key']), component=good['kind']=='kit') for good in goods}
+        for item in result['created']:
+            match = next((good for good in goods if good['source_id'] == item.parent_id and good['name'] == item.original_text), None)
+            if match:
+                item.metadata['national_regime'] = national[match['key']]
+                item.save(update_fields=['metadata'])
+        _publish_intake(job)
+
     else:
-        stages['national_regime'] = {'state': 'complete', 'result': [], 'cost_rub': '0'}
-    # Only evidence verified by the existing national-regime service can be persisted.
-    national = {good['key']: resolve_item(native.get(good['key']), national.get(good['key']), component=good['kind']=='kit') for good in goods}
-    for item in result['created']:
-        match = next((good for good in goods if good['source_id'] == item.parent_id and good['name'] == item.original_text), None)
-        if match:
-            item.metadata['national_regime'] = national[match['key']]
-            item.save(update_fields=['metadata'])
-    _publish_intake(job)
+        national = {}
+        stages['national_regime'] = {'state': 'deferred', 'cost_rub': '0'}
 
     instruction = """Извлеки требования из документов для каждого товара task.goods. Верни одну запись для каждого key, даже если дополнений нет. Исходные сведения извещения сохраняются программой автоматически: не заменяй и не переписывай их. Если документ указывает другое значение, верни значение документа отдельно, без объединения с извещением. Не придумывай требования. Избегай повторения идентичных исходным сведений.
 
@@ -2497,6 +2502,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             raise ValueError('Не задан положительный бюджет проверки.')
         profile_cost = Decimal('0')
         routes_only = bool(job.diagnostics.get("routes_only"))
+        items_only = os.getenv("PSADMIN_ITEM_COLLECTION_ONLY") == "1"
         if not routes_only:
             _refresh_phase(job, "notification", "Обновляем извещение…")
             previous = job.tender.notification_raw
@@ -2517,7 +2523,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         result = {"created": [], "state": "no_change", "diagnostics": []}
         job.diagnostics.setdefault('stages', {})['notification'] = {'state': 'complete', 'cost_rub': '0'}
         _publish_intake(job)
-        if not routes_only:
+        if not routes_only and not items_only:
             disposition = _refresh_intake_profile(job, max_cost_rub=total_cap / 2)
             profile_cost = Decimal(str(job.diagnostics.get('stages', {}).get('profile', {}).get('cost_rub', 0)))
             if disposition == 'not_fit' and job.trigger != 'manual_document_refresh':
@@ -2561,6 +2567,12 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             job.status = 'partial'
             job.diagnostics['refresh'] = {'stage': 'paused', 'label': 'Сведения сохранены · разбор позиции не завершён'}
             job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'pending', 'cost_rub': '0'}
+            return job
+        if items_only and not routes_only:
+            job.diagnostics['items_only'] = True
+            job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'deferred', 'cost_rub': '0'}
+            job.status = 'needs_review'
+            job.diagnostics['refresh'] = {'stage': 'complete', 'label': 'Сведения о товарах собраны · требуется проверка'}
             return job
         if not routes_only and result.get('created'):
             _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
