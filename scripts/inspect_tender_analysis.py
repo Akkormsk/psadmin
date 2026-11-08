@@ -345,17 +345,30 @@ def main():
         from tenders.models import TenderComputeJob
         from collections import Counter
         tender = Tender.objects.get(purchase_number=number)
-        job = TenderComputeJob.objects.filter(tender=tender).latest('pk')
+        job = TenderComputeJob.objects.get(pk=166, tender=tender)
         memory = job.diagnostics.get('source_reading') or {}
         rows = list((memory.get('assignments') or {}).values())
-        sources = list(tender.v2_source_items.filter(source_type='notification', is_active=True))
-        linked = {source.pk:sum(source.pk in row.get('source_ids', []) and row.get('scope')=='item' for row in rows) for source in sources}
-        print(json.dumps({'job_id':job.pk, 'status':job.status, 'read':memory.get('read'), 'total':memory.get('total'),
-            'source_binding':job.diagnostics.get('stages', {}).get('source_binding'), 'assignment_scopes':dict(Counter(row.get('scope') for row in rows)),
-            'position_count':len(sources), 'positions_with_item_evidence':sum(bool(n) for n in linked.values()),
-            'positions_without_item_evidence':[source.metadata.get('notification_index', -1)+1 for source in sources if not linked[source.pk]],
-            'stages':{key:{'state':row.get('state'), 'outcome':row.get('outcome')} for key,row in job.diagnostics.get('stages',{}).items() if key in ('structure','national_regime','tz','routing')},
-            'gap_counts':dict(Counter(gap.get('stage') for gap in job.diagnostics.get('analysis_gaps',[])))}, ensure_ascii=False), flush=True)
+        fragments = memory.get('fragments') or {}
+        stages = job.diagnostics.get('stages') or {}
+        tz = (stages.get('tz') or {}).get('result') or []
+        unassigned = [row for row in rows if row.get('scope') == 'unassigned']
+        samples = []
+        for row in unassigned[:5]:
+            block = fragments.get(row['id'], {})
+            occ = (block.get('occurrences') or [{}])[0]
+            loc = occ.get('structure') or {}
+            nearby = []
+            for other in fragments.values():
+                for o in other.get('occurrences', []):
+                    st = o.get('structure') or {}
+                    if o.get('doc_id') == occ.get('doc_id') and st.get('table') == loc.get('table') and type(st.get('row')) is int and type(loc.get('row')) is int and abs(st['row']-loc['row']) <= 1:
+                        nearby.append({'row':st['row'], 'text':other.get('text','')[:180]})
+            samples.append({'text':block.get('text','')[:400], 'location':occ.get('location'), 'structure':loc, 'nearby':nearby[:8], 'reason':row.get('reason')})
+        print(json.dumps({'job':job.pk,'status':job.status,'read':memory.get('read'),'total':memory.get('total'),
+            'scopes':dict(Counter(row.get('scope') for row in rows)), 'tz_rows':len(tz),
+            'tz_chars':sum(len(row.get('characteristics') or []) for row in tz if isinstance(row,dict)),
+            'samples':samples, 'jobs':list(TenderComputeJob.objects.filter(tender=tender).order_by('-pk').values('pk','status','completed_at')[:3])}, ensure_ascii=False, default=str), flush=True)
+
 
 
 if __name__ == '__main__':
