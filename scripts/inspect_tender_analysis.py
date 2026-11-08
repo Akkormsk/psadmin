@@ -252,11 +252,11 @@ def inspect_binding_request(tender):
              for name, row in job.diagnostics.get('stages', {}).items() if name.startswith('binding:')}
     job.save = lambda **kwargs: None
     engine = GatewayDocumentEnricher(max_cost_rub='3.6558815')
-    report = {'saved': saved}
+    report = {'saved': {name: {**row, 'result': {'count': len(row.get('result') or []), 'unresolved': [r for r in row.get('result') or [] if r.get('scope') == 'unassigned'][:5]}} for name,row in saved.items()}}
     class Captured(RuntimeError):
         pass
     def capture(job, stage, instruction, task, **kwargs):
-        report.update(stage=stage, inventory_count=len(task['inventory']), block_count=len(task['blocks']),
+        report.update(stage=stage, field_bytes={key:len(json.dumps(value, ensure_ascii=False).encode()) for key,value in task.items()}, inventory_count=len(task['inventory']), block_count=len(task['blocks']),
             block_id_count=len({row['id'] for row in task['blocks']}),
             samples=[{key: row.get(key) for key in ('id', 'text', 'structure', 'table_start')} for row in task['blocks'][:2]],
             instruction=instruction, output_tokens=kwargs['output_tokens'])
