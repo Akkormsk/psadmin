@@ -417,7 +417,7 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         stripped = SourceMemory([{k: v for k, v in b.items() if k != 'structure'} for b in blocks], [{'source_id': 1}], 'model')
         self.assertEqual(list(original.blocks), list(stripped.blocks))
 
-@override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 10000, 'max_output_tokens': 4096}})
+@override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 12000, 'max_output_tokens': 4096}})
 class ItemBindingResumeTests(TestCase):
     setUp = SourceMemoryPipelineTests.setUp
     engine = SourceMemoryPipelineTests.engine
