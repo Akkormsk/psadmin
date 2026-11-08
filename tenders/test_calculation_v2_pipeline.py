@@ -81,6 +81,41 @@ class CalculationV2PipelineTests(TestCase):
         self.assertEqual(changed.supersedes_id, first.pk)
         self.assertEqual(TenderSourceItem.objects.filter(tender=tender).count(), 2)
 
+    def test_notification_position_one_does_not_match_positions_ten_and_eleven(self):
+        tender = self.tender(payload=notification([raw_item(f'Item {i}', '2', 'shared-code') for i in range(12)]))
+        first = ingest_source_items(tender)
+        second = ingest_source_items(tender)
+        self.assertEqual([row.pk for row in first], [row.pk for row in second])
+        self.assertEqual(tender.v2_source_items.filter(is_active=True).count(), 12)
+        self.assertEqual(tender.v2_source_items.count(), 12)
+
+    def test_ingestion_restores_existing_position_and_retires_duplicate_version(self):
+        tender = self.tender(payload=notification([raw_item('Item', '2', 'code')]))
+        source = ingest_source_items(tender)[0]
+        source.is_active = False
+        source.save(update_fields=['is_active'])
+        duplicate = TenderSourceItem.objects.create(tender=tender, source_key=source.source_key + ':v:old',
+            source_type=source.source_type, original_text=source.original_text, quantity=source.quantity,
+            unit=source.unit, requirements=source.requirements, metadata=source.metadata, is_active=True)
+        restored = ingest_source_items(tender)[0]
+        self.assertEqual(restored.pk, source.pk)
+        duplicate.refresh_from_db()
+        source.refresh_from_db()
+        self.assertFalse(duplicate.is_active)
+        self.assertTrue(source.is_active)
+        self.assertEqual(tender.v2_source_items.count(), 2)
+
+    def test_ingestion_keeps_a_source_replaced_by_active_document_components_inactive(self):
+        tender = self.tender(payload=notification([raw_item('Set', '2', 'code')]))
+        source = ingest_source_items(tender)[0]
+        source.is_active = False
+        source.save(update_fields=['is_active'])
+        TenderSourceItem.objects.create(tender=tender, source_key='component', source_type='document_component',
+            parent=source, original_text='Part', quantity=2, is_active=True)
+        self.assertEqual(ingest_source_items(tender)[0].pk, source.pk)
+        source.refresh_from_db()
+        self.assertFalse(source.is_active)
+
     @override_settings(CALCULATION_V2_ENABLED=True)
     def test_normal_tender_skips_enrichment_and_routes_in_one_batch(self):
         process = ProcessDefinition.objects.create(name="Generic route", role=ProcessDefinition.ROLE_SUPPLY)

@@ -120,7 +120,21 @@ def source_reading_history(tender):
                         samples.append({'error': str(exc), 'id': row.get('id'), 'source_excerpt': block.get('text', '')[:300], 'location': block.get('location')})
         read_ids = {row.get('id') for row in memory.get('records', {}).values()}
         scopes = Counter(row.get('scope') for row in memory.get('records', {}).values())
+        assignments = memory.get('assignments') or {}
+        binding_scopes = Counter(row.get('scope') for row in assignments.values())
+        inventory = {}
+        for source in tender.v2_source_items.filter(is_active=True):
+            key = (source.original_text, str(source.quantity), source.unit)
+            inventory.setdefault(key, []).append({'id': source.pk, 'index': source.metadata.get('notification_index'),
+                'source_type': source.source_type, 'parent_id': source.parent_id, 'source_key': source.source_key})
         history.append({'job_id': job.pk, 'gaps': job.diagnostics.get('analysis_gaps'),
+            'binding': {'stage': job.diagnostics.get('stages', {}).get('source_binding'),
+                'assigned': len(assignments), 'scopes': dict(binding_scopes),
+                'duplicate_positions': [rows for rows in inventory.values() if len(rows) > 1],
+                'unresolved_locations': [{key: blocks.get(row.get('id'), {}).get(key) for key in ('location', 'structure')}
+                    for row in assignments.values() if row.get('scope') == 'unassigned'][:5],
+                'purposes': dict(Counter(purpose for row in assignments.values() for purpose in row.get('purposes', []))),
+                'unresolved_reasons': list(dict.fromkeys(row.get('reason', '') for row in assignments.values() if row.get('scope') == 'unassigned'))[:10]},
             'scopes': dict(scopes), 'remaining_count': len(blocks) - len(read_ids),
             'largest_remaining': sorted([{'id': key, 'location': block.get('location'), 'bytes': len(block.get('text', '').encode())} for key, block in blocks.items() if key not in read_ids], key=lambda row: row['bytes'], reverse=True)[:3],
             'coverage': {key: memory.get(key) for key in ('total', 'read', 'complete')},
