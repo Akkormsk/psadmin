@@ -2557,7 +2557,7 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             _refresh_phase(job, "national_regime", "Проверяем требования 1875…")
             from .national_regime import tender_items
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
-        if not routes_only and result.get('state') in {'reading_incomplete', 'binding_incomplete', 'structure_incomplete'}:
+        if not routes_only and (job.diagnostics.get('awaiting_budget') or result.get('state') in {'reading_incomplete', 'binding_incomplete', 'structure_incomplete'}):
             job.status = 'partial'
             job.diagnostics['refresh'] = {'stage': 'paused', 'label': 'Сведения сохранены · разбор позиции не завершён'}
             job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'pending', 'cost_rub': '0'}
