@@ -37,6 +37,12 @@ CODE_ONLY, fix/intake-item-evidence: Word outline metadata/иерархия ра
 
 Проверки: 35 source-memory/composition checks PASS, manage.py check PASS, migration drift отсутствует. Повтор с блокированным Gateway сохраняет привязки и общие условия. Chromium проверил реально отрендеренный фрагмент на 390px: свёрнут по умолчанию, раскрывается без overflow, источник использует существующий data-doc-preview, текст экранируется. Это component preview, не authenticated whole-card acceptance. Расширенный набор 104 теста показал два прежних падения; оба воспроизведены на неизменённом 0ebff5b: operator acceptance fixture не удовлетворяет полному stage contract; конфликт двух цитат ожидает одну строку, получая две. Эти посторонние поведения не исправлялись и не выдаются за PASS. TEST deployment/реальная семантическая привязка/полный цикл новой версии пока не подтверждены.
 
+### Первая выкладка item evidence и защита продолжения
+
+TEST 3da17b8c9cd4821f2f2f45ef537fa66de7174a6a / Actions 42475381529: actual SHA, source-memory flag, backup, health и public URL проверены; 31 server checks PASS. Новых paid calls пока нет; полный semantic/control pass не принят.
+
+Дополнительная регрессия воспроизвела запуск router после binding_incomplete. Исправление останавливает job как partial/paused до маршрутизации при reading/binding/structure incomplete; старые планы/товары остаются, новые вызовы маршрута не делаются. finally сохраняет фактический расход и прогресс. 36 целевых локальных проверок PASS; отдельный failed-before тест подтвердил исправление. Эта защита не меняет алгоритм/качество маршрутов.
+
 ## 1. Назначение и границы
 
 PSADMIN ведёт тендер от ЕИС/ГосПлана через отбор/документы/расчёт до торгов и результата. Полная калькуляция V2 и исполнение ещё не приняты. LLM интерпретирует язык, backend валидирует источники, считает, фильтрует и ранжирует. V1 сохраняется до принятия V2; никаких supplier/product hardcodes.

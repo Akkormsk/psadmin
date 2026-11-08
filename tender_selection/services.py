@@ -2557,6 +2557,11 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             _refresh_phase(job, "national_regime", "Проверяем требования 1875…")
             from .national_regime import tender_items
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
+        if not routes_only and result.get('state') in {'reading_incomplete', 'binding_incomplete', 'structure_incomplete'}:
+            job.status = 'partial'
+            job.diagnostics['refresh'] = {'stage': 'paused', 'label': 'Сведения сохранены · разбор позиции не завершён'}
+            job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'pending', 'cost_rub': '0'}
+            return job
         if not routes_only and result.get('created'):
             _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
             profile_cost += Decimal(str(job.diagnostics.get('stages', {}).get('profile_after_tz', {}).get('cost_rub', 0)))
