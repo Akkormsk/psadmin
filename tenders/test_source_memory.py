@@ -378,6 +378,16 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, 'Привязка источников'):
             list(memory.context({1}, 'tz'))
 
+    def test_irrelevant_text_does_not_block_item_evidence(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        blocks = list(memory.blocks.values())
+        memory.assign([{'id': blocks[0]['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']},
+                       {'id': blocks[1]['id'], 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']},
+                       {'id': blocks[2]['id'], 'scope': 'irrelevant', 'source_ids': [], 'purposes': [], 'reason': 'Не относится к товарам'}], blocks)
+        self.assertEqual([b['facts'][0]['quote'] for b in memory.context({1}, 'tz')], ['Кружка белая 350 мл'])
+        self.assertEqual(len(memory.snapshot()['assignments']), 3)
+
     def test_heading_hierarchy_is_retained_without_changing_existing_addresses(self):
         docs = {1: {'url': 'spec', 'source_html': '<h1>ТЗ</h1><h2>Спецификация</h2><p>Материал</p>', 'tables': []}}
         blocks = document_blocks(docs)

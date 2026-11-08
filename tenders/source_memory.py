@@ -251,11 +251,15 @@ class SourceMemory:
         validate_reading(rows, blocks, {row['source_id'] for row in self.inventory})
         for row in rows:
             purposes = row.get('purposes')
+            if row['scope'] == 'irrelevant':
+                if row['source_ids']:
+                    raise ValueError('Посторонний текст не должен привязываться к позиции.')
+                continue
             if row['scope'] == 'unassigned' and (not isinstance(row.get('reason'), str) or not row['reason'].strip()):
                 raise ValueError('Для неясной привязки требуется объяснение.')
             if row['scope'] == 'global' and row['source_ids']:
                 raise ValueError('Общие условия не должны подменять отдельную позицию.')
-            if row['scope'] == 'irrelevant' or not isinstance(purposes, list) or not purposes or any(
+            if not isinstance(purposes, list) or not purposes or any(
                     not isinstance(purpose, str) or purpose not in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for purpose in purposes):
                 raise ValueError('Не определено назначение сведений позиции.')
         for row in rows:
