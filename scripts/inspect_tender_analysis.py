@@ -342,14 +342,20 @@ def main():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
-        from tender_selection.notification import parse_notification
-        from tender_selection.models import DocumentPreview
-        from lxml import html
+        from tenders.models import TenderComputeJob
+        from collections import Counter
         tender = Tender.objects.get(purchase_number=number)
-        notice = parse_notification(tender.notification_raw or {})
-        docs = notice.get('documents', [])
-        previews = {p.url:p for p in DocumentPreview.objects.filter(url__in=[d.get('url') for d in docs])}
-        print(json.dumps({'number':number, 'items':notice.get('items', []), 'documents':[{'name':d.get('name'), 'cached':d.get('url') in previews, 'text':html.fromstring(previews[d['url']].html).text_content() if d.get('url') in previews and previews[d['url']].html else None} for d in docs]}, ensure_ascii=False, default=str), flush=True)
+        job = TenderComputeJob.objects.filter(tender=tender).latest('pk')
+        memory = job.diagnostics.get('source_reading') or {}
+        rows = list((memory.get('assignments') or {}).values())
+        sources = list(tender.v2_source_items.filter(source_type='notification', is_active=True))
+        linked = {source.pk:sum(source.pk in row.get('source_ids', []) and row.get('scope')=='item' for row in rows) for source in sources}
+        print(json.dumps({'job_id':job.pk, 'status':job.status, 'read':memory.get('read'), 'total':memory.get('total'),
+            'source_binding':job.diagnostics.get('stages', {}).get('source_binding'), 'assignment_scopes':dict(Counter(row.get('scope') for row in rows)),
+            'position_count':len(sources), 'positions_with_item_evidence':sum(bool(n) for n in linked.values()),
+            'positions_without_item_evidence':[source.metadata.get('notification_index', -1)+1 for source in sources if not linked[source.pk]],
+            'stages':{key:{'state':row.get('state'), 'outcome':row.get('outcome')} for key,row in job.diagnostics.get('stages',{}).items() if key in ('structure','national_regime','tz','routing')},
+            'gap_counts':dict(Counter(gap.get('stage') for gap in job.diagnostics.get('analysis_gaps',[])))}, ensure_ascii=False), flush=True)
 
 
 if __name__ == '__main__':
