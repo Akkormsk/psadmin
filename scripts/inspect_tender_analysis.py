@@ -287,9 +287,20 @@ def main():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
-        print(json.dumps({'source_reading_history': source_reading_history(Tender.objects.get(purchase_number=number))}, ensure_ascii=False, default=str), flush=True)
-        tender = Tender.objects.get(purchase_number=number)
-        print(json.dumps({'binding_request': inspect_binding_request(tender)}, ensure_ascii=False, default=str), flush=True)
+        from django.db.models import Count
+        from tender_selection.notification import parse_notification
+        from tender_selection.models import DocumentPreview
+        from tenders.models import TenderComputeJob
+        saved = list(TenderComputeJob.objects.exclude(tender__purchase_number=number).filter(diagnostics__source_reading__complete=True).order_by('-pk').values('pk','tender__purchase_number','diagnostics__source_reading__total')[:10])
+        candidates = []
+        tenders = Tender.objects.exclude(purchase_number=number).filter(v2_source_items__is_active=True, v2_source_items__source_type='notification').annotate(item_count=Count('v2_source_items')).filter(item_count__lte=8).order_by('-pk')[:80]
+        for tender in tenders:
+            docs = parse_notification(tender.notification_raw or {}).get('documents', [])
+            urls = [doc['url'] for doc in docs if doc.get('url')]
+            previews = list(DocumentPreview.objects.filter(url__in=urls).exclude(html='').values('url','kind','html'))
+            if previews:
+                candidates.append({'number': tender.purchase_number, 'items':tender.item_count, 'cached_documents':len(previews), 'html_bytes':sum(len(p['html'].encode()) for p in previews), 'kinds':list({p['kind'] for p in previews})})
+        print(json.dumps({'other_read_tenders':saved, 'candidates':sorted(candidates,key=lambda r:r['html_bytes'])[:8]}, ensure_ascii=False), flush=True)
 
 
 if __name__ == '__main__':
