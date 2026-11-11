@@ -38,7 +38,7 @@
           <details data-analysis-extra="{{ tender.pk }}" {% if analysis_issues|length < 2 %}hidden{% endif %}><summary>Подробности</summary><div data-analysis-issues="{{ tender.pk }}"><ul>{% for issue in analysis_issues|slice:"1:" %}<li>{{ issue }}</li>{% endfor %}</ul></div></details>
         </div>
         <p class="ts-detail__links" data-card-refresh="links">
-          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">ЕИС ↗</a>{% endif %}
+          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
           {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
         </p>
         {% if is_manual %}<p class="ts-warn">Данные ЕИС не загружены. Карточка создана из ручного расчёта; недостающую информацию и документы можно будет добавить позже.</p>{% endif %}
@@ -89,7 +89,7 @@
     <summary class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--neutral">{% if card.items %}{{ card.items|length }} позиций{% elif is_manual %}данные ЕИС не загружены{% else %}основные условия закупки{% endif %}</span></span></summary>
     {% if is_fz223 %}
     <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
-      <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку закупки ↗</a></p>
+      <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку {% if tender.source == "eat" %}ЕАТ{% else %}закупки{% endif %} ↗</a></p>
     {% elif fetch_failed %}
     <p class="ts-warn" data-notification-error>Не удалось загрузить извещение (возможно, лимит запросов).
       <a href="?refresh=1">Попробовать ещё раз</a>. Ниже — что известно из списка.</p>
@@ -396,7 +396,7 @@
     <div class="panel-header"><h2 class="panel-title">Жалобы в ФАС <small class="ts-count">{{ complaints|length }}</small></h2></div>
     <p class="ts-warn">По закупке есть жалобы — аукцион может быть приостановлен, а закупка отменена или переиграна.
       Текст жалоб и решения — на портале ЕИС:
-      <a href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">открыть карточку ↗</a></p>
+      <a href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">открыть карточку {% if tender.source == "eat" %}ЕАТ{% endif %} ↗</a></p>
     <ul class="ts-extras">
       {% for c in complaints %}
       <li>
