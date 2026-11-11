@@ -1,0 +1,73 @@
+name: EAT Berezka read-only API probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Probe purchase-list API without publishing credentials or response bodies
+        env:
+          EAT_API_TOKEN: ${{ secrets.EAT_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import ssl
+          import urllib.request
+          import urllib.error
+          from xml.etree import ElementTree
+
+          token = os.environ.get("EAT_API_TOKEN", "").strip()
+          if not token:
+              raise SystemExit("EAT_API_TOKEN is missing; no network request made")
+          # This is a *diagnostic* placeholder, not an approved schema-complete
+          # requestOrderList integration. The Album TFF / XSD is required.
+          endpoint = "https://agregatoreat.ru/integration/ecom/rest/api/order/requestOrderList"
+          payload = b'<?xml version="1.0" encoding="UTF-8"?><requestOrderList/>'
+          request = urllib.request.Request(
+              endpoint,
+              data=payload,
+              method="POST",
+              headers={
+                  "Content-Type": "application/xml; charset=UTF-8",
+                  # The public short manual names no exact header; this is
+                  # a tentative convention to validate, not a confirmed one.
+                  "token": token,
+                  "Accept": "application/xml",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=18, context=ssl.create_default_context()) as r:
+                  status = r.status
+                  media_type = r.headers.get_content_type()
+                  body = r.read(262145)
+          except urllib.error.HTTPError as error:
+              status = error.code
+              media_type = error.headers.get_content_type()
+              body = error.read(262145)
+          except (urllib.error.URLError, TimeoutError, OSError):
+              print("EAT probe: transport/TLS/timeout failure; no response published")
+              raise SystemExit(1)
+          print(f"EAT probe HTTP status: {status}; content type: {media_type}")
+          if len(body) > 262144:
+              print("Response exceeds 256 KiB diagnostic limit; body discarded")
+              raise SystemExit(0)
+          try:
+              root = ElementTree.fromstring(body)
+          except ElementTree.ParseError:
+              print("Response body is not valid XML (not printed)")
+          else:
+              root_name = root.tag.split("}")[-1]
+              print("Response XML root:", root_name if root_name.isidentifier() else "(non-identifier)")
+              names = sorted({node.tag.split("}")[-1] for node in root.iter()})
+              safe_names = [name for name in names if name.isidentifier() and len(name) < 80]
+              print("XML element names (no values):", ", ".join(safe_names[:25]))
+          print("Diagnostic only. No tenders stored, no bids placed, no production/test deployments.")
+          PY
