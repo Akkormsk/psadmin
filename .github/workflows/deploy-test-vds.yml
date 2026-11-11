@@ -117,6 +117,34 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
+      - name: Configure EAT read-only credentials on TEST only
+        shell: bash
+        env:
+          EAT_API_TOKEN: ${{ secrets.EAT_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EAT_API_TOKEN" ]; then
+            echo "No EAT API secret; EAT source remains disabled on TEST."
+          else
+            # Supply credential only via encrypted SSH stdin, not command arguments or logs.
+            printf '%s' "$EAT_API_TOKEN" | ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              "$SSH_USER@$SSH_HOST" "python3 -c 'import sys, os, json
+from pathlib import Path
+p = Path(\"/home/deploy/psadmin-test.env\")
+token = sys.stdin.read().strip()
+assert token and \"\\n\" not in token and \"\\r\" not in token
+assert p.is_file(), \"TEST environment file missing\"
+rows = [line for line in p.read_text().splitlines() if not line.startswith((\"EAT_API_TOKEN=\", \"EAT_EXT_SYSTEM=\", \"EAT_PULL_ENABLED=\"))]
+rows.extend([\"EAT_API_TOKEN=\" + json.dumps(token), \"EAT_EXT_SYSTEM=300911501\", \"EAT_PULL_ENABLED=1\"])
+tmp = p.with_suffix(\".eat-tmp\")
+fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, \"w\") as output: output.write(\"\\n\".join(rows) + \"\\n\")
+os.replace(tmp, p)
+os.chmod(p, 0o600)
+print(\"EAT credentials configured for TEST only (token redacted)\")'"
+          fi
+
       - name: Upload release archive
         shell: bash
         run: |
