@@ -185,7 +185,9 @@ def shortlist(orders, *, minimum, include, exclude, now, days, mode):
             continue
         result.append({
             "purchase_number": number, "title": title, "max_price": price,
-            "collecting_finished_at": deadline, "published_at": published,
+            "collecting_finished_at": deadline,
+            # startTime is the session's start, NOT the publication timestamp.
+            "published_at": None, "session_start": published,
         })
     return result
 
