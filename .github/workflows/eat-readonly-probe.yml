@@ -1,6 +1,9 @@
-name: EAT Berezka read-only API diagnostic
+name: EAT Berezka read-only published date range check
 
 on:
+  push:
+    branches:
+      - feature/eat-readonly-diagnostic
   workflow_dispatch:
 
 permissions:
@@ -12,8 +15,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Query read-only EAT list API
+      - name: Check EAT publication window
         env:
           EAT_API_TOKEN: ${{ secrets.EAT_API_TOKEN }}
           EAT_EXT_SYSTEM: '300911501'
-        run: python3 scripts/eat_api_diagnostic.py
+        run: python3 scripts/eat_published_probe.py
