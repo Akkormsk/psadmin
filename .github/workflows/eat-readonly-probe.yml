@@ -1,9 +1,6 @@
 name: EAT Berezka read-only published date range check
 
 on:
-  push:
-    branches:
-      - feature/eat-readonly-diagnostic
   workflow_dispatch:
 
 permissions:
