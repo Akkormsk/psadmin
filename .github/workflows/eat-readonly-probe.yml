@@ -1,9 +1,6 @@
 name: EAT Berezka read-only API probe
 
 on:
-  push:
-    branches:
-      - feature/eat-readonly-diagnostic
   workflow_dispatch:
 
 permissions:
