@@ -1,6 +1,9 @@
 name: EAT Berezka read-only API diagnostic
 
 on:
+  push:
+    branches:
+      - feature/eat-readonly-diagnostic
   workflow_dispatch:
 
 permissions:
@@ -15,5 +18,5 @@ jobs:
       - name: Query read-only EAT list API
         env:
           EAT_API_TOKEN: ${{ secrets.EAT_API_TOKEN }}
-          EAT_EXT_SYSTEM: ${{ vars.EAT_EXT_SYSTEM }}
+          EAT_EXT_SYSTEM: '300911501'
         run: python3 scripts/eat_api_diagnostic.py
