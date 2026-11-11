@@ -685,7 +685,7 @@ def retry_pending_documents(*, limit: int = 8, pause: float = DOCUMENT_PREFETCH_
     from .risk_assessment import select_documents
 
     tenders = (
-        Tender.objects.filter(law="fz44", collecting_finished_at__gte=timezone.now())
+        Tender.objects.filter(law="fz44", source=Tender.EIS, collecting_finished_at__gte=timezone.now())
         .exclude(status=Tender.DISMISSED).exclude(notification_raw={})
         .order_by("collecting_finished_at")
     )
@@ -731,7 +731,7 @@ def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[
     )
     attempted = succeeded = 0
     tenders = (
-        Tender.objects.filter(never_checked | failed_earlier, law="fz44")
+        Tender.objects.filter(never_checked | failed_earlier, law="fz44", source=Tender.EIS)
         .order_by("-last_pulled_at")[:recent]
     )
     for tender in tenders:
@@ -1077,6 +1077,8 @@ def start_risk_assessment_in_background(tender_id: int) -> None:
         close_old_connections()
         try:
             tender = Tender.objects.get(pk=tender_id)
+            if tender.source == Tender.EAT:
+                return  # EAT has a different notification/document contract.
             risk_assessment_for(tender)
         except Exception:
             logger.exception("Фоновая оценка риска не удалась для тендера %s", tender_id)
@@ -1097,6 +1099,8 @@ def push_to_estimate(tender, user):
     from .stats import price_stats_for
 
     tender = Tender.objects.select_for_update().get(pk=tender.pk)
+    if tender.source == Tender.EAT:
+        raise ValueError("Расчёт закупки ЕАТ пока недоступен: требуется отдельный разбор её спецификации.")
     existing = tender.estimates.order_by('pk').first()
     if existing:
         return existing.pk
@@ -1343,7 +1347,7 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             protocol_checked_at__isnull=False, outcome_checked_at__isnull=True)
         | Q(status=Tender.DISMISSED, contract_price__isnull=False, contract_winner_inn="",
             outcome_checked_at__lt=timezone.now() - CONTRACT_RECHECK)
-    ).order_by("created_at")[:50]
+    ).filter(source=Tender.EIS).order_by("created_at")[:50]
     for tender in tenders:
         if attempted >= limit:
             break
@@ -1630,7 +1634,7 @@ def retry_pending_protocols(*, limit: int = 6, pause: float = PROTOCOL_PAUSE_SEC
     from .protocols import ProtocolError
 
     now = timezone.now()
-    base = Tender.objects.filter(protocol={}, law="fz44")
+    base = Tender.objects.filter(protocol={}, law="fz44", source=Tender.EIS)
     bidding = base.filter(
         Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_RECHECK),
         outcome_status=Tender.OUTCOME_PENDING, collecting_finished_at__lt=now,
@@ -2080,6 +2084,8 @@ def refresh_document_analysis(user, tender_id, *, routes_only=False):
 
     _require_tender_admin(user)
     tender = Tender.objects.select_for_update().get(pk=tender_id)
+    if tender.source == Tender.EAT:
+        raise ValueError("Разбор документов ЕАТ ещё не подключён; используйте ссылку на исходную сессию.")
     active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued", "routing", "preparing"]).first()
     if active and active.updated_at < timezone.now() - timedelta(minutes=15):
         active.status = "partial"; active.error = {"message": "Предыдущее обновление прервано. Запущена повторная попытка."}; active.completed_at = timezone.now()
