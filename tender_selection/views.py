@@ -497,7 +497,7 @@ def tender_list(request):
         # до него не добрался, — это не сбой, а «ещё не проверяли», значок не должен
         # гореть на буквально каждой новой карточке.
         tender.notification_missing = (
-            tender.law == "fz44" and not tender.list_notification_present and tender.notification_checked_at is not None
+            tender.source != Tender.EAT and tender.law == "fz44" and not tender.list_notification_present and tender.notification_checked_at is not None
             and not tender.notification_error
         )
 
@@ -541,7 +541,7 @@ def tender_detail(request, pk):
     if tender.opened_at is None and not analysis_snapshot:  # для «жирного» непрочитанного в списке — только реальный заход, не фон
         tender.opened_at = timezone.now()
         tender.save(update_fields=["opened_at"])
-    is_manual = tender.source == Tender.MANUAL
+    is_manual = tender.source in (Tender.MANUAL, Tender.EAT)
     payload = (tender.notification_raw or None) if analysis_snapshot else None if is_manual else notification_for(tender, force=request.GET.get("refresh") == "1")
     card = parse_notification(payload) if payload else None
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
@@ -1315,6 +1315,13 @@ def profile_triage_run(request):
 @require_POST
 def pull_now(request):
     run = pull_tenders_now(request.user)
+    eat_status = run.get("eat_status")
+    if eat_status == "started":
+        messages.info(request, "ЕАТ «Берёзка»: обновление запущено отдельно; результаты появятся во «Входящих» после завершения.")
+    elif eat_status == "already_running":
+        messages.info(request, "ЕАТ «Берёзка»: предыдущее обновление ещё выполняется.")
+    elif eat_status == "not_configured":
+        messages.warning(request, "ЕАТ «Берёзка»: нет токена или номера поставщика в TEST.")
     if run["ok"]:
         messages.success(
             request,
