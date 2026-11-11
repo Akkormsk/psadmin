@@ -1,6 +1,9 @@
-name: EAT Berezka read-only published date range check
+name: EAT Berezka read-only legal basis verification
 
 on:
+  push:
+    branches:
+      - feature/eat-readonly-diagnostic
   workflow_dispatch:
 
 permissions:
@@ -9,11 +12,11 @@ permissions:
 jobs:
   api-diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
-      - name: Check EAT publication window
+      - name: Inspect EAT legal basis of sample session
         env:
           EAT_API_TOKEN: ${{ secrets.EAT_API_TOKEN }}
-          EAT_EXT_SYSTEM: '300911501'
-        run: python3 scripts/eat_published_probe.py
+          EAT_SAMPLE_NUMBER: '100076455126100040'
+        run: python3 scripts/eat_detail_probe.py
