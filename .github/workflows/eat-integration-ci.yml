@@ -1,0 +1,29 @@
+name: EAT integration isolated tests
+
+on:
+  push:
+    branches:
+      - feature/eat-incoming-integration
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Validate Django config and EAT integration regressions
+        env:
+          DJANGO_SECRET_KEY: ci-only
+          DB_ENGINE: sqlite
+        run: |
+          python -m compileall -q tender_selection
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py test tender_selection.test_eat_integration tender_selection.test_keyword_pull --noinput -v 2
