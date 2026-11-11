@@ -15,8 +15,8 @@ def make_request(name, ext_system, uid, *, days=7):
                                                f"{{{EAT}}}RequestUID": uid})
     if name == "requestOrdersListLitePublished":
         now = datetime.now(timezone.utc)
-        ET.SubElement(root, "dateFrom").text = (now - timedelta(days=days)).isoformat(timespec="seconds")
-        ET.SubElement(root, "dateTo").text = now.isoformat(timespec="seconds")
+        ET.SubElement(root, f"{{{EAT}}}dateFrom").text = (now - timedelta(days=days)).isoformat(timespec="seconds")
+        ET.SubElement(root, f"{{{EAT}}}dateTo").text = now.isoformat(timespec="seconds")
     ET.SubElement(root, "extSystem").text = ext_system
     return ET.tostring(root, xml_declaration=True, encoding="utf-8")
 
