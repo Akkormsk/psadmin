@@ -1,0 +1,33 @@
+name: EAT TEST read-only visibility diagnostics
+on:
+  push:
+    branches:
+      - diagnostic/eat-incoming-visibility
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_USER: deploy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Inspect TEST EAT entries and filter settings (read only)
+        shell: bash
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py shell -c 'import os,json; from django.utils import timezone; from tender_selection.models import Tender,FilterSettings,PullRun; from tender_selection.filtering import parse_terms,match_title; s=FilterSettings.load(); now=timezone.now(); rows=list(Tender.objects.filter(source=Tender.EAT).order_by(\"-last_pulled_at\")[:20]); runs=list(PullRun.objects.filter(params__source=\"eat\").order_by(\"-started_at\")[:8]); print(\"EAT_DIAGNOSTIC \"+json.dumps({\"now\":now.isoformat(),\"enabled\":os.getenv(\"EAT_PULL_ENABLED\"),\"token_present\":bool(os.getenv(\"EAT_API_TOKEN\")),\"ext_system_present\":bool(os.getenv(\"EAT_EXT_SYSTEM\")),\"settings\":{\"days\":s.window_days,\"minimum\":str(s.min_price),\"include\":s.include_words[:200],\"exclude\":s.exclude_words[:200]},\"rows\":[{\"number\":t.purchase_number,\"title\":t.title,\"end\":t.collecting_finished_at.isoformat() if t.collecting_finished_at else None,\"status\":t.status,\"review\":t.review,\"law\":t.law,\"passes_words\":match_title(t.title,parse_terms(s.include_words),parse_terms(s.exclude_words))[0],\"valid_deadline\":bool(t.collecting_finished_at and t.collecting_finished_at>=now)} for t in rows],\"runs\":[{\"at\":r.started_at.isoformat(),\"ok\":r.ok,\"created\":r.created_count,\"received\":r.records_received,\"error\":r.error,\"diag\":r.params.get(\"diagnostics\")} for r in runs]},ensure_ascii=False,default=str))' "
