@@ -252,7 +252,7 @@ def build_params(*, days: int, stage: int | None, min_price, regions=None, law: 
 def _risk_eligible(tender) -> bool:
     # Плюс-слова и минимальную цену не проверяем: тендер уже вручную переведён в «Оценку».
     return (
-        tender.law == "fz44"
+        tender.law == "fz44" and tender.source == Tender.EIS
         # риск не считаем, пока тендер не дошёл до «Проверки» — на «Входящих»
         # ещё не решили, что он вообще стоит внимания
         and tender.review != Tender.UNREVIEWED
@@ -626,8 +626,8 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     Побочно кладёт имя/город заказчика в кэш Organization — список это подхватит без
     отдельных запросов.
     """
-    if tender.law != "fz44":
-        return None  # у 223-ФЗ нет разобранного извещения — только файлы
+    if tender.law != "fz44" or tender.source == Tender.EAT:
+        return None  # EAT has a separate XML notification; never query Gosplan for its 18-digit IDs
     if tender.notification_raw and not force:
         return tender.notification_raw
     try:
@@ -685,7 +685,7 @@ def retry_pending_documents(*, limit: int = 8, pause: float = DOCUMENT_PREFETCH_
     from .risk_assessment import select_documents
 
     tenders = (
-        Tender.objects.filter(law="fz44", collecting_finished_at__gte=timezone.now())
+        Tender.objects.filter(law="fz44", source=Tender.EIS, collecting_finished_at__gte=timezone.now())
         .exclude(status=Tender.DISMISSED).exclude(notification_raw={})
         .order_by("collecting_finished_at")
     )
@@ -731,7 +731,7 @@ def retry_pending_notifications(*, limit: int = 10, recent: int = 300) -> tuple[
     )
     attempted = succeeded = 0
     tenders = (
-        Tender.objects.filter(never_checked | failed_earlier, law="fz44")
+        Tender.objects.filter(never_checked | failed_earlier, law="fz44", source=Tender.EIS)
         .order_by("-last_pulled_at")[:recent]
     )
     for tender in tenders:
@@ -755,7 +755,7 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     now = timezone.now()
     attempted = succeeded = 0
     tenders = Tender.objects.filter(
-        law="fz44", risk_checked_at__isnull=True,
+        law="fz44", source=Tender.EIS, risk_checked_at__isnull=True,
     ).exclude(review=Tender.UNREVIEWED).order_by("first_seen_at")[:300]
     for tender in tenders:
         if attempted >= limit:
@@ -788,7 +788,7 @@ def retry_pending_deadlines(*, limit: int = 10, pause: float = None) -> tuple[in
     now = timezone.now()
     settings = FilterSettings.load()
     tenders = Tender.objects.filter(
-        law="fz44", status=Tender.NEW, review=Tender.UNREVIEWED,
+        law="fz44", source=Tender.EIS, status=Tender.NEW, review=Tender.UNREVIEWED,
         collecting_finished_at__lt=now,
         collecting_finished_at__gte=now - timedelta(days=settings.incoming_ttl_days),
     ).order_by("-collecting_finished_at")[:limit]
@@ -878,7 +878,7 @@ _EXTRAS_ACTIVE_WINDOW = timedelta(days=45)  # после закрытия при
 
 
 def extras_need_refresh(tender, *, force: bool = False) -> bool:
-    if tender.law != "fz44":
+    if tender.law != "fz44" or tender.source == Tender.EAT:
         return False
 
     now = timezone.now()
@@ -1077,6 +1077,8 @@ def start_risk_assessment_in_background(tender_id: int) -> None:
         close_old_connections()
         try:
             tender = Tender.objects.get(pk=tender_id)
+            if tender.source == Tender.EAT:
+                return  # EAT has a different notification/document contract.
             risk_assessment_for(tender)
         except Exception:
             logger.exception("Фоновая оценка риска не удалась для тендера %s", tender_id)
@@ -1097,6 +1099,8 @@ def push_to_estimate(tender, user):
     from .stats import price_stats_for
 
     tender = Tender.objects.select_for_update().get(pk=tender.pk)
+    if tender.source == Tender.EAT:
+        raise ValueError("Расчёт закупки ЕАТ пока недоступен: требуется отдельный разбор её спецификации.")
     existing = tender.estimates.order_by('pk').first()
     if existing:
         return existing.pk
@@ -1343,7 +1347,7 @@ def retry_pending_outcomes(*, limit: int = 5) -> tuple[int, int]:
             protocol_checked_at__isnull=False, outcome_checked_at__isnull=True)
         | Q(status=Tender.DISMISSED, contract_price__isnull=False, contract_winner_inn="",
             outcome_checked_at__lt=timezone.now() - CONTRACT_RECHECK)
-    ).order_by("created_at")[:50]
+    ).filter(source=Tender.EIS).order_by("created_at")[:50]
     for tender in tenders:
         if attempted >= limit:
             break
@@ -1630,7 +1634,7 @@ def retry_pending_protocols(*, limit: int = 6, pause: float = PROTOCOL_PAUSE_SEC
     from .protocols import ProtocolError
 
     now = timezone.now()
-    base = Tender.objects.filter(protocol={}, law="fz44")
+    base = Tender.objects.filter(protocol={}, law="fz44", source=Tender.EIS)
     bidding = base.filter(
         Q(protocol_checked_at__isnull=True) | Q(protocol_checked_at__lt=now - PROTOCOL_RECHECK),
         outcome_status=Tender.OUTCOME_PENDING, collecting_finished_at__lt=now,
@@ -1933,9 +1937,13 @@ def run_profile_triage(user):
 
 def pull_tenders_now(user):
     _require_tender_admin(user)
+    from .eat_service import start_eat_pull
+    # EAT takes two asynchronous API steps and must not block the existing HTTP request.
+    eat_status = start_eat_pull()
     run = run_pull(max_requests=16)
     return {"ok": run.ok, "requests_made": run.requests_made, "records_received": run.records_received,
-            "created_count": run.created_count, "duration_seconds": run.duration_seconds, "error": run.error}
+            "created_count": run.created_count, "duration_seconds": run.duration_seconds, "error": run.error,
+            "eat_status": eat_status}
 
 @transaction.atomic
 def answer_tender_owner_question(user, tender_id, interaction_id, answer):
@@ -2076,6 +2084,8 @@ def refresh_document_analysis(user, tender_id, *, routes_only=False):
 
     _require_tender_admin(user)
     tender = Tender.objects.select_for_update().get(pk=tender_id)
+    if tender.source == Tender.EAT:
+        raise ValueError("Разбор документов ЕАТ ещё не подключён; используйте ссылку на исходную сессию.")
     active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued", "routing", "preparing"]).first()
     if active and active.updated_at < timezone.now() - timedelta(minutes=15):
         active.status = "partial"; active.error = {"message": "Предыдущее обновление прервано. Запущена повторная попытка."}; active.completed_at = timezone.now()
