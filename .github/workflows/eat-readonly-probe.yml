@@ -1,4 +1,4 @@
-name: EAT Berezka read-only API probe
+name: EAT Berezka read-only API diagnostic
 
 on:
   workflow_dispatch:
@@ -7,84 +7,13 @@ permissions:
   contents: read
 
 jobs:
-  api-probe:
+  api-diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Probe purchase-list API without publishing credentials or response bodies
+      - uses: actions/checkout@v4
+      - name: Query read-only EAT list API
         env:
           EAT_API_TOKEN: ${{ secrets.EAT_API_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import ssl
-          import urllib.request
-          import urllib.error
-          from xml.etree import ElementTree
-
-          token = os.environ.get("EAT_API_TOKEN", "").strip()
-          if not token:
-              raise SystemExit("EAT_API_TOKEN is missing; no network request made")
-          # This is a *diagnostic* placeholder, not an approved schema-complete
-          # requestOrderList integration. The Album TFF / XSD is required.
-          endpoint = "https://agregatoreat.ru/integration/ecom/rest/api/order/requestOrderList"
-          payload = b'<?xml version="1.0" encoding="UTF-8"?><requestOrderList/>'
-          request = urllib.request.Request(
-              endpoint,
-              data=payload,
-              method="POST",
-              headers={
-                  "Content-Type": "application/xml; charset=UTF-8",
-                  # The public short manual names no exact header; this is
-                  # a tentative convention to validate, not a confirmed one.
-                  "token": token,
-                  "Accept": "application/xml",
-              },
-          )
-          try:
-              with urllib.request.urlopen(request, timeout=18, context=ssl.create_default_context()) as r:
-                  status = r.status
-                  media_type = r.headers.get_content_type()
-                  body = r.read(262145)
-          except urllib.error.HTTPError as error:
-              status = error.code
-              media_type = error.headers.get_content_type()
-              body = error.read(262145)
-          except (urllib.error.URLError, TimeoutError, OSError):
-              print("EAT probe: transport/TLS/timeout failure; no response published")
-              raise SystemExit(1)
-          print(f"EAT probe HTTP status: {status}; content type: {media_type}")
-          if len(body) > 262144:
-              print("Response exceeds 256 KiB diagnostic limit; body discarded")
-              raise SystemExit(0)
-          try:
-              root = ElementTree.fromstring(body)
-          except ElementTree.ParseError:
-              print("Response body is not valid XML (not printed)")
-          else:
-              root_name = root.tag.split("}")[-1]
-              print("Response XML root:", root_name if root_name.isidentifier() else "(non-identifier)")
-              names = sorted({node.tag.split("}")[-1] for node in root.iter()})
-              safe_names = [name for name in names if name.isidentifier() and len(name) < 80]
-              print("XML element names (no values):", ", ".join(safe_names[:25]))
-          # Distinguish an API-specific rejection from a site-wide edge block.
-          # Never emit server response values, tokens or raw bodies.
-          def compare_probe(label, url, method="GET", data=None):
-              probe = urllib.request.Request(url, method=method, data=data,
-                  headers={"Content-Type": "application/xml; charset=UTF-8"} if data else {})
-              try:
-                  with urllib.request.urlopen(probe, timeout=12) as response:
-                      code, content_type, sample = response.status, response.headers.get_content_type(), response.read(8192)
-              except urllib.error.HTTPError as error:
-                  code, content_type, sample = error.code, error.headers.get_content_type(), error.read(8192)
-              except (urllib.error.URLError, TimeoutError, OSError):
-                  print(label + ": transport failure")
-                  return
-              import hashlib
-              print(label + f": HTTP {code}, type={content_type}, fingerprint={hashlib.sha256(sample).hexdigest()[:16]}")
-          compare_probe("Public classifier", "https://agregatoreat.ru/integration/ecom/classifier/eatCategorySet.zip")
-          compare_probe("Unauthenticated list", endpoint, "POST", payload)
-          print("Diagnostic only. No tenders stored, no bids placed, no production/test deployments.")
-          PY
+          EAT_EXT_SYSTEM: ${{ vars.EAT_EXT_SYSTEM }}
+        run: python3 scripts/eat_api_diagnostic.py
