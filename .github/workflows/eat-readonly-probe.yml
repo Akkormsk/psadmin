@@ -72,5 +72,22 @@ jobs:
               names = sorted({node.tag.split("}")[-1] for node in root.iter()})
               safe_names = [name for name in names if name.isidentifier() and len(name) < 80]
               print("XML element names (no values):", ", ".join(safe_names[:25]))
+          # Distinguish an API-specific rejection from a site-wide edge block.
+          # Never emit server response values, tokens or raw bodies.
+          def compare_probe(label, url, method="GET", data=None):
+              probe = urllib.request.Request(url, method=method, data=data,
+                  headers={"Content-Type": "application/xml; charset=UTF-8"} if data else {})
+              try:
+                  with urllib.request.urlopen(probe, timeout=12) as response:
+                      code, content_type, sample = response.status, response.headers.get_content_type(), response.read(8192)
+              except urllib.error.HTTPError as error:
+                  code, content_type, sample = error.code, error.headers.get_content_type(), error.read(8192)
+              except (urllib.error.URLError, TimeoutError, OSError):
+                  print(label + ": transport failure")
+                  return
+              import hashlib
+              print(label + f": HTTP {code}, type={content_type}, fingerprint={hashlib.sha256(sample).hexdigest()[:16]}")
+          compare_probe("Public classifier", "https://agregatoreat.ru/integration/ecom/classifier/eatCategorySet.zip")
+          compare_probe("Unauthenticated list", endpoint, "POST", payload)
           print("Diagnostic only. No tenders stored, no bids placed, no production/test deployments.")
           PY
