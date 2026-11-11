@@ -72,8 +72,9 @@ class Tender(models.Model):
 
     LAW_CHOICES = (("fz44", "44-ФЗ"), ("fz223", "223-ФЗ"))
     EIS = "eis"
+    EAT = "eat"
     MANUAL = "manual"
-    SOURCE_CHOICES = ((EIS, "ЕИС"), (MANUAL, "Вручную"))
+    SOURCE_CHOICES = ((EIS, "ЕИС"), (EAT, "ЕАТ «Берёзка»"), (MANUAL, "Вручную"))
     NEW = "new"
     DISMISSED = "dismissed"
     PUSHED = "pushed"
