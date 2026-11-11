@@ -252,7 +252,7 @@ def build_params(*, days: int, stage: int | None, min_price, regions=None, law: 
 def _risk_eligible(tender) -> bool:
     # Плюс-слова и минимальную цену не проверяем: тендер уже вручную переведён в «Оценку».
     return (
-        tender.law == "fz44"
+        tender.law == "fz44" and tender.source == Tender.EIS
         # риск не считаем, пока тендер не дошёл до «Проверки» — на «Входящих»
         # ещё не решили, что он вообще стоит внимания
         and tender.review != Tender.UNREVIEWED
@@ -626,8 +626,8 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     Побочно кладёт имя/город заказчика в кэш Organization — список это подхватит без
     отдельных запросов.
     """
-    if tender.law != "fz44":
-        return None  # у 223-ФЗ нет разобранного извещения — только файлы
+    if tender.law != "fz44" or tender.source == Tender.EAT:
+        return None  # EAT has a separate XML notification; never query Gosplan for its 18-digit IDs
     if tender.notification_raw and not force:
         return tender.notification_raw
     try:
@@ -755,7 +755,7 @@ def retry_pending_risks(*, limit: int = 3) -> tuple[int, int]:
     now = timezone.now()
     attempted = succeeded = 0
     tenders = Tender.objects.filter(
-        law="fz44", risk_checked_at__isnull=True,
+        law="fz44", source=Tender.EIS, risk_checked_at__isnull=True,
     ).exclude(review=Tender.UNREVIEWED).order_by("first_seen_at")[:300]
     for tender in tenders:
         if attempted >= limit:
@@ -788,7 +788,7 @@ def retry_pending_deadlines(*, limit: int = 10, pause: float = None) -> tuple[in
     now = timezone.now()
     settings = FilterSettings.load()
     tenders = Tender.objects.filter(
-        law="fz44", status=Tender.NEW, review=Tender.UNREVIEWED,
+        law="fz44", source=Tender.EIS, status=Tender.NEW, review=Tender.UNREVIEWED,
         collecting_finished_at__lt=now,
         collecting_finished_at__gte=now - timedelta(days=settings.incoming_ttl_days),
     ).order_by("-collecting_finished_at")[:limit]
@@ -878,7 +878,7 @@ _EXTRAS_ACTIVE_WINDOW = timedelta(days=45)  # после закрытия при
 
 
 def extras_need_refresh(tender, *, force: bool = False) -> bool:
-    if tender.law != "fz44":
+    if tender.law != "fz44" or tender.source == Tender.EAT:
         return False
 
     now = timezone.now()
@@ -1933,9 +1933,13 @@ def run_profile_triage(user):
 
 def pull_tenders_now(user):
     _require_tender_admin(user)
+    from .eat_service import start_eat_pull
+    # EAT takes two asynchronous API steps and must not block the existing HTTP request.
+    eat_status = start_eat_pull()
     run = run_pull(max_requests=16)
     return {"ok": run.ok, "requests_made": run.requests_made, "records_received": run.records_received,
-            "created_count": run.created_count, "duration_seconds": run.duration_seconds, "error": run.error}
+            "created_count": run.created_count, "duration_seconds": run.duration_seconds, "error": run.error,
+            "eat_status": eat_status}
 
 @transaction.atomic
 def answer_tender_owner_question(user, tender_id, interaction_id, answer):
