@@ -21,7 +21,7 @@ _LOCK = threading.Lock()
 _RUNNING = False
 
 
-def run_eat_pull(*, days=None, detail_limit=35):
+def run_eat_pull(*, days=None, detail_limit=200):
     selection = FilterSettings.load()
     days = int(days or selection.window_days)
     started = dj_timezone.now()
@@ -69,7 +69,8 @@ def run_eat_pull(*, days=None, detail_limit=35):
                 "published_at": item["published_at"],
                 "source": Tender.EAT,
                 "eis_url": url,  # Legacy link field; UI labels it by platform.
-                "raw": {"eat": fields, "source": "eat", "law_verified": True},
+                "raw": {"eat": fields, "source": "eat", "law_verified": True,
+                        "session_start": item["session_start"].isoformat() if item.get("session_start") else None},
                 "last_pulled_at": started,
                 "first_seen_at": started,
             }
