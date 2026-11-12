@@ -28,6 +28,8 @@ jobs:
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
               "docker exec -i $container python manage.py shell --no-imports" < scripts/audit_discovery_readonly.py
           done
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+            'for container in psadmin-web-1 psadmin-discovery-collector-1 psadmin-test-test-web-1 psadmin-test-test-discovery-mirror-1; do docker inspect --format "{{.Name}} status={{.State.Status}} restarts={{.RestartCount}} image={{.Image}} {{range .Mounts}}{{if eq .Destination \"/var/lib/psadmin-discovery\"}}feedRW={{.RW}}{{end}}{{end}}" "$container"; done; docker exec psadmin-discovery-collector-1 cat /app/.release-sha'
       - name: Inspect collection process identities without arguments or secrets
         env:
           SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
