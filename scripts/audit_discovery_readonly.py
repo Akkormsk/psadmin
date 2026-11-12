@@ -30,6 +30,7 @@ print(json.dumps({"collection_safety": {
     "autopull_enabled": os.getenv("TENDER_AUTOPULL_ENABLED"),
     "web_autopull_enabled": os.getenv("TENDER_AUTOPULL_WEB_ENABLED"),
     "calculation_v2_enabled": os.getenv("CALCULATION_V2_ENABLED"),
+    "configured_gosplan_requests_per_minute": os.getenv("GOSPLAN_REQUESTS_PER_MINUTE"),
 }}, ensure_ascii=False))
 directory = os.getenv("TENDER_DISCOVERY_FEED_DIR")
 verification = {"role": os.getenv("TENDER_DISCOVERY_ROLE"), "sample_present": False}
