@@ -38,6 +38,11 @@ for category, tender in (("active", active), ("with_protocol", archived)):
                 result["xml_root_types"] = sorted(set(tags))
     except Exception as exc:
         result["archive_error"] = type(exc).__name__
+        cause = exc.__cause__
+        if cause is not None:
+            reason = getattr(cause, "reason", None)
+            result["transport_cause"] = type(cause).__name__
+            result["transport_reason"] = str(reason)[:250] if reason is not None else type(cause).__name__
         result["archive_error_text"] = str(exc)[:150] if isinstance(exc, eis_docs.EisDocsError) else "request failed"
     result["archive_seconds"] = round(time.monotonic()-started, 2)
     if category == "with_protocol":
