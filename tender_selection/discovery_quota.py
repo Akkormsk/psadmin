@@ -22,7 +22,7 @@ def _receipt(directory, event):
 
 
 def reserve_request(path, params):
-    rate = float(os.getenv("GOSPLAN_REQUESTS_PER_MINUTE", "7"))
+    rate = float(os.getenv("GOSPLAN_REQUESTS_PER_MINUTE", "10"))
     if not 0 < rate <= 10:
         raise ValueError("GOSPLAN_REQUESTS_PER_MINUTE должен быть больше 0 и не больше бесплатного лимита 10")
     directory = _directory()
