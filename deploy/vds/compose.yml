@@ -26,9 +26,7 @@ services:
       start_period: 30s
 
   discovery-collector:
-    build:
-      context: ../..
-      dockerfile: deploy/vds/Dockerfile
+    image: psadmin-web
     env_file: .env
     environment:
       TENDER_DISCOVERY_ROLE: collector
