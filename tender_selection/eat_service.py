@@ -58,9 +58,12 @@ def run_eat_pull(*, days=None, detail_limit=200):
                 stats["law_unknown"] += 1
                 continue
             fields = eat_api.notification_fields(detail)
+            normalized = eat_api.normalized_notification(detail)
+            normalized["card"]["title"] = item["title"]
             url = fields["WWWReference"]
             if not url.startswith("https://agregatoreat.ru/"):
                 url = ""
+            normalized["card"]["eis_href"] = url
             number = item["purchase_number"]
             attrs = {
                 "title": item["title"],
@@ -75,6 +78,12 @@ def run_eat_pull(*, days=None, detail_limit=200):
                         "session_start": item["session_start"].isoformat() if item.get("session_start") else None},
                 "last_pulled_at": started,
                 "first_seen_at": started,
+                "notification_raw": normalized,
+                "notification_checked_at": started,
+                "notification_error": "" if normalized["card"]["items"] else "ЕАТ не вернул перечень товаров; полнота не подтверждена.",
+                "customer_inn": normalized["card"]["customer"]["inn"],
+                "okpd2": sorted({row["code"] for row in normalized["card"]["items"] if row.get("code")}),
+                "purchase_type": fields["PurchaseMethod"],
             }
             with transaction.atomic():
                 existing = Tender.objects.select_for_update().filter(
@@ -84,6 +93,14 @@ def run_eat_pull(*, days=None, detail_limit=200):
                     stats["skipped"] += 1
                     continue
                 if existing:
+                    for key in ("customer_inn", "eis_url", "purchase_type"):
+                        if not attrs[key] and getattr(existing, key):
+                            attrs.pop(key)
+                    previous_items = (existing.notification_raw.get("card") or {}).get("items", [])
+                    if previous_items and not normalized["card"]["items"]:
+                        attrs.pop("notification_raw")
+                        attrs.pop("notification_checked_at")
+                        attrs.pop("okpd2")
                     # Preserve user decisions/flags and initial discovery timestamp.
                     attrs.pop("first_seen_at", None)
                     for key, value in attrs.items():

@@ -210,3 +210,49 @@ def notification_fields(root):
     keys = ("typePurchase", "PurchaseMethod", "WWWReference", "maxOrderCost", "OrderNumber",
             "orderExpireDate", "startDate", "stateDescription", "DeliveryDate")
     return {key: _value(root, key) for key in keys}
+
+
+def normalized_notification(root):
+    """EAT 2.82.1 OrderNotificationType/productInfoType to the shared card DTO."""
+    detail = next((node for node in root.iter() if _local(node.tag) == "responseOrderNotification"), root)
+    def child(node, name):
+        return next((element for element in node if _local(element.tag) == name), None)
+    def text(node, name):
+        element = child(node, name) if node is not None else None
+        return (element.text or "").strip() if element is not None else ""
+    items = []
+    for product in detail:
+        if _local(product.tag) != "Product":
+            continue
+        classifier, unit = child(product, "OKPD"), child(product, "OKEI")
+        characteristics = []
+        for feature in product:
+            if _local(feature.tag) != "features":
+                continue
+            value = text(feature, "qualityValueSet") or text(feature, "valueSet")
+            if not value:
+                bounds = child(feature, "range")
+                if bounds is not None:
+                    value = " – ".join(v for v in (text(bounds, "from"), text(bounds, "to")) if v)
+            characteristics.append({"name": text(feature, "name"), "value": value})
+        for name, label in (("description", "Описание"), ("requirements", "Требования")):
+            if text(product, name):
+                characteristics.append({"name": label, "value": text(product, name)})
+        items.append({"name": text(product, "name"), "code": text(classifier, "code"),
+                      "code_name": text(classifier, "name"), "unit": text(unit, "name") or text(unit, "code"),
+                      "quantity": text(product, "availableVolume"), "price": text(product, "price"),
+                      "sum": text(product, "cost"), "characteristics": characteristics})
+    customer = child(detail, "Customer")
+    buyer = {"name": text(customer, "CustomerName"), "inn": _value(customer, "INN") if customer is not None else "",
+             "post_address": text(customer, "address")}
+    fields = notification_fields(detail)
+    card = {"doc_type": "eatOrderNotification", "title": "", "eis_href": fields["WWWReference"],
+            "etp": {"name": "ЕАТ «Берёзка»", "url": "https://agregatoreat.ru/"},
+            "placing_way": fields["PurchaseMethod"], "customer": buyer,
+            "dates": {"collect_start": _datetime(fields["startDate"]), "collect_end": _datetime(fields["orderExpireDate"])},
+            "money": {"max_price": fields["maxOrderCost"], "currency": "RUB"},
+            "delivery_address": _value(detail, "AddressString"),
+            "delivery_region": _value(detail, "deliveryRegion"), "items": items, "documents": []}
+    # Store JSON-safe strings; parse_notification restores dates for the screen.
+    card["dates"] = {key: value.isoformat() if value else None for key, value in card["dates"].items()}
+    return {"platform": "eat", "schema_version": "2.82.1", "card": card}

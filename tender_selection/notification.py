@@ -131,6 +131,10 @@ def _documents(source: dict) -> list[dict]:
 
 def parse_notification(payload: dict) -> dict:
     """payload — весь ответ /notification ({doc_type, published_at, source})."""
+    if payload.get("platform") == "eat":
+        card = dict(payload.get("card") or {})
+        card["dates"] = {key: _dt(value) for key, value in (card.get("dates") or {}).items()}
+        return card
     source = payload.get("source") or {}
     common = source.get("commonInfo") or {}
     resp_org = _dig(source, "purchaseResponsibleInfo", "responsibleOrgInfo", default={}) or {}

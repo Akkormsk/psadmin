@@ -38,6 +38,7 @@
 
     <section class="panel">
       <div class="panel-header"><h2 class="panel-title">Получение закупок</h2></div>
+      {% if discovery_mirror %}<p class="settings-description">Карточки ЕИС поступают из общего сбора PROD. Настройки ниже уточняют местный отбор и получение ЕАТ; расширить первичный сбор ЕИС можно в настройках PROD.</p>{% endif %}
       <h3 class="settings-subtitle">Источники</h3>
       <div class="ts-checks">
         <label class="ts-check"><input type="checkbox" name="source" value="eis" {% if not settings.sources or 'eis' in settings.sources %}checked{% endif %}> ЕИС (ГосПлан)</label>

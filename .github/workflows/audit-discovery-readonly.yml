@@ -1,0 +1,52 @@
+name: Audit discovery coverage read only
+on:
+  push:
+    branches: [feature/discovery-eis-mirror]
+    paths: ['scripts/audit_discovery_readonly.py', '.github/workflows/audit-discovery-readonly.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read collection counters from both databases
+        env:
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+          SSH_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_HOSTS" > "$HOME/.ssh/known_hosts"
+          for container in psadmin-web-1 psadmin-test-test-web-1; do
+            echo "Read-only audit: $container"
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+              "docker exec -i $container python manage.py shell --no-imports" < scripts/audit_discovery_readonly.py
+          done
+      - name: Inspect collection process identities without arguments or secrets
+        env:
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  args = (proc/'cmdline').read_bytes().decode(errors='replace').split('\0')
+                  roles = [role for role in ('pull_tenders','collect_discovery','collect_price_stats','tender_selection.scheduler') if any(role in arg for arg in args)]
+                  if roles and any('python' in Path(arg).name for arg in args[:1]):
+                      try:
+                          cwd = str((proc/'cwd').resolve())
+                      except OSError:
+                          cwd = 'protected'
+                      print(json.dumps({'pid':int(proc.name),'roles':roles,'cwd':cwd}))
+              except OSError:
+                  pass
+          PY
