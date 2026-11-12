@@ -1,5 +1,8 @@
 name: Measure collection hour
 on:
+  push:
+    branches: [test-server]
+    paths: ['.github/workflows/measure-collection-hour.yml']
   workflow_dispatch:
 permissions:
   contents: read
