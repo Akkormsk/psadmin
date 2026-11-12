@@ -1,6 +1,6 @@
 # Протокол PSADMIN — TEST
 
-### Выпуск общего discovery — DELIVERY_VERIFIED, 2026-11-12
+### Выпуск общего discovery — TEST_VERIFIED / PROD_VERIFIED для доставки, 2026-11-12
 
 Разрешённый владельцем PROD→TEST rollout завершён. PROD: source main 2c9412fa55565e582b1315ccd1d8c328318416df, Actions `43250931046` revision/health/public PASS (предыдущие b0b352c/518409e тоже прошли штатный deploy). TEST: source test-server 99c9842a0c4fd8b8176106f55b2b39b1f9fae156, Actions `43249843315`, host/container .twin-version совпали, healthy, 38 offline server tests PASS. READ ONLY audit подтвердил 139 общих raw карточек, missing=0/different=0 в обеих БД; одинаковый sample_key/raw. Worker/web image ID совпали внутри каждой среды, restarts=0, TEST feedRW=false. Суточное покрытие ещё не доказано; единственный найденный collector иногда получал HTTP 429, добавлено соблюдение provider reset/Retry-After. ЕИС PMD после последнего code34 повторно не проверялся в rollout, полнота secondary/жалоб/контрактов и реальный EAT DTO остаются неподтверждёнными. Это подтверждение доставки и изоляции данных, не полная приёмка всех адаптеров.
 
