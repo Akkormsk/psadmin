@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from django.test import TestCase, SimpleTestCase
 
-from . import discovery_feed, gosplan, services
+from . import discovery_feed, discovery_quota, gosplan, services
 from .models import Tender, DiscoveryCursor
 
 
@@ -96,6 +96,24 @@ class DiscoveryFeedTests(TestCase):
 
 
 class DiscoveryOnlyTests(SimpleTestCase):
+    def test_exhausted_provider_quota_waits_even_after_success(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(discovery_quota, "_directory", return_value=Path(directory)), \
+                patch.object(discovery_quota.time, "time", return_value=100), \
+                patch.object(discovery_quota.time, "sleep") as sleep:
+            discovery_quota.record_response(200, {"x-ratelimit-remaining-minute": "0", "RateLimit-Reset": "30"})
+            discovery_quota.reserve_request("/fz44/purchases", {})
+            sleep.assert_called_once_with(30)
+
+    def test_rate_limit_retry_after_is_shared_with_other_callers(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(discovery_quota, "_directory", return_value=Path(directory)), \
+                patch.object(discovery_quota.time, "time", return_value=100), \
+                patch.object(discovery_quota.time, "sleep") as sleep:
+            discovery_quota.record_response(429, {"Retry-After": "45"})
+            discovery_quota.reserve_request("/fz44/purchases", {})
+            sleep.assert_called_once_with(45)
+
     def test_secondary_endpoints_cannot_use_gosplan_network(self):
         with patch.object(gosplan, "urlopen") as request:
             for path in ("/fz44/contracts", "/fz44/organizations", "/fz44/purchases/123", "/fz44/purchases/123/notification"):
