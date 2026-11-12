@@ -2,12 +2,14 @@
 import io
 import json
 import os
+import hashlib
+from pathlib import Path
 from datetime import timedelta
 from django.core.management import call_command, get_commands
 from django.db import connection
 from django.db.models import Sum
 from django.utils import timezone
-from tender_selection.models import PullRun, FilterSettings
+from tender_selection.models import PullRun, FilterSettings, Tender
 
 with connection.cursor() as cursor:
     cursor.execute("SET default_transaction_read_only = on")
@@ -29,3 +31,20 @@ print(json.dumps({"collection_safety": {
     "web_autopull_enabled": os.getenv("TENDER_AUTOPULL_WEB_ENABLED"),
     "calculation_v2_enabled": os.getenv("CALCULATION_V2_ENABLED"),
 }}, ensure_ascii=False))
+directory = os.getenv("TENDER_DISCOVERY_FEED_DIR")
+verification = {"role": os.getenv("TENDER_DISCOVERY_ROLE"), "sample_present": False}
+for marker in ("/app/.release-sha", "/app/.twin-version"):
+    if Path(marker).is_file():
+        verification[Path(marker).name] = Path(marker).read_text().strip()
+if directory and Path(directory).is_dir():
+    files = list(Path(directory).glob("*.json"))
+    verification["feed_files"] = len(files)
+    if files:
+        path = min(files, key=lambda item: item.stat().st_mtime_ns)
+        payload = json.loads(path.read_bytes())
+        record = payload["record"]
+        local = Tender.objects.filter(law=payload["law"], purchase_number=record["purchase_number"]).values_list("raw", flat=True).first()
+        verification["sample_present"] = local is not None
+        verification["sample_matches"] = local == record
+        verification["sample_key"] = path.stem
+print(json.dumps({"delivery_verification": verification}, ensure_ascii=False))
