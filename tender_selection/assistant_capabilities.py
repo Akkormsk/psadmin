@@ -108,8 +108,8 @@ def _record_outcome(user, payload):
 
 register_tool(AssistantTool(
     "tender.discovery_settings", "Настроить поиск и отбор закупок",
-    "Изменяет действующие правила поиска тем же общим исполнителем, что и настройки сайта.",
-    {'include_words': 'string?', 'exclude_words': 'string?', 'profile_triage_enabled': {'type': 'boolean', 'required': False, 'label': 'Помечать сомнительные тендеры'}, 'min_price': 'number?', 'window_days': 'integer?', 'okpd2_codes': 'string[]?', 'regions': 'string[]?', 'laws': {'type': 'string[]', 'required': False, 'label': 'Законы о закупках', 'choices': Tender.LAW_CHOICES}},
+    "Изменяет действующие правила поиска тем же общим исполнителем, что и настройки сайта. Источники загрузки отделены от законов и отбора во входящие.",
+    {'sources': {'type': 'string[]', 'required': False, 'label': 'Источники закупок', 'choices': [('eis', 'ЕИС'), ('eat', 'ЕАТ «Берёзка»')]}, 'include_words': 'string?', 'exclude_words': 'string?', 'profile_triage_enabled': {'type': 'boolean', 'required': False, 'label': 'Помечать сомнительные тендеры'}, 'min_price': 'number?', 'window_days': 'integer?', 'okpd2_codes': 'string[]?', 'regions': 'string[]?', 'laws': {'type': 'string[]', 'required': False, 'label': 'Законы о закупках', 'choices': Tender.LAW_CHOICES}},
     False, True, True, _save_discovery_settings,
     ui={'model': 'tender_selection.FilterSettings'}, source="tender_selection.services.save_selection_settings",
 ))

@@ -453,6 +453,7 @@ def tender_list(request):
     show_all = request.GET.get("all") == "1"
     sort = request.GET.get("sort") if request.GET.get("sort") in SORTS else DEFAULT_SORT
     law_filter = request.GET.get("law") if request.GET.get("law") in ("fz44", "fz223") else "all"
+    source_filter = request.GET.get("source") if request.GET.get("source") in ("eis", "eat", "manual") else "all"
     query = request.GET.get("q", "").strip()
     now = timezone.now()
 
@@ -465,6 +466,8 @@ def tender_list(request):
     )
     if law_filter != "all":
         queryset = queryset.filter(law=law_filter)
+    if source_filter != "all":
+        queryset = queryset.filter(source=source_filter)
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
 
     rows, hidden, expired = visible_found_tenders(
@@ -513,6 +516,7 @@ def tender_list(request):
         "show_all": show_all,
         "sort": sort,
         "law_filter": law_filter,
+        "source_filter": source_filter,
         "law_counts": {"all": sum(counts.values()), "fz44": counts.get("fz44", 0), "fz223": counts.get("fz223", 0)},
         "settings": settings,
         "last_run": PullRun.objects.first(),
@@ -1200,6 +1204,7 @@ def filter_settings(request):
                 "okpd2_codes": request.POST.getlist("okpd2"),
                 "regions": [r for r in request.POST.getlist("region") if r.isdigit()],
                 "laws": [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"],
+                "sources": request.POST.getlist("source"),
             })
         except ValueError as exc:
             messages.error(request, str(exc))

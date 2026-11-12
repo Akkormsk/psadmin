@@ -38,6 +38,7 @@
         <input type="hidden" name="view" value="list">
         {% if sort != "deadline" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         {% if law_filter != "all" %}<input type="hidden" name="law" value="{{ law_filter }}">{% endif %}
+        {% if source_filter != "all" %}<input type="hidden" name="source" value="{{ source_filter }}">{% endif %}
         {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
         <input type="search" name="q" value="{{ query }}" id="ts-search" placeholder="Поиск по названию, заказчику, № закупки, ИНН…" autocomplete="off">
         <kbd>Ctrl K</kbd>
@@ -53,6 +54,7 @@
         <button type="button" class="{% if law_filter == 'all' %}is-active{% endif %}" onclick="tsGo('law','')">Все <small>{{ law_counts.all }}</small></button>
         <button type="button" class="{% if law_filter == 'fz44' %}is-active{% endif %}" onclick="tsGo('law','fz44')">44-ФЗ <small>{{ law_counts.fz44 }}</small></button>
         <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ <small>{{ law_counts.fz223 }}</small></button>
+        <select aria-label="Источник закупок" onchange="tsGo('source',this.value)"><option value="">Все источники</option><option value="eis" {% if source_filter == 'eis' %}selected{% endif %}>ЕИС</option><option value="eat" {% if source_filter == 'eat' %}selected{% endif %}>ЕАТ «Берёзка»</option><option value="manual" {% if source_filter == 'manual' %}selected{% endif %}>Вручную</option></select>
       </div>
       {% if show_all %}
       <button type="button" class="ts-show-hidden" onclick="tsGo('all','')">Вернуть отбор</button>

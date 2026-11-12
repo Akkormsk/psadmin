@@ -161,6 +161,10 @@ def effective_okpd2(settings) -> list[str]:
     return list(settings.okpd2_codes) if settings.okpd2_codes else DEFAULT_OKPD2
 
 
+def effective_sources(settings):
+    return settings.sources or [Tender.EIS, Tender.EAT]
+
+
 def effective_laws(settings) -> list[str]:
     return [law for law in (settings.laws or ["fz44"]) if law in {"fz44", "fz223"}]
 
@@ -272,6 +276,8 @@ def run_pull(
     max_requests: int = 20,
 ) -> PullRun:
     settings = FilterSettings.load()
+    if Tender.EIS not in effective_sources(settings):
+        return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True, params={"source": "eis", "disabled": True})
     if days is None:
         days = settings.window_days
     if min_price is None:
@@ -377,6 +383,8 @@ def run_keyword_pull(
     if pause is None:
         pause = gosplan.THROTTLE_SECONDS
     settings = FilterSettings.load()
+    if Tender.EIS not in effective_sources(settings):
+        return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True, params={"source": "eis", "disabled": True})
     if days is None:
         days = settings.window_days
     if min_price is None:
@@ -1704,6 +1712,11 @@ def save_selection_settings(payload):
         if not isinstance(regions, list) or not all(str(x).isdigit() for x in regions):
             raise ValueError("Неверный список регионов")
         settings.regions = [str(x) for x in regions]
+    if "sources" in payload:
+        sources = payload["sources"]
+        if not isinstance(sources, list) or not sources or any(x not in (Tender.EIS, Tender.EAT) for x in sources):
+            raise ValueError("Выберите ЕИС, ЕАТ или оба источника")
+        settings.sources = list(dict.fromkeys(sources))
     if "laws" in payload:
         laws = payload["laws"]
         if not isinstance(laws, list) or not laws or any(x not in ("fz44", "fz223") for x in laws):

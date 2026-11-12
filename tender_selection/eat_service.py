@@ -22,7 +22,10 @@ _RUNNING = False
 
 
 def run_eat_pull(*, days=None, detail_limit=200):
+    from .services import effective_sources, effective_laws
     selection = FilterSettings.load()
+    if Tender.EAT not in effective_sources(selection):
+        return None
     days = int(days or selection.window_days)
     started = dj_timezone.now()
     run = PullRun.objects.create(
@@ -37,9 +40,8 @@ def run_eat_pull(*, days=None, detail_limit=200):
         stats["total"] = len(orders)
         stats["mode"] = mode
         stats["partial"] = mode != "published"
-        include, exclude = parse_terms(selection.include_words), parse_terms(selection.exclude_words)
         candidates = eat_api.shortlist(
-            orders, minimum=selection.min_price, include=include, exclude=exclude,
+            orders, minimum=selection.min_price, include=[], exclude=[],
             now=now, days=days, mode=mode,
         )
         stats["shortlisted"] = len(candidates)
@@ -52,7 +54,7 @@ def run_eat_pull(*, days=None, detail_limit=200):
             detail = eat_api.notification(item["purchase_number"])
             stats["checked"] += 1
             law = eat_api.legal_basis(detail)
-            if law != "fz44":
+            if law not in effective_laws(selection):
                 stats["law_unknown"] += 1
                 continue
             fields = eat_api.notification_fields(detail)
@@ -76,7 +78,7 @@ def run_eat_pull(*, days=None, detail_limit=200):
             }
             with transaction.atomic():
                 existing = Tender.objects.select_for_update().filter(
-                    law="fz44", purchase_number=number,
+                    law=law, purchase_number=number,
                 ).first()
                 if existing and existing.source != Tender.EAT:
                     stats["skipped"] += 1
@@ -89,7 +91,7 @@ def run_eat_pull(*, days=None, detail_limit=200):
                     existing.save(update_fields=list(attrs))
                     stats["updated"] += 1
                 else:
-                    Tender.objects.create(law="fz44", purchase_number=number, **attrs)
+                    Tender.objects.create(law=law, purchase_number=number, **attrs)
                     stats["created"] += 1
         run.ok = True
     except eat_api.EatError as exc:
@@ -120,6 +122,9 @@ def start_eat_pull():
     explicit updates retry safely using the unique tender identifier.
     """
     global _RUNNING
+    from .services import effective_sources
+    if Tender.EAT not in effective_sources(FilterSettings.load()):
+        return "disabled"
     if os.getenv("EAT_PULL_ENABLED") != "1":
         return "disabled"
     if not os.getenv("EAT_API_TOKEN") or not os.getenv("EAT_EXT_SYSTEM"):

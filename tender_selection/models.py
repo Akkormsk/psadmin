@@ -29,7 +29,8 @@ class FilterSettings(models.Model):
     incoming_ttl_days = models.PositiveSmallIntegerField("Уборка «Входящих»: дней после окончания подачи", default=7)
     okpd2_codes = models.JSONField("Категории ОКПД2", default=list, blank=True)
     regions = models.JSONField("Регионы (коды)", default=list, blank=True)
-    laws = models.JSONField("Источники", default=list, blank=True)
+    laws = models.JSONField("Законы о закупках", default=list, blank=True)
+    sources = models.JSONField("Источники закупок", default=list, blank=True, help_text="ЕИС и ЕАТ; пустой список использует оба источника.")
     # Позиция в списке плюс-слов для run_keyword_pull — обход по кругу растянут
     # на несколько циклов сбора, курсор просто запоминает, с какого слова
     # продолжить в следующий раз.

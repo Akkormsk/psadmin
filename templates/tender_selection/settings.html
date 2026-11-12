@@ -12,7 +12,7 @@
 
     <section class="panel">
       <div class="panel-header">
-        <h2 class="panel-title">Фильтр по названию</h2>
+        <h2 class="panel-title">Отбор во «Входящие»</h2>
         <div class="panel-actions">
           <a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a>
           <button type="submit" class="button-success">Сохранить</button>
@@ -33,11 +33,17 @@
         <textarea id="exclude_words" name="exclude_words" rows="8">{{ settings.exclude_words }}</textarea>
       </div>
       <label class="ts-check ts-profile-triage"><input type="checkbox" name="profile_triage_enabled" value="1" {% if settings.profile_triage_enabled %}checked{% endif %}> Проверять профиль по составу закупки и скрывать подтверждённо неподходящие</label>
-      <p class="settings-description">Jev не скрывает тендеры и не меняет слова. Он только ставит отметку для ручной проверки после того, как тендер уже прошёл фильтр.</p>
+      <p class="settings-description">Эти настройки управляют показом сохранённых закупок. Проверка профиля может скрыть подтверждённо неподходящие; данные остаются в системе.</p>
     </section>
 
     <section class="panel">
-      <div class="panel-header"><h2 class="panel-title">Параметры выгрузки</h2></div>
+      <div class="panel-header"><h2 class="panel-title">Получение закупок</h2></div>
+      <h3 class="settings-subtitle">Источники</h3>
+      <div class="ts-checks">
+        <label class="ts-check"><input type="checkbox" name="source" value="eis" {% if not settings.sources or 'eis' in settings.sources %}checked{% endif %}> ЕИС (ГосПлан)</label>
+        <label class="ts-check"><input type="checkbox" name="source" value="eat" {% if not settings.sources or 'eat' in settings.sources %}checked{% endif %}> ЕАТ «Берёзка»</label>
+      </div>
+      <p class="settings-description">ЕАТ пока возвращает действующие сессии без гарантии даты публикации. Регион и ОКПД2 в адаптере ЕАТ ещё не нормализованы: эти ограничения применяются к ЕИС, а для ЕАТ не гарантируются.</p>
       <div class="settings-grid settings-grid--three">
         <div class="form-group">
           <label for="min_price">Минимальная НМЦК, ₽</label>
@@ -49,7 +55,7 @@
         </div>
       </div>
 
-      <h3 class="settings-subtitle">Источники</h3>
+      <h3 class="settings-subtitle">Законы</h3>
       <div class="ts-checks">
         {% for code, label, checked in laws %}
         <label class="ts-check"><input type="checkbox" name="law" value="{{ code }}" {% if checked %}checked{% endif %}> {{ label }}</label>

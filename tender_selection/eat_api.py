@@ -178,9 +178,7 @@ def shortlist(orders, *, minimum, include, exclude, now, days, mode):
             continue
         if deadline is None or deadline <= now:
             continue
-        if mode == "active_only" and (not published or published < cutoff):
-            # No historical guarantee: this limits only the returned active sessions.
-            continue
+        # Active-only API has no publication date; do not invent a date-window filter.
         if not match_title(title, include, exclude)[0]:
             continue
         result.append({

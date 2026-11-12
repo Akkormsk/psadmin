@@ -50,6 +50,14 @@ def _run_once(tick: int) -> None:
     except Exception:
         logger.exception("autopull: run_pull failed")
 
+    try:
+        from .eat_service import run_eat_pull
+        import os
+        if os.getenv("EAT_PULL_ENABLED") == "1":
+            run_eat_pull()
+    except Exception:
+        logger.exception("autopull: EAT pull failed")
+
     close_old_connections()
     try:
         from .services import run_keyword_pull
