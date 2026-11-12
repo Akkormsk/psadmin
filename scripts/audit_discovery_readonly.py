@@ -1,12 +1,13 @@
 """Small read-only collection report; compatible with the pre-upgrade runtime."""
 import io
 import json
+import os
 from datetime import timedelta
 from django.core.management import call_command, get_commands
 from django.db import connection
 from django.db.models import Sum
 from django.utils import timezone
-from tender_selection.models import PullRun
+from tender_selection.models import PullRun, FilterSettings
 
 with connection.cursor() as cursor:
     cursor.execute("SET default_transaction_read_only = on")
@@ -22,3 +23,9 @@ else:
               "legacy_recorded_requests": rows.aggregate(total=Sum("requests_made"))["total"],
               "conclusion": "Новая телеметрия ещё не установлена; полное покрытие и число HTTP attempts не подтверждены."}
 print(json.dumps({"checked_at": timezone.now().isoformat(), **report}, ensure_ascii=False, default=str))
+print(json.dumps({"collection_safety": {
+    "profile_triage_enabled": FilterSettings.objects.filter(pk=1).values_list("profile_triage_enabled", flat=True).first(),
+    "autopull_enabled": os.getenv("TENDER_AUTOPULL_ENABLED"),
+    "web_autopull_enabled": os.getenv("TENDER_AUTOPULL_WEB_ENABLED"),
+    "calculation_v2_enabled": os.getenv("CALCULATION_V2_ENABLED"),
+}}, ensure_ascii=False))
