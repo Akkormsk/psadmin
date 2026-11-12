@@ -42,6 +42,9 @@ jobs:
                   continue
               try:
                   args = (proc/'cmdline').read_bytes().decode(errors='replace').split('\0')
+                  program = Path(args[0]).name if args else ''
+                  if program in ('apt-get','dpkg','pg_dump','buildkitd','cc1','gcc','pip','git'):
+                      print(json.dumps({'build_process_pid':int(proc.name),'program':program}))
                   roles = [role for role in ('pull_tenders','collect_discovery','collect_price_stats','tender_selection.scheduler') if any(role in arg for arg in args)]
                   if roles and any('python' in Path(arg).name for arg in args[:1]):
                       try:
