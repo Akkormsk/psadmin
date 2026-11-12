@@ -114,6 +114,15 @@ class DiscoveryOnlyTests(SimpleTestCase):
             discovery_quota.reserve_request("/fz44/purchases", {})
             sleep.assert_called_once_with(45)
 
+    def test_expired_absolute_reset_does_not_suspend_collection_for_years(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(discovery_quota, "_directory", return_value=Path(directory)), \
+                patch.object(discovery_quota.time, "time", return_value=1800000000), \
+                patch.object(discovery_quota.time, "sleep") as sleep:
+            discovery_quota.record_response(429, {"x-ratelimit-reset-minute": "1799999999"})
+            discovery_quota.reserve_request("/fz44/purchases", {})
+            sleep.assert_not_called()
+
     def test_secondary_endpoints_cannot_use_gosplan_network(self):
         with patch.object(gosplan, "urlopen") as request:
             for path in ("/fz44/contracts", "/fz44/organizations", "/fz44/purchases/123", "/fz44/purchases/123/notification"):

@@ -61,7 +61,7 @@ def record_response(status, headers):
             elif reset:
                 try:
                     value = float(reset)
-                    delay = value - time.time() if value > time.time() else value
+                    delay = value - time.time() if value > time.time() / 2 else value
                 except ValueError:
                     pass
             state = directory / ".provider-wait-until"
