@@ -9,7 +9,7 @@ services:
     environment:
       TENDER_DISCOVERY_ROLE: collector
       TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
-      GOSPLAN_REQUESTS_PER_MINUTE: ${GOSPLAN_REQUESTS_PER_MINUTE:-7}
+      GOSPLAN_REQUESTS_PER_MINUTE: ${GOSPLAN_REQUESTS_PER_MINUTE:-10}
     volumes:
       - discovery_feed:/var/lib/psadmin-discovery
     restart: unless-stopped
@@ -31,7 +31,7 @@ services:
     environment:
       TENDER_DISCOVERY_ROLE: collector
       TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
-      GOSPLAN_REQUESTS_PER_MINUTE: ${GOSPLAN_REQUESTS_PER_MINUTE:-7}
+      GOSPLAN_REQUESTS_PER_MINUTE: ${GOSPLAN_REQUESTS_PER_MINUTE:-10}
       TENDER_AUTOPULL_ENABLED: "0"
       TENDER_AUTOPULL_WEB_ENABLED: "0"
       CALCULATION_V2_ENABLED: "0"

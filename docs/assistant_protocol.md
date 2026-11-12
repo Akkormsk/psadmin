@@ -1,5 +1,7 @@
 # Протокол PSADMIN — PROD
 
+2026-11-12, прямая команда владельца: общий configured бюджет ГосПлана повышен с 7 до 10 requests/min (default клиента и Compose web/collector). Верхняя граница бесплатного тарифа остаётся 10. Provider remaining/reset/Retry-After по-прежнему приостанавливают запросы при исчерпании фактического остатка; это потолок, не принудительные 10 запросов каждую минуту. Отдельный collector — один фоновый процесс PROD для первичного discovery и публикации public карточек двум БД; TEST не обращается в ГосПлан. Суточный аудит остаётся отдельным read-only наблюдением.
+
 ## Подготовленный общий discovery — CODE_ONLY, 2026-11-12
 
 TEST delivery подтверждён: Actions `43249843315`, host/container .twin-version=99c9842a0c4fd8b8176106f55b2b39b1f9fae156, twin web healthy, 38 server tests PASS. READ ONLY post-rollout audit `43249437890` (rerun, job 131294535528): 139 feed records, missing=0/different=0 в обеих БД; одинаковый sample_key и raw совпали. Это проверка доставки, не полное покрытие источника и не подтверждение secondary ЕИС/жалоб/контрактов. TEST source role=mirror, PROD=collector; пользовательские данные не сверялись и не копировались.
