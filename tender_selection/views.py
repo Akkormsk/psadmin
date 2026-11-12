@@ -1240,15 +1240,9 @@ def profile_triage_run(request):
 @superuser_required
 @require_POST
 def pull_now(request):
-    run = run_pull(max_requests=16)
-    if run.ok:
-        messages.success(
-            request,
-            f"Выгрузка: запросов {run.requests_made}, записей {run.records_received}, "
-            f"новых {run.created_count}, за {run.duration_seconds} сек.",
-        )
-    else:
-        messages.error(request, f"Выгрузка не удалась: {run.error}")
+    from .discovery_feed import start_discovery_pull
+    started = start_discovery_pull()
+    messages.info(request, "Сбор закупок запущен в фоне." if started else "Предыдущий сбор ещё выполняется.")
     return redirect("tender_selection:list")
 
 

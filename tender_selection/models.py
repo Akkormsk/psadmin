@@ -270,6 +270,15 @@ class StatsRun(models.Model):
         return f"{self.started_at:%d.%m.%Y %H:%M} — +{self.created_count}"
 
 
+class DiscoveryCursor(models.Model):
+    query_key = models.CharField("Отпечаток первичного фильтра", max_length=64, unique=True)
+    through_at = models.DateTimeField("Подтверждённая граница обновления источника")
+
+    class Meta:
+        verbose_name = "Курсор первичного сбора"
+        verbose_name_plural = "Курсоры первичного сбора"
+
+
 class PullRun(models.Model):
     started_at = models.DateTimeField("Начало")
     finished_at = models.DateTimeField("Конец", null=True, blank=True)
