@@ -11,6 +11,23 @@ from django.utils import timezone
 from tender_selection.models import Tender
 from tender_selection import eis_docs, protocols
 
+context = ssl.create_default_context()
+print(json.dumps({"ssl_version": ssl.OPENSSL_VERSION, "tls13_supported": ssl.HAS_TLSv1_3,
+                  "default_minimum": context.minimum_version.name,
+                  "default_maximum": context.maximum_version.name}), flush=True)
+for protocol_version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
+    context = ssl.create_default_context()
+    context.minimum_version = context.maximum_version = protocol_version
+    probe = {"forced_tls": protocol_version.name, "host": "int44.zakupki.gov.ru"}
+    try:
+        with socket.create_connection((probe["host"], 443), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=probe["host"]) as secure:
+                probe["negotiated"] = secure.version()
+    except Exception as exc:
+        probe["error"] = type(exc).__name__
+        probe["reason"] = str(exc)[:250]
+    print(json.dumps(probe), flush=True)
+
 for host in ("int44.zakupki.gov.ru", "zakupki.gov.ru"):
     probe = {"network_host": host}
     try:
