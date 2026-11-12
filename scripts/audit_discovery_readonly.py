@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import time
 from pathlib import Path
 from datetime import timedelta
 from django.core.management import call_command, get_commands
@@ -38,6 +39,20 @@ for marker in ("/app/.release-sha", "/app/.twin-version"):
 if directory and Path(directory).is_dir():
     files = list(Path(directory).glob("*.json"))
     verification["feed_files"] = len(files)
+    cutoff = time.time() - 2 * float(os.getenv("TENDER_MIRROR_INTERVAL_SECONDS", "30"))
+    settled = missing = different = 0
+    for path in files:
+        if path.stat().st_mtime > cutoff:
+            continue
+        payload = json.loads(path.read_bytes())
+        if path.stat().st_mtime > cutoff:
+            continue
+        record = payload["record"]
+        local = Tender.objects.filter(law=payload["law"], purchase_number=record["purchase_number"]).values_list("raw", flat=True).first()
+        settled += 1
+        missing += int(local is None)
+        different += int(local is not None and local != record)
+    verification.update({"settled_feed_records": settled, "settled_missing": missing, "settled_different": different})
     if files:
         path = min(files, key=lambda item: item.stat().st_mtime_ns)
         payload = json.loads(path.read_bytes())
