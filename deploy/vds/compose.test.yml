@@ -9,6 +9,7 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: ../../../psadmin-test.env
     environment:
+      GOSPLAN_API_DISABLED: "1"
       TIMEWEB_AI_ASSISTANT_MODEL: anthropic/claude-haiku-5-5
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
       CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT: "32000"
@@ -37,6 +38,7 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: ../../../psadmin-test.env
     environment:
+      GOSPLAN_API_DISABLED: "1"
       TENDER_AUTOPULL_WEB_ENABLED: "0"
       CALCULATION_V2_SOURCE_MEMORY_ENABLED: "1"
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5

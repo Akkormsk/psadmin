@@ -1,0 +1,48 @@
+name: Measure collection hour
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+    steps:
+      - name: Configure connection
+        env:
+          KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$HOSTS" > "$HOME/.ssh/known_hosts"
+      - name: Observe one hour without upstream or model calls
+        run: |
+          set -euo pipefail
+          start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "Measurement start: $start"
+          sleep 3600
+          end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "Measurement end: $end"
+          for container in psadmin-web-1 psadmin-test-test-web-1; do
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+              "docker exec -i '$container' python manage.py shell --no-imports" <<PY
+          import json, os
+          from datetime import datetime
+          from django.db import connection
+          from django.db.models import Sum, Count
+          from tender_selection.models import PullRun
+          from tenders.models import TenderComputeJob
+          start=datetime.fromisoformat('$start'.replace('Z','+00:00'))
+          end=datetime.fromisoformat('$end'.replace('Z','+00:00'))
+          with connection.cursor() as cursor:
+              cursor.execute('SET default_transaction_read_only = on')
+          runs=PullRun.objects.filter(started_at__gte=start,started_at__lt=end)
+          print(json.dumps({'container':'$container','gosplan_disabled':os.getenv('GOSPLAN_API_DISABLED')=='1','gosplan_key_configured':bool(os.getenv('GOSPLAN_API_KEY')),'pull_runs':list(runs.values('started_at','finished_at','requests_made','records_received','created_count','ok','error','params')),'jobs_created_in_window':TenderComputeJob.objects.filter(created_at__gte=start,created_at__lt=end).aggregate(count=Count('pk'),recorded_cost=Sum('total_cost'))},default=str))
+          PY
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+              "docker logs --since '$start' --until '$end' '$container' 2>&1 | grep -E '429|autopull:|rate.limit' | tail -60" || true
+          done

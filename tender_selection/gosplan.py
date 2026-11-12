@@ -71,6 +71,8 @@ def eis_url(purchase_number: str, purchase_type: str) -> str:
 
 
 def _get(path: str, params: dict):
+    if os.getenv("GOSPLAN_API_DISABLED") == "1":
+        raise GosplanError("ГосПлан на TEST временно отключён: лимит IP зарезервирован для PROD.")
     query = urlencode([(k, v) for k, v in params.items() if v is not None], doseq=True)
     url = f"{base_url()}{path}?{query}"
     headers = {"Accept": "application/json"}
