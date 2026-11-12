@@ -59,6 +59,8 @@ for host in ("int44.zakupki.gov.ru", "int.zakupki.gov.ru"):
         probe["reason"] = str(exc)[:200]
     print(json.dumps(probe), flush=True)
 
+eis_docs.SOAP_URL = "https://int.zakupki.gov.ru/eis-integration/services/getDocsIP"
+print(json.dumps({"soap_probe_host": "int.zakupki.gov.ru"}), flush=True)
 with connection.cursor() as cursor:
     cursor.execute("SET default_transaction_read_only = on")
 print(json.dumps({"eis_token_configured": bool(eis_docs.token())}))
