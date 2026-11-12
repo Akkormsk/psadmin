@@ -70,6 +70,12 @@ class DiscoveryFeedTests(TestCase):
         self.assertTrue(discovery_feed.import_feed().ok)
         self.assertEqual(Tender.objects.count(), 1)
 
+    def test_initial_backfill_does_not_start_paid_profile_triage(self):
+        with patch.object(gosplan, "iter_purchases", return_value=iter([self.record])), \
+                patch("tender_selection.profile_triage.start_profile_triage_in_background") as ai:
+            self.assertTrue(services.run_pull(classifiers=["17"], laws=["fz44"]).ok)
+        ai.assert_not_called()
+
     def test_next_completed_scan_uses_update_cursor(self):
         with patch.object(gosplan, "iter_purchases", return_value=iter([])):
             self.assertTrue(services.run_pull(classifiers=["17"], laws=["fz44"]).ok)

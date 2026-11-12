@@ -341,9 +341,10 @@ def run_pull(
                     )
                 created += int(is_created)
                 updated += int(not is_created)
-                if is_created:
+                if is_created and (os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params):
                     triage_ids.append(tender.pk)
-                v2_candidate_ids.append(tender.pk)
+                if os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params:
+                    v2_candidate_ids.append(tender.pk)
             advance_discovery(cursor_key, run.started_at.replace(microsecond=0))
             run.params["queries"].append({"key": cursor_key, "law": law,
                 **{key: value for key, value in params.items() if key.endswith("_after") or key.endswith("_before")}})
@@ -367,7 +368,8 @@ def run_pull(
         from .profile_triage import start_profile_triage_in_background
         from tenders.calculation_v2_pipeline import trigger_visible_tender
 
-        start_profile_triage_in_background(triage_ids)
+        if triage_ids:
+            start_profile_triage_in_background(triage_ids)
         for tender in Tender.objects.filter(pk__in=set(v2_candidate_ids)):
             trigger_visible_tender(tender)
 
@@ -459,7 +461,7 @@ def run_keyword_pull(
                     )
                 created += int(is_created)
                 updated += int(not is_created)
-                if is_created:
+                if is_created and (os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params):
                     triage_ids.append(tender.pk)
             advance_discovery(cursor_key, run.started_at.replace(microsecond=0))
             run.params["queries"].append({"key": cursor_key, "law": "fz44",
@@ -488,7 +490,8 @@ def run_keyword_pull(
     if run.ok:
         from .profile_triage import start_profile_triage_in_background
 
-        start_profile_triage_in_background(triage_ids)
+        if triage_ids:
+            start_profile_triage_in_background(triage_ids)
     return run
 
 
