@@ -61,9 +61,7 @@ services:
         condition: service_healthy
 
   test-discovery-mirror:
-    build:
-      context: ../..
-      dockerfile: deploy/vds/Dockerfile
+    image: psadmin-test-test-web
     env_file: ../../../psadmin-test.env
     environment:
       GOSPLAN_API_DISABLED: "1"
