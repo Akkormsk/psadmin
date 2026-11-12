@@ -41,13 +41,13 @@
 {% if shell != "pipeline" and saved_estimates %}
 <section class="panel panel--separated">
   <div class="panel-header">
-    <h2 class="panel-title">Актуальные расчёты</h2>
+    <h2 class="panel-title">{% if shell == "order" %}Сохранённые расчёты заказов{% else %}Актуальные расчёты{% endif %}</h2>
     <div class="panel-actions">
-      <nav class="ts-seg" aria-label="Фильтр расчётов">
+      {% if shell != "order" %}<nav class="ts-seg" aria-label="Фильтр расчётов">
         <a class="ts-seg__item{% if kind_filter == "" %} is-active{% endif %}" href="?kind=">Все</a>
         <a class="ts-seg__item{% if kind_filter == "tender" %} is-active{% endif %}" href="?kind=tender">Тендеры</a>
         <a class="ts-seg__item{% if kind_filter == "order" %} is-active{% endif %}" href="?kind=order">Самостоятельные</a>
-      </nav>
+      </nav>{% endif %}
       <nav class="ts-seg" aria-label="Активные или готовые">
         <a class="ts-seg__item{% if worklist_filter == "" %} is-active{% endif %}" href="?worklist=">Все</a>
         <a class="ts-seg__item{% if worklist_filter == "active" %} is-active{% endif %}" href="?worklist=active">В работе</a>

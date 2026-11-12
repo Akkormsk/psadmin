@@ -90,13 +90,16 @@ class EstimateShellTests(TestCase):
         self.assertContains(response, "Удалить просчёт")
         self.assertNotContains(response, "Важное для расчёта")
 
-    def test_worklist_list_links_tender_rows_to_the_worklist_shell(self):
+    def test_order_list_shows_orders_even_when_tender_filter_is_requested(self):
         tender = self._tender()
         estimate = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Моё")
+        order = OrderEstimate.objects.create(owner=self.user, order_number="ORDER", name="Ручной заказ")
 
         response = self.client.get(reverse("tender_home"), {"kind": "tender", "worklist": ""})
 
-        self.assertContains(response, reverse("tender_worklist_estimate", args=[estimate.pk]))
+        self.assertNotContains(response, reverse("tender_worklist_estimate", args=[estimate.pk]))
+        self.assertContains(response, reverse("tender_estimate", args=[order.pk]))
+        self.assertContains(response, "Сохранённые расчёты заказов")
 
     def test_header_shows_title_customer_and_number(self):
         """Название задаёт тендер, «имя» расчёта по договорённости хранит
