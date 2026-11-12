@@ -2,6 +2,8 @@
 
 ## Подготовленный общий discovery — CODE_ONLY, 2026-11-12
 
+TEST delivery подтверждён: Actions `43249843315`, host/container .twin-version=99c9842a0c4fd8b8176106f55b2b39b1f9fae156, twin web healthy, 38 server tests PASS. READ ONLY post-rollout audit `43249437890` (rerun, job 131294535528): 139 feed records, missing=0/different=0 в обеих БД; одинаковый sample_key и raw совпали. Это проверка доставки, не полное покрытие источника и не подтверждение secondary ЕИС/жалоб/контрактов. TEST source role=mirror, PROD=collector; пользовательские данные не сверялись и не копировались.
+
 PROD delivery подтверждён: Actions `43247534190` для b0b352c и `43248889106` для 518409e — revision marker, container health, LibreOffice и public URL PASS; публичный X-PSADMIN-Revision=518409eaccb0b5547bc8ff2fe3cdbc86e2964327. READ ONLY audit: первые 139 raw карточек в общем потоке совпали с PROD, недостающих/отличающихся=0. Полнота суточного сбора ещё не доказана. Наблюдались 429 при default 7/min; на момент process inspection найден только collect_discovery, конкретный внешний конкурент не установлен. Добавлено соблюдение provider remaining=0 и Retry-After/RateLimit-Reset в общем pacing state, без изменения configured бюджета 7/min; соответствующие заголовки доступны в receipts. При первом успешном HTTP с исчерпанным остатком новый запрос ждёт reset, а не провоцирует 429.
 
 Новый discovery-collector использует тот же image `psadmin-web`, который штатный deploy.sh собирает с GIT_SHA. Отдельная автоматическая сборка collector без build arg давала бы marker unknown и лишнюю сборку; общий образ гарантирует одинаковую версию web/collector. После выпуска проверять совпадение image ID и release marker обоих контейнеров.
