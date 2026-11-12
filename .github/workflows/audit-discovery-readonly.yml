@@ -28,3 +28,21 @@ jobs:
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
               "docker exec -i $container python manage.py shell --no-imports" < scripts/audit_discovery_readonly.py
           done
+      - name: Inspect collection process identities without arguments or secrets
+        env:
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  args = (proc/'cmdline').read_bytes().decode(errors='replace').split('\0')
+                  roles = [role for role in ('pull_tenders','collect_discovery','collect_price_stats','scheduler._run_once') if any(role in arg for arg in args)]
+                  if roles and any('python' in Path(arg).name for arg in args[:1]):
+                      print(json.dumps({'pid':int(proc.name),'roles':roles,'cwd':str((proc/'cwd').resolve())}))
+              except OSError:
+                  pass
+          PY

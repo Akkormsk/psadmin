@@ -2,7 +2,6 @@
 import io
 import json
 import os
-import hashlib
 from pathlib import Path
 from datetime import timedelta
 from django.core.management import call_command, get_commands
@@ -48,3 +47,15 @@ if directory and Path(directory).is_dir():
         verification["sample_matches"] = local == record
         verification["sample_key"] = path.stem
 print(json.dumps({"delivery_verification": verification}, ensure_ascii=False))
+if directory:
+    receipt = Path(directory) / "requests.jsonl"
+    if receipt.is_file():
+        from collections import deque
+        events = []
+        for line in deque(receipt.open(), maxlen=20):
+            try:
+                event = json.loads(line)
+                events.append({key: event.get(key) for key in ("at", "event", "status", "remaining")})
+            except ValueError:
+                pass
+        print(json.dumps({"rate_receipts_tail": events}))
