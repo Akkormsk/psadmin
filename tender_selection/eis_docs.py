@@ -24,10 +24,11 @@ import uuid
 import zipfile
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
-SOAP_URL = "https://int44.zakupki.gov.ru/eis-integration/services/getDocsIP"
+SOAP_URL = "https://int.zakupki.gov.ru/eis-integration/services/getDocsIP"
 REQUEST_TIMEOUT = 20
 ARCHIVE_TIMEOUT = 90
 MAX_ARCHIVE_BYTES = 60 * 1024 * 1024
@@ -98,7 +99,7 @@ def _soap_call(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> str:
             raise EisDocsError(f"ЕИС отклонил запрос документов: {fault.group(1)}") from exc
         raise EisDocsError(f"ЕИС ответил HTTP {exc.code} на запрос документов.") from exc
     except (URLError, TimeoutError, ConnectionError, OSError) as exc:
-        raise EisDocsError("ЕИС недоступен (таймаут) при запросе документов.") from exc
+        raise EisDocsError("Не удалось установить соединение с ЕИС при запросе документов.") from exc
 
 
 def fetch_archive_urls(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> list[str]:
@@ -107,6 +108,20 @@ def fetch_archive_urls(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) 
     fault = _FAULT_RE.search(text)
     if fault:
         raise EisDocsError(f"ЕИС отклонил запрос документов: {fault.group(1)}")
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as exc:
+        raise EisDocsError("ЕИС вернул некорректный XML вместо ответа сервиса документов.") from exc
+    for node in root.iter():
+        if node.tag.rsplit("}", 1)[-1] != "errorInfo":
+            continue
+        fields = {child.tag.rsplit("}", 1)[-1]: child.text or "" for child in node}
+        detail = fields.get("message") or "Причина не указана."
+        secret = token()
+        if secret:
+            detail = detail.replace(secret, "[скрыто]")
+        code = fields.get("code", "")
+        raise EisDocsError(f"ЕИС отклонил запрос документов (код {code}): {detail[:500]}")
     urls = _ARCHIVE_URL_RE.findall(text)
     if not urls:
         raise EisDocsError("ЕИС не вернул архив документов для этой закупки.")
