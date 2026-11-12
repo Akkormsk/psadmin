@@ -1,4 +1,6 @@
 from unittest.mock import patch
+import io
+from django.core.cache import cache
 
 from django.test import SimpleTestCase
 
@@ -6,6 +8,18 @@ from . import eis_docs
 
 
 class EisServiceResponseTests(SimpleTestCase):
+    def test_access_block_stops_followup_network_requests(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        xml = b"<response><errorInfo><code>34</code><message>blocked</message></errorInfo></response>"
+        with patch.object(eis_docs, "token", return_value="test-block-token"), \
+                patch.object(eis_docs, "urlopen", return_value=io.BytesIO(xml)) as request:
+            with self.assertRaises(eis_docs.EisDocsError):
+                eis_docs.fetch_archive_urls("123")
+            with self.assertRaisesMessage(eis_docs.EisDocsError, "приостановлены"):
+                eis_docs.fetch_archive_urls("123")
+        request.assert_called_once()
+
     def test_service_error_is_reported_and_token_is_redacted(self):
         response = '''<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
           xmlns:e="http://zakupki.gov.ru/fz44/get-docs-ip/ws"><s:Body>

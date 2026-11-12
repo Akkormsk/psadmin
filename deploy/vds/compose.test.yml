@@ -10,12 +10,16 @@ services:
     env_file: ../../../psadmin-test.env
     environment:
       GOSPLAN_API_DISABLED: "1"
+      TENDER_DISCOVERY_ROLE: mirror
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
       TIMEWEB_AI_ASSISTANT_MODEL: anthropic/claude-haiku-5-5
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
       CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT: "32000"
       CALCULATION_V2_SOURCE_MEMORY_ENABLED: "1"
       TIMEWEB_AI_BASE_URL: https://api.timeweb.ai/v1
     restart: unless-stopped
+    volumes:
+      - discovery_feed:/var/lib/psadmin-discovery:ro
     mem_limit: 600m
     depends_on:
       test-db:
@@ -39,15 +43,39 @@ services:
     env_file: ../../../psadmin-test.env
     environment:
       GOSPLAN_API_DISABLED: "1"
+      TENDER_DISCOVERY_ROLE: mirror
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
       TENDER_AUTOPULL_WEB_ENABLED: "0"
       CALCULATION_V2_SOURCE_MEMORY_ENABLED: "1"
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
       CALCULATION_V2_ROUTER_MODEL: anthropic/claude-haiku-5-5
       INCOMING_PROFILE_MODEL: anthropic/claude-haiku-5-5
     command: ["python", "manage.py", "run_calculation_v2_job", "--watch"]
+    volumes:
+      - discovery_feed:/var/lib/psadmin-discovery:ro
     restart: unless-stopped
     stop_grace_period: 600s
     mem_limit: 600m
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+  test-discovery-mirror:
+    build:
+      context: ../..
+      dockerfile: deploy/vds/Dockerfile
+    env_file: ../../../psadmin-test.env
+    environment:
+      GOSPLAN_API_DISABLED: "1"
+      TENDER_DISCOVERY_ROLE: mirror
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
+      TENDER_AUTOPULL_ENABLED: "0"
+      TENDER_AUTOPULL_WEB_ENABLED: "0"
+    command: ["python", "manage.py", "mirror_discovery", "--watch"]
+    volumes:
+      - discovery_feed:/var/lib/psadmin-discovery:ro
+    restart: unless-stopped
+    mem_limit: 200m
     depends_on:
       test-db:
         condition: service_healthy
@@ -72,4 +100,7 @@ networks:
     external: true
 
 volumes:
+  discovery_feed:
+    name: psadmin-discovery-feed
+    external: true
   pgdata:

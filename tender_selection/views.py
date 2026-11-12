@@ -1190,6 +1190,7 @@ def eis_diag(request):
 
 @superuser_required
 def filter_settings(request):
+    import os
     settings = FilterSettings.load()
     if request.method == "POST":
         from .services import save_selection_settings
@@ -1221,6 +1222,7 @@ def filter_settings(request):
         "regions": [(code, name, str(code) in chosen_regions) for code, name in sorted(REGION_NAMES.items(), key=lambda x: x[1])],
         "laws": [(code, label, code in chosen_laws) for code, label in Tender.LAW_CHOICES],
         "using_defaults": not settings.okpd2_codes,
+        "discovery_mirror": os.getenv("TENDER_DISCOVERY_ROLE") == "mirror",
     })
 
 
@@ -1327,7 +1329,9 @@ def pull_now(request):
         messages.info(request, "ЕАТ «Берёзка»: предыдущее обновление ещё выполняется.")
     elif eat_status == "not_configured":
         messages.warning(request, "ЕАТ «Берёзка»: нет токена или номера поставщика в TEST.")
-    if run["ok"]:
+    if run.get("background"):
+        messages.info(request, "Сбор закупок запущен в фоне." if run.get("started") else "Предыдущий сбор ещё выполняется.")
+    elif run["ok"]:
         messages.success(
             request,
             f"Выгрузка: запросов {run['requests_made']}, записей {run['records_received']}, "

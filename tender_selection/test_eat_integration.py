@@ -12,6 +12,35 @@ from .models import FilterSettings, Tender
 
 
 class EatApiContractTests(TestCase):
+    def test_xsd_products_are_available_through_the_shared_card_parser(self):
+        from .notification import parse_notification
+        xml = '''<responseProcessingResult xmlns:e="http://agregatoreat.ru/eat/">
+          <e:responseOrderNotification><e:OrderNumber>100000000000000001</e:OrderNumber>
+          <e:Product><e:sequenceNumber>1</e:sequenceNumber><e:name>Папка</e:name>
+          <e:OKPD><e:code>17.23</e:code><e:name>Изделия из бумаги</e:name></e:OKPD>
+          <e:OKEI><e:code>796</e:code><e:name>шт</e:name></e:OKEI>
+          <e:availableVolume>10</e:availableVolume><e:price>100</e:price><e:cost>1000</e:cost>
+          <e:features><e:name>Цвет</e:name><e:qualityValueSet>Синий</e:qualityValueSet></e:features></e:Product>
+          <e:Customer><e:CustomerName>Заказчик</e:CustomerName><e:sellerRef><e:INN>1234567890</e:INN></e:sellerRef></e:Customer>
+          <e:orderExpireDate>2026-12-01T12:00:00+03:00</e:orderExpireDate>
+          </e:responseOrderNotification></responseProcessingResult>'''
+        card = parse_notification(eat_api.normalized_notification(ET.fromstring(xml)))
+        self.assertEqual(card['items'][0]['name'], 'Папка')
+        self.assertEqual(card['items'][0]['quantity'], '10')
+        self.assertEqual(card['items'][0]['code'], '17.23')
+        self.assertEqual(card['items'][0]['characteristics'], [{'name': 'Цвет', 'value': 'Синий'}])
+        self.assertEqual(card['customer']['inn'], '1234567890')
+        self.assertIsNotNone(card['dates']['collect_end'])
+
+    def test_eat_documents_never_call_eis(self):
+        from .services import _fetch_doc_bytes
+        from .documents import DocumentError
+        tender = Tender(source=Tender.EAT, purchase_number='100000000000000001')
+        with patch('tender_selection.services.fetch_document_via_eis') as eis:
+            with self.assertRaises(DocumentError):
+                _fetch_doc_bytes(tender, 'https://agregatoreat.ru/file', 'file.docx')
+        eis.assert_not_called()
+
     def test_request_xml_has_xsd_namespaces_and_unqualified_ext_system(self):
         body = eat_api._xml_message("requestOrderList", "300911501", "example")
         root = ET.fromstring(body)

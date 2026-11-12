@@ -17,7 +17,7 @@ class Command(BaseCommand):
         parser.add_argument("--days", type=int, default=None, help="Окно по дате публикации, дней (деф. из настроек)")
         parser.add_argument("--min-price", type=float, default=None, help="НМЦК не меньше указанной (деф. из настроек)")
         parser.add_argument("--okpd2", default="", help="Свой список кодов ОКПД2 через запятую (переопределяет настройки)")
-        parser.add_argument("--max-requests", type=int, default=25, help="Потолок числа запросов к API за прогон")
+        parser.add_argument("--max-requests", type=int, default=None, help="Явный потолок запросов; по умолчанию полный обход")
         parser.add_argument("--loop", action="store_true", help="Крутиться в цикле — автообновление")
         parser.add_argument("--interval", type=int, default=30, help="Пауза между прогонами в цикле, минут (деф. 30)")
         parser.add_argument("--enrich", action="store_true", help="Заодно добирать имена заказчиков (по 8 за прогон)")

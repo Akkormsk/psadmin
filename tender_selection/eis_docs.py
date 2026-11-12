@@ -22,9 +22,11 @@ import re
 import time
 import uuid
 import zipfile
+import hashlib
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +75,17 @@ def token() -> str:
     return os.getenv("EIS_TOKEN", "").strip()
 
 
+def _redact(text):
+    secret = token()
+    return text.replace(secret, "[скрыто]") if secret else text
+
+
 def _soap_call(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> str:
     if not token():
         raise EisDocsError("Не задан EIS_TOKEN.")
+    block_key = "eis-pmd-block:" + hashlib.sha256(token().encode()).hexdigest()
+    if cache.get(block_key):
+        raise EisDocsError("ЕИС временно заблокировал доступ ПМД; повторные запросы приостановлены.")
     body = _ENVELOPE.format(
         token=token(),
         req_id=uuid.uuid4(),
@@ -87,7 +97,16 @@ def _soap_call(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> str:
     })
     try:
         with urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8", errors="replace")
+            text = response.read().decode("utf-8", errors="replace")
+            try:
+                root = ET.fromstring(text)
+                for node in root.iter():
+                    if node.tag.rsplit("}", 1)[-1] == "errorInfo":
+                        if any(child.tag.rsplit("}", 1)[-1] == "code" and child.text == "34" for child in node):
+                            cache.set(block_key, True, timeout=int(os.getenv("EIS_ACCESS_BLOCK_RETRY_SECONDS", "3600")))
+            except ET.ParseError:
+                pass
+            return text
     except HTTPError as exc:
         detail = ""
         try:
@@ -96,7 +115,7 @@ def _soap_call(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) -> str:
             pass
         fault = _FAULT_RE.search(detail)
         if fault:
-            raise EisDocsError(f"ЕИС отклонил запрос документов: {fault.group(1)}") from exc
+            raise EisDocsError(f"ЕИС отклонил запрос документов: {_redact(fault.group(1))}") from exc
         raise EisDocsError(f"ЕИС ответил HTTP {exc.code} на запрос документов.") from exc
     except (URLError, TimeoutError, ConnectionError, OSError) as exc:
         raise EisDocsError("Не удалось установить соединение с ЕИС при запросе документов.") from exc
@@ -107,7 +126,7 @@ def fetch_archive_urls(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) 
     text = _soap_call(reestr_number, timeout=timeout)
     fault = _FAULT_RE.search(text)
     if fault:
-        raise EisDocsError(f"ЕИС отклонил запрос документов: {fault.group(1)}")
+        raise EisDocsError(f"ЕИС отклонил запрос документов: {_redact(fault.group(1))}")
     try:
         root = ET.fromstring(text)
     except ET.ParseError as exc:

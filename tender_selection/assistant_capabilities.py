@@ -217,7 +217,7 @@ register_tool(AssistantTool(
 
 register_tool(AssistantTool(
     "tender.import_by_number", "Добавить тендер по номеру",
-    "Находит закупку по 44-ФЗ в ГосПлане и добавляет её без дубля. Существующий тендер не меняет; отсутствие данных не создаёт пустую карточку. Фильтры входящих сохраняются.",
+    "Получает закупку по 44-ФЗ напрямую из ЕИС и добавляет её без дубля. Существующий тендер не меняет; ошибка доступа или неполные данные не создают пустую карточку. Фильтры входящих сохраняются.",
     {"purchase_number": {"type": "string", "required": True, "label": "Номер закупки по 44-ФЗ"}},
     False, True, True,
     lambda user, payload: _tender_action(import_tender_by_number, user, payload, "purchase_number"),
