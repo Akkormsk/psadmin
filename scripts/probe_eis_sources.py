@@ -55,3 +55,20 @@ for category, tender in (("active", active), ("with_protocol", archived)):
             result["protocol_error"] = type(exc).__name__
         result["protocol_seconds"] = round(time.monotonic()-started, 2)
     print(json.dumps(result, ensure_ascii=False), flush=True)
+    if category == "active" and result.get("archive_error"):
+        import ssl
+        from unittest.mock import patch
+        original_open = eis_docs.urlopen
+        context = ssl.create_default_context()
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        def tls12_open(*args, **kwargs):
+            return original_open(*args, context=context, **kwargs)
+        probe = {"probe": "TLS1.2", "number": tender.purchase_number}
+        try:
+            with patch.object(eis_docs, "urlopen", tls12_open):
+                probe["archive_count"] = len(eis_docs.fetch_archive_urls(tender.purchase_number, timeout=20))
+        except Exception as exc:
+            cause = exc.__cause__
+            probe["error"] = type(exc).__name__
+            probe["reason"] = str(getattr(cause, "reason", type(cause).__name__))[:250]
+        print(json.dumps(probe), flush=True)
