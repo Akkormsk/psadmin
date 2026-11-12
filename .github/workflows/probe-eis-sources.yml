@@ -2,7 +2,7 @@ name: Probe real EIS sources read only
 on:
   push:
     branches: [feature/source-filter-settings]
-    paths: ['scripts/probe_eis_sources.py', '.github/workflows/probe-eis-sources.yml']
+    paths: ['scripts/probe_eis_once.py', '.github/workflows/probe-eis-sources.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -41,4 +41,4 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$SSH_HOSTS" > "$HOME/.ssh/known_hosts"
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
-            'docker exec -i psadmin-test-test-web-1 python manage.py shell --no-imports' < scripts/probe_eis_sources.py
+            'docker exec -i psadmin-test-test-web-1 python manage.py shell --no-imports' < scripts/probe_eis_once.py
