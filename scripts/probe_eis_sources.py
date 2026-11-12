@@ -28,7 +28,7 @@ for protocol_version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
         probe["reason"] = str(exc)[:250]
     print(json.dumps(probe), flush=True)
 
-for host in ("int44.zakupki.gov.ru", "zakupki.gov.ru"):
+for host in ("int44.zakupki.gov.ru", "int.zakupki.gov.ru", "zakupki.gov.ru"):
     probe = {"network_host": host}
     try:
         probe["addresses"] = sorted({entry[4][0] for entry in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
@@ -41,6 +41,22 @@ for host in ("int44.zakupki.gov.ru", "zakupki.gov.ru"):
     except Exception as exc:
         probe["network_error"] = type(exc).__name__
         probe["network_reason"] = str(exc)[:250]
+    print(json.dumps(probe), flush=True)
+
+from urllib.request import urlopen
+for host in ("int44.zakupki.gov.ru", "int.zakupki.gov.ru"):
+    probe = {"wsdl_host": host}
+    try:
+        with urlopen("https://" + host + "/eis-integration/services/getDocsIP?wsdl", timeout=15) as response:
+            data = response.read(1024 * 1024)
+            probe["status"] = response.status
+            root = ET.fromstring(data)
+            probe["root"] = root.tag
+            probe["namespace"] = root.attrib.get("targetNamespace")
+            probe["operations"] = sorted({e.attrib["name"] for e in root.iter() if e.tag.endswith("}operation") and "name" in e.attrib})
+    except Exception as exc:
+        probe["error"] = type(exc).__name__
+        probe["reason"] = str(exc)[:200]
     print(json.dumps(probe), flush=True)
 
 with connection.cursor() as cursor:
