@@ -40,9 +40,13 @@ jobs:
                   continue
               try:
                   args = (proc/'cmdline').read_bytes().decode(errors='replace').split('\0')
-                  roles = [role for role in ('pull_tenders','collect_discovery','collect_price_stats','scheduler._run_once') if any(role in arg for arg in args)]
+                  roles = [role for role in ('pull_tenders','collect_discovery','collect_price_stats','tender_selection.scheduler') if any(role in arg for arg in args)]
                   if roles and any('python' in Path(arg).name for arg in args[:1]):
-                      print(json.dumps({'pid':int(proc.name),'roles':roles,'cwd':str((proc/'cwd').resolve())}))
+                      try:
+                          cwd = str((proc/'cwd').resolve())
+                      except OSError:
+                          cwd = 'protected'
+                      print(json.dumps({'pid':int(proc.name),'roles':roles,'cwd':cwd}))
               except OSError:
                   pass
           PY
