@@ -3,11 +3,28 @@ import io
 import json
 import time
 import zipfile
+import socket
+import ssl
 from xml.etree import ElementTree as ET
 from django.db import connection
 from django.utils import timezone
 from tender_selection.models import Tender
 from tender_selection import eis_docs, protocols
+
+for host in ("int44.zakupki.gov.ru", "zakupki.gov.ru"):
+    probe = {"network_host": host}
+    try:
+        probe["addresses"] = sorted({entry[4][0] for entry in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
+        started = time.monotonic()
+        with socket.create_connection((host, 443), timeout=10) as sock:
+            probe["tcp_seconds"] = round(time.monotonic() - started, 2)
+            probe["tcp_ok"] = True
+            with ssl.create_default_context().wrap_socket(sock, server_hostname=host) as secure:
+                probe["tls_version"] = secure.version()
+    except Exception as exc:
+        probe["network_error"] = type(exc).__name__
+        probe["network_reason"] = str(exc)[:250]
+    print(json.dumps(probe), flush=True)
 
 with connection.cursor() as cursor:
     cursor.execute("SET default_transaction_read_only = on")
