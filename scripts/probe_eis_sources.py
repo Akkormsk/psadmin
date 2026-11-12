@@ -90,6 +90,14 @@ for category, tender in (("active", active), ("with_protocol", archived)):
                 result["xml_root_types"] = sorted(set(tags))
     except Exception as exc:
         result["archive_error"] = type(exc).__name__
+        if str(exc) == "ЕИС не вернул архив документов для этой закупки.":
+            root = ET.fromstring(eis_docs._soap_call(tender.purchase_number, timeout=20))
+            result["response_tags"] = sorted({e.tag.rsplit("}", 1)[-1] for e in root.iter()})
+            result["response_messages"] = [
+                (e.text or "").replace(eis_docs.token(), "[redacted]")[:500]
+                for e in root.iter()
+                if e.tag.rsplit("}", 1)[-1].lower() in ("message", "description", "errortext", "code", "errorcode", "errormessage")
+            ]
         cause = exc.__cause__
         if cause is not None:
             reason = getattr(cause, "reason", None)
