@@ -36,6 +36,8 @@ jobs:
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" python3 - <<'PY'
           import json
+          import subprocess
+          import re
           from pathlib import Path
           for proc in Path('/proc').iterdir():
               if not proc.name.isdigit():
@@ -54,4 +56,22 @@ jobs:
                       print(json.dumps({'pid':int(proc.name),'roles':roles,'cwd':cwd}))
               except OSError:
                   pass
+          try:
+              result = subprocess.run(['docker','buildx','history','ls','--format','{{json .}}'],capture_output=True,text=True,timeout=10)
+              if result.returncode:
+                  print(json.dumps({'build_history_error':result.stderr[:180]}))
+              else:
+                  records = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+                  print(json.dumps({'build_history':[ {key:row.get(key) for key in ('Ref','Name','Status','Duration')} for row in records[:3]]}))
+                  if records:
+                      ref = records[0].get('Ref')
+                      if ref:
+                          try:
+                              output = subprocess.run(['docker','buildx','history','logs',ref],capture_output=True,text=True,timeout=8).stdout
+                          except subprocess.TimeoutExpired as exc:
+                              output = (exc.stdout or b'').decode(errors='replace') if isinstance(exc.stdout,bytes) else (exc.stdout or '')
+                          lines = [line for line in output.splitlines() if re.search(r'Get:|Ign:|Err:|E:|W:|Unpacking|Setting up|Could not|Fetched|ERROR|DONE',line)]
+                          print(json.dumps({'build_log_tail':[re.sub(r'(https?://)[^/@\s]+:[^/@\s]+@',r'\1[redacted]@',line)[:240] for line in lines[-15:]]}))
+          except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
+              print(json.dumps({'build_history_error':type(exc).__name__}))
           PY
