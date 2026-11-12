@@ -6,6 +6,12 @@ services:
       context: ../..
       dockerfile: deploy/vds/Dockerfile
     env_file: .env
+    environment:
+      TENDER_DISCOVERY_ROLE: collector
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
+      GOSPLAN_REQUESTS_PER_MINUTE: ${GOSPLAN_REQUESTS_PER_MINUTE:-7}
+    volumes:
+      - discovery_feed:/var/lib/psadmin-discovery
     restart: unless-stopped
     mem_limit: 1200m
     depends_on:
@@ -18,6 +24,27 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  discovery-collector:
+    build:
+      context: ../..
+      dockerfile: deploy/vds/Dockerfile
+    env_file: .env
+    environment:
+      TENDER_DISCOVERY_ROLE: collector
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
+      GOSPLAN_REQUESTS_PER_MINUTE: ${GOSPLAN_REQUESTS_PER_MINUTE:-7}
+      TENDER_AUTOPULL_ENABLED: "0"
+      TENDER_AUTOPULL_WEB_ENABLED: "0"
+      CALCULATION_V2_ENABLED: "0"
+    command: ["python", "manage.py", "collect_discovery", "--watch"]
+    volumes:
+      - discovery_feed:/var/lib/psadmin-discovery
+    restart: unless-stopped
+    mem_limit: 400m
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:16
@@ -57,6 +84,8 @@ networks:
     name: psadmin-edge
 
 volumes:
+  discovery_feed:
+    name: psadmin-discovery-feed
   pgdata:
   caddy_data:
   caddy_config:

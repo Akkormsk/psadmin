@@ -43,7 +43,7 @@ def _run_once(tick: int) -> None:
 
     close_old_connections()
     try:
-        run = run_pull(max_requests=16)
+        run = run_pull()
         logger.warning("autopull: pull — %d new, %d seen, %.0fs, ok=%s%s",
                        run.created_count, run.records_received, run.duration_seconds,
                        run.ok, f", err={run.error}" if run.error else "")
@@ -53,7 +53,7 @@ def _run_once(tick: int) -> None:
     close_old_connections()
     try:
         from .services import run_keyword_pull
-        kw_run = run_keyword_pull(max_requests=16)
+        kw_run = run_keyword_pull()
         logger.warning("autopull: keyword pull — %d new, %d seen, %.0fs, ok=%s%s",
                        kw_run.created_count, kw_run.records_received, kw_run.duration_seconds,
                        kw_run.ok, f", err={kw_run.error}" if kw_run.error else "")

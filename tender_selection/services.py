@@ -19,6 +19,8 @@ from django.db.models import Q
 import os
 
 from . import gosplan
+from .discovery_feed import discovery_run, publish
+from .discovery_cursor import prepare as prepare_discovery, advance as advance_discovery
 from .documents import DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
@@ -73,7 +75,7 @@ CATEGORY_GROUPS = [
 ]
 DEFAULT_OKPD2 = [code for code, _ in CATEGORY_GROUPS]
 
-# API принимает не больше 5 кодов classifier за запрос — режем на батчи.
+# Generic grouping; discovery passes size=1 as required by the purchases API.
 def _chunk(items, size=5):
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
@@ -153,8 +155,8 @@ def _record_to_fields(record: dict, pulled_at, law: str) -> dict:
     }
 
 
-def build_params(*, days: int, stage: int | None, min_price, regions=None, law: str = "fz44") -> dict:
-    now_msk = timezone.now().astimezone(MSK)
+def build_params(*, days: int, stage: int | None, min_price, regions=None, law: str = "fz44", now=None) -> dict:
+    now_msk = (now or timezone.now()).astimezone(MSK)
     since = (now_msk - timedelta(days=days)).replace(microsecond=0)
     params = {
         "sort": "published_at_desc",
@@ -181,6 +183,7 @@ def _risk_eligible(tender) -> bool:
     )
 
 
+@discovery_run
 def run_pull(
     *,
     days: int | None = None,
@@ -190,7 +193,7 @@ def run_pull(
     classifier_batches=None,
     laws=None,
     regions=None,
-    max_requests: int = 20,
+    max_requests: int | None = None,
 ) -> PullRun:
     settings = FilterSettings.load()
     if days is None:
@@ -202,11 +205,11 @@ def run_pull(
     laws = laws or effective_laws(settings)
 
     if classifier_batches:
-        batches = [list(b) for b in classifier_batches]
+        batches = [[code] for batch in classifier_batches for code in batch]
     elif classifiers:
-        batches = _chunk(classifiers)
+        batches = _chunk(classifiers, 1)
     else:
-        batches = _chunk(effective_okpd2(settings))
+        batches = _chunk(effective_okpd2(settings), 1)
 
     run = PullRun.objects.create(
         started_at=timezone.now(),
@@ -223,17 +226,20 @@ def run_pull(
     triage_ids = []
     v2_candidate_ids = []
     seen: set[str] = set()
-    bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law) for law in laws}
+    bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law, now=run.started_at) for law in laws}
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
     jobs = [(law, batch) for batch in batches for law in laws]
+    run.params.update({"windows": bases, "queries": [], "jobs_total": len(jobs), "jobs_completed": 0, "complete": False})
+    run.save(update_fields=["params"])
     try:
         for step, (law, batch) in enumerate(jobs):
-            remaining = max_requests - stats["requests"]
-            if remaining <= 0:
-                break
+            remaining = None if max_requests is None else max_requests - stats["requests"]
+            if remaining is not None and remaining <= 0:
+                raise gosplan.GosplanError("Бюджет обхода исчерпан; полнота не подтверждена")
             if step and stats["requests"]:
                 time.sleep(gosplan.THROTTLE_SECONDS)
             params = {**bases[law], "classifier": batch}
+            cursor_key, params = prepare_discovery(law, params, days)
             for record in gosplan.iter_purchases(
                 params=params, law=law, max_requests=remaining, on_request=_on_request
             ):
@@ -241,6 +247,7 @@ def run_pull(
                 if not number or (law, number) in seen:
                     continue
                 seen.add((law, number))
+                publish(record, law)
                 with transaction.atomic():
                     tender, is_created = Tender.objects.update_or_create(
                         law=law,
@@ -249,9 +256,16 @@ def run_pull(
                     )
                 created += int(is_created)
                 updated += int(not is_created)
-                if is_created:
+                if is_created and (os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params):
                     triage_ids.append(tender.pk)
-                v2_candidate_ids.append(tender.pk)
+                if os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params:
+                    v2_candidate_ids.append(tender.pk)
+            advance_discovery(cursor_key, run.started_at.replace(microsecond=0))
+            run.params["queries"].append({"key": cursor_key, "law": law,
+                **{key: value for key, value in params.items() if key.endswith("_after") or key.endswith("_before")}})
+            run.params["jobs_completed"] += 1
+            run.save(update_fields=["params"])
+        run.params["complete"] = True
         run.ok = True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
@@ -269,16 +283,18 @@ def run_pull(
         from .profile_triage import start_profile_triage_in_background
         from tenders.calculation_v2_pipeline import trigger_visible_tender
 
-        start_profile_triage_in_background(triage_ids)
+        if triage_ids:
+            start_profile_triage_in_background(triage_ids)
         for tender in Tender.objects.filter(pk__in=set(v2_candidate_ids)):
             trigger_visible_tender(tender)
 
     return run
 
 
+@discovery_run
 def run_keyword_pull(
-    *, days=None, min_price=None, regions=None, max_requests: int = 16,
-    per_word_requests: int = 3, pause: float = None,
+    *, days=None, min_price=None, regions=None, max_requests: int | None = None,
+    per_word_requests: int | None = None, pause: float = None,
 ) -> PullRun:
     """Дополнительный обход — не по категориям ОКПД2 (`classifier` у Госплана
     молча не находит часть кодов, см. CATEGORY_GROUPS, а часть тендеров и
@@ -318,13 +334,16 @@ def run_keyword_pull(
         params={"mode": "keyword", "days": days, "min_price": float(min_price or 0), "words_total": len(words)},
     )
     if not words:
+        run.params.update({"jobs_total": 0, "jobs_completed": 0, "complete": True})
         run.ok = True
         run.finished_at = timezone.now()
         run.duration_seconds = 0.0
         run.save()
         return run
 
-    base = build_params(days=days, stage=1, min_price=min_price, regions=regions, law="fz44")
+    base = build_params(days=days, stage=1, min_price=min_price, regions=regions, law="fz44", now=run.started_at)
+    run.params.update({"windows": {"fz44": base}, "queries": [], "jobs_total": len(words), "jobs_completed": 0, "complete": False})
+    run.save(update_fields=["params"])
     stats = {"requests": 0, "records": 0}
 
     def _on_request(_request_no, got):
@@ -335,17 +354,19 @@ def run_keyword_pull(
     created = updated = words_done = 0
     triage_ids = []
     try:
-        for offset in range(min(max_requests, len(words))):
+        for offset in range(len(words) if max_requests is None else min(max_requests, len(words))):
             if offset:
                 time.sleep(pause)
             word = words[(cursor + offset) % len(words)]
             params = {**base, "object_info": word}
+            cursor_key, params = prepare_discovery("fz44", params, days)
             for record in gosplan.iter_purchases(
                 params=params, law="fz44", max_requests=per_word_requests, on_request=_on_request
             ):
                 number = (record.get("purchase_number") or "").strip()
                 if not number:
                     continue
+                publish(record, "fz44")
                 with transaction.atomic():
                     tender, is_created = Tender.objects.update_or_create(
                         law="fz44", purchase_number=number,
@@ -353,9 +374,17 @@ def run_keyword_pull(
                     )
                 created += int(is_created)
                 updated += int(not is_created)
-                if is_created:
+                if is_created and (os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params):
                     triage_ids.append(tender.pk)
+            advance_discovery(cursor_key, run.started_at.replace(microsecond=0))
+            run.params["queries"].append({"key": cursor_key, "law": "fz44",
+                **{key: value for key, value in params.items() if key.endswith("_after") or key.endswith("_before")}})
             words_done += 1
+            run.params["jobs_completed"] = words_done
+            run.save(update_fields=["params"])
+        if words_done != len(words):
+            raise gosplan.GosplanError("Обойдены не все ключевые слова; полнота не подтверждена")
+        run.params["complete"] = True
         run.ok = True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
@@ -374,7 +403,8 @@ def run_keyword_pull(
     if run.ok:
         from .profile_triage import start_profile_triage_in_background
 
-        start_profile_triage_in_background(triage_ids)
+        if triage_ids:
+            start_profile_triage_in_background(triage_ids)
     return run
 
 
@@ -475,7 +505,7 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
         tender.notification_checked_at = timezone.now()
         tender.notification_error = str(exc)[:300]
         tender.save(update_fields=["notification_checked_at", "notification_error"])
-        return None
+        return tender.notification_raw or None
     tender.notification_raw = payload
     tender.notification_checked_at = timezone.now()
     tender.notification_error = ""
