@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from .discovery_feed import feed_path
@@ -29,7 +30,9 @@ def reserve_request(path, params):
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = directory / ".last-request"
         previous = float(state.read_text()) if state.exists() else 0
-        delay = previous + 60 / rate - time.time()
+        provider_state = directory / ".provider-wait-until"
+        provider_until = float(provider_state.read_text()) if provider_state.exists() else 0
+        delay = max(previous + 60 / rate, provider_until) - time.time()
         if delay > 0:
             time.sleep(delay)
         state.write_text(str(time.time()))
@@ -42,5 +45,29 @@ def record_response(status, headers):
     directory = _directory()
     with (directory / ".quota-lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        remaining = headers.get("x-ratelimit-remaining-minute") or headers.get("RateLimit-Remaining")
+        retry = headers.get("Retry-After")
+        reset = headers.get("RateLimit-Reset") or headers.get("x-ratelimit-reset-minute")
+        if status == 429 or str(remaining) == "0":
+            delay = float(os.getenv("GOSPLAN_RATE_WINDOW_SECONDS", "60"))
+            if retry:
+                try:
+                    delay = float(retry)
+                except ValueError:
+                    try:
+                        delay = parsedate_to_datetime(retry).timestamp() - time.time()
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+            elif reset:
+                try:
+                    value = float(reset)
+                    delay = value - time.time() if value > time.time() / 2 else value
+                except ValueError:
+                    pass
+            state = directory / ".provider-wait-until"
+            previous = float(state.read_text()) if state.exists() else 0
+            state.write_text(str(max(previous, time.time() + max(0, delay))))
         _receipt(directory, {"event": "response", "status": status,
-                             "remaining": headers.get("x-ratelimit-remaining-minute")})
+                             "remaining": remaining, "retry_after": retry, "reset": reset,
+                             "limit": headers.get("x-ratelimit-limit-minute") or headers.get("RateLimit-Limit"),
+                             "age": headers.get("Age")})
