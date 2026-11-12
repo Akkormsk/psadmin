@@ -152,7 +152,7 @@ CATEGORY_GROUPS = [
 ]
 DEFAULT_OKPD2 = [code for code, _ in CATEGORY_GROUPS]
 
-# API принимает не больше 5 кодов classifier за запрос — режем на батчи.
+# Ограничение API: один classifier в запросе списка закупок.
 def _chunk(items, size=5):
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
@@ -273,7 +273,7 @@ def run_pull(
     classifier_batches=None,
     laws=None,
     regions=None,
-    max_requests: int = 20,
+    max_requests: int | None = None,
 ) -> PullRun:
     settings = FilterSettings.load()
     if Tender.EIS not in effective_sources(settings):
@@ -287,11 +287,11 @@ def run_pull(
     laws = laws or effective_laws(settings)
 
     if classifier_batches:
-        batches = [list(b) for b in classifier_batches]
+        batches = [[code] for batch in classifier_batches for code in batch]
     elif classifiers:
-        batches = _chunk(classifiers)
+        batches = [[code] for code in classifiers]
     else:
-        batches = _chunk(effective_okpd2(settings))
+        batches = [[code] for code in effective_okpd2(settings)]
 
     run = PullRun.objects.create(
         started_at=timezone.now(),
@@ -313,8 +313,8 @@ def run_pull(
     jobs = [(law, batch) for batch in batches for law in laws]
     try:
         for step, (law, batch) in enumerate(jobs):
-            remaining = max_requests - stats["requests"]
-            if remaining <= 0:
+            remaining = None if max_requests is None else max_requests - stats["requests"]
+            if remaining is not None and remaining <= 0:
                 break
             if step and stats["requests"]:
                 time.sleep(gosplan.THROTTLE_SECONDS)
@@ -337,7 +337,7 @@ def run_pull(
                 if is_created:
                     triage_ids.append(tender.pk)
                 v2_candidate_ids.append(tender.pk)
-        run.ok = True
+        run.ok = step == len(jobs) - 1 if jobs else True
     except gosplan.GosplanError as exc:
         run.error = str(exc)
         run.ok = False
@@ -362,8 +362,8 @@ def run_pull(
 
 
 def run_keyword_pull(
-    *, days=None, min_price=None, regions=None, max_requests: int = 16,
-    per_word_requests: int = 3, pause: float = None,
+    *, days=None, min_price=None, regions=None, max_requests: int | None = None,
+    per_word_requests: int | None = None, pause: float = None,
 ) -> PullRun:
     """Дополнительный обход — не по категориям ОКПД2 (`classifier` у Госплана
     молча не находит часть кодов, см. CATEGORY_GROUPS, а часть тендеров и
@@ -422,7 +422,7 @@ def run_keyword_pull(
     created = updated = words_done = 0
     triage_ids = []
     try:
-        for offset in range(min(max_requests, len(words))):
+        for offset in range(len(words) if max_requests is None else min(max_requests, len(words))):
             if offset:
                 time.sleep(pause)
             word = words[(cursor + offset) % len(words)]
@@ -1953,7 +1953,7 @@ def pull_tenders_now(user):
     from .eat_service import start_eat_pull
     # EAT takes two asynchronous API steps and must not block the existing HTTP request.
     eat_status = start_eat_pull()
-    run = run_pull(max_requests=16)
+    run = run_pull()
     return {"ok": run.ok, "requests_made": run.requests_made, "records_received": run.records_received,
             "created_count": run.created_count, "duration_seconds": run.duration_seconds, "error": run.error,
             "eat_status": eat_status}

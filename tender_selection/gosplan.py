@@ -10,6 +10,7 @@ import json
 import os
 import re
 import time
+import itertools
 from typing import Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -196,7 +197,7 @@ def iter_purchases(
     params: dict,
     law: str = "fz44",
     page_size: int = PAGE_SIZE,
-    max_requests: int = 8,
+    max_requests: int | None = None,
     throttle: float = THROTTLE_SECONDS,
     on_request: Callable[[int, int], None] | None = None,
 ) -> Iterator[dict]:
@@ -207,7 +208,9 @@ def iter_purchases(
     после каждого успешного запроса — для журналирования.
     """
     skip = 0
-    for request_no in range(1, max_requests + 1):
+    for request_no in itertools.count(1):
+        if max_requests is not None and request_no > max_requests:
+            return
         if request_no > 1:
             time.sleep(throttle)
         page_params = {**params, "limit": page_size, "skip": skip}

@@ -1,5 +1,7 @@
 # Протокол PSADMIN — TEST
 
+CODE_ONLY: discovery audit found historical per-run caps (16 category requests, 16 words, 3 pages/word) introduced for background workload control, without a completeness proof. Default purchase pagination and normal collection now traverse to exhaustion, classifier requests use single codes as required upstream. Explicit caller caps remain compatibility controls; no claim of durable checkpoint recovery or zero-loss coverage is made. TEST Gosplan remains disabled pending rate coordination. EIS getDocsIP is verified in existing code only as the archive-of-attachments service; replacing Gosplan notification/clarification/complaint/organization/contract calls has not been proven by this change and those calls remain to preserve information.
+
 2026-11-12: на время часового замера TEST Gosplan requests отключены через GOSPLAN_API_DISABLED в обоих TEST сервисах: общий IP-лимит оставлен PROD. ЕАТ не отключён. measure-collection-hour workflow наблюдает час без upstream/AI вызовов, затем читает PullRun и записанную стоимость новых TenderComputeJob в READ ONLY; это не полный биллинг ИИ и не полный счётчик HTTP (enrichment/retries вне PullRun). Повторное включение TEST ГосПлана — после согласования общего ограничителя или отдельного API-ключа.
 
 ## 0. Актуальный снимок — 2026-11-08
