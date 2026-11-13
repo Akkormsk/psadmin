@@ -146,7 +146,12 @@ def pick_cases():
         pick("small_other", pk)
         if len(chosen) >= 4:
             break
-    return chosen[:4]
+    # Also exercise an actual persisted component/route, not just raw sources.
+    candidate = (TenderCommercialItem.objects.filter(status="active")
+        .values("tender_id").annotate(n=Count("pk")).order_by("n", "tender_id").first())
+    if candidate:
+        pick("working_tree_minimum", candidate["tender_id"])
+    return chosen[:5]
 
 
 def main():
