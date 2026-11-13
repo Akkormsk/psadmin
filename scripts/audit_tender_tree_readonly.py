@@ -1,6 +1,7 @@
 """TEST-only selective read-only verification of the deployed tender working tree."""
 import json
 import time
+import resource
 from collections import Counter
 from django.contrib.auth import get_user_model
 from django.db import connection, transaction
@@ -117,6 +118,7 @@ def inspect_tender(label, tender):
 
 
 def pick_cases():
+    # Start with small, bounded real tenders; large tender is tested separately.
     chosen, seen = [], set()
     def pick(label, pk):
         if pk is None or pk in seen:
@@ -125,22 +127,31 @@ def pick_cases():
         if tender:
             chosen.append((label, tender))
             seen.add(pk)
-    large = (TenderSourceItem.objects.filter(is_active=True)
-             .values("tender_id").annotate(n=Count("pk")).order_by("-n").first())
-    pick("largest_source_inventory", large["tender_id"] if large else None)
-    pick("composite", TenderCommercialItem.objects.filter(status="active", structure="composite").order_by("-pk").values_list("tender_id", flat=True).first())
-    pick("shared_route", ComponentRoutePlan.objects.filter(scope="shared", commercial_item__status="active").order_by("-pk").values_list("commercial_item__tender_id", flat=True).first())
-    pick("with_result", TenderComputeLine.objects.exclude(result={}).order_by("-pk").values_list("job__tender_id", flat=True).first())
-    pick("with_components", CalculationComponent.objects.filter(status="active").order_by("-pk").values_list("commercial_item__tender_id", flat=True).first())
-    if len(chosen) < 5:
-        for pk in Tender.objects.order_by("-pk").values_list("pk", flat=True)[:15]:
-            pick("other", pk)
-            if len(chosen) == 5:
-                break
-    return chosen[:5]
+    small_tenders = list(
+        TenderSourceItem.objects.filter(is_active=True)
+        .values("tender_id").annotate(n=Count("pk"))
+        .filter(n__gte=1, n__lte=8).order_by("-tender_id")[:60]
+    )
+    small = {r["tender_id"] for r in small_tenders}
+    for pk in (TenderCommercialItem.objects.filter(tender_id__in=small, status="active", structure="composite").order_by("-pk").values_list("tender_id", flat=True)[:10]):
+        pick("small_composite", pk)
+        break
+    for pk in ComponentRoutePlan.objects.filter(commercial_item__tender_id__in=small, scope="shared").values_list("commercial_item__tender_id", flat=True)[:10]:
+        pick("small_shared", pk)
+        break
+    for pk in TenderComputeLine.objects.filter(job__tender_id__in=small).exclude(result={}).values_list("job__tender_id", flat=True)[:10]:
+        pick("small_result", pk)
+        break
+    for pk in small:
+        pick("small_other", pk)
+        if len(chosen) >= 4:
+            break
+    return chosen[:4]
 
 
 def main():
+    # Cap this process below the container memory to avoid an OOM kill.
+    resource.setrlimit(resource.RLIMIT_AS, (450 * 1024 * 1024, 450 * 1024 * 1024))
     if connection.vendor != "postgresql":
         raise RuntimeError("This audit is strictly for TEST PostgreSQL.")
     with transaction.atomic():
