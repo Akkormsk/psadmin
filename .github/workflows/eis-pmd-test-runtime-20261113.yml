@@ -1,0 +1,77 @@
+name: EIS PMD test-server one-shot
+on:
+  push:
+    branches:
+      - diagnostics/eis-pmd-20261113
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+    steps:
+      - name: Check TEST container with existing runtime credentials (read only)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$SSH_HOST" || -z "$SSH_PRIVATE_KEY" || -z "$SSH_KNOWN_HOSTS" ]]; then
+            echo 'RESULT=TEST_SSH_SECRET_MISSING'
+            exit 0
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null "deploy@$SSH_HOST" 'cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python -' <<'PY'
+          import os, datetime, uuid, urllib.request, urllib.error, xml.etree.ElementTree as ET
+          token = os.getenv("EIS_TOKEN","").strip()
+          if not token:
+              print("RESULT=TEST_RUNTIME_EIS_TOKEN_MISSING")
+              raise SystemExit(0)
+          envelope=ET.Element("{http://schemas.xmlsoap.org/soap/envelope/}Envelope")
+          header=ET.SubElement(envelope,"{http://schemas.xmlsoap.org/soap/envelope/}Header")
+          ET.SubElement(header,"individualPerson_token").text=token
+          body=ET.SubElement(envelope,"{http://schemas.xmlsoap.org/soap/envelope/}Body")
+          request=ET.SubElement(body,"{http://zakupki.gov.ru/fz44/get-docs-ip/ws}getDocsByReestrNumberRequest")
+          index=ET.SubElement(request,"index")
+          ET.SubElement(index,"id").text=str(uuid.uuid4())
+          ET.SubElement(index,"createDateTime").text=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+          ET.SubElement(index,"mode").text="PROD"
+          selection=ET.SubElement(request,"selectionParams")
+          ET.SubElement(selection,"subsystemType").text="PRIZ"
+          ET.SubElement(selection,"reestrNumber").text="0372200000926000408"
+          req=urllib.request.Request("https://int.zakupki.gov.ru/eis-integration/services/getDocsIP",data=ET.tostring(envelope,encoding="utf-8",xml_declaration=True),headers={"Content-Type":"text/xml; charset=utf-8"},method="POST")
+          print("RESULT=EIS_REQUEST_ATTEMPTED")
+          try:
+              with urllib.request.urlopen(req,timeout=22) as f:
+                  raw=f.read(250000)
+                  print("HTTP_STATUS="+str(f.status))
+          except urllib.error.HTTPError as e:
+              raw=e.read(250000)
+              print("HTTP_STATUS="+str(e.code))
+          except Exception as e:
+              print("RESULT=TRANSPORT_ERROR TYPE="+type(e).__name__)
+              raise SystemExit(0)
+          try:
+              root=ET.fromstring(raw)
+          except ET.ParseError:
+              print("RESULT=NON_XML_RESPONSE")
+              raise SystemExit(0)
+          local=lambda t:t.rsplit("}",1)[-1]
+          errors=[x for x in root.iter() if local(x.tag) in ("errorInfo","Fault")]
+          if errors:
+              print("RESULT=EIS_ERROR")
+              for x in errors[:1]:
+                  fields={local(c.tag):c.text or "" for c in x}
+                  print("ERROR_CODE="+fields.get("code","missing"))
+                  print("ERROR_MESSAGE_PRESENT="+str(bool(fields.get("message") or fields.get("faultstring"))))
+          else:
+              print("RESULT=EIS_XML_SUCCESS")
+              print("ARCHIVE_COUNT="+str(sum(local(x.tag)=="archiveUrl" for x in root.iter())))
+          PY
