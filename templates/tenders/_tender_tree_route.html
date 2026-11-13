@@ -1,0 +1,14 @@
+<div class="route">
+    <strong>Маршрут #{{ route.id }}</strong>
+    <span class="badge">{{ route.status }}</span>
+    <span class="badge">{{ route.freshness }}</span>
+    {% if route.historical %}<span class="badge">исторический</span>{% endif %}
+    {% for step in route.steps %}
+    <div class="step">
+        {{ step.position }}. {{ step.name }} <span class="badge">{{ step.state|default:"—" }}</span>
+        <span class="muted">ID {{ step.id }}</span>
+        <div class="refs">{% for group, ids in step.calculations.items %}{% if ids %}<strong>{{ group }}:</strong> {% for ref in ids %}<a href="#result-{{ ref|slugify }}">{{ ref }}</a>{% endfor %}{% endif %}{% endfor %}</div>
+        {% if step.details %}<details><summary>Параметры этапа</summary><pre>{{ step.details }}</pre></details>{% endif %}
+    </div>
+    {% empty %}<p class="muted">Нет этапов.</p>{% endfor %}
+</div>

@@ -1,0 +1,31 @@
+name: Tender working tree isolated CI
+
+on:
+  push:
+    branches:
+      - feature/tender-working-tree
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      DJANGO_SECRET_KEY: ci-only
+      DB_ENGINE: sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Check settings, schema and template syntax
+        run: |
+          python -m compileall -q tenders/debug_tree.py tenders/working_items.py
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+      - name: Working tree and diagnostic page regressions
+        run: python manage.py test tenders.test_working_items tenders.test_debug_tree --noinput -v 2
