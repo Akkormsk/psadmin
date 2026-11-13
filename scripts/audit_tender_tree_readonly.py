@@ -157,6 +157,15 @@ def main():
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION READ ONLY")
+        stats = {
+            "commercial_active": TenderCommercialItem.objects.filter(status="active").count(),
+            "commercial_composite": TenderCommercialItem.objects.filter(status="active", structure="composite").count(),
+            "components_active": CalculationComponent.objects.filter(status="active").count(),
+            "shared_plans": ComponentRoutePlan.objects.filter(scope="shared").count(),
+            "operation_plans": ComponentRoutePlan.objects.filter(scope="component").count(),
+            "work_units": TenderComputeWorkUnit.objects.count(),
+        }
+        print(json.dumps({"TEST_GRAPH_COUNTS":stats}), flush=True)
         cases = pick_cases()
         errors = []
         print("READ_ONLY_TEST_AUDIT: " + str(len(cases)) + " selected cases", flush=True)
