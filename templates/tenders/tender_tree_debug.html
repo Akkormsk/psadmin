@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Диагностика дерева · {{ tender.purchase_number }}{% endblock %}
+{% block extra_head %}
+<style>
+.tree-debug{max-width:1160px;margin:24px auto 90px;padding:0 18px;color:var(--text-primary,inherit)}
+.tree-debug h1{font-size:1.55rem;margin:0 0 6px}
+.tree-debug h2{font-size:1.2rem;margin:22px 0 12px}
+.tree-debug h3{font-size:1.02rem;margin:0 0 8px}
+.tree-debug p{margin:4px 0 10px}
+.tree-debug .muted{opacity:.72;font-size:.88rem}
+.tree-debug .summary{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}
+.tree-debug .chip{background:var(--card-background,#f4f5f7);border:1px solid var(--border-color,#d8dbe0);padding:6px 10px;border-radius:10px;font-size:.9rem}
+.tree-debug .panel{background:var(--card-background,#fff);border:1px solid var(--border-color,#d8dbe0);border-radius:12px;padding:16px;margin:12px 0}
+.tree-debug .component{border-left:3px solid #7790ae;padding:10px 12px;margin:8px 0;background:var(--card-background,#f4f5f7);border-radius:6px;min-width:0}
+.tree-debug .historical{border-left-color:#aaa;opacity:.85}
+.tree-debug .route{border:1px dashed var(--border-color,#b9bec8);padding:9px;margin-top:8px;border-radius:8px}
+.tree-debug .step{padding:5px 0 5px 12px}
+.tree-debug .refs{font-size:.83rem;margin:5px 0;overflow-wrap:anywhere}
+.tree-debug .refs a{margin-right:7px}
+.tree-debug .badge{font-size:.78rem;font-weight:600;padding:2px 7px;border-radius:7px;background:var(--card-background,#e8eef5);margin-left:6px}
+.tree-debug .warn{color:#ac5a14}
+.tree-debug pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.78rem;max-height:340px;overflow:auto;border:1px solid var(--border-color,#ddd);padding:10px;border-radius:8px}
+.tree-debug details{margin:8px 0}
+.tree-debug summary{cursor:pointer;font-weight:600}
+.tree-debug .registry article{border-top:1px solid var(--border-color,#ddd);padding:10px 0}
+.tree-debug .scroll{overflow:auto}
+</style>
+{% endblock %}
+{% block content %}
+<main class="tree-debug">
+    <h1>Дерево тендера {{ tender.purchase_number }}</h1>
+    <p class="muted">Диагностика · только чтение · видна только сотрудникам с правом staff. Данные из существующих моделей, без перерасчёта.</p>
+    <div class="summary">
+        <span class="chip">Позиций: {{ items|length }}</span>
+        <span class="chip">Компонентов: {{ component_count }}</span>
+        <span class="chip">Записей расчётов: {{ registry|length }}</span>
+        <span class="chip">Проблем связей/количеств: {{ issue_count }}</span>
+        <span class="chip">Актуальность неизвестна: {{ unverified_count }}</span>
+        <span class="chip">Без владельца: {{ unattached|length }}</span>
+    </div>
+    {% for entry in items %}
+    {% with item=entry.node %}
+    <section class="panel" id="item-{{ forloop.counter }}">
+        <h2>{{ forloop.counter }}. {{ item.name }}</h2>
+        <p>Количество: {{ item.quantity|default_if_none:"неизвестно" }} {{ item.unit }} · Тип: {{ item.kind }} · <strong>Состояние: {{ item.state }}</strong></p>
+        {% if item.notice_prices %}
+        <p><strong>Цена из извещения (принадлежит исходной позиции/набору):</strong>
+        {% for price in item.notice_prices %}№{{ price.position }} — за ед. {{ price.unit_price|default_if_none:"—" }}, всего {{ price.total|default_if_none:"—" }}{% if not forloop.last %}; {% endif %}{% endfor %}</p>
+        {% endif %}
+        {% for issue in item.issues %}<p class="warn">Проблема: {{ issue }}</p>{% endfor %}
+        <div class="refs">{% for group, ids in item.calculations.items %}{% if ids %}<strong>{{ group }}:</strong> {% for ref in ids %}<a href="#result-{{ ref|slugify }}">{{ ref }}</a>{% endfor %}{% endif %}{% endfor %}</div>
+        <details><summary>ТЗ и источники</summary>
+            <strong>Требования:</strong><pre>{{ entry.requirements_json }}</pre>
+            <strong>Исходные позиции, подтверждения и ссылки:</strong><pre>{{ entry.sources_json }}</pre>
+        </details>
+        <h3>Компоненты</h3>
+        {% for row in entry.components %}
+        {% include "tenders/_tender_tree_component.html" with row=row only %}
+        {% empty %}<p class="muted">Рабочие компоненты отсутствуют.</p>{% endfor %}
+        <h3>Общие этапы набора / позиции</h3>
+        {% for route in item.shared_routes %}
+        {% include "tenders/_tender_tree_route.html" with route=route only %}
+        {% empty %}<p class="muted">Общих маршрутов нет.</p>{% endfor %}
+        {% if entry.historical_components %}
+        <details><summary>Архивные компоненты ({{ entry.historical_components|length }})</summary>
+        {% for row in entry.historical_components %}
+        {% include "tenders/_tender_tree_component.html" with row=row only %}
+        {% endfor %}
+        </details>
+        {% endif %}
+    </section>
+    {% endwith %}
+    {% empty %}
+    <p>В дереве нет позиций.</p>
+    {% endfor %}
+
+    <section class="panel registry"><h2>Реестр сохранённых результатов</h2>
+        <p class="muted">Каждый результат показан один раз. Этапы и компоненты выше содержат ссылки на него. Это не новая калькуляция.</p>
+        {% for entry in registry %}
+        <article id="result-{{ entry.ref|slugify }}">
+            <strong>{{ entry.ref }}</strong>
+            <span class="badge">{{ entry.record.status }}</span>
+            <span class="badge">{{ entry.record.freshness }}</span>
+            {% if entry.record.historical %}<span class="badge">история</span>{% endif %}
+            {% if entry.record.usable %}<span class="badge">допустим</span>{% endif %}
+            {% if entry.record.association %}<span class="warn">{{ entry.record.association }}</span>{% endif %}
+            <p class="muted">job {{ entry.record.job_id|default_if_none:"—" }} · {{ entry.record.kind }} · ID {{ entry.record.id }}</p>
+            <details><summary>Сохранённое значение / данные калькулятора</summary><pre>{{ entry.result_json }}</pre></details>
+        </article>
+        {% empty %}<p class="muted">Сохранённых результатов нет.</p>{% endfor %}
+    </section>
+    {% if unattached %}
+    <section class="panel"><h2>Результаты без текущего владельца</h2>
+        <p class="warn">Не потеряны и не прибавляются к себестоимости без явной привязки.</p>
+        {% for ref in unattached %}<a href="#result-{{ ref|slugify }}">{{ ref }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+    </section>
+    {% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% with c=row.node %}
+<div class="component {% if c.historical %}historical{% endif %}" style="margin-left:{{ row.indent_px }}px">
+    <strong>{{ c.name }}</strong>
+    <span class="badge">{{ c.state }}</span>
+    {% if c.historical %}<span class="badge">архив</span>{% endif %}
+    <p class="muted">ID {{ c.id }} · Исходный товар {{ c.source_item_id|default_if_none:"—" }} · {{ c.quantity|default_if_none:"неизвестно" }} {{ c.unit }} · Коэффициент {{ c.quantity_per_parent }}</p>
+    {% for issue in c.issues %}<p class="warn">Проблема: {{ issue }}</p>{% endfor %}
+    <div class="refs">{% for group, ids in c.calculations.items %}{% if ids %}<strong>{{ group }}:</strong> {% for ref in ids %}<a href="#result-{{ ref|slugify }}">{{ ref }}</a>{% endfor %}{% endif %}{% endfor %}</div>
+    {% for route in c.routes %}
+    {% include "tenders/_tender_tree_route.html" with route=route only %}
+    {% empty %}<p class="muted">Маршрут отсутствует.</p>{% endfor %}
+    <details><summary>Требования и происхождение</summary><pre>{{ c.requirements }}</pre><pre>{{ c.provenance }}</pre></details>
+</div>
+{% endwith %}
