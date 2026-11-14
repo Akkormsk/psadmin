@@ -1,0 +1,62 @@
+name: Refresh EIS runtime access
+on:
+  push:
+    branches: [ops/eis-token-refresh]
+    paths: ['.github/workflows/refresh-eis-access.yml']
+permissions:
+  contents: read
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update runtime key and recreate existing services only
+        env:
+          EIS_TOKEN: ${{ secrets.EIS_TOKEN }}
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+          SSH_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$EIS_TOKEN"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_HOSTS" > "$HOME/.ssh/known_hosts"
+          remote_script="/tmp/psadmin-eis-env-${GITHUB_RUN_ID}.py"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes scripts/refresh_eis_env.py "deploy@$SSH_HOST:$remote_script"
+          printf '%s' "$EIS_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" "python3 '$remote_script'"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          for directory in /home/deploy/psadmin/deploy/vds /home/deploy/psadmin-test/deploy/vds; do
+            cd "$directory"
+            compose_file=compose.yml
+            [ "$directory" = /home/deploy/psadmin-test/deploy/vds ] && compose_file=compose.test.yml
+            services=$(docker compose -f "$compose_file" ps --services --status running)
+            for service in $services; do
+              case "$service" in
+                web|discovery-collector|test-web|test-intake-worker|test-discovery-mirror)
+                  docker compose -f "$compose_file" up -d --no-build --no-deps "$service"
+                  ;;
+              esac
+            done
+          done
+          for container in psadmin-web-1 psadmin-test-test-web-1; do
+            healthy=0
+            for attempt in $(seq 1 30); do
+              state=$(docker inspect -f '{{.State.Health.Status}}' "$container")
+              if [ "$state" = healthy ]; then healthy=1; break; fi
+              sleep 3
+            done
+            test "$healthy" = 1
+            printf '%s health=healthy\n' "$container"
+          done
+          REMOTE
+          for container in psadmin-web-1 psadmin-discovery-collector-1 psadmin-test-test-web-1 psadmin-test-test-discovery-mirror-1; do
+            printf '%s' "$EIS_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+              "docker exec -i $container python -c 'import os,sys; expected=sys.stdin.read(); assert expected and os.getenv(\"EIS_TOKEN\")==expected; print(\"$container key_matches_secret=True\")'"
+          done
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+            'docker exec -i psadmin-web-1 python manage.py shell --no-imports' < scripts/check_eis_access_once.py
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" "rm -f '$remote_script'"
