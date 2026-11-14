@@ -1,0 +1,43 @@
+name: Observe discovery probe receipts
+on:
+  push:
+    branches: [ops/discovery-completion-probe]
+    paths: ['.github/workflows/observe-discovery-probe.yml']
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read filter counts and recent HTTP receipts without upstream requests
+        env:
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+          SSH_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+            'docker exec -i psadmin-web-1 python manage.py shell --no-imports' <<'PY'
+          import json
+          from collections import Counter, deque
+          from datetime import datetime, timezone
+          from django.db import connection
+          from tender_selection.discovery_feed import feed_path
+          from tender_selection.models import FilterSettings
+          from tender_selection.services import effective_laws, effective_okpd2
+          from tender_selection.filtering import parse_terms
+          with connection.cursor() as cursor:
+              cursor.execute('SET default_transaction_read_only=on')
+          settings = FilterSettings.objects.get(pk=1)
+          print(json.dumps({'days': settings.window_days, 'classifier_queries': len(effective_laws(settings))*len(effective_okpd2(settings)), 'keyword_queries': len({term[0] for term in parse_terms(settings.include_words) if term and term[0]})}))
+          since = datetime(2026, 11, 14, 9, 3, 32, tzinfo=timezone.utc).timestamp()
+          with (feed_path() / 'requests.jsonl').open() as stream:
+              events = [json.loads(line) for line in deque(stream, maxlen=5000) if line.strip()]
+          recent = [e for e in events if e['at'] >= since]
+          print(json.dumps({'since': datetime.fromtimestamp(since, timezone.utc).isoformat(), 'requests': sum(e.get('event')=='request' for e in recent), 'statuses': dict(Counter(str(e.get('status')) for e in recent if e.get('event')=='response')), 'last_events': recent[-3:]}))
+          PY
