@@ -6,6 +6,7 @@ import zipfile
 from collections import Counter, deque
 from pathlib import Path
 from xml.etree import ElementTree as ET
+from urllib.parse import urlsplit
 from django.db import connection
 from tender_selection import eis_docs, eis_source
 from tender_selection.models import Tender
@@ -31,6 +32,7 @@ tender = Tender.objects.filter(law='fz44', source='eis').order_by('-last_pulled_
 report = {'eis_soap_requests':1, 'archives_downloaded':0}
 try:
     urls = eis_docs.fetch_archive_urls(tender.purchase_number, timeout=20)
+    report['archive_host'] = urlsplit(urls[0]).hostname
     data = eis_docs.download_archive(urls[0], timeout=25)
     report['archives_downloaded'] = 1
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -45,6 +47,10 @@ try:
         report['document_links'] = len(card.get('documents', []))
 except Exception as exc:
     report['error_type'] = type(exc).__name__
+    cause = exc.__cause__
+    if cause is not None:
+        report['transport_cause'] = type(cause).__name__
+        report['transport_reason'] = str(getattr(cause, 'reason', ''))[:200]
     if isinstance(exc, eis_docs.EisDocsError):
         report['error'] = str(exc).replace(eis_docs.token(), '[redacted]')[:300]
 print(json.dumps(report,ensure_ascii=False),flush=True)
