@@ -1,0 +1,26 @@
+name: Inspect restored source access read only
+on:
+  push:
+    branches: [ops/eis-token-refresh]
+    paths: ['.github/workflows/inspect-restored-sources.yml', 'scripts/inspect_restored_sources.py']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect runtime receipts and one EIS archive without database writes
+        env:
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+          SSH_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+            'docker exec -i psadmin-web-1 python manage.py shell --no-imports' < scripts/inspect_restored_sources.py
