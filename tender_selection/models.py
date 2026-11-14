@@ -1,7 +1,8 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
+from django.utils import timezone
 
 
 class FilterSettings(models.Model):
@@ -52,8 +53,42 @@ class FilterSettings(models.Model):
         return cls.objects.get_or_create(pk=1)[0]
 
 
+class TenderQuerySet(models.QuerySet):
+    def bulk_create(self, objs, *args, **kwargs):
+        from .history import sync_tenders
+        objs = list(objs)
+        with transaction.atomic(using=self.db):
+            result = super().bulk_create(objs, *args, **kwargs)
+            ids = [obj.pk for obj in result if obj.pk is not None]
+            for obj in result:
+                if obj.pk is None:
+                    ids.extend(self.model.objects.using(self.db).filter(
+                        law=obj.law, purchase_number=obj.purchase_number,
+                    ).values_list("pk", flat=True))
+            sync_tenders(ids, using=self.db)
+        return result
+
+    def update(self, **kwargs):
+        from .history import sync_tenders
+        with transaction.atomic(using=self.db):
+            ids = list(self.values_list("pk", flat=True))
+            count = super().update(**kwargs)
+            sync_tenders(ids, using=self.db)
+        return count
+
+
 class Tender(models.Model):
     """Единая карточка тендера от импорта до архива."""
+
+    objects = TenderQuerySet.as_manager()
+
+    def save(self, *args, **kwargs):
+        from .history import sync_tenders
+        using = kwargs.get("using") or self._state.db or "default"
+        with transaction.atomic(using=using):
+            result = super().save(*args, **kwargs)
+            sync_tenders([self.pk], using=using)
+        return result
 
     @classmethod
     def assistant_read_views(cls):
@@ -225,6 +260,19 @@ class DocumentPreview(models.Model):
         return self.filename or self.url
 
 
+class ContractStatQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        from .history import sync_contract_stat
+        if set(kwargs) == {"history_id"}:
+            return super().update(**kwargs)
+        with transaction.atomic(using=self.db):
+            ids = list(self.values_list("pk", flat=True))
+            count = super().update(**kwargs)
+            for stat in self.model.objects.using(self.db).filter(pk__in=ids, own_funnel=True).iterator():
+                sync_contract_stat(stat, using=self.db)
+        return count
+
+
 class ContractStat(models.Model):
     """Одна завершённая закупка: начальная цена, итог контракта, снижение.
 
@@ -232,6 +280,13 @@ class ContractStat(models.Model):
     Используется для оценки предполагаемого снижения по похожим тендерам.
     """
 
+    objects = ContractStatQuerySet.as_manager()
+
+    history = models.ForeignKey(
+        "TenderHistory", verbose_name="Единая история тендера", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="compatible_contract_stats",
+        help_text="Связь статистики своей воронки с канонической историей; общерыночные записи не привязаны.",
+    )
     law = models.CharField("Закон", max_length=8, default="fz44", db_index=True)
     purchase_number = models.CharField("Номер закупки", max_length=40, db_index=True)
     contract_reg_num = models.CharField("Номер контракта", max_length=40, blank=True, db_index=True)
@@ -267,6 +322,14 @@ class ContractStat(models.Model):
 
     def __str__(self):
         return f"{self.purchase_number} — {self.discount_pct or '?'}%"
+
+    def save(self, *args, **kwargs):
+        from .history import sync_contract_stat
+        using = kwargs.get("using") or self._state.db or "default"
+        with transaction.atomic(using=using):
+            result = super().save(*args, **kwargs)
+            sync_contract_stat(self, using=using)
+        return result
 
 
 class StatsRun(models.Model):
@@ -320,10 +383,22 @@ class PullRun(models.Model):
         return f"{self.started_at:%d.%m.%Y %H:%M} — {self.records_received} записей"
 
 
-class IncomingTrace(models.Model):
-    """След тендера, удалённого уборкой «Входящих»: сам тендер больше не нужен, а для
-    аудита плюс/минус-слов важно, что он был и что с ним стало (скрыт словами или
-    показан, но в работу не взят)."""
+class TenderHistory(models.Model):
+    """Компактная история; расширяет прежнюю физическую таблицу IncomingTrace."""
+
+    UNKNOWN = "unknown"
+    SOURCE_CHOICES = ((UNKNOWN, "Источник не сохранился"), *Tender.SOURCE_CHOICES)
+    DECISION_SOURCES = (("", "Не зафиксировано"), ("auto", "Автоматически"), ("manual", "Вручную"))
+    REASONS = (("", "Не зафиксирована"), ("minus_words", "Минус-слова"),
+               ("plus_combination", "Не выполнено сочетание плюс-слов"),
+               ("not_profile", "Подтверждено: не наш профиль"),
+               ("expired", "Истёк срок подачи"), ("other", "Другая причина"))
+
+    source = models.CharField("Источник", max_length=12, choices=SOURCE_CHOICES, default=UNKNOWN)
+    tender = models.OneToOneField(
+        Tender, verbose_name="Рабочая карточка", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="history_record",
+    )
 
     law = models.CharField("Закон", max_length=8, default="fz44")
     purchase_number = models.CharField("Номер закупки", max_length=40)
@@ -331,16 +406,69 @@ class IncomingTrace(models.Model):
     okpd2 = models.JSONField("ОКПД2", default=list, blank=True)
     max_price = models.DecimalField("НМЦК", max_digits=16, decimal_places=2, null=True, blank=True)
     plus_hits = models.JSONField("Сработавшие плюс-слова", default=list, blank=True)
-    filtered_out = models.BooleanField("Скрыт словами", default=False)
+    minus_hits = models.JSONField("Сработавшие минус-слова", default=list, blank=True)
+    rule_version = models.CharField("Версия правил отбора", max_length=64, blank=True)
+    filter_snapshot = models.JSONField("Применённые правила отбора", default=dict, blank=True)
+    filtered_out = models.BooleanField("Скрыт словами", null=True, default=None,
+                                      help_text="Пусто — решение отбора ещё не зафиксировано; не означает, что тендер прошёл фильтр.")
     was_opened = models.BooleanField("Открывали", default=False)
-    purged_at = models.DateTimeField("Удалён", auto_now_add=True)
+    reason_code = models.CharField("Причина исключения", max_length=32, choices=REASONS, blank=True)
+    reason_text = models.TextField("Пояснение причины", blank=True)
+    decision_source = models.CharField("Кто принял решение", max_length=8, choices=DECISION_SOURCES, blank=True)
+    decision_at = models.DateTimeField("Решение принято", null=True, blank=True)
+    decision_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Автор решения", null=True,
+                                    blank=True, on_delete=models.SET_NULL, related_name="tender_history_decisions")
+    customer_inn = models.CharField("ИНН заказчика", max_length=32, blank=True)
+    currency_code = models.CharField("Валюта", max_length=8, blank=True)
+    region = models.PositiveIntegerField("Регион", null=True, blank=True)
+    stage = models.PositiveSmallIntegerField("Этап закупки у источника", null=True, blank=True)
+    purchase_type = models.CharField("Способ закупки", max_length=64, blank=True)
+    source_url = models.URLField("Ссылка на источник", max_length=500, blank=True)
+    published_at = models.DateTimeField("Опубликован", null=True, blank=True)
+    collecting_finished_at = models.DateTimeField("Окончание подачи", null=True, blank=True)
+    first_seen_at = models.DateTimeField("Впервые получен", null=True, blank=True)
+    last_seen_at = models.DateTimeField("Последнее получение", null=True, blank=True)
+    status = models.CharField("Статус карточки", max_length=16, choices=Tender.STATUS_CHOICES, blank=True)
+    review = models.CharField("Состояние рассмотрения", max_length=16, choices=Tender.REVIEW_CHOICES, blank=True, default=Tender.UNREVIEWED)
+    archived_at = models.DateTimeField("Архивирован", null=True, blank=True)
+    archived_from_stage = models.CharField("Откуда исключён", max_length=16, blank=True, db_index=True)
+    outcome_status = models.CharField("Результат", max_length=16, choices=Tender.OUTCOME_STATUS_CHOICES, blank=True)
+    bid_number = models.CharField("Номер нашей заявки", max_length=40, blank=True)
+    bid_price = models.DecimalField("Наша цена", max_digits=16, decimal_places=2, null=True, blank=True)
+    our_place = models.PositiveIntegerField("Наше место", null=True, blank=True)
+    participants_count = models.PositiveIntegerField("Количество участников", null=True, blank=True)
+    final_price = models.DecimalField("Итоговая цена", max_digits=16, decimal_places=2, null=True, blank=True)
+    discount_pct = models.DecimalField("Фактическое снижение, %", max_digits=5, decimal_places=2, null=True, blank=True)
+    contract_reg_num = models.CharField("Номер контракта", max_length=40, blank=True)
+    winner_inn = models.CharField("ИНН победителя", max_length=32, blank=True)
+    contract_date = models.DateField("Дата контракта", null=True, blank=True)
+    outcome_source = models.CharField("Источник результата", max_length=8, choices=Tender.OUTCOME_SOURCE_CHOICES, blank=True)
+    outcome_checked_at = models.DateTimeField("Результат получен", null=True, blank=True)
+    forecast_percent = models.DecimalField("Сохранённый прогноз снижения, %", max_digits=5, decimal_places=2, null=True, blank=True)
+    forecast_sample_count = models.PositiveIntegerField("Размер выборки прогноза", null=True, blank=True)
+    forecast_at = models.DateTimeField("Дата прогноза", null=True, blank=True)
+    forecast_included = models.BooleanField("Учитывать в прогнозе", default=True)
+    category = models.CharField("Категория статистики", max_length=12, blank=True)
+    shared_purchase = models.BooleanField("Совместная закупка", default=False)
+    own_funnel = models.BooleanField("Получен нашей воронкой", default=True)
+    legacy_data = models.JSONField("Сведения перенесённых старых записей", default=dict, blank=True,
+                                  help_text="Исходные текстовые факты для проверки переноса, включая дубли старых следов и контрактов.")
+    purged_at = models.DateTimeField("Запись истории создана", auto_now_add=True)
+    updated_at = models.DateTimeField("История обновлена", default=timezone.now, editable=False)
 
     class Meta:
-        verbose_name = "След удалённого тендера"
-        verbose_name_plural = "Следы удалённых тендеров"
+        db_table = "tender_selection_incomingtrace"
+        constraints = [models.UniqueConstraint(fields=["source", "law", "purchase_number"], name="uniq_tender_history_identity")]
+        indexes = [models.Index(fields=["archived_at", "source"], name="tender_history_archive_idx")]
+        verbose_name = "История тендера"
+        verbose_name_plural = "История тендеров"
 
     def __str__(self):
         return self.purchase_number
+
+
+# Совместимость существующего кода; это тот же класс и та же физическая таблица.
+IncomingTrace = TenderHistory
 
 
 class TenderDismissalFeedback(models.Model):
@@ -357,6 +485,14 @@ class TenderDismissalFeedback(models.Model):
     tender = models.ForeignKey(Tender, on_delete=models.CASCADE, related_name="dismissal_feedback")
     reason = models.CharField("Причина", max_length=16, choices=REASON_CHOICES)
     created_at = models.DateTimeField("Когда отмечено", auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        from .history import sync_feedback
+        using = kwargs.get("using") or self._state.db or "default"
+        with transaction.atomic(using=using):
+            result = super().save(*args, **kwargs)
+            sync_feedback(self, using=using)
+        return result
 
     class Meta:
         ordering = ["-created_at", "-pk"]

@@ -1,7 +1,8 @@
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
 
 from .models import (
-    ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, StatsRun, Tender,
+    ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, StatsRun, Tender, TenderHistory,
 )
 
 
@@ -67,3 +68,25 @@ class StatsRunAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(TenderHistory)
+class TenderHistoryAdmin(admin.ModelAdmin):
+    list_display = ("purchase_number", "source", "title", "max_price", "archived_from_stage",
+                    "reason_code", "decision_source", "outcome_status", "updated_at")
+    list_filter = ("source", "law", "status", "archived_from_stage", "reason_code", "decision_source", "outcome_status")
+    search_fields = ("purchase_number", "title", "customer_inn", "winner_inn", "reason_text")
+    date_hierarchy = "purged_at"
+    list_select_related = ("tender",)
+    readonly_fields = tuple(field.name for field in TenderHistory._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return super().has_delete_permission(request, obj) and (obj is None or obj.tender_id is None)
+
+    def delete_queryset(self, request, queryset):
+        if queryset.filter(tender__isnull=False).exists():
+            raise PermissionDenied("История связана с рабочей карточкой. Сначала завершите работу с ней; расчёты здесь не удаляются.")
+        super().delete_queryset(request, queryset)

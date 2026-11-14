@@ -879,20 +879,22 @@ def purge_stale() -> dict:
     traces = []
     to_archive_ids = []
     to_delete_ids = []
-    for tender in expired.only("id", "law", "purchase_number", "title", "object_info", "okpd2", "max_price", "opened_at"):
+    for tender in expired.only("id", "source", "law", "purchase_number", "title", "object_info", "okpd2", "max_price", "opened_at"):
         passes, hits = match_title(tender.title or tender.object_info, include, exclude)
         if passes:
             to_archive_ids.append(tender.id)
             continue
         to_delete_ids.append(tender.id)
         traces.append(IncomingTrace(
-            law=tender.law, purchase_number=tender.purchase_number, title=tender.title or tender.object_info,
+            source=tender.source, law=tender.law, purchase_number=tender.purchase_number, title=tender.title or tender.object_info,
             okpd2=tender.okpd2, max_price=tender.max_price, plus_hits=hits,
             filtered_out=True, was_opened=tender.opened_at is not None,
         ))
     # След — для аудита плюс/минус-слов: без него «не наши» (скрытые) тендеры исчезают бесследно.
     with transaction.atomic():
-        IncomingTrace.objects.bulk_create(traces)
+        IncomingTrace.objects.bulk_create(traces, update_conflicts=True,
+            unique_fields=["source", "law", "purchase_number"],
+            update_fields=["plus_hits", "filtered_out", "was_opened"])
         archived_incoming = Tender.objects.filter(id__in=to_archive_ids).update(
             status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
         )

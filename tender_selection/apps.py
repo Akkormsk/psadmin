@@ -7,5 +7,6 @@ class TenderSelectionConfig(AppConfig):
     verbose_name = "Тендеры"
 
     def ready(self):
+        from . import history_signals  # noqa: F401
         from . import scheduler
         scheduler.start()
