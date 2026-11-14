@@ -110,7 +110,7 @@ class TenderHistoryTests(TestCase):
 
     def test_optional_malformed_protocol_does_not_break_card_storage(self):
         tender = Tender.objects.create(purchase_number="malformed", bid_number="12", protocol={
-            "participants": ["bad row", {"id": "12", "rank": "12"}], "applications_total": "15"})
+            "participants": ["bad row", {"id": 12, "rank": "12"}], "applications_total": "15"})
         self.assertEqual(tender.history_record.our_place, 12)
         self.assertEqual(tender.history_record.participants_count, 15)
 

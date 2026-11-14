@@ -39,7 +39,7 @@ def sync_tenders(ids, *, using="default", detach=False):
                 history, _ = histories.select_for_update().get_or_create(**identity)
             from .protocols import find_ours
             participants = row["protocol__participants"]
-            participants = [p for p in participants if isinstance(p, dict) and "id" in p] if isinstance(participants, list) else []
+            participants = [{**p, "id": str(p["id"] or "")} for p in participants if isinstance(p, dict) and "id" in p] if isinstance(participants, list) else []
             ours = find_ours({"participants": participants},
                              bid_number=row["bid_number"], bid_price=None)
             rank = ours.get("rank") if ours else None
