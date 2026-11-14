@@ -250,6 +250,11 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='tenderhistory',
+            name='filtered_out',
+            field=models.BooleanField(default=None, null=True, help_text='Пусто — решение отбора ещё не зафиксировано; не означает, что тендер прошёл фильтр.', verbose_name='Скрыт словами'),
+        ),
+        migrations.AlterField(
+            model_name='tenderhistory',
             name='purged_at',
             field=models.DateTimeField(auto_now_add=True, verbose_name='Запись истории создана'),
         ),

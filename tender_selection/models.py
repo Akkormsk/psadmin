@@ -409,7 +409,8 @@ class TenderHistory(models.Model):
     minus_hits = models.JSONField("Сработавшие минус-слова", default=list, blank=True)
     rule_version = models.CharField("Версия правил отбора", max_length=64, blank=True)
     filter_snapshot = models.JSONField("Применённые правила отбора", default=dict, blank=True)
-    filtered_out = models.BooleanField("Скрыт словами", default=False)
+    filtered_out = models.BooleanField("Скрыт словами", null=True, default=None,
+                                      help_text="Пусто — решение отбора ещё не зафиксировано; не означает, что тендер прошёл фильтр.")
     was_opened = models.BooleanField("Открывали", default=False)
     reason_code = models.CharField("Причина исключения", max_length=32, choices=REASONS, blank=True)
     reason_text = models.TextField("Пояснение причины", blank=True)

@@ -74,7 +74,7 @@ def _corpus() -> dict[str, list[str]]:
             continue
         else:
             groups["incoming"].append(trace.title)
-            if not trace.filtered_out:
+            if trace.filtered_out is False:
                 groups["ignored"].append(trace.title)
     return groups
 

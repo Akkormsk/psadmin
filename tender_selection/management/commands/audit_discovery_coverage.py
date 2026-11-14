@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
+from django.db.models import F
 from django.utils import timezone
 
 from tender_selection.discovery_feed import feed_path
@@ -68,5 +69,8 @@ class Command(BaseCommand):
                 "own_stats_missing_history": ContractStat.objects.filter(own_funnel=True, history__isnull=True).count(),
                 "unlinked_history_rows": TenderHistory.objects.filter(tender__isnull=True).count(),
                 "unknown_source_rows": TenderHistory.objects.filter(source=TenderHistory.UNKNOWN).count(),
+                "linked_identity_mismatches": TenderHistory.objects.filter(tender__isnull=False).exclude(
+                    source=F("tender__source"), law=F("tender__law"), purchase_number=F("tender__purchase_number"),
+                ).count(),
             }
         self.stdout.write(json.dumps(report, ensure_ascii=False, default=str))
