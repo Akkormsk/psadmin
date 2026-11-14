@@ -72,7 +72,7 @@ class TenderQuerySet(models.QuerySet):
         from .history import sync_tenders
         with transaction.atomic(using=self.db):
             ids = list(self.values_list("pk", flat=True))
-            count = super().update(**kwargs)
+            count = super(TenderQuerySet, self.filter(pk__in=ids)).update(**kwargs)
             sync_tenders(ids, using=self.db)
         return count
 
@@ -267,7 +267,7 @@ class ContractStatQuerySet(models.QuerySet):
             return super().update(**kwargs)
         with transaction.atomic(using=self.db):
             ids = list(self.values_list("pk", flat=True))
-            count = super().update(**kwargs)
+            count = super(ContractStatQuerySet, self.filter(pk__in=ids)).update(**kwargs)
             for stat in self.model.objects.using(self.db).filter(pk__in=ids, own_funnel=True).iterator():
                 sync_contract_stat(stat, using=self.db)
         return count

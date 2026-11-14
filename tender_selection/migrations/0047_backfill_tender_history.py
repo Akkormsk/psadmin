@@ -6,7 +6,7 @@ import json
 import re
 
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db import migrations, models
+from django.db import migrations
 from django.db.models import Count
 
 
@@ -149,8 +149,4 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RunPython(forward, reverse),
-        migrations.AddConstraint(
-            model_name="tenderhistory",
-            constraint=models.UniqueConstraint(fields=["source", "law", "purchase_number"], name="uniq_tender_history_identity"),
-        ),
     ]
