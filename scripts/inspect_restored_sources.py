@@ -31,7 +31,8 @@ print(json.dumps({'proxy_protocols':sorted(getproxies().keys())}))
 tender = Tender.objects.filter(law='fz44', source='eis').order_by('-last_pulled_at').first()
 report = {'eis_soap_requests':1, 'archives_downloaded':0}
 try:
-    urls = eis_docs.fetch_archive_urls(tender.purchase_number, timeout=20)
+    response = ET.fromstring(eis_docs._soap_call(tender.purchase_number, timeout=20))
+    urls = [(node.text or '').strip() for node in response.iter() if node.tag.rsplit('}', 1)[-1] == 'archiveUrl' and node.text]
     report['archive_host'] = urlsplit(urls[0]).hostname
     data = eis_docs.download_archive(urls[0], timeout=25)
     report['archives_downloaded'] = 1
