@@ -32,6 +32,11 @@ if installed:
     storage.update(working_cards_missing_history=Tender.objects.filter(history_record__isnull=True).count(),
                    own_stats_missing_history=Stat.objects.filter(own_funnel=True, history__isnull=True).count(),
                    unknown_source_rows=History.objects.filter(source="unknown").count())
+    retained = {"incoming_traces": 0, "contract_stats": 0, "dismissal_feedback": 0}
+    for payload in History.objects.values_list("legacy_data", flat=True).iterator(chunk_size=500):
+        for key in retained:
+            retained[key] += len(payload.get(key, []))
+    storage["retained_source_rows"] = retained
 print(json.dumps({"storage_history": storage}, ensure_ascii=False))
 if "audit_discovery_coverage" in get_commands():
     stream = io.StringIO()
