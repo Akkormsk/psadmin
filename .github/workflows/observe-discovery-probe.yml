@@ -30,11 +30,18 @@ jobs:
           from tender_selection.discovery_feed import feed_path
           from tender_selection.models import FilterSettings
           from tender_selection.services import effective_laws, effective_okpd2
+          from tender_selection.services import build_params
           from tender_selection.filtering import parse_terms
           with connection.cursor() as cursor:
               cursor.execute('SET default_transaction_read_only=on')
           settings = FilterSettings.objects.get(pk=1)
           print(json.dumps({'days': settings.window_days, 'classifier_queries': len(effective_laws(settings))*len(effective_okpd2(settings)), 'keyword_queries': len({term[0] for term in parse_terms(settings.include_words) if term and term[0]})}))
+          snapshot = datetime.now(timezone.utc).replace(microsecond=0)
+          bases = {law: build_params(days=settings.window_days, stage=1, min_price=settings.min_price, regions=settings.regions, law=law, now=snapshot) for law in effective_laws(settings)}
+          jobs = [('classifier', law, {**base, 'classifier': [code]}) for code in effective_okpd2(settings) for law, base in bases.items()]
+          base = build_params(days=settings.window_days, stage=1, min_price=settings.min_price, regions=settings.regions, law='fz44', now=snapshot)
+          jobs += [('keyword', 'fz44', {**base, 'object_info': word}) for word in dict.fromkeys(term[0] for term in parse_terms(settings.include_words) if term and term[0])]
+          print(json.dumps({'probe_jobs': jobs, 'snapshot': snapshot.isoformat()}, ensure_ascii=False))
           since = datetime(2026, 11, 14, 9, 3, 32, tzinfo=timezone.utc).timestamp()
           with (feed_path() / 'requests.jsonl').open() as stream:
               events = [json.loads(line) for line in deque(stream, maxlen=5000) if line.strip()]
