@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
+from django.db.models import QuerySet
 from django.db.migrations.executor import MigrationExecutor
 from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.utils import timezone
@@ -44,6 +45,24 @@ class TenderHistoryTests(TestCase):
         TenderHistory.objects.create(source=Tender.EAT, purchase_number="same")
         with self.assertRaises(IntegrityError), transaction.atomic():
             TenderHistory.objects.create(source=Tender.EIS, purchase_number="same")
+
+    def test_bulk_update_cannot_change_a_late_insert_without_updating_its_history(self):
+        initial = Tender.objects.create(purchase_number="initial")
+        original_update = QuerySet.update
+        inserted = []
+
+        def insert_before_write(queryset, **kwargs):
+            if queryset.model is Tender and not inserted:
+                inserted.append(Tender.objects.create(purchase_number="late"))
+            return original_update(queryset, **kwargs)
+
+        with patch.object(QuerySet, "update", new=insert_before_write):
+            count = Tender.objects.filter(status=Tender.NEW).update(status=Tender.DISMISSED)
+        self.assertEqual(count, 1)
+        self.assertEqual(TenderHistory.objects.get(tender=initial).status, Tender.DISMISSED)
+        late = Tender.objects.get(pk=inserted[0].pk)
+        self.assertEqual(late.status, Tender.NEW)
+        self.assertEqual(late.history_record.status, late.status)
 
     def test_archive_and_restore_update_existing_history_without_new_filtering(self):
         tender = Tender.objects.create(purchase_number="archive")
@@ -146,7 +165,7 @@ class TenderHistoryTests(TestCase):
 
 class TenderHistoryMigrationTests(TransactionTestCase):
     migrate_from = ("tender_selection", "0044_discoverycursor")
-    migrate_to = ("tender_selection", "0047_backfill_tender_history")
+    migrate_to = ("tender_selection", "0048_tender_history_identity")
 
     def setUp(self):
         executor = MigrationExecutor(connection)
