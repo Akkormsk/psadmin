@@ -9,6 +9,7 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import QuerySet
 from django.db.migrations.executor import MigrationExecutor
 from django.test import RequestFactory, TestCase, TransactionTestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from .admin import TenderHistoryAdmin
@@ -151,6 +152,11 @@ class TenderHistoryTests(TestCase):
         tender.delete()
         history.refresh_from_db()
         self.assertTrue(model_admin.has_delete_permission(request, history))
+        self.client.force_login(user)
+        response = self.client.get(reverse("admin:tender_selection_tenderhistory_changelist"), {"q": "protected"})
+        self.assertContains(response, "protected")
+        response = self.client.get(reverse("admin:tender_selection_tenderhistory_change", args=[history.pk]))
+        self.assertEqual(response.status_code, 200)
 
     def test_read_only_coverage_audit_reports_history_completeness(self):
         Tender.objects.create(purchase_number="audited")
