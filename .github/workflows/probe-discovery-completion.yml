@@ -1,0 +1,26 @@
+name: Probe primary discovery completion
+on:
+  push:
+    branches: [ops/discovery-completion-probe]
+    paths: ['.github/workflows/probe-discovery-completion.yml', 'scripts/probe_discovery_completion.py']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read primary lists with shared quota and no ingestion
+        env:
+          SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+          SSH_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" \
+            'docker exec -i psadmin-web-1 python manage.py shell --no-imports' < scripts/probe_discovery_completion.py
