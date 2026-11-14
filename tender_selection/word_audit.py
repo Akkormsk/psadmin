@@ -59,10 +59,23 @@ def _corpus() -> dict[str, list[str]]:
     profile_ids = [pk for pk, reason in feedback_reasons.items() if reason == TenderDismissalFeedback.NOT_PROFILE]
     for tender in Tender.objects.filter(pk__in=profile_ids).only("title", "object_info"):
         groups["dismissed"].append(tender.title or tender.object_info or "")
-    for trace in IncomingTrace.objects.only("title", "filtered_out").order_by("-purged_at"):
-        groups["incoming"].append(trace.title)
-        if not trace.filtered_out:
-            groups["ignored"].append(trace.title)
+    # Linked cards were already counted above; history is their surviving replacement, not a second sample.
+    for trace in IncomingTrace.objects.filter(tender__isnull=True).only(
+        "title", "filtered_out", "review", "reason_code", "decision_source",
+    ).order_by("-purged_at"):
+        if trace.review and trace.review != Tender.UNREVIEWED:
+            groups["taken"].append(trace.title)
+        elif trace.decision_source == "manual" and trace.reason_code == TenderDismissalFeedback.NOT_PROFILE:
+            groups["dismissed"].append(trace.title)
+        elif trace.decision_source == "manual" and trace.reason_code == TenderDismissalFeedback.OTHER:
+            continue
+        elif not trace.review:
+            # An old contract without a surviving card does not prove a manual refusal or an ignored incoming.
+            continue
+        else:
+            groups["incoming"].append(trace.title)
+            if not trace.filtered_out:
+                groups["ignored"].append(trace.title)
     return groups
 
 

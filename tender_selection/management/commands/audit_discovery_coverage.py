@@ -8,7 +8,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from tender_selection.discovery_feed import feed_path
-from tender_selection.models import PullRun, Tender
+from tender_selection.models import ContractStat, PullRun, Tender, TenderHistory
 
 
 class Command(BaseCommand):
@@ -62,4 +62,11 @@ class Command(BaseCommand):
                     report["feed_missing_locally"] += int(local is None)
                     report["feed_different_locally"] += int(local is not None and local != record)
             report["completed_windows"] = [r["params"].get("windows") for r in discovery if r["ok"] and r["params"].get("complete")]
+            report["tender_history"] = {
+                "rows": TenderHistory.objects.count(),
+                "working_cards_missing_history": Tender.objects.filter(history_record__isnull=True).count(),
+                "own_stats_missing_history": ContractStat.objects.filter(own_funnel=True, history__isnull=True).count(),
+                "unlinked_history_rows": TenderHistory.objects.filter(tender__isnull=True).count(),
+                "unknown_source_rows": TenderHistory.objects.filter(source=TenderHistory.UNKNOWN).count(),
+            }
         self.stdout.write(json.dumps(report, ensure_ascii=False, default=str))

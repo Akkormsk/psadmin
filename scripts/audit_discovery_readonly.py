@@ -7,11 +7,32 @@ from datetime import timedelta
 from django.core.management import call_command, get_commands
 from django.db import connection
 from django.db.models import Sum
+from django.db.models import Count
+from django.apps import apps
 from django.utils import timezone
 from tender_selection.models import PullRun, FilterSettings, Tender
 
 with connection.cursor() as cursor:
     cursor.execute("SET default_transaction_read_only = on")
+try:
+    History = apps.get_model("tender_selection", "TenderHistory")
+    installed = True
+except LookupError:
+    History = apps.get_model("tender_selection", "IncomingTrace")
+    installed = False
+Stat = apps.get_model("tender_selection", "ContractStat")
+identity = ["source", "law", "purchase_number"] if installed else ["law", "purchase_number"]
+storage = {
+    "schema_installed": installed, "working_cards": Tender.objects.count(),
+    "history_rows": History.objects.count(),
+    "duplicate_identity_groups": History.objects.values(*identity).annotate(n=Count("pk")).filter(n__gt=1).count(),
+    "own_contract_stats": Stat.objects.filter(own_funnel=True).count(),
+}
+if installed:
+    storage.update(working_cards_missing_history=Tender.objects.filter(history_record__isnull=True).count(),
+                   own_stats_missing_history=Stat.objects.filter(own_funnel=True, history__isnull=True).count(),
+                   unknown_source_rows=History.objects.filter(source="unknown").count())
+print(json.dumps({"storage_history": storage}, ensure_ascii=False))
 if "audit_discovery_coverage" in get_commands():
     stream = io.StringIO()
     call_command("audit_discovery_coverage", hours=24, stdout=stream)

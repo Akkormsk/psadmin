@@ -32,7 +32,7 @@ class IncomingTraceTests(TestCase):
         self.assertEqual(shown.status, Tender.DISMISSED)
         self.assertIsNotNone(shown.archived_at)
         self.assertEqual(Tender.objects.get(purchase_number="2").status, Tender.DISMISSED)
-        self.assertFalse(IncomingTrace.objects.filter(purchase_number="1").exists())
+        self.assertFalse(IncomingTrace.objects.get(purchase_number="1").filtered_out)
         trace = IncomingTrace.objects.get(purchase_number="2")
         self.assertTrue(trace.filtered_out)
 
