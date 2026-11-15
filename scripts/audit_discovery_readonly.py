@@ -115,10 +115,31 @@ if directory:
 
 if hasattr(FilterSettings, "primary_filters"):
     history = apps.get_model("tender_selection", "TenderHistory")
-    latest_runs = list(PullRun.objects.order_by("-pk").values("started_at", "finished_at", "ok", "requests_made", "records_received", "created_count", "updated_count", "error", "params")[:1])
+    latest_runs = list(PullRun.objects.filter(params__has_key="jobs_total").order_by("-pk").values("started_at", "finished_at", "ok", "requests_made", "records_received", "created_count", "updated_count", "error", "params")[:1])
     for entry in latest_runs:
         params = entry.pop("params")
         entry["coverage"] = {key: params.get(key) for key in ("jobs_total", "jobs_completed", "complete", "filter_config_version")}
+        entry["successful_pages"] = entry.pop("requests_made")
+        attempts, statuses = 0, {}
+        if directory:
+            receipts = Path(directory) / "requests.jsonl"
+            if receipts.is_file():
+                start = entry["started_at"].timestamp()
+                end = entry["finished_at"].timestamp() if entry["finished_at"] else timezone.now().timestamp()
+                for line in receipts.open():
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not start <= event.get("at", 0) <= end:
+                        continue
+                    if event.get("event") == "request":
+                        attempts += 1
+                    elif event.get("event") == "response":
+                        status = str(event.get("status"))
+                        statuses[status] = statuses.get(status, 0) + 1
+        entry["http_attempts_this_run"] = attempts
+        entry["http_statuses_this_run"] = statuses
     print(json.dumps({"secondary_intake": {
         "decided": history.objects.filter(filter_snapshot__has_key="intake").count(),
         "working_without_decision": Tender.objects.exclude(history_record__filter_snapshot__has_key="intake").count(),
