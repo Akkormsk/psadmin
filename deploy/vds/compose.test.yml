@@ -9,7 +9,7 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: ../../../psadmin-test.env
     environment:
-      GOSPLAN_API_DISABLED: "0"
+      GOSPLAN_API_DISABLED: "1"
       TENDER_DISCOVERY_ROLE: standalone
       TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-test-discovery
       GOSPLAN_QUOTA_DIR: /var/lib/psadmin-shared-quota
@@ -50,7 +50,7 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: ../../../psadmin-test.env
     environment:
-      GOSPLAN_API_DISABLED: "0"
+      GOSPLAN_API_DISABLED: "1"
       TENDER_DISCOVERY_ROLE: standalone
       TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-test-discovery
       GOSPLAN_QUOTA_DIR: /var/lib/psadmin-shared-quota
@@ -78,7 +78,7 @@ services:
     image: psadmin-test-test-web
     env_file: ../../../psadmin-test.env
     environment:
-      GOSPLAN_API_DISABLED: "0"
+      GOSPLAN_API_DISABLED: "1"
       TENDER_DISCOVERY_ROLE: standalone
       TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-test-discovery
       GOSPLAN_QUOTA_DIR: /var/lib/psadmin-shared-quota

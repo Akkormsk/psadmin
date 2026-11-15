@@ -10,7 +10,7 @@
       <div class="panel-header"><h2 class="panel-title">1. Основной фильтр — поиск</h2>
         <button type="submit" class="button-success">Сохранить</button></div>
       <p class="settings-description">Между условиями — «И», между плюс-словами — «ИЛИ». Пустые необязательные поля не ограничивают поиск.</p>
-      {% if discovery_mirror %}<p class="filter-notice">Копирование из PROD включено. Первичный фильтр этого сервера не управляет потоком.</p>{% else %}<p class="filter-notice">Первичный фильтр применяется в запросе к ГосПлану. Вторичный отсев выполняется один раз при поступлении; принятые карточки повторно по этим условиям не скрываются.</p>{% endif %}
+      {% if discovery_paused %}<p class="filter-notice">Поиск ГосПлана приостановлен: текущие условия требуют нескольких запросов. Настройки и полученные карточки сохранены.</p>{% elif discovery_mirror %}<p class="filter-notice">Копирование из PROD включено. Первичный фильтр этого сервера не управляет потоком.</p>{% else %}<p class="filter-notice">Первичный фильтр применяется в запросе к ГосПлану. Вторичный отсев выполняется один раз при поступлении; принятые карточки повторно по этим условиям не скрываются.</p>{% endif %}
       <div class="settings-grid settings-grid--two filter-section">
         <fieldset class="filter-choice-group">
           <legend>Источник закупок</legend>

@@ -77,7 +77,7 @@ def _get(path: str, params: dict):
     if path not in {"/fz44/purchases", "/fz223/purchases"}:
         raise GosplanError("ГосПлан используется только для первичного поиска закупок.")
     if os.getenv("GOSPLAN_API_DISABLED") == "1":
-        raise GosplanError("ГосПлан на TEST временно отключён: лимит IP зарезервирован для PROD.")
+        raise GosplanError("Поиск ГосПлана на TEST приостановлен настройкой GOSPLAN_API_DISABLED.")
     query = urlencode([(k, v) for k, v in params.items() if v is not None], doseq=True)
     url = f"{base_url()}{path}?{query}"
     headers = {"Accept": "application/json"}

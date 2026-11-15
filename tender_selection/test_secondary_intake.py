@@ -122,3 +122,11 @@ class SecondaryIntakeTests(TestCase):
         tender = self.pull(record)
         services.dismiss_tender(tender)
         self.assertEqual(self.pull(self.record()).status, Tender.DISMISSED)
+
+    def test_disabled_provider_is_paused_without_any_search_requests(self):
+        import os
+        with patch.dict(os.environ, {'GOSPLAN_API_DISABLED':'1'}), patch.object(gosplan,'iter_purchases') as fetch:
+            run = services.run_pull()
+        fetch.assert_not_called()
+        self.assertTrue(run.params['paused'])
+        self.assertFalse(Tender.objects.exists())
