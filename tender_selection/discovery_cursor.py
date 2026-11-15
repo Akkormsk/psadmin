@@ -5,13 +5,13 @@ import json
 from .models import DiscoveryCursor
 
 
-def prepare(law, params, days):
+def prepare(law, params, days, *, filter_version=None, through_at=None):
     identity = {key: value for key, value in params.items() if key not in {"published_after", "published_before"}}
-    key = hashlib.sha256(json.dumps({"law": law, "days": days, "filter": identity}, sort_keys=True).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps({"law": law, "days": days, "filter": identity, "version": filter_version}, sort_keys=True).encode()).hexdigest()
     cursor = DiscoveryCursor.objects.filter(query_key=key).first()
-    if cursor:
+    if cursor and "updated_before" not in params and "updated_after" not in params:
         # Updates catch late arrivals with an older publication date as well.
-        params = {**params, "updated_after": cursor.through_at.isoformat(), "updated_before": params["published_before"]}
+        params = {**params, "updated_after": cursor.through_at.isoformat(), "updated_before": (through_at.isoformat() if through_at else params["published_before"])}
     return key, params
 
 
