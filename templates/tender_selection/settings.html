@@ -7,10 +7,10 @@
   <form method="post" class="content-stack">
     {% csrf_token %}<input type="hidden" name="settings_version" value="2">
     <section class="panel">
-      <div class="panel-header"><h2 class="panel-title">1. Основной фильтр — поиск</h2>
+      <div class="panel-header"><h2 class="panel-title">1. Фильтр получения — ГосПлан</h2>
         <button type="submit" class="button-success">Сохранить</button></div>
       <p class="settings-description">Между условиями — «И», между плюс-словами — «ИЛИ». Пустые необязательные поля не ограничивают поиск.</p>
-      {% if discovery_paused %}<p class="filter-notice">Поиск ГосПлана приостановлен: текущие условия требуют нескольких запросов. Настройки и полученные карточки сохранены.</p>{% elif discovery_mirror %}<p class="filter-notice">Копирование из PROD включено. Первичный фильтр этого сервера не управляет потоком.</p>{% else %}<p class="filter-notice">Первичный фильтр применяется в запросе к ГосПлану. Вторичный отсев выполняется один раз при поступлении; принятые карточки повторно по этим условиям не скрываются.</p>{% endif %}
+      {% if discovery_paused %}<p class="filter-notice">Постоянный сбор приостановлен. Контрольный обход запускается отдельно; настройки и карточки сохранены.</p>{% elif discovery_mirror %}<p class="filter-notice">Копирование из PROD включено. Первичный фильтр этого сервера не управляет потоком.</p>{% else %}<p class="filter-notice">Первичный фильтр применяется в запросе к ГосПлану. Вторичный отсев выполняется один раз при поступлении; принятые карточки повторно по этим условиям не скрываются.</p>{% endif %}
       <div class="settings-grid settings-grid--two filter-section">
         <fieldset class="filter-choice-group">
           <legend>Источник закупок</legend>
@@ -32,8 +32,10 @@
         <div class="form-group">{{ primary_form.max_price_le.label_tag }}{{ primary_form.max_price_le }}{{ primary_form.max_price_le.errors }}</div>
       </div>
       <div class="form-group"><label for="include_words">Плюс-слова — хотя бы одно</label>
-        <textarea id="include_words" name="include_words" rows="6" placeholder="Сувенир, полиграф, подароч…">{{ form_values.include_words }}</textarea>
-        <p class="settings-description filter-hint">Через запятую или с новой строки. Поиск в названии, без учёта регистра и «е/ё». «Слово+слово» — обе части в названии закупки.</p></div>
+        <textarea id="include_words" name="include_words" rows="6" placeholder="сувенир, брендир, мерч…">{{ form_values.include_words }}</textarea>
+        <p class="settings-description filter-hint">Поиск только в названии закупки. Корень «брендир» найдёт «брендированная». Запятая или новая строка — ИЛИ; «корпоративн+продукц» — обе части в любом порядке. Регистр и «е/ё» не важны. Символы * и | не являются командами поиска — вводите обычный текст.</p></div>
+      {% for plan in search_plan %}<p class="settings-description filter-hint">{% if plan.law == 'fz44' %}44-ФЗ{% else %}223-ФЗ{% endif %}: групп поиска — {{ plan.groups }}, длины строк — {{ plan.lengths }} из 128 символов. Каждая страница группы расходует отдельный запрос; общий темп ограничен для всех групп вместе.</p>{% endfor %}
+      {% if latest_census %}<p class="filter-notice">Последняя проверка: {{ latest_census.params.unique_records }} уникальных закупок; {{ latest_census.params.census.http_attempts }} обращений, {{ latest_census.params.census.http_errors }} ошибок. {% if latest_census.ok and latest_census.params.complete %}Все поиски завершены.{% else %}Обход не завершён.{% endif %} Это выдача ГосПлана по выбранным условиям, не общий объём ЕИС.</p>{% endif %}
       <fieldset class="filter-choice-group filter-section">
         <legend>Этап закупки</legend>
         <div class="filter-options filter-options--stages">{% for option in primary_form.stage %}<label class="filter-choice">{{ option.tag }}<span>{{ option.choice_label }}</span></label>{% endfor %}</div>
@@ -62,10 +64,10 @@
       </details>
     </section>
     <section class="panel">
-      <div class="panel-header"><h2 class="panel-title">2. Вторичный фильтр — отбор во «Входящие»</h2><a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a></div>
+      <div class="panel-header"><h2 class="panel-title">2. Фильтр отсева — в архив</h2><a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a></div>
       <div class="form-group"><label for="exclude_words">Минус-слова — исключить при совпадении</label><textarea id="exclude_words" name="exclude_words" rows="5" placeholder="Слова и сочетания, которые не подходят">{{ form_values.exclude_words }}</textarea>
-        <p class="settings-description filter-hint">Через запятую или с новой строки. «Ремонт+дорог» — обе части в названии.</p></div>
-      <label class="filter-choice"><input type="checkbox" name="profile_triage_enabled" value="1" {% if profile_enabled %}checked{% endif %}><span>Проверять соответствие профилю<small>Рекомендация для оценки; не скрывает уже принятые карточки</small></span></label>
+        <p class="settings-description filter-hint">Через запятую или с новой строки — любое совпадение. «Ремонт+дорог» — обе части в любом порядке; фраза с пробелами — подряд. Применяется один раз при поступлении: карточка сохраняется в архиве с причиной. Принятые и восстановленные карточки повторно не отсеиваются.</p></div>
+
     </section>
     <div class="filter-footer"><button type="submit" class="button-success">Сохранить настройки</button></div>
   </form>

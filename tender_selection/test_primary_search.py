@@ -114,8 +114,8 @@ class PrimarySearchTests(TestCase):
         admin = get_user_model().objects.create_superuser('primary-admin', 'p@example.test', 'pass')
         self.client.force_login(admin)
         response = self.client.get(url)
-        self.assertContains(response, 'Основной фильтр')
-        self.assertContains(response, 'Вторичный фильтр')
+        self.assertContains(response, 'Фильтр получения')
+        self.assertContains(response, 'Фильтр отсева')
         payload = {'settings_version': '2', 'source': 'eis', 'law': 'fz44', 'min_price': '300000',
                    'include_words': 'сувенир', 'okpd2_codes': '', 'max_price_le': '2000000'}
         self.assertEqual(self.client.post(url, payload).status_code, 302)
