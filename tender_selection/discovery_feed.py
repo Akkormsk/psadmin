@@ -22,11 +22,10 @@ def start_discovery_pull():
         return False
     def collect():
         from django.db import close_old_connections
-        from .services import run_pull, run_keyword_pull
+        from .services import run_pull
         close_old_connections()
         try:
             run_pull()
-            run_keyword_pull()
         except Exception:
             logging.getLogger(__name__).exception("Discovery background collection failed")
         finally:

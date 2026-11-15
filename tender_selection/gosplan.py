@@ -11,6 +11,7 @@ import os
 import re
 import time
 import itertools
+from datetime import datetime, timedelta
 from typing import Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -205,6 +206,7 @@ def iter_purchases(
     max_requests: int | None = None,
     throttle: float = THROTTLE_SECONDS,
     on_request: Callable[[int, int], None] | None = None,
+    _budget=None,
 ) -> Iterator[dict]:
     """Листает /fz44/purchases по ``skip`` до пустой страницы или ``max_requests``.
 
@@ -212,14 +214,29 @@ def iter_purchases(
     При GosplanError делает один повтор через 60 секунд. ``on_request(n, got)`` вызывается
     после каждого успешного запроса — для журналирования.
     """
+    if _budget is None:
+        _budget = [0]
+    # Live API rejects publication windows >90 days. Partition the entire
+    # requested range, with overlap at boundaries; never shorten user scope.
+    if params.get("published_after") and params.get("published_before"):
+        start = datetime.fromisoformat(params["published_after"])
+        end = datetime.fromisoformat(params["published_before"])
+        if end - start > timedelta(days=90):
+            while start < end:
+                upper = min(start + timedelta(days=90), end)
+                yield from iter_purchases(params={**params, "published_after": start.isoformat(),
+                                                  "published_before": upper.isoformat()},
+                    law=law, page_size=page_size, max_requests=max_requests,
+                    throttle=throttle, on_request=on_request, _budget=_budget)
+                start = upper
+            return
     skip = 0
     for request_no in itertools.count(1):
-        if max_requests is not None and request_no > max_requests:
+        if max_requests is not None and _budget[0] >= max_requests:
             raise GosplanError("Обход прерван явно заданным бюджетом; полнота не подтверждена")
         if skip > 1000:
             # The upstream API rejects larger offsets. Split fixed date windows,
             # overlapping the boundary to avoid losing identical timestamps.
-            from datetime import datetime
             start_key, end_key = ("updated_after", "updated_before") if "updated_after" in params else ("published_after", "published_before")
             try:
                 start = datetime.fromisoformat(params[start_key])
@@ -232,11 +249,12 @@ def iter_purchases(
             for lower, upper in ((start, middle), (middle, end)):
                 yield from iter_purchases(params={**params, start_key: lower.isoformat(), end_key: upper.isoformat()},
                                           law=law, page_size=page_size, max_requests=max_requests,
-                                          throttle=throttle, on_request=on_request)
+                                          throttle=throttle, on_request=on_request, _budget=_budget)
             return
         if request_no > 1:
             time.sleep(throttle)
         page_params = {**params, "limit": page_size, "skip": skip}
+        _budget[0] += 1
         page = _fetch_with_retry(page_params, law)
         if on_request:
             on_request(request_no, len(page))

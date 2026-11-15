@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
+from .primary_search_defaults import default_primary_filters
 
 
 class FilterSettings(models.Model):
@@ -18,6 +19,7 @@ class FilterSettings(models.Model):
         help_text="Через запятую или с новой строки. Если в названии есть хотя бы одно — тендер скрывается.",
     )
     min_price = models.DecimalField("Минимальная НМЦК, ₽", max_digits=16, decimal_places=2, default=Decimal("300000"))
+    primary_filters = models.JSONField("Первичные фильтры ГосПлана", default=default_primary_filters, blank=True, help_text="Редактируемые условия поиска; пустые поля не ограничивают выдачу.")
     window_days = models.PositiveSmallIntegerField("Окно по дате публикации, дней", default=7)
     risk_warning_days = models.PositiveSmallIntegerField("Риск: короткий срок, дней", default=14)
     risk_critical_days = models.PositiveSmallIntegerField("Риск: критический срок, дней", default=7)

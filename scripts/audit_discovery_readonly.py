@@ -38,6 +38,23 @@ if installed:
             retained[key] += len(payload.get(key, []))
     storage["retained_source_rows"] = retained
 print(json.dumps({"storage_history": storage}, ensure_ascii=False))
+if hasattr(FilterSettings, "primary_filters"):
+    from tender_selection.primary_search import build_primary_params, split_primary_requests
+    from tender_selection.filtering import parse_terms
+    from tender_selection.services import effective_laws
+    selection = FilterSettings.objects.filter(pk=1).first()
+    if selection:
+        try:
+            groups = {law: len(split_primary_requests(build_primary_params(selection, law, timezone.now()),
+                                                     selection.include_words, law))
+                      for law in effective_laws(selection)}
+            print(json.dumps({"primary_search_plan": {"valid": True,
+                "keyword_entries": len(parse_terms(selection.include_words)), "or_groups_by_law": groups,
+                "selected_classifiers": len(selection.okpd2_codes or []),
+                "jobs": sum(groups.values()) * max(1, len(selection.okpd2_codes or [])),
+                "role": os.getenv("TENDER_DISCOVERY_ROLE"), "upstream_called": False}}, ensure_ascii=False))
+        except ValueError as exc:
+            print(json.dumps({"primary_search_plan": {"valid": False, "error": str(exc), "upstream_called": False}}, ensure_ascii=False))
 if "audit_discovery_coverage" in get_commands():
     stream = io.StringIO()
     call_command("audit_discovery_coverage", hours=24, stdout=stream)

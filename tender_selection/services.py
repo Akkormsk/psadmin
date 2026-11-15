@@ -270,7 +270,7 @@ def _risk_eligible(tender) -> bool:
 def run_pull(
     *,
     days: int | None = None,
-    stage: int | None = 1,
+    stage: int | str | None = "configured",
     min_price=None,
     classifiers=None,
     classifier_batches=None,
@@ -281,20 +281,19 @@ def run_pull(
     settings = FilterSettings.load()
     if Tender.EIS not in effective_sources(settings):
         return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True, params={"source": "eis", "disabled": True})
-    if days is None:
-        days = settings.window_days
+    from .primary_search import build_primary_params, split_primary_requests
     if min_price is None:
         min_price = settings.min_price
     if regions is None:
         regions = settings.regions
     laws = laws or effective_laws(settings)
-
     if classifier_batches:
         batches = [[code] for batch in classifier_batches for code in batch]
-    elif classifiers:
+    elif classifiers is not None:
         batches = _chunk(classifiers, 1)
     else:
-        batches = _chunk(effective_okpd2(settings), 1)
+        batches = _chunk(settings.okpd2_codes or [], 1)
+    batches = batches or [[]]
 
     run = PullRun.objects.create(
         started_at=timezone.now(),
@@ -311,20 +310,37 @@ def run_pull(
     triage_ids = []
     v2_candidate_ids = []
     seen: set[str] = set()
-    bases = {law: build_params(days=days, stage=stage, min_price=min_price, regions=regions, law=law, now=run.started_at) for law in laws}
+    bases = {law: build_primary_params(settings, law, run.started_at) for law in laws}
+    for base in bases.values():
+        base["max_price_ge"] = str(min_price)
+        if regions:
+            base["region"] = [int(r) for r in regions]
+        else:
+            base.pop("region", None)
+        if days is not None:
+            base["published_after"] = (run.started_at - timedelta(days=days)).isoformat()
+        if stage != "configured":
+            if stage is None:
+                base.pop("stage", None)
+            else:
+                base["stage"] = [str(stage)]
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
-    jobs = [(law, batch) for batch in batches for law in laws]
+    jobs = [(law, batch, base) for batch in batches for law in laws
+            for base in split_primary_requests(bases[law], settings.include_words, law)]
     run.params.update({"windows": bases, "queries": [], "jobs_total": len(jobs), "jobs_completed": 0, "complete": False})
     run.save(update_fields=["params"])
     try:
-        for step, (law, batch) in enumerate(jobs):
+        for step, (law, batch, base) in enumerate(jobs):
             remaining = None if max_requests is None else max_requests - stats["requests"]
             if remaining is not None and remaining <= 0:
                 raise gosplan.GosplanError("Бюджет обхода исчерпан; полнота не подтверждена")
             if step and stats["requests"]:
                 time.sleep(gosplan.THROTTLE_SECONDS)
-            params = {**bases[law], "classifier": batch}
-            cursor_key, params = prepare_discovery(law, params, days)
+            params = {**base}
+            if batch:
+                params["classifier"] = batch
+            cursor_key, params = prepare_discovery(law, params, days,
+                filter_version=settings.primary_filters, through_at=run.started_at)
             for record in gosplan.iter_purchases(
                 params=params, law=law, max_requests=remaining, on_request=_on_request
             ):
@@ -381,118 +397,9 @@ def run_keyword_pull(
     *, days=None, min_price=None, regions=None, max_requests: int | None = None,
     per_word_requests: int | None = None, pause: float = None,
 ) -> PullRun:
-    """Дополнительный обход — не по категориям ОКПД2 (`classifier` у Госплана
-    молча не находит часть кодов, см. CATEGORY_GROUPS, а часть тендеров и
-    вовсе без категории), а по тем же плюс-словам, что уже используются для
-    показа/скрытия «Входящих» (`object_info` — текстовый поиск Госплана по
-    названию, отдельный параметр от `classifier`).
-
-    Слов обычно на порядок больше, чем укладывается в один цикл, — курсор
-    (`FilterSettings.keyword_pull_cursor`) просто запоминает, на каком слове
-    остановились, и следующий вызов продолжает оттуда по кругу. Тендер висит
-    днями, так что полный круг за несколько циклов — не проблема.
-
-    ``max_requests`` здесь — сколько слов пробуем за один вызов (не сырых
-    HTTP-запросов: у каждого слова своя небольшая пагинация, ``per_word_requests``)."""
-    from .filtering import parse_terms
-
-    if pause is None:
-        pause = gosplan.THROTTLE_SECONDS
-    settings = FilterSettings.load()
-    if Tender.EIS not in effective_sources(settings):
-        return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True, params={"source": "eis", "disabled": True})
-    if days is None:
-        days = settings.window_days
-    if min_price is None:
-        min_price = settings.min_price
-    if regions is None:
-        regions = settings.regions
-
-    seen_words: set[str] = set()
-    words: list[str] = []
-    for entry in parse_terms(settings.include_words):
-        word = entry[0] if entry else ""
-        if word and word not in seen_words:
-            seen_words.add(word)
-            words.append(word)
-
-    run = PullRun.objects.create(
-        started_at=timezone.now(),
-        params={"mode": "keyword", "days": days, "min_price": float(min_price or 0), "words_total": len(words)},
-    )
-    if not words:
-        run.params.update({"jobs_total": 0, "jobs_completed": 0, "complete": True})
-        run.ok = True
-        run.finished_at = timezone.now()
-        run.duration_seconds = 0.0
-        run.save()
-        return run
-
-    base = build_params(days=days, stage=1, min_price=min_price, regions=regions, law="fz44", now=run.started_at)
-    run.params.update({"windows": {"fz44": base}, "queries": [], "jobs_total": len(words), "jobs_completed": 0, "complete": False})
-    run.save(update_fields=["params"])
-    stats = {"requests": 0, "records": 0}
-
-    def _on_request(_request_no, got):
-        stats["requests"] += 1
-        stats["records"] += got
-
-    cursor = settings.keyword_pull_cursor % len(words)
-    created = updated = words_done = 0
-    triage_ids = []
-    try:
-        for offset in range(len(words) if max_requests is None else min(max_requests, len(words))):
-            if offset:
-                time.sleep(pause)
-            word = words[(cursor + offset) % len(words)]
-            params = {**base, "object_info": word}
-            cursor_key, params = prepare_discovery("fz44", params, days)
-            for record in gosplan.iter_purchases(
-                params=params, law="fz44", max_requests=per_word_requests, on_request=_on_request
-            ):
-                number = (record.get("purchase_number") or "").strip()
-                if not number:
-                    continue
-                publish(record, "fz44")
-                with transaction.atomic():
-                    tender, is_created = Tender.objects.update_or_create(
-                        law="fz44", purchase_number=number,
-                        defaults={**_record_to_fields(record, run.started_at, "fz44"), "source": Tender.EIS},
-                    )
-                created += int(is_created)
-                updated += int(not is_created)
-                if is_created and (os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params):
-                    triage_ids.append(tender.pk)
-            advance_discovery(cursor_key, run.started_at.replace(microsecond=0))
-            run.params["queries"].append({"key": cursor_key, "law": "fz44",
-                **{key: value for key, value in params.items() if key.endswith("_after") or key.endswith("_before")}})
-            words_done += 1
-            run.params["jobs_completed"] = words_done
-            run.save(update_fields=["params"])
-        if words_done != len(words):
-            raise gosplan.GosplanError("Обойдены не все ключевые слова; полнота не подтверждена")
-        run.params["complete"] = True
-        run.ok = True
-    except gosplan.GosplanError as exc:
-        run.error = str(exc)
-        run.ok = False
-
-    settings.keyword_pull_cursor = (cursor + words_done) % len(words)
-    settings.save(update_fields=["keyword_pull_cursor"])
-
-    run.finished_at = timezone.now()
-    run.requests_made = stats["requests"]
-    run.records_received = stats["records"]
-    run.created_count = created
-    run.updated_count = updated
-    run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
-    run.save()
-    if run.ok:
-        from .profile_triage import start_profile_triage_in_background
-
-        if triage_ids:
-            start_profile_triage_in_background(triage_ids)
-    return run
+    """Compatibility entry point: words are now part of run_pull, never a second sweep."""
+    return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True,
+                                  params={"merged_into_primary": True})
 
 
 def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, direct_timeout=15):
@@ -1725,7 +1632,7 @@ def save_selection_settings(payload):
     if "min_price" in payload:
         try:
             price = Decimal(str(payload["min_price"]))
-            if not price.is_finite() or price < 0:
+            if not price.is_finite() or price < 0 or price >= Decimal("100000000000000"):
                 raise ValueError
         except (InvalidOperation, ValueError, TypeError):
             raise ValueError("Минимальная цена должна быть неотрицательным числом")
@@ -1742,10 +1649,13 @@ def save_selection_settings(payload):
         codes = payload["okpd2_codes"]
         if not isinstance(codes, list) or not all(isinstance(x, str) for x in codes):
             raise ValueError("Неверный список кодов ОКПД2")
-        settings.okpd2_codes = codes
+        import re
+        if any(not re.fullmatch(r"[0-9.\-]{2,50}", c) for c in codes):
+            raise ValueError("Неверный код ОКПД2")
+        settings.okpd2_codes = list(dict.fromkeys(codes))
     if "regions" in payload:
         regions = payload["regions"]
-        if not isinstance(regions, list) or not all(str(x).isdigit() for x in regions):
+        if not isinstance(regions, list) or not all(str(x).isdigit() and 1 <= int(x) <= 99 for x in regions):
             raise ValueError("Неверный список регионов")
         settings.regions = [str(x) for x in regions]
     if "sources" in payload:
@@ -1758,8 +1668,21 @@ def save_selection_settings(payload):
         if not isinstance(laws, list) or not laws or any(x not in ("fz44", "fz223") for x in laws):
             raise ValueError("Необходимо выбрать 44-ФЗ, 223-ФЗ или оба закона")
         settings.laws = laws
+    from .primary_search import validate_primary, word_pattern
+    if "primary_filters" in payload:
+        if not isinstance(payload["primary_filters"], dict):
+            raise ValueError("Первичные фильтры должны быть объектом")
+        settings.primary_filters = validate_primary({**settings.primary_filters, **payload["primary_filters"]})
+    if "include_words" in payload:
+        word_pattern(settings.include_words)
+    maximum = settings.primary_filters.get("max_price_le")
+    if maximum is not None and Decimal(maximum) < settings.min_price:
+        raise ValueError("Максимальная цена должна быть не меньше минимальной")
+    from .primary_search import build_primary_params, split_primary_requests
+    for law in effective_laws(settings):
+        split_primary_requests(build_primary_params(settings, law, timezone.now()), settings.include_words, law)
     settings.save()
-    return {"updated": True, "min_price": str(settings.min_price),
+    return {"updated": True, "primary_filters": settings.primary_filters, "min_price": str(settings.min_price),
             "window_days": settings.window_days, "laws": settings.laws}
 
 

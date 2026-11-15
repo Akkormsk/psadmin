@@ -1191,37 +1191,53 @@ def eis_diag(request):
 @superuser_required
 def filter_settings(request):
     import os
+    from .services import effective_sources
+    from .primary_search import PrimaryFilterForm
     settings = FilterSettings.load()
+    primary_form = PrimaryFilterForm(request.POST if request.method == "POST" else None,
+                                     initial=settings.primary_filters)
     if request.method == "POST":
         from .services import save_selection_settings
-
         try:
-            save_selection_settings({
+            payload = {
                 "include_words": request.POST.get("include_words", ""),
                 "exclude_words": request.POST.get("exclude_words", ""),
                 "profile_triage_enabled": request.POST.get("profile_triage_enabled") == "1",
                 "min_price": request.POST.get("min_price") or 0,
-                "window_days": request.POST.get("window_days") or 7,
-                "okpd2_codes": request.POST.getlist("okpd2"),
-                "regions": [r for r in request.POST.getlist("region") if r.isdigit()],
-                "laws": [law for law in request.POST.getlist("law") if law in ("fz44", "fz223")] or ["fz44"],
+                "okpd2_codes": [c.strip() for c in request.POST.get("okpd2_codes", "").replace("\n", ",").split(",") if c.strip()]
+                    if "settings_version" in request.POST else request.POST.getlist("okpd2"),
+                "regions": request.POST.getlist("region"),
+                "laws": request.POST.getlist("law") or ["fz44"],
                 "sources": request.POST.getlist("source"),
-            })
+            }
+            if "window_days" in request.POST:
+                payload["window_days"] = request.POST.get("window_days") or settings.window_days
+            if "settings_version" in request.POST:
+                if not primary_form.is_valid():
+                    raise ValueError("Исправьте отмеченные поля первичного фильтра.")
+                payload["primary_filters"] = {**dict.fromkeys(primary_form.fields), **primary_form.serializable()}
+                if not request.POST.getlist("law"):
+                    raise ValueError("Выберите хотя бы один закон.")
+            save_selection_settings(payload)
         except ValueError as exc:
             messages.error(request, str(exc))
-            return redirect("tender_selection:settings")
-        messages.success(request, "Настройки подбора сохранены.")
-        return redirect("tender_selection:list")
+        else:
+            messages.success(request, "Настройки подбора сохранены.")
+            return redirect("tender_selection:list")
 
-    chosen_codes = set(effective_okpd2(settings))
-    chosen_regions = set(str(r) for r in (settings.regions or []))
-    chosen_laws = set(effective_laws(settings))
+    chosen_regions = set(request.POST.getlist("region") if request.method == "POST" else map(str, settings.regions or []))
+    chosen_laws = set(request.POST.getlist("law") if request.method == "POST" else effective_laws(settings))
     return render(request, "tender_selection/settings.html", {
-        "settings": settings,
-        "categories": [(code, label, code in chosen_codes) for code, label in CATEGORY_GROUPS],
+        "settings": settings, "primary_form": primary_form,
+        "advanced_fields": [field for field in primary_form if field.name not in {"stage", "max_price_le", "purchase_type"}],
         "regions": [(code, name, str(code) in chosen_regions) for code, name in sorted(REGION_NAMES.items(), key=lambda x: x[1])],
         "laws": [(code, label, code in chosen_laws) for code, label in Tender.LAW_CHOICES],
-        "using_defaults": not settings.okpd2_codes,
+        "form_values": request.POST if request.method == "POST" else {
+            "include_words": settings.include_words, "exclude_words": settings.exclude_words,
+            "min_price": str(settings.min_price), "okpd2_codes": ", ".join(settings.okpd2_codes or []),
+        },
+        "chosen_sources": request.POST.getlist("source") if request.method == "POST" else effective_sources(settings),
+        "profile_enabled": request.POST.get("profile_triage_enabled") == "1" if request.method == "POST" else settings.profile_triage_enabled,
         "discovery_mirror": os.getenv("TENDER_DISCOVERY_ROLE") == "mirror",
     })
 
