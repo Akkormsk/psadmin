@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Настройки подбора тендеров{% endblock %}
 {% block content %}
-<div class="container">
+<div class="container ts-filter-settings">
   <a href="{% url 'tender_selection:list' %}" class="back-link">← Подбор тендеров</a>
   <h1>Настройки подбора</h1>
   <form method="post" class="content-stack">
@@ -9,49 +9,110 @@
     <section class="panel">
       <div class="panel-header"><h2 class="panel-title">1. Основной фильтр — поиск</h2>
         <button type="submit" class="button-success">Сохранить</button></div>
-      <p class="settings-description">Между условиями — «И», между плюс-словами — «ИЛИ». Все значения можно изменить. Пустое необязательное поле не ограничивает поиск.</p>
-      {% if discovery_mirror %}<p class="settings-description">TEST получает карточки из общего сбора PROD. Эти настройки не меняют сбор PROD и не запускают отдельный сборщик. Проверка нового поиска — следующий этап.</p>{% endif %}
-      <h3 class="settings-subtitle">Источники и законы</h3>
-      <div class="ts-checks">
-        <label><input type="checkbox" name="source" value="eis" {% if 'eis' in chosen_sources %}checked{% endif %}> ЕИС (ГосПлан)</label>
-        <label><input type="checkbox" name="source" value="eat" {% if 'eat' in chosen_sources %}checked{% endif %}> ЕАТ «Берёзка»</label>
-        {% for code, label, checked in laws %}<label><input type="checkbox" name="law" value="{{ code }}" {% if checked %}checked{% endif %}> {{ label }}</label>{% endfor %}
+      <p class="settings-description">Между условиями — «И», между плюс-словами — «ИЛИ». Пустые необязательные поля не ограничивают поиск.</p>
+      {% if discovery_mirror %}<p class="filter-notice">На TEST первичный поиск ЕИС пока не применяется к загрузке: тендеры поступают из PROD. Вторичный отбор работает с полученными карточками.</p>{% endif %}
+      <div class="settings-grid settings-grid--two filter-section">
+        <fieldset class="filter-choice-group">
+          <legend>Источник закупок</legend>
+          <div class="filter-options">
+            <label class="filter-choice"><input type="checkbox" name="source" value="eis" {% if 'eis' in chosen_sources %}checked{% endif %}><span>ЕИС</span></label>
+            <label class="filter-choice"><input type="checkbox" name="source" value="eat" {% if 'eat' in chosen_sources %}checked{% endif %}><span>ЕАТ «Берёзка»</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="filter-choice-group">
+          <legend>Закон о закупках</legend>
+          <div class="filter-options">
+            {% for code, label, checked in laws %}<label class="filter-choice"><input type="checkbox" name="law" value="{{ code }}" {% if checked %}checked{% endif %}><span>{{ label }}</span></label>{% endfor %}
+          </div>
+        </fieldset>
       </div>
-      <p class="settings-description">Расширенные условия ниже относятся к ГосПлану. Полное применение этих условий к ЕАТ будет отдельным этапом.</p>
-      <div class="settings-grid settings-grid--three">
-        <div class="form-group"><label for="min_price">Минимальная НМЦК, ₽</label><input id="min_price" name="min_price" type="number" step="0.01" min="0" value="{{ form_values.min_price }}"></div>
+      <p class="settings-description filter-hint">Расширенные условия поиска ниже относятся к ЕИС. Подключение их к ЕАТ — отдельный этап.</p>
+      <div class="settings-grid settings-grid--two filter-section">
+        <div class="form-group"><label for="min_price">Минимальная НМЦК, ₽</label><input id="min_price" name="min_price" type="number" step="0.01" min="0" value="{{ form_values.min_price }}" placeholder="Без нижней границы"></div>
         <div class="form-group">{{ primary_form.max_price_le.label_tag }}{{ primary_form.max_price_le }}{{ primary_form.max_price_le.errors }}</div>
       </div>
       <div class="form-group"><label for="include_words">Плюс-слова — хотя бы одно</label>
-        <textarea id="include_words" name="include_words" rows="6">{{ form_values.include_words }}</textarea>
-        <p class="settings-description">Через запятую или с новой строки. Поиск по названию закупки, без учёта регистра и «ё/е». Пусто — любые названия. Для сочетания «слово+слово» источник ищет первую часть, точное совпадение сочетания проверяет приложение.</p></div>
-      <div class="form-group"><label>Этап закупки</label>{{ primary_form.stage }}{{ primary_form.stage.errors }}<p class="settings-description">Ничего не выбрано — все этапы.</p></div>
-      <div class="form-group">{{ primary_form.purchase_type.label_tag }}{{ primary_form.purchase_type }}{{ primary_form.purchase_type.errors }}<p class="settings-description">Можно выбрать несколько. Ничего не выбрано — любой способ. Технические названия — дополнительные типы извещений ГосПлана.</p></div>
-      <details><summary>ОКПД2 и регионы</summary>
-        <div class="form-group"><label for="okpd2_codes">Коды ОКПД2 через запятую</label><textarea id="okpd2_codes" name="okpd2_codes" rows="2">{{ form_values.okpd2_codes }}</textarea><p class="settings-description">Любой из указанных кодов. Пусто — все категории, без подстановки списка.</p></div>
-        <div class="ts-checks ts-checks--cols">{% for code, name, checked in regions %}<label><input type="checkbox" name="region" value="{{ code }}" {% if checked %}checked{% endif %}> {{ name }}</label>{% endfor %}</div>
-        <p class="settings-description">Ни одного региона — все регионы.</p>
+        <textarea id="include_words" name="include_words" rows="6" placeholder="Сувенир, полиграф, подароч…">{{ form_values.include_words }}</textarea>
+        <p class="settings-description filter-hint">Через запятую или с новой строки. Поиск в названии, без учёта регистра и «е/ё». «Слово+слово» — обе части: источник ищет первую, приложение проверяет сочетание.</p></div>
+      <fieldset class="filter-choice-group filter-section">
+        <legend>Этап закупки</legend>
+        <div class="filter-options filter-options--stages">{% for option in primary_form.stage %}<label class="filter-choice">{{ option.tag }}<span>{{ option.choice_label }}</span></label>{% endfor %}</div>
+        {{ primary_form.stage.errors }}<p class="settings-description filter-hint">Ничего не выбрано — все этапы.</p>
+      </fieldset>
+      <details class="filter-disclosure" data-choice-field="purchase_type" data-empty-label="Любой способ" {% if primary_form.purchase_type.value %}open{% endif %}>
+        <summary>Способ закупки <span class="filter-selection" data-choice-summary>{% if primary_form.purchase_type.value %}Выбрано: {{ primary_form.purchase_type.value|length }}{% else %}Любой способ{% endif %}</span></summary>
+        <p class="settings-description filter-hint">Отметьте один или несколько способов. Ничего не выбрано — любой способ.</p>
+        <div class="filter-options filter-options--methods">{% for option in primary_form.purchase_type %}<label class="filter-choice">{{ option.tag }}<span>{{ option.choice_label }}</span></label>{% endfor %}</div>
+        {{ primary_form.purchase_type.errors }}
       </details>
-      <details><summary>Дополнительные условия</summary>
-        <p class="settings-description">Пустые даты — без ограничения давности публикации. Поля с пометкой закона применяются только к нему.</p>
-        <div class="settings-grid settings-grid--three">{% for field in advanced_fields %}<div class="form-group">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}</div>
+      <div class="form-group filter-section"><label for="okpd2_codes">Коды ОКПД2</label><textarea id="okpd2_codes" name="okpd2_codes" rows="2" placeholder="Например: 17, 18.12">{{ form_values.okpd2_codes }}</textarea><p class="settings-description filter-hint">Через запятую. Подойдёт любой из указанных кодов. Пусто — все категории.</p></div>
+      <details class="filter-disclosure" data-choice-field="region" data-empty-label="Все регионы">
+        <summary>Регионы <span class="filter-selection" data-choice-summary>Все регионы</span></summary>
+        <p class="settings-description filter-hint">Ничего не выбрано — все регионы.</p>
+        <div class="filter-options filter-options--regions">{% for code, name, checked in regions %}<label class="filter-choice"><input type="checkbox" name="region" value="{{ code }}" {% if checked %}checked{% endif %}><span>{{ name }}</span></label>{% endfor %}</div>
+      </details>
+      <details class="filter-disclosure">
+        <summary>Дополнительные условия</summary>
+        <p class="settings-description filter-hint">Даты — по времени сайта. Пустые поля не ограничивают поиск; условия с пометкой закона применяются только к нему.</p>
+        {% for title, fields in advanced_groups %}
+        <fieldset class="filter-choice-group filter-section"><legend>{{ title }}</legend>
+          <div class="settings-grid settings-grid--two">{% for field in fields %}<div class="form-group">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}</div>
+        </fieldset>
+        {% endfor %}
       </details>
     </section>
     <section class="panel">
       <div class="panel-header"><h2 class="panel-title">2. Вторичный фильтр — отбор во «Входящие»</h2><a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a></div>
-      <div class="form-group"><label for="exclude_words">Минус-слова — исключить при совпадении</label><textarea id="exclude_words" name="exclude_words" rows="5">{{ form_values.exclude_words }}</textarea></div>
-      <p class="settings-description">Через запятую или с новой строки. «Ремонт+дорог» — обе части в названии. Текущий алгоритм отсева этим этапом не меняется.</p>
-      <label><input type="checkbox" name="profile_triage_enabled" value="1" {% if profile_enabled %}checked{% endif %}> Проверять профиль по составу закупки и скрывать подтверждённо неподходящие</label>
-      <p class="settings-description">Сохраняется действующая настройка проверки профиля. Однократный отсев на входе будет настроен отдельным этапом.</p>
+      <div class="form-group"><label for="exclude_words">Минус-слова — исключить при совпадении</label><textarea id="exclude_words" name="exclude_words" rows="5" placeholder="Слова и сочетания, которые не подходят">{{ form_values.exclude_words }}</textarea>
+        <p class="settings-description filter-hint">Через запятую или с новой строки. «Ремонт+дорог» — обе части в названии.</p></div>
+      <label class="filter-choice"><input type="checkbox" name="profile_triage_enabled" value="1" {% if profile_enabled %}checked{% endif %}><span>Проверять профиль по составу закупки<small>Скрывать подтверждённо неподходящие закупки</small></span></label>
     </section>
-    <button type="submit" class="button-success">Сохранить настройки</button>
+    <div class="filter-footer"><button type="submit" class="button-success">Сохранить настройки</button></div>
   </form>
 </div>
 <style>
-.ts-checks {display:flex;flex-wrap:wrap;gap:10px 20px;margin:12px 0}
-.ts-checks--cols {display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
-details {margin:20px 0} summary {cursor:pointer;font-weight:600;margin-bottom:14px}
-.errorlist {color:#b91c1c} #id_stage {display:flex;flex-wrap:wrap;gap:10px 22px}
-#id_purchase_type {min-height:130px;width:100%} textarea {width:100%}
+.ts-filter-settings {max-width:1120px}
+.ts-filter-settings .filter-section {margin-top:24px}
+.ts-filter-settings .form-group {min-width:0}
+.ts-filter-settings .form-group :is(input,select,textarea) {font:inherit;font-size:14px;min-height:44px}
+.ts-filter-settings textarea {width:100%;line-height:1.5;resize:vertical}
+.ts-filter-settings .filter-choice-group {border:0;padding:0;min-width:0;margin-bottom:0}
+.ts-filter-settings legend {font-weight:600;margin-bottom:12px;padding:0;font-size:15px}
+.ts-filter-settings .filter-options {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.ts-filter-settings .filter-options--stages {grid-template-columns:repeat(4,minmax(0,1fr))}
+.ts-filter-settings .filter-choice {display:flex;align-items:center;gap:10px;min-height:44px;box-sizing:border-box;padding:11px 13px;border:1px solid var(--field-border);border-radius:var(--radius-sm);background:var(--field-bg);color:var(--ink);font-size:14px;font-weight:500;line-height:1.4;cursor:pointer;margin:0}
+.ts-filter-settings .filter-choice:has(input:checked) {border-color:var(--accent);background:var(--tint-positive)}
+.ts-filter-settings .filter-choice:focus-within {outline:2px solid var(--accent);outline-offset:2px}
+.ts-filter-settings .filter-choice input[type=checkbox] {width:17px;height:17px;min-height:0;flex:0 0 17px;margin:0;padding:0;accent-color:var(--accent);cursor:pointer}
+.ts-filter-settings .filter-choice small {display:block;color:var(--ink-3);font-size:12px;font-weight:400;margin-top:2px}
+.ts-filter-settings .filter-hint {font-size:13px;line-height:1.5;margin-top:8px}
+.ts-filter-settings .filter-notice {padding:12px 14px;margin:16px 0 0;border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink-2);background:var(--tint-neutral);font-size:13px;line-height:1.5}
+.ts-filter-settings .filter-disclosure {border-top:1px solid var(--border);margin-top:22px;padding-top:18px}
+.ts-filter-settings summary {cursor:pointer;font-weight:600;font-size:15px;line-height:1.6}
+.ts-filter-settings .filter-selection {font-size:13px;font-weight:400;color:var(--ink-3);margin-left:10px}
+.ts-filter-settings .filter-options--methods {margin-top:14px}
+.ts-filter-settings .filter-options--regions {grid-template-columns:repeat(3,minmax(0,1fr));max-height:320px;overflow:auto;margin-top:14px;padding:3px}
+.ts-filter-settings .errorlist {color:var(--negative-ink);font-size:13px;padding-left:18px}
+.ts-filter-settings .filter-footer {display:flex;justify-content:flex-end}
+@media(max-width:720px) {
+  .ts-filter-settings .filter-options--stages,.ts-filter-settings .filter-options--regions {grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:480px) {
+  .ts-filter-settings .filter-options,.ts-filter-settings .filter-options--stages {grid-template-columns:1fr}
+  .ts-filter-settings .panel-header {align-items:flex-start;gap:12px;flex-wrap:wrap}
+}
 </style>
+<script>
+(function () {
+  document.querySelectorAll('.ts-filter-settings [data-choice-field]').forEach(function (group) {
+    const summary = group.querySelector('[data-choice-summary]');
+    function update() {
+      const count = group.querySelectorAll('input[type="checkbox"]:checked').length;
+      summary.textContent = count ? 'Выбрано: ' + count : group.dataset.emptyLabel;
+    }
+    group.addEventListener('change', update);
+    update();
+  });
+})();
+</script>
 {% endblock %}

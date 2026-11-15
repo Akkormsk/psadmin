@@ -216,3 +216,29 @@ class PrimaryRoundTripTests(SimpleTestCase):
                       'updated_before': '2026-11-15T00:01:00.123456+00:00', 'classifier': ['1'*50]}
             line = 'GET /fz44/purchases?' + urlencode(actual, doseq=True) + '&limit=100&skip=1000 HTTP/1.1\r\n'
             self.assertLessEqual(len(line.encode()), 700)
+
+
+class FilterSettingsChoiceUiTests(TestCase):
+    def setUp(self):
+        admin = get_user_model().objects.create_superuser('filter-ui', 'ui@example.test', 'pass')
+        self.client.force_login(admin)
+
+    def test_source_law_and_multiple_methods_save_independently(self):
+        url = reverse('tender_selection:settings')
+        response = self.client.post(url, {
+            'settings_version': '2', 'source': ['eis', 'eat'], 'law': ['fz223'],
+            'min_price': '300000', 'include_words': 'сувенир',
+            'stage': ['1', '2'], 'purchase_type': ['purchaseNoticeAE', 'purchaseNoticeZK'],
+        })
+        self.assertEqual(response.status_code, 302)
+        settings = FilterSettings.load()
+        self.assertEqual(settings.sources, ['eis', 'eat'])
+        self.assertEqual(settings.laws, ['fz223'])
+        self.assertEqual(settings.primary_filters['purchase_type'], ['purchaseNoticeAE', 'purchaseNoticeZK'])
+        page = self.client.get(url)
+        self.assertContains(page, '<legend>Источник закупок</legend>', html=True)
+        self.assertContains(page, '<legend>Закон о закупках</legend>', html=True)
+        self.assertNotContains(page, '<select name="purchase_type"')
+        self.assertContains(page, 'type="checkbox" name="purchase_type" value="purchaseNoticeAE"')
+        self.assertContains(page, 'type="checkbox" name="purchase_type" value="purchaseNoticeZK"')
+        self.assertNotContains(page, '>epNotificationEOKD<')
