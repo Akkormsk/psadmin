@@ -147,6 +147,7 @@ class PrimaryTransportTests(SimpleTestCase):
         for i in range(111):
             self.assertTrue(any(re.search(g['object_info'], 'полиграфическаяпродукция'+str(i)) for g in groups))
         self.assertTrue(all(g['stage'] == ['1'] and g['max_price_ge'] == '300000' for g in groups))
+        self.assertTrue(all(len(g['object_info']) <= 128 for g in groups))
 
     def test_provider_date_partition_covers_entire_range(self):
         from datetime import datetime, timedelta

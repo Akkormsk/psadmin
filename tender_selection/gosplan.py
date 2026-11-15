@@ -203,7 +203,7 @@ def _fetch_with_retry(page_params: dict, law: str, deadline=None) -> list[dict]:
                 wait = min(wait, max(0, deadline - time.monotonic()))
             time.sleep(wait)
         except GosplanError as exc:
-            if "HTTP 504" in str(exc) or network_retried:
+            if "HTTP 504" in str(exc) or str(exc).startswith("HTTP 4") or network_retried:
                 raise
             network_retried = True
             time.sleep(15)

@@ -78,8 +78,9 @@ class DiscoveryFeedTests(TestCase):
 
     def test_next_completed_scan_uses_update_cursor(self):
         with patch.object(gosplan, "iter_purchases", return_value=iter([])):
-            self.assertTrue(services.run_pull(classifiers=["17"], laws=["fz44"]).ok)
-        self.assertEqual(DiscoveryCursor.objects.count(), 1)
+            first = services.run_pull(classifiers=["17"], laws=["fz44"])
+            self.assertTrue(first.ok)
+        self.assertEqual(DiscoveryCursor.objects.count(), first.params["jobs_total"])
         with patch.object(gosplan, "iter_purchases", return_value=iter([])) as request:
             self.assertTrue(services.run_pull(classifiers=["17"], laws=["fz44"]).ok)
         self.assertIn("updated_after", request.call_args.kwargs["params"])

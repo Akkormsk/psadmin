@@ -45,11 +45,13 @@ if hasattr(FilterSettings, "primary_filters"):
     selection = FilterSettings.objects.filter(pk=1).first()
     if selection:
         try:
-            groups = {law: len(split_primary_requests(build_primary_params(selection, law, timezone.now()),
-                                                     selection.include_words, law))
-                      for law in effective_laws(selection)}
+            plans = {law: split_primary_requests(build_primary_params(selection, law, timezone.now()),
+                                                selection.include_words, law) for law in effective_laws(selection)}
+            groups = {law: len(queries) for law, queries in plans.items()}
+            max_pattern = max((len(query.get("object_info", "")) for queries in plans.values() for query in queries), default=0)
             print(json.dumps({"primary_search_plan": {"valid": True,
                 "keyword_entries": len(parse_terms(selection.include_words)), "or_groups_by_law": groups,
+                "max_pattern_chars": max_pattern,
                 "selected_classifiers": len(selection.okpd2_codes or []),
                 "jobs": sum(groups.values()) * max(1, len(selection.okpd2_codes or [])),
                 "role": os.getenv("TENDER_DISCOVERY_ROLE"), "upstream_called": False}}, ensure_ascii=False))

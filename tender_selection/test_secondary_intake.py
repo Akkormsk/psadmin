@@ -97,3 +97,28 @@ class SecondaryIntakeTests(TestCase):
         self.assertFalse(Tender.objects.exists())
         self.assertFalse(TenderHistory.objects.exists())
         self.assertFalse(run.params['complete'])
+
+    def test_provider_deadline_extension_reopens_only_automatic_expiry(self):
+        record=self.record()
+        record['collecting_finished_at']=(timezone.now()-timedelta(hours=1)).isoformat()
+        tender=self.pull(record)
+        self.assertEqual(tender.status,Tender.DISMISSED)
+        reopened=self.pull(self.record())
+        self.assertEqual(reopened.status,Tender.NEW)
+        self.assertEqual(reopened.history_record.reason_code,'')
+
+    def test_extension_does_not_undo_negative_or_manual_archive(self):
+        record=self.record(title='Щебень')
+        record['collecting_finished_at']=(timezone.now()-timedelta(hours=1)).isoformat()
+        tender=self.pull(record)
+        self.assertEqual(self.pull(self.record(title='Щебень')).status,Tender.DISMISSED)
+        second=self.pull(self.record(number='manual'))
+        services.dismiss_tender(second)
+        self.assertEqual(self.pull(self.record(number='manual')).status,Tender.DISMISSED)
+
+    def test_manual_hide_of_expired_card_blocks_automatic_reopening(self):
+        record = self.record()
+        record['collecting_finished_at'] = (timezone.now()-timedelta(hours=1)).isoformat()
+        tender = self.pull(record)
+        services.dismiss_tender(tender)
+        self.assertEqual(self.pull(self.record()).status, Tender.DISMISSED)

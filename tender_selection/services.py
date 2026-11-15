@@ -312,9 +312,12 @@ def run_pull(
                 base.pop("stage", None)
             else:
                 base["stage"] = [str(stage)]
-    # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
-    jobs = [(law, batch, base) for batch in batches for law in laws
-            for base in split_primary_requests(bases[law], settings.include_words, law)]
+    # Interleave categories/laws within each OR group, rather than exhaust all
+    # words for the first category before reaching the other categories.
+    plans = {law: split_primary_requests(bases[law], settings.include_words, law) for law in laws}
+    jobs = [(law, batch, plans[law][index])
+            for index in range(max(len(groups) for groups in plans.values()))
+            for batch in batches for law in laws if index < len(plans[law])]
     import hashlib
     stable = {law: {k: v for k, v in base.items() if k != "published_before"} for law, base in bases.items()}
     run.params["filter_config_version"] = hashlib.sha256(json.dumps({"queries": stable, "classifiers": batches}, sort_keys=True).encode()).hexdigest()
@@ -1423,6 +1426,9 @@ def dismiss_tender(tender, *, reason=None) -> None:
         TenderDismissalFeedback.objects.create(tender=tender, reason=reason)
     clear_tender_document_previews(tender)
     archive_tender(tender)
+    from .models import TenderHistory
+    TenderHistory.objects.filter(tender_id=tender.pk).update(
+        decision_source="manual", decision_at=timezone.now())
 
 
 def restore_tender(tender) -> None:
