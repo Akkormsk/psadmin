@@ -1198,7 +1198,6 @@ def filter_settings(request):
             payload = {
                 "include_words": request.POST.get("include_words", ""),
                 "exclude_words": request.POST.get("exclude_words", ""),
-                "profile_triage_enabled": request.POST.get("profile_triage_enabled") == "1",
                 "min_price": request.POST.get("min_price") or 0,
                 "okpd2_codes": [c.strip() for c in request.POST.get("okpd2_codes", "").replace("\n", ",").split(",") if c.strip()]
                     if "settings_version" in request.POST else request.POST.getlist("okpd2"),
@@ -1221,10 +1220,21 @@ def filter_settings(request):
             messages.success(request, "Настройки подбора сохранены.")
             return redirect("tender_selection:list")
 
+    from .primary_search import build_primary_params, split_primary_requests
+    search_plan = []
+    try:
+        for law in effective_laws(settings):
+            queries = split_primary_requests(build_primary_params(settings, law, timezone.now()), settings.include_words, law)
+            search_plan.append({"law": law, "groups": len(queries),
+                                "lengths": ", ".join(str(len(q.get("object_info", ""))) for q in queries)})
+    except ValueError:
+        pass  # Existing form errors explain invalid settings.
+    latest_census = PullRun.objects.filter(params__has_key="census").order_by("-pk").first()
     chosen_regions = set(request.POST.getlist("region") if request.method == "POST" else map(str, settings.regions or []))
     chosen_laws = set(request.POST.getlist("law") if request.method == "POST" else effective_laws(settings))
     return render(request, "tender_selection/settings.html", {
         "settings": settings, "primary_form": primary_form,
+        "search_plan": search_plan, "latest_census": latest_census,
         "advanced_groups": [(label, [primary_form[name] for name in names]) for label, names in [
             ("Даты", ["published_after", "published_before", "updated_after", "updated_before", "deadline_after", "deadline_before"]),
             ("Организации", ["customer", "owner", "responsible", "placer"]),
@@ -1239,7 +1249,6 @@ def filter_settings(request):
             "min_price": str(settings.min_price), "okpd2_codes": ", ".join(settings.okpd2_codes or []),
         },
         "chosen_sources": request.POST.getlist("source") if request.method == "POST" else effective_sources(settings),
-        "profile_enabled": request.POST.get("profile_triage_enabled") == "1" if request.method == "POST" else settings.profile_triage_enabled,
         "discovery_mirror": os.getenv("TENDER_DISCOVERY_ROLE") == "mirror",
         "discovery_paused": os.getenv("GOSPLAN_API_DISABLED") == "1",
     })
