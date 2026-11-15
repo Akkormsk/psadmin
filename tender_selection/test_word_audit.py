@@ -17,10 +17,8 @@ def _settings(plus="футболк, кружк", minus="медицин"):
 
 
 class IncomingTraceTests(TestCase):
-    def test_purge_archives_shown_tenders_and_traces_only_the_hidden_ones(self):
-        """Показанные (прошли плюс/минус-фильтр) — источник статистики по
-        торгам, поэтому архивируются насовсем, а не удаляются. Скрытые
-        фильтром тоже сохраняются в архиве со следом IncomingTrace."""
+    def test_purge_archives_expired_without_reapplying_words(self):
+        """Expiry preserves unknown/previous admission instead of re-reading words."""
         _settings()
         now = timezone.now()
         Tender.objects.create(purchase_number="1", title="Футболки хлопковые", collecting_finished_at=now - timedelta(days=30))
@@ -34,7 +32,8 @@ class IncomingTraceTests(TestCase):
         self.assertEqual(Tender.objects.get(purchase_number="2").status, Tender.DISMISSED)
         self.assertIsNone(IncomingTrace.objects.get(purchase_number="1").filtered_out)
         trace = IncomingTrace.objects.get(purchase_number="2")
-        self.assertTrue(trace.filtered_out)
+        self.assertIsNone(trace.filtered_out)
+        self.assertEqual(trace.reason_code, "expired")
 
 
 class WordStatsTests(TestCase):

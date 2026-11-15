@@ -13,9 +13,11 @@ from .primary_search import PrimaryFilterForm, build_primary_params, word_patter
 class PrimaryPatternTests(SimpleTestCase):
     def test_literal_or_case_yo_and_compounds(self):
         pattern = word_pattern('Сувенир, Ёлоч, футболк+принт, (печать)')
-        for title in ['СУВЕНИРЫ', 'елочка', 'ЁЛОЧНЫЕ', 'Футболки', '(печать)']:
+        for title in ['СУВЕНИРЫ', 'елочка', 'ЁЛОЧНЫЕ', 'Футболки с принтом', '(печать)']:
             self.assertRegex(title, pattern)
         self.assertIsNone(re.search(pattern, 'щебень'))
+        self.assertIsNone(re.search(pattern, 'Футболки без рисунка'))
+        self.assertRegex('Принт на футболке', pattern)
         self.assertIsNone(word_pattern(''))
         with self.assertRaises(ValueError):
             word_pattern('аб')
@@ -152,12 +154,12 @@ class PrimaryTransportTests(SimpleTestCase):
         with patch.object(gosplan, 'fetch_page', return_value=[]) as request:
             self.assertEqual(list(gosplan.iter_purchases(params=params)), [])
         queries = [c.args[0] for c in request.call_args_list]
-        self.assertEqual(queries[0]['published_after'], params['published_after'])
-        self.assertEqual(queries[-1]['published_before'], params['published_before'])
+        self.assertEqual(queries[-1]['published_after'], params['published_after'])
+        self.assertEqual(queries[0]['published_before'], params['published_before'])
         for query in queries:
             self.assertLessEqual(datetime.fromisoformat(query['published_before']) - datetime.fromisoformat(query['published_after']), timedelta(days=90))
         for a, b in zip(queries, queries[1:]):
-            self.assertEqual(a['published_before'], b['published_after'])
+            self.assertEqual(a['published_after'], b['published_before'])
         with patch.object(gosplan, 'fetch_page', return_value=[]):
             with self.assertRaises(gosplan.GosplanError):
                 list(gosplan.iter_purchases(params=params, max_requests=1))

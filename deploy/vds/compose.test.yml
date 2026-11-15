@@ -1,5 +1,5 @@
 # Service names differ from prod's: caddy sees both stacks, so a shared "web" name would be ambiguous.
-# Test twin at test.admin.psodin.ru: own code dir (~/psadmin-test), own copy of the prod DB.
+# TEST has its own database and collector; only the provider quota lock is shared with PROD.
 name: psadmin-test
 
 services:
@@ -9,9 +9,16 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: ../../../psadmin-test.env
     environment:
-      GOSPLAN_API_DISABLED: "1"
-      TENDER_DISCOVERY_ROLE: mirror
-      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
+      GOSPLAN_API_DISABLED: "0"
+      TENDER_DISCOVERY_ROLE: standalone
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-test-discovery
+      GOSPLAN_QUOTA_DIR: /var/lib/psadmin-shared-quota
+      GOSPLAN_RECEIPTS_DIR: /var/lib/psadmin-test-discovery
+      GOSPLAN_CLIENT_ID: test
+      GOSPLAN_REQUESTS_PER_MINUTE: ${PSADMIN_TEST_GOSPLAN_REQUESTS_PER_MINUTE:-9}
+      TENDER_DISCOVERY_ENRICH_AFTER_PULL: "0"
+      TENDER_AUTOPULL_ENABLED: "0"
+      TENDER_AUTOPULL_WEB_ENABLED: "0"
       TIMEWEB_AI_ASSISTANT_MODEL: anthropic/claude-haiku-5-5
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
       CALCULATION_V2_DOCUMENT_OUTPUT_TOKEN_LIMIT: "32000"
@@ -19,7 +26,8 @@ services:
       TIMEWEB_AI_BASE_URL: https://api.timeweb.ai/v1
     restart: unless-stopped
     volumes:
-      - discovery_feed:/var/lib/psadmin-discovery:ro
+      - test_discovery:/var/lib/psadmin-test-discovery
+      - shared_quota:/var/lib/psadmin-shared-quota
     mem_limit: 600m
     depends_on:
       test-db:
@@ -42,9 +50,14 @@ services:
       dockerfile: deploy/vds/Dockerfile
     env_file: ../../../psadmin-test.env
     environment:
-      GOSPLAN_API_DISABLED: "1"
-      TENDER_DISCOVERY_ROLE: mirror
-      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
+      GOSPLAN_API_DISABLED: "0"
+      TENDER_DISCOVERY_ROLE: standalone
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-test-discovery
+      GOSPLAN_QUOTA_DIR: /var/lib/psadmin-shared-quota
+      GOSPLAN_RECEIPTS_DIR: /var/lib/psadmin-test-discovery
+      GOSPLAN_CLIENT_ID: test
+      GOSPLAN_REQUESTS_PER_MINUTE: ${PSADMIN_TEST_GOSPLAN_REQUESTS_PER_MINUTE:-9}
+      TENDER_DISCOVERY_ENRICH_AFTER_PULL: "0"
       TENDER_AUTOPULL_WEB_ENABLED: "0"
       CALCULATION_V2_SOURCE_MEMORY_ENABLED: "1"
       TIMEWEB_AI_V2_EXTRACTION_MODEL: anthropic/claude-haiku-5-5
@@ -52,7 +65,8 @@ services:
       INCOMING_PROFILE_MODEL: anthropic/claude-haiku-5-5
     command: ["python", "manage.py", "run_calculation_v2_job", "--watch"]
     volumes:
-      - discovery_feed:/var/lib/psadmin-discovery:ro
+      - test_discovery:/var/lib/psadmin-test-discovery
+      - shared_quota:/var/lib/psadmin-shared-quota
     restart: unless-stopped
     stop_grace_period: 600s
     mem_limit: 600m
@@ -60,18 +74,25 @@ services:
       test-db:
         condition: service_healthy
 
-  test-discovery-mirror:
+  test-discovery-collector:
     image: psadmin-test-test-web
     env_file: ../../../psadmin-test.env
     environment:
-      GOSPLAN_API_DISABLED: "1"
-      TENDER_DISCOVERY_ROLE: mirror
-      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-discovery
+      GOSPLAN_API_DISABLED: "0"
+      TENDER_DISCOVERY_ROLE: standalone
+      TENDER_DISCOVERY_FEED_DIR: /var/lib/psadmin-test-discovery
+      GOSPLAN_QUOTA_DIR: /var/lib/psadmin-shared-quota
+      GOSPLAN_RECEIPTS_DIR: /var/lib/psadmin-test-discovery
+      GOSPLAN_CLIENT_ID: test
+      GOSPLAN_REQUESTS_PER_MINUTE: ${PSADMIN_TEST_GOSPLAN_REQUESTS_PER_MINUTE:-9}
+      TENDER_DISCOVERY_ENRICH_AFTER_PULL: "0"
       TENDER_AUTOPULL_ENABLED: "0"
       TENDER_AUTOPULL_WEB_ENABLED: "0"
-    command: ["python", "manage.py", "mirror_discovery", "--watch"]
+      TENDER_DISCOVERY_INTERVAL_SECONDS: ${PSADMIN_TEST_DISCOVERY_INTERVAL_SECONDS:-300}
+    command: ["python", "manage.py", "collect_discovery", "--watch"]
     volumes:
-      - discovery_feed:/var/lib/psadmin-discovery:ro
+      - test_discovery:/var/lib/psadmin-test-discovery
+      - shared_quota:/var/lib/psadmin-shared-quota
     restart: unless-stopped
     mem_limit: 200m
     depends_on:
@@ -98,7 +119,8 @@ networks:
     external: true
 
 volumes:
-  discovery_feed:
+  test_discovery:
+  shared_quota:
     name: psadmin-discovery-feed
     external: true
   pgdata:

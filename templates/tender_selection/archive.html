@@ -14,7 +14,7 @@
     <div class="ts-head">
       <div>
         <h2 class="ts-head__title">Архив <span class="ts-count-pill">{{ page_obj.paginator.count }}</span></h2>
-        <p class="ts-head__stats"><span>причина скрытия — стадия, на которой тендер ушёл в архив</span></p>
+        <p class="ts-head__stats"><span>Разделы — этап исключения. Причина указана в карточке.</span></p>
       </div>
     </div>
 
@@ -58,6 +58,7 @@
             <span>{% if tender.org and tender.org.name %}{{ tender.org.name }}{% else %}ИНН {{ tender.customer_inn|default:"—" }}{% endif %}</span>
           </span>
           <span class="ts-row__sub">
+            {% if tender.history_record.reason_text %}<span>{{ tender.history_record.reason_text }}</span>{% endif %}
             {% if tender.org.city or tender.region_label %}<span>{{ tender.org.city|default:tender.region_label }}</span>{% endif %}
             {% if tender.contract_reduction_percent is not None %}<span>факт снижения {{ tender.contract_reduction_percent }}%</span>{% endif %}
             {% if tender.contract_exe_end %}<span>исполнение до {{ tender.contract_exe_end|date:"d.m.Y" }}</span>{% endif %}

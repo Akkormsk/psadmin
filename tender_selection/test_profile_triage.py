@@ -61,7 +61,7 @@ class ProfileTriageTests(TestCase):
         self.assertEqual(TenderDismissalFeedback.objects.get(tender=tender).reason, TenderDismissalFeedback.NOT_PROFILE)
 
 
-    def test_confirmed_foreign_is_hidden_without_deleting_and_can_be_seen_with_show_all(self):
+    def test_profile_signal_does_not_revoke_admitted_card(self):
         from .services import visible_found_tenders
         from .profile_triage import CONTRACT
         settings = FilterSettings.load(); settings.profile_triage_enabled = True; settings.save()
@@ -69,7 +69,7 @@ class ProfileTriageTests(TestCase):
             profile_assessment={'contract': CONTRACT, 'title': 'Чужой предмет', 'object_info': '', 'verdict': 'not_fit'})
         kwargs = {'min_price': 0, 'include_words': '', 'exclude_words': ''}
         rows, hidden, _ = visible_found_tenders(Tender.objects.filter(pk=tender.pk), **kwargs)
-        self.assertEqual(rows, []); self.assertEqual(hidden, 1)
+        self.assertEqual([row.pk for row in rows], [tender.pk]); self.assertEqual(hidden, 0)
         rows, _, _ = visible_found_tenders(Tender.objects.filter(pk=tender.pk), show_all=True, **kwargs)
         self.assertEqual([row.pk for row in rows], [tender.pk])
         tender.review = Tender.INTERESTING; tender.save()

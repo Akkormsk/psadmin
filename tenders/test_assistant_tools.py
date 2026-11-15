@@ -1291,22 +1291,24 @@ class AssistantToolRegistryTests(TestCase):
                 "entity": "cash.BankPayment", "order_by": ["-raw", "-id"],
             }})
 
-    def test_read_business_view_reuses_the_existing_incoming_tender_rules(self):
+    def test_read_business_view_reuses_persisted_incoming_admission(self):
         from tender_selection.models import FilterSettings, Tender
-
+        from tender_selection.intake import decide
         settings = FilterSettings.load()
         settings.min_price = 100
         settings.include_words = "подход"
-        settings.save(update_fields=["min_price", "include_words"])
+        settings.exclude_words = "скрыт"
+        settings.save()
         visible = Tender.objects.create(purchase_number="read-visible", title="Подходящий", max_price="300000")
-        Tender.objects.create(purchase_number="read-hidden", title="Скрытый", max_price="1")
-
+        hidden = Tender.objects.create(purchase_number="read-hidden", title="Скрытый", max_price="1")
+        admitted = Tender.objects.create(purchase_number="read-admitted", title="Другой", max_price="1")
+        for tender in (visible, hidden, admitted):
+            decide(tender.pk, settings)
         result = execute_tool("read", self.admin, {"plan": {
             "entity": "tender_selection.Tender", "view": "incoming",
             "fields": ["purchase_number"], "order_by": "-id", "limit": 10,
         }})
-
-        self.assertEqual([record["purchase_number"] for record in result["records"]], [visible.purchase_number])
+        self.assertEqual([record["purchase_number"] for record in result["records"]], [admitted.purchase_number, visible.purchase_number])
         self.assertEqual(result["query"]["view"], "incoming")
 
     def test_read_rejects_sensitive_bank_account_and_non_owner(self):

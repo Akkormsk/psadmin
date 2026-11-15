@@ -67,7 +67,15 @@ else:
               "legacy_recorded_requests": rows.aggregate(total=Sum("requests_made"))["total"],
               "conclusion": "Новая телеметрия ещё не установлена; полное покрытие и число HTTP attempts не подтверждены."}
 print(json.dumps({"checked_at": timezone.now().isoformat(), **report}, ensure_ascii=False, default=str))
+from urllib.parse import urlsplit
+from tender_selection import gosplan
 print(json.dumps({"collection_safety": {
+    "discovery_role": os.getenv("TENDER_DISCOVERY_ROLE"),
+    "gosplan_disabled": os.getenv("GOSPLAN_API_DISABLED"),
+    "gosplan_host": urlsplit(gosplan.base_url()).hostname,
+    "gosplan_key_configured": bool(gosplan.api_key()),
+    "discovery_enrichment": os.getenv("TENDER_DISCOVERY_ENRICH_AFTER_PULL"),
+    "quota_shared": bool(os.getenv("GOSPLAN_QUOTA_DIR")),
     "profile_triage_enabled": FilterSettings.objects.filter(pk=1).values_list("profile_triage_enabled", flat=True).first(),
     "autopull_enabled": os.getenv("TENDER_AUTOPULL_ENABLED"),
     "web_autopull_enabled": os.getenv("TENDER_AUTOPULL_WEB_ENABLED"),
@@ -102,3 +110,16 @@ if directory:
             except ValueError:
                 pass
         print(json.dumps({"rate_receipts_tail": events}))
+
+if hasattr(FilterSettings, "primary_filters"):
+    history = apps.get_model("tender_selection", "TenderHistory")
+    latest_runs = list(PullRun.objects.order_by("-pk").values("started_at", "finished_at", "ok", "requests_made", "records_received", "created_count", "updated_count", "error", "params")[:1])
+    for entry in latest_runs:
+        params = entry.pop("params")
+        entry["coverage"] = {key: params.get(key) for key in ("jobs_total", "jobs_completed", "complete", "filter_config_version")}
+    print(json.dumps({"secondary_intake": {
+        "decided": history.objects.filter(filter_snapshot__has_key="intake").count(),
+        "working_without_decision": Tender.objects.exclude(history_record__filter_snapshot__has_key="intake").count(),
+        "current_archived_reasons": list(history.objects.filter(status="dismissed").values("reason_code").annotate(n=Count("pk"))),
+        "recent_runs": latest_runs,
+    }}, ensure_ascii=False, default=str))

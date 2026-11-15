@@ -91,7 +91,7 @@ class ConfiguredBehaviourTests(TestCase):
         self.assertEqual(result["risk_level"], "high")
         self.assertEqual({f["code"]: f["level"] for f in result["risk_factors"]}, {"samples": "high", "national_regime": "low"})
 
-    def test_incoming_ttl_comes_from_settings(self):
+    def test_deadline_exclusion_is_immediate_and_not_a_retention_ttl(self):
         from datetime import timedelta
 
         from django.utils import timezone
@@ -107,7 +107,7 @@ class ConfiguredBehaviourTests(TestCase):
 
         services.purge_stale()
 
-        self.assertEqual(list(Tender.objects.filter(status=Tender.NEW).values_list("purchase_number", flat=True)), ["fresh"])
+        self.assertFalse(Tender.objects.filter(status=Tender.NEW).exists())
         self.assertEqual(Tender.objects.get(purchase_number="old").status, Tender.DISMISSED)
 
     def test_expired_evaluation_and_calculation_leave_the_kanban(self):

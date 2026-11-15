@@ -20,6 +20,15 @@ def start_discovery_pull():
     """A full discovery pass must not occupy a web request until gunicorn kills it."""
     if not _background_lock.acquire(blocking=False):
         return False
+    directory = feed_path()
+    if directory is not None:
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / ".collector-lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                _background_lock.release()
+                return False
     def collect():
         from django.db import close_old_connections
         from .services import run_pull

@@ -338,8 +338,7 @@ def kanban(request):
     def _visible(base_qs, dir_key):
         qs = base_qs.order_by(*_deadline_order(dir_key, "collecting_finished_at", "first_seen_at"))
         rows, _hidden, _expired = visible_found_tenders(
-            qs, min_price=settings.min_price,
-            include_words=settings.include_words, exclude_words=settings.exclude_words, include_board_pins=True,
+            qs,  include_board_pins=True,
         )
         return rows
 
@@ -416,8 +415,7 @@ def _deadline_urgency(deadline, now) -> tuple[int | None, str]:
 
 def _incoming_count(settings) -> int:
     rows, _hidden, _expired = visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at"), min_price=settings.min_price,
-        include_words=settings.include_words, exclude_words=settings.exclude_words,
+        Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at"),
     )
     return len(rows)
 
@@ -427,8 +425,7 @@ def _board_count(settings) -> int:
     from tenders.models import TenderEstimate
 
     review, _hidden, _expired = visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at", "kanban_visible_until"), min_price=settings.min_price,
-        include_words=settings.include_words, exclude_words=settings.exclude_words, include_board_pins=True,
+        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at", "kanban_visible_until"),  include_board_pins=True,
     )
     estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).exclude(Q(tender__outcome_status=Tender.OUTCOME_DRAFT, tender__collecting_finished_at__lt=timezone.now()) & ~Q(tender__kanban_visible_until__gt=timezone.now())).count()
     return len(review) + estimates
@@ -471,8 +468,7 @@ def tender_list(request):
     queryset = queryset.order_by(SORTS[sort], F("first_seen_at").desc())
 
     rows, hidden, expired = visible_found_tenders(
-        queryset, min_price=settings.min_price, include_words=settings.include_words,
-        exclude_words=settings.exclude_words, show_all=show_all,
+        queryset, show_all=show_all,
     )
 
     orgs = {o.inn: o for o in Organization.objects.filter(inn__in={t.customer_inn for t in rows if t.customer_inn})}
@@ -1519,7 +1515,7 @@ def archive(request):
     sort = request.GET.get("sort") if request.GET.get("sort") in ARCHIVE_SORTS else "archived"
 
     selection_settings = FilterSettings.load()
-    tenders = Tender.objects.filter(status=Tender.DISMISSED)
+    tenders = Tender.objects.filter(status=Tender.DISMISSED).select_related("history_record")
     if law_filter != "all":
         tenders = tenders.filter(law=law_filter)
     tenders = list(tenders.order_by(ARCHIVE_SORTS[sort], "-pk"))

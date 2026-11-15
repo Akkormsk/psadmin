@@ -53,7 +53,7 @@ class ArchiveTests(TestCase):
         self.assertTrue(rows[0].has_complaint)
         self.assertFalse(rows[0].notification_missing)
         self.assertTrue({"raw", "notification_raw", "complaints_raw", "protocol"} <= rows[0].get_deferred_fields())
-        self.assertContains(response, "Вернуть отбор")
+        self.assertContains(response, "Архив входящих")
 
     def test_stage_is_the_reason_and_each_stage_is_counted(self):
         self._archived("incoming", "Кружки")
