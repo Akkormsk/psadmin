@@ -194,3 +194,25 @@ class PrimarySettingsMigrationTests(TransactionTestCase):
         executor.migrate(before)
         model = executor.loader.project_state(before).apps.get_model('tender_selection', 'FilterSettings')
         self.assertEqual(model.objects.get(pk=1).include_words, 'сувенир, полиграф')
+
+
+class PrimaryRoundTripTests(SimpleTestCase):
+    def test_saved_date_renders_in_editable_local_time(self):
+        with timezone.override('Europe/Moscow'):
+            initial = {'published_after': '2026-11-01T12:00:45+00:00'}
+            form = PrimaryFilterForm(initial=initial)
+            self.assertIn('value="2026-11-01T15:00:45"', str(form['published_after']))
+            self.assertEqual(initial['published_after'], '2026-11-01T12:00:45+00:00')
+
+    def test_request_groups_leave_room_for_incremental_cursor_and_classifier(self):
+        from .primary_search import split_primary_requests
+        from urllib.parse import urlencode
+        words = ','.join('сувенирнаяпродукция' + str(i) for i in range(20))
+        base = {'stage': ['1'], 'object_info': word_pattern(words)}
+        with patch.dict(os.environ, {'GOSPLAN_MAX_REQUEST_LINE_BYTES': '700'}):
+            groups = split_primary_requests(base, words, 'fz44')
+        for group in groups:
+            actual = {**group, 'updated_after': '2026-11-15T00:00:00.123456+00:00',
+                      'updated_before': '2026-11-15T00:01:00.123456+00:00', 'classifier': ['1'*50]}
+            line = 'GET /fz44/purchases?' + urlencode(actual, doseq=True) + '&limit=100&skip=1000 HTTP/1.1\r\n'
+            self.assertLessEqual(len(line.encode()), 700)
