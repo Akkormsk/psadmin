@@ -255,6 +255,7 @@ def run_pull(
     regions=None,
     max_requests: int | None = None,
     max_seconds: float | None = None,
+    full_scan: bool = False,
 ) -> PullRun:
     settings = FilterSettings.load()
     if os.getenv("GOSPLAN_API_DISABLED") == "1":
@@ -279,7 +280,7 @@ def run_pull(
     run = PullRun.objects.create(
         started_at=timezone.now(),
         params={"days": days, "min_price": float(min_price or 0), "laws": laws, "regions": list(regions or []),
-                "okpd2": [c for b in batches for c in b]},
+                "okpd2": [c for b in batches for c in b], "full_scan": full_scan},
     )
     stats = {"requests": 0, "records": 0}
     deadline = time.monotonic() + max_seconds if max_seconds is not None else None
@@ -338,7 +339,7 @@ def run_pull(
             if batch:
                 params["classifier"] = batch
             cursor_key, params = prepare_discovery(law, params, days,
-                filter_version=settings.primary_filters, through_at=run.started_at)
+                filter_version=settings.primary_filters, through_at=run.started_at, full_scan=full_scan)
             for record in gosplan.iter_purchases(
                 params=params, law=law, max_requests=remaining, on_request=_on_request, deadline=deadline
             ):
@@ -383,6 +384,7 @@ def run_pull(
         run.error = "Не удалось сохранить данные/решение; полнота не подтверждена"
         run.ok = False
 
+    run.params["unique_records"] = len(seen)
     run.finished_at = timezone.now()
     run.requests_made = stats["requests"]
     run.records_received = stats["records"]

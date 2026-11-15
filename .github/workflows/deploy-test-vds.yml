@@ -6,6 +6,16 @@ on:
       - test-server
   workflow_dispatch:
     inputs:
+      discovery_census:
+        description: "Bounded TEST import and two full coverage passes; temporarily pause PROD Gosplan only, auto-resume; no deploy/AI/EIS/EAT"
+        required: false
+        default: false
+        type: boolean
+      census_max_seconds:
+        description: "Total census budget in seconds, at most 3600"
+        required: false
+        default: "1800"
+        type: string
       target_sha:
         description: "Commit SHA from test-server; leave empty for the selected branch HEAD"
         required: false
@@ -79,7 +89,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/test-server' && !inputs.inspect_tender_number && !inputs.refresh_estimates
+    if: github.ref == 'refs/heads/test-server' && !inputs.inspect_tender_number && !inputs.refresh_estimates && !inputs.discovery_census
     runs-on: ubuntu-22.04
     env:
       TEST_URL: https://test.admin.psodin.ru
@@ -394,3 +404,29 @@ jobs:
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
               "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml cp test-web:/app/private_maintenance_backups /home/deploy/psadmin-test-maintenance-backups-${{ github.run_id }}"
           fi
+
+  discovery_census:
+    if: github.event_name == 'workflow_dispatch' && inputs.discovery_census
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      MAX_SECONDS: ${{ inputs.census_max_seconds }}
+    steps:
+      - name: Configure existing VDS connection
+        env:
+          KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$HOSTS" > "$HOME/.ssh/known_hosts"
+      - name: Bounded census with automatic PROD resume
+        run: |
+          set -euo pipefail
+          case "$MAX_SECONDS" in ''|*[!0-9]*) exit 2 ;; esac
+          test "$MAX_SECONDS" -gt 0
+          test "$MAX_SECONDS" -le 3600
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "deploy@$SSH_HOST" "python3 /home/deploy/psadmin-test/scripts/run_discovery_census.py --run-id '$GITHUB_RUN_ID' --max-seconds '$MAX_SECONDS'"
