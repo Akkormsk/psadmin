@@ -1241,6 +1241,7 @@ def filter_settings(request):
         "chosen_sources": request.POST.getlist("source") if request.method == "POST" else effective_sources(settings),
         "profile_enabled": request.POST.get("profile_triage_enabled") == "1" if request.method == "POST" else settings.profile_triage_enabled,
         "discovery_mirror": os.getenv("TENDER_DISCOVERY_ROLE") == "mirror",
+        "discovery_paused": os.getenv("GOSPLAN_API_DISABLED") == "1",
     })
 
 

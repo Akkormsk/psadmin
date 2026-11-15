@@ -257,6 +257,9 @@ def run_pull(
     max_seconds: float | None = None,
 ) -> PullRun:
     settings = FilterSettings.load()
+    if os.getenv("GOSPLAN_API_DISABLED") == "1":
+        return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True,
+            params={"source": "eis", "paused": True, "disabled": True})
     if Tender.EIS not in effective_sources(settings):
         return PullRun.objects.create(started_at=timezone.now(), finished_at=timezone.now(), ok=True, params={"source": "eis", "disabled": True})
     from .primary_search import build_primary_params, split_primary_requests
@@ -1881,6 +1884,10 @@ def pull_tenders_now(user):
     from .eat_service import start_eat_pull
     # EAT takes two asynchronous API steps and must not block the existing HTTP request.
     eat_status = start_eat_pull()
+    if os.getenv("GOSPLAN_API_DISABLED") == "1":
+        return {"ok": False, "requests_made": 0, "records_received": 0, "created_count": 0,
+                "duration_seconds": 0, "error": "Поиск ГосПлана приостановлен: текущие условия требуют нескольких запросов.",
+                "eat_status": eat_status}
     if os.getenv("TENDER_DISCOVERY_ROLE") != "mirror":
         from .discovery_feed import start_discovery_pull
         started = start_discovery_pull()

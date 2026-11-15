@@ -261,10 +261,10 @@ jobs:
           print(json.dumps({"assistant_model": model, "base_url": base_url, "key_configured": key_configured}))
 
           assert os.getenv("TENDER_DISCOVERY_ROLE") == "standalone"
-          assert os.getenv("GOSPLAN_API_DISABLED") == "0"
+          assert os.getenv("GOSPLAN_API_DISABLED") == "1"
           assert os.getenv("TENDER_DISCOVERY_ENRICH_AFTER_PULL") == "0"
           assert os.getenv("GOSPLAN_QUOTA_DIR") != os.getenv("TENDER_DISCOVERY_FEED_DIR")
-          print("Independent TEST discovery enabled; mirror removed; shared pacing only")
+          print("TEST discovery intentionally paused; mirror removed; no Gosplan requests")
           import django
           os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
           django.setup()

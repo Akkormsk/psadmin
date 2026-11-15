@@ -26,7 +26,10 @@ class Command(BaseCommand):
                 expire_incoming()
                 run = run_pull(max_seconds=options['max_seconds'])
                 expire_incoming()
-                self.stdout.write(f'discovery: new={run.created_count}, updated={run.updated_count}, pages={run.requests_made}, complete={run.params.get("complete",False)}, ok={run.ok}; {run.error}')
+                if run.params.get('paused'):
+                    self.stdout.write('discovery paused: no Gosplan requests')
+                else:
+                    self.stdout.write(f'discovery: new={run.created_count}, updated={run.updated_count}, pages={run.requests_made}, complete={run.params.get("complete",False)}, ok={run.ok}; {run.error}')
             finally:
                 close_old_connections()
             if not options['watch']:
