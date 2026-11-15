@@ -157,8 +157,7 @@ print(json.dumps({"census_overlap":{"from":"2026-11-15T14:43:07Z","to":"2026-11-
 # Read every archived title; report aggregate vocabulary only, no client records.
 import re
 from collections import Counter
-from tender_selection.models import TenderHistory
-archive = TenderHistory.objects.filter(status='dismissed')
+archive = (History if installed else Tender).objects.filter(status='dismissed')
 frequency=Counter()
 for title in archive.values_list('title',flat=True).iterator(chunk_size=500):
     frequency.update(set(re.findall(r'[а-яёa-z]{4,}',(title or '').lower())))
