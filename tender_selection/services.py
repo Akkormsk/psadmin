@@ -1,8 +1,8 @@
 """Оркестрация выгрузки закупок: тянет страницы через gosplan.iter_purchases,
 сохраняет Tender, пишет журнал PullRun.
 
-Фильтр по цене и категориям задаётся на стороне API; плюс/минус-слова
-применяются позже, при показе списка (см. filtering.py).
+Первичные условия выполняются API. Вторичный отсев фиксируется при
+поступлении; чтение списка не меняет принятое решение.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from .discovery_cursor import prepare as prepare_discovery, advance as advance_d
 from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
-from .filtering import match_title, parse_terms
 
 
 RISK_FACTOR_LABELS = (
@@ -48,7 +47,7 @@ EVALUATION_NUMBERS = (
     ("stats_min_samples", "Минимум закупок для прогноза", int, 1, 100),
     ("reduction_hint_min", "Подсказка снижения не меньше", int, 0, 100),
     ("reduction_hint_max", "Подсказка снижения не больше", int, 0, 100),
-    ("incoming_ttl_days", "Хранить просроченные «Входящие»", int, 1, 365),
+    ("incoming_ttl_days", "Перепроверять сроки после дедлайна, дней", int, 1, 365),
 )
 _TENDER_SETTINGS_FIELDS = ("roi_good_percent", "roi_thin_percent", "vat_rate", "default_reduction_percent")
 
@@ -58,14 +57,9 @@ MSK = ZoneInfo("Europe/Moscow")
 UTC = ZoneInfo("UTC")
 
 
-def visible_found_tenders(queryset, *, min_price, include_words, exclude_words, show_all=False, include_board_pins=False):
-    """Existing shared rules for the site's incoming tender list and board."""
+def visible_found_tenders(queryset, *, show_all=False, include_board_pins=False, **_legacy_unused):
+    """Read persisted admission; never repeat primary or secondary filtering."""
     now = timezone.now()
-    if min_price:
-        price_filter = Q(max_price__gte=min_price) | Q(max_price__isnull=True)
-        if include_board_pins:
-            price_filter |= Q(kanban_visible_until__gt=now)
-        queryset = queryset.filter(price_filter)
     expired = 0
     if not show_all:
         expired_filter = Q(collecting_finished_at__lt=now)
@@ -73,34 +67,17 @@ def visible_found_tenders(queryset, *, min_price, include_words, exclude_words, 
             expired_filter &= ~Q(kanban_visible_until__gt=now)
         expired = queryset.filter(expired_filter).count()
         queryset = queryset.exclude(expired_filter)
-    include = parse_terms(include_words)
-    exclude = parse_terms(exclude_words)
-    from .profile_triage import profile_disposition
-    use_profile = bool(FilterSettings.objects.filter(pk=1).values_list("profile_triage_enabled", flat=True).first())
-    rows, hidden = [], 0
-    for tender in queryset:
-        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
-        if use_profile and tender.status == Tender.NEW and tender.review == Tender.UNREVIEWED:
-            disposition = profile_disposition(tender)
-            if disposition in {"fit", "not_fit"}:
-                passes = disposition == "fit"
-        if passes or show_all or (include_board_pins and tender.kanban_visible_until and tender.kanban_visible_until > now):
-            tender.match_hits = hits
-            tender.filtered_out = not passes
-            rows.append(tender)
-        else:
-            hidden += 1
-    return rows, hidden, expired
+    rows = list(queryset)
+    for tender in rows:
+        tender.match_hits = []
+        tender.filtered_out = False
+    return rows, 0, expired
 
 
 def visible_incoming_tender_queryset():
     """The same current incoming-tender selection shown by the site's list."""
-    selection = FilterSettings.load()
     rows, _hidden, _expired = visible_found_tenders(
         Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED),
-        min_price=selection.min_price,
-        include_words=selection.include_words,
-        exclude_words=selection.exclude_words,
     )
     return Tender.objects.filter(pk__in=[tender.pk for tender in rows])
 
@@ -218,7 +195,7 @@ def _record_to_fields(record: dict, pulled_at, law: str) -> dict:
     # 223-ФЗ: customer (строка) / placer / submission_close_at
     customers = record.get("customers") or ([record["customer"]] if record.get("customer") else [])
     close = record.get("collecting_finished_at") or record.get("submission_close_at")
-    number = (record.get("purchase_number") or "").strip()
+    number = str(record.get("purchase_number") or "").strip()
     return {
         "object_info": record.get("object_info") or "",
         "title": gosplan.clean_title(record.get("object_info") or ""),
@@ -277,6 +254,7 @@ def run_pull(
     laws=None,
     regions=None,
     max_requests: int | None = None,
+    max_seconds: float | None = None,
 ) -> PullRun:
     settings = FilterSettings.load()
     if Tender.EIS not in effective_sources(settings):
@@ -301,10 +279,20 @@ def run_pull(
                 "okpd2": [c for b in batches for c in b]},
     )
     stats = {"requests": 0, "records": 0}
+    deadline = time.monotonic() + max_seconds if max_seconds is not None else None
+
+    def check_deadline():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise gosplan.GosplanError("Проверка остановлена по времени; полнота не подтверждена")
 
     def _on_request(_request_no, got):
         stats["requests"] += 1
         stats["records"] += got
+        run.requests_made = stats["requests"]
+        run.records_received = stats["records"]
+        run.created_count, run.updated_count = created, updated
+        run.save(update_fields=["requests_made", "records_received", "created_count", "updated_count"])
+        check_deadline()
 
     created = updated = 0
     triage_ids = []
@@ -327,10 +315,14 @@ def run_pull(
     # чередуем законы внутри каждого батча — при нехватке лимита оба закона получают поровну
     jobs = [(law, batch, base) for batch in batches for law in laws
             for base in split_primary_requests(bases[law], settings.include_words, law)]
+    import hashlib
+    stable = {law: {k: v for k, v in base.items() if k != "published_before"} for law, base in bases.items()}
+    run.params["filter_config_version"] = hashlib.sha256(json.dumps({"queries": stable, "classifiers": batches}, sort_keys=True).encode()).hexdigest()
     run.params.update({"windows": bases, "queries": [], "jobs_total": len(jobs), "jobs_completed": 0, "complete": False})
     run.save(update_fields=["params"])
     try:
         for step, (law, batch, base) in enumerate(jobs):
+            check_deadline()
             remaining = None if max_requests is None else max_requests - stats["requests"]
             if remaining is not None and remaining <= 0:
                 raise gosplan.GosplanError("Бюджет обхода исчерпан; полнота не подтверждена")
@@ -342,21 +334,30 @@ def run_pull(
             cursor_key, params = prepare_discovery(law, params, days,
                 filter_version=settings.primary_filters, through_at=run.started_at)
             for record in gosplan.iter_purchases(
-                params=params, law=law, max_requests=remaining, on_request=_on_request
+                params=params, law=law, max_requests=remaining, on_request=_on_request, deadline=deadline
             ):
-                number = (record.get("purchase_number") or "").strip()
+                number = str(record.get("purchase_number") or "").strip()
                 if not number or (law, number) in seen:
                     continue
                 seen.add((law, number))
+                if Tender.objects.filter(law=law, purchase_number=number).exclude(source=Tender.EIS).exists():
+                    raise gosplan.GosplanError("Коллизия номера другого источника; карточка не перезаписана")
                 publish(record, law)
                 with transaction.atomic():
                     tender, is_created = Tender.objects.update_or_create(
                         law=law,
-                        purchase_number=number,
-                        defaults={**_record_to_fields(record, run.started_at, law), "source": Tender.EIS},
+                        purchase_number=number, source=Tender.EIS,
+                        defaults=_record_to_fields(record, run.started_at, law),
                     )
+                    from .intake import decide
+                    admitted = decide(tender.pk, settings, existing=not is_created, primary_context={
+                        "source": "gosplan", "law": law, "query": params,
+                        "filter_config_version": run.params["filter_config_version"],
+                    })
                 created += int(is_created)
                 updated += int(not is_created)
+                if not admitted:
+                    continue
                 if is_created and (os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params):
                     triage_ids.append(tender.pk)
                 if os.getenv("TENDER_DISCOVERY_ROLE") != "collector" or "updated_after" in params:
@@ -371,6 +372,10 @@ def run_pull(
     except gosplan.GosplanError as exc:
         run.error = str(exc)
         run.ok = False
+    except Exception:
+        logger.exception("Discovery failed while saving primary data or admission")
+        run.error = "Не удалось сохранить данные/решение; полнота не подтверждена"
+        run.ok = False
 
     run.finished_at = timezone.now()
     run.requests_made = stats["requests"]
@@ -380,7 +385,7 @@ def run_pull(
     run.duration_seconds = round((run.finished_at - run.started_at).total_seconds(), 1)
     run.save()
 
-    if run.ok:
+    if run.ok and os.getenv("TENDER_DISCOVERY_ENRICH_AFTER_PULL", "1") != "0":
         from .profile_triage import start_profile_triage_in_background
         from tenders.calculation_v2_pipeline import trigger_visible_tender
 
@@ -763,52 +768,12 @@ def retry_pending_deadlines(*, limit: int = 10, pause: float = None) -> tuple[in
 
 
 def purge_stale() -> dict:
-    """Фоновая уборка карточек по истечении срока подачи:
-    - показанные (прошли плюс/минус-фильтр) — архивируются насовсем, а не
-      удаляются: даже нетронутый тендер — источник статистики по торгам
-      (см. retry_pending_protocols/_outcomes — обогащают именно архив);
-    - скрытые фильтром — как и раньше, удаляются, остаётся только след для
-      аудита слов (IncomingTrace) — для статистики торгов они бесполезны.
-
-    Просроченные «Оценка» и «Расчёт» уходят в архив сразу после дедлайна.
-    «Торги» и опубликованные результаты остаются на доске до фиксации результата."""
-
-    from .filtering import match_title, parse_terms
-    from .models import IncomingTrace
-
+    """Deadline cleanup only; never re-read primary or negative words."""
     now = timezone.now()
-    settings = FilterSettings.load()
-    expired = Tender.objects.filter(
-        status=Tender.NEW, review=Tender.UNREVIEWED,
-        collecting_finished_at__lt=now - timedelta(days=settings.incoming_ttl_days),
-    )
-    include, exclude = parse_terms(settings.include_words), parse_terms(settings.exclude_words)
-    traces = []
-    to_archive_ids = []
-    to_delete_ids = []
-    for tender in expired.only("id", "source", "law", "purchase_number", "title", "object_info", "okpd2", "max_price", "opened_at"):
-        passes, hits = match_title(tender.title or tender.object_info, include, exclude)
-        if passes:
-            to_archive_ids.append(tender.id)
-            continue
-        to_delete_ids.append(tender.id)
-        traces.append(IncomingTrace(
-            source=tender.source, law=tender.law, purchase_number=tender.purchase_number, title=tender.title or tender.object_info,
-            okpd2=tender.okpd2, max_price=tender.max_price, plus_hits=hits,
-            filtered_out=True, was_opened=tender.opened_at is not None,
-        ))
-    # След — для аудита плюс/минус-слов: без него «не наши» (скрытые) тендеры исчезают бесследно.
+    from .intake import expire_incoming
+    archived_incoming = expire_incoming()
+    expired_incoming = 0
     with transaction.atomic():
-        IncomingTrace.objects.bulk_create(traces, update_conflicts=True,
-            unique_fields=["source", "law", "purchase_number"],
-            update_fields=["plus_hits", "filtered_out", "was_opened"])
-        archived_incoming = Tender.objects.filter(id__in=to_archive_ids).update(
-            status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
-        )
-        archived_incoming += Tender.objects.filter(id__in=to_delete_ids).update(
-            status=Tender.DISMISSED, archived_at=now, archived_from_stage="incoming",
-        )
-        expired_incoming = 0
         archived_evaluation = Tender.objects.filter(
             status=Tender.NEW, review=Tender.INTERESTING,
             collecting_finished_at__lt=now,
@@ -1467,6 +1432,11 @@ def restore_tender(tender) -> None:
     tender.archived_at = None
     tender.archived_from_stage = ""
     tender.save(update_fields=["status", "archived_at", "archived_from_stage"])
+    from .models import TenderHistory
+    TenderHistory.objects.filter(tender_id=tender.pk).update(filtered_out=False, reason_code="",
+        reason_text="", decision_source="manual", decision_at=timezone.now())
+    from .intake import decide
+    decide(tender.pk, existing=True)
 
 
 def set_tender_review(tender, review) -> None:
@@ -1482,11 +1452,7 @@ def set_tender_review(tender, review) -> None:
 def update_filter_words(*, include_words, exclude_words):
     if not isinstance(include_words, str) or not isinstance(exclude_words, str):
         raise ValueError("Нужны текстовые плюс- и минус-слова")
-    settings = FilterSettings.load()
-    settings.include_words = include_words.strip()
-    settings.exclude_words = exclude_words.strip()
-    settings.save(update_fields=["include_words", "exclude_words"])
-    return settings
+    return save_selection_settings({"include_words": include_words, "exclude_words": exclude_words})
 
 
 def toggle_forecast_inclusion(tender):
@@ -1892,15 +1858,12 @@ def run_profile_triage(user):
     settings = FilterSettings.load()
     if not settings.profile_triage_enabled:
         raise ValueError("Сначала включите проверку профиля в настройках отбора")
-    from .filtering import match_title, parse_terms
     from .profile_triage import start_profile_triage_in_background
 
     candidates = Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED)
     ids = []
-    include, exclude = parse_terms(settings.include_words), parse_terms(settings.exclude_words)
     for tender in candidates.order_by("pk"):
-        if match_title(tender.title, include, [])[0]:
-            ids.append(tender.pk)
+        ids.append(tender.pk)
         if len(ids) == 100:
             break
     start_profile_triage_in_background(ids)
@@ -2751,5 +2714,5 @@ def intake_readiness_for(user):
     heavy = [field.name for field in Tender._meta.concrete_fields if field.name.endswith('_raw')]
     rows, _, _ = visible_found_tenders(
         Tender.objects.filter(status=Tender.NEW, review=Tender.UNREVIEWED).defer(*heavy),
-        min_price=selection.min_price, include_words=selection.include_words, exclude_words=selection.exclude_words)
+        )
     return summarize(rows)

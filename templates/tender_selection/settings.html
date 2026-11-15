@@ -10,7 +10,7 @@
       <div class="panel-header"><h2 class="panel-title">1. Основной фильтр — поиск</h2>
         <button type="submit" class="button-success">Сохранить</button></div>
       <p class="settings-description">Между условиями — «И», между плюс-словами — «ИЛИ». Пустые необязательные поля не ограничивают поиск.</p>
-      {% if discovery_mirror %}<p class="filter-notice">На TEST первичный поиск ЕИС пока не применяется к загрузке: тендеры поступают из PROD. Вторичный отбор работает с полученными карточками.</p>{% endif %}
+      {% if discovery_mirror %}<p class="filter-notice">Копирование из PROD включено. Первичный фильтр этого сервера не управляет потоком.</p>{% else %}<p class="filter-notice">Первичный фильтр применяется в запросе к ГосПлану. Вторичный отсев выполняется один раз при поступлении; принятые карточки повторно по этим условиям не скрываются.</p>{% endif %}
       <div class="settings-grid settings-grid--two filter-section">
         <fieldset class="filter-choice-group">
           <legend>Источник закупок</legend>
@@ -33,7 +33,7 @@
       </div>
       <div class="form-group"><label for="include_words">Плюс-слова — хотя бы одно</label>
         <textarea id="include_words" name="include_words" rows="6" placeholder="Сувенир, полиграф, подароч…">{{ form_values.include_words }}</textarea>
-        <p class="settings-description filter-hint">Через запятую или с новой строки. Поиск в названии, без учёта регистра и «е/ё». «Слово+слово» — обе части: источник ищет первую, приложение проверяет сочетание.</p></div>
+        <p class="settings-description filter-hint">Через запятую или с новой строки. Поиск в названии, без учёта регистра и «е/ё». «Слово+слово» — обе части в названии закупки.</p></div>
       <fieldset class="filter-choice-group filter-section">
         <legend>Этап закупки</legend>
         <div class="filter-options filter-options--stages">{% for option in primary_form.stage %}<label class="filter-choice">{{ option.tag }}<span>{{ option.choice_label }}</span></label>{% endfor %}</div>
@@ -65,7 +65,7 @@
       <div class="panel-header"><h2 class="panel-title">2. Вторичный фильтр — отбор во «Входящие»</h2><a href="{% url 'tender_selection:word_audit' %}" class="button-secondary">Аудит слов</a></div>
       <div class="form-group"><label for="exclude_words">Минус-слова — исключить при совпадении</label><textarea id="exclude_words" name="exclude_words" rows="5" placeholder="Слова и сочетания, которые не подходят">{{ form_values.exclude_words }}</textarea>
         <p class="settings-description filter-hint">Через запятую или с новой строки. «Ремонт+дорог» — обе части в названии.</p></div>
-      <label class="filter-choice"><input type="checkbox" name="profile_triage_enabled" value="1" {% if profile_enabled %}checked{% endif %}><span>Проверять профиль по составу закупки<small>Скрывать подтверждённо неподходящие закупки</small></span></label>
+      <label class="filter-choice"><input type="checkbox" name="profile_triage_enabled" value="1" {% if profile_enabled %}checked{% endif %}><span>Проверять соответствие профилю<small>Рекомендация для оценки; не скрывает уже принятые карточки</small></span></label>
     </section>
     <div class="filter-footer"><button type="submit" class="button-success">Сохранить настройки</button></div>
   </form>

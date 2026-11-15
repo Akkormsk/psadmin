@@ -107,8 +107,12 @@ def run_eat_pull(*, days=None, detail_limit=200):
                         setattr(existing, key, value)
                     existing.save(update_fields=list(attrs))
                     stats["updated"] += 1
+                    from .intake import decide
+                    decide(existing.pk, selection, existing=True)
                 else:
-                    Tender.objects.create(law=law, purchase_number=number, **attrs)
+                    tender = Tender.objects.create(law=law, purchase_number=number, **attrs)
+                    from .intake import decide
+                    decide(tender.pk, selection)
                     stats["created"] += 1
         run.ok = True
     except eat_api.EatError as exc:

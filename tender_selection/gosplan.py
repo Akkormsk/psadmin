@@ -186,16 +186,27 @@ def iter_contracts(
         skip += page_size
 
 
-def _fetch_with_retry(page_params: dict, law: str) -> list[dict]:
-    """Одна страница: при 429 — одна пауза и повтор, при сетевой ошибке — короткий повтор."""
-    try:
-        return fetch_page(page_params, law)
-    except RateLimitError:
-        time.sleep(RATE_LIMIT_WAIT)
-        return fetch_page(page_params, law)  # второй 429 пробросится наверх — вернём частичный результат
-    except GosplanError:
-        time.sleep(15)
-        return fetch_page(page_params, law)
+def _fetch_with_retry(page_params: dict, law: str, deadline=None) -> list[dict]:
+    rate_retries = int(os.getenv("GOSPLAN_RATE_RETRIES", "5"))
+    network_retried = False
+    while True:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise GosplanError("Проверка остановлена по времени; полнота не подтверждена")
+        try:
+            return fetch_page(page_params, law)
+        except RateLimitError:
+            if rate_retries <= 0:
+                raise
+            rate_retries -= 1
+            wait = RATE_LIMIT_WAIT
+            if deadline is not None:
+                wait = min(wait, max(0, deadline - time.monotonic()))
+            time.sleep(wait)
+        except GosplanError as exc:
+            if "HTTP 504" in str(exc) or network_retried:
+                raise
+            network_retried = True
+            time.sleep(15)
 
 
 def iter_purchases(
@@ -207,6 +218,7 @@ def iter_purchases(
     throttle: float = THROTTLE_SECONDS,
     on_request: Callable[[int, int], None] | None = None,
     _budget=None,
+    deadline=None,
 ) -> Iterator[dict]:
     """Листает /fz44/purchases по ``skip`` до пустой страницы или ``max_requests``.
 
@@ -223,15 +235,17 @@ def iter_purchases(
         end = datetime.fromisoformat(params["published_before"])
         if end - start > timedelta(days=90):
             while start < end:
-                upper = min(start + timedelta(days=90), end)
-                yield from iter_purchases(params={**params, "published_after": start.isoformat(),
-                                                  "published_before": upper.isoformat()},
+                lower = max(end - timedelta(days=90), start)
+                yield from iter_purchases(params={**params, "published_after": lower.isoformat(),
+                                                  "published_before": end.isoformat()},
                     law=law, page_size=page_size, max_requests=max_requests,
-                    throttle=throttle, on_request=on_request, _budget=_budget)
-                start = upper
+                    throttle=throttle, on_request=on_request, _budget=_budget, deadline=deadline)
+                end = lower
             return
     skip = 0
     for request_no in itertools.count(1):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise GosplanError("Проверка остановлена по времени; полнота не подтверждена")
         if max_requests is not None and _budget[0] >= max_requests:
             raise GosplanError("Обход прерван явно заданным бюджетом; полнота не подтверждена")
         if skip > 1000:
@@ -249,13 +263,28 @@ def iter_purchases(
             for lower, upper in ((start, middle), (middle, end)):
                 yield from iter_purchases(params={**params, start_key: lower.isoformat(), end_key: upper.isoformat()},
                                           law=law, page_size=page_size, max_requests=max_requests,
-                                          throttle=throttle, on_request=on_request, _budget=_budget)
+                                          throttle=throttle, on_request=on_request, _budget=_budget, deadline=deadline)
             return
         if request_no > 1:
             time.sleep(throttle)
         page_params = {**params, "limit": page_size, "skip": skip}
         _budget[0] += 1
-        page = _fetch_with_retry(page_params, law)
+        try:
+            page = _fetch_with_retry(page_params, law, **({"deadline": deadline} if deadline is not None else {}))
+        except GosplanError as exc:
+            if "HTTP 504" not in str(exc):
+                raise
+            start = datetime.fromisoformat(params["published_after"])
+            end = datetime.fromisoformat(params["published_before"])
+            if (end - start).total_seconds() <= 1:
+                raise
+            middle = start + (end - start) / 2
+            for lower, upper in ((middle, end), (start, middle)):
+                yield from iter_purchases(params={**params, "published_after": lower.isoformat(),
+                                                  "published_before": upper.isoformat()},
+                    law=law, page_size=page_size, max_requests=max_requests,
+                    throttle=throttle, on_request=on_request, _budget=_budget, deadline=deadline)
+            return
         if on_request:
             on_request(request_no, len(page))
         if not page:

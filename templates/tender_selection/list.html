@@ -56,11 +56,7 @@
         <button type="button" class="{% if law_filter == 'fz223' %}is-active{% endif %}" onclick="tsGo('law','fz223')">223-ФЗ <small>{{ law_counts.fz223 }}</small></button>
         <select aria-label="Источник закупок" onchange="tsGo('source',this.value)"><option value="">Все источники</option><option value="eis" {% if source_filter == 'eis' %}selected{% endif %}>ЕИС</option><option value="eat" {% if source_filter == 'eat' %}selected{% endif %}>ЕАТ «Берёзка»</option><option value="manual" {% if source_filter == 'manual' %}selected{% endif %}>Вручную</option></select>
       </div>
-      {% if show_all %}
-      <button type="button" class="ts-show-hidden" onclick="tsGo('all','')">Вернуть отбор</button>
-      {% elif hidden_count or expired_count %}
-      <button type="button" class="ts-show-hidden" onclick="tsGo('all','1')" title="Скрыты фильтрами: {{ hidden_count }} · срок истёк: {{ expired_count }}">Показать скрытые · {{ hidden_count|add:expired_count }}</button>
-      {% endif %}
+      <a class="ts-show-hidden" href="{% url 'tender_selection:archive' %}?stage=incoming">Архив входящих</a>
     </div>
 
     <div class="ts-bulkbar" data-bulk-bar>

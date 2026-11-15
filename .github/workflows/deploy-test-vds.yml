@@ -234,7 +234,11 @@ jobs:
 
           cd "$app/deploy/vds"
           ./twin.sh up </dev/null
-          docker compose -f compose.test.yml ps test-web
+          docker compose -f compose.test.yml ps test-web test-discovery-collector
+          collector_id="$(docker compose -f compose.test.yml ps -q test-discovery-collector)"
+          test -n "$collector_id"
+          test "$(docker inspect -f '{{.State.Running}}' "$collector_id")" = true
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=psadmin-test --filter label=com.docker.compose.service=test-discovery-mirror)"
           # Focused, offline regressions. Django creates a separate test database;
           # these tests never call a paid AI provider.
           docker compose -f compose.test.yml exec -T -e DJANGO_SECURE_COOKIES=0 test-web python manage.py test \
@@ -256,6 +260,11 @@ jobs:
           assert key_configured, "TEST Gateway key is missing"
           print(json.dumps({"assistant_model": model, "base_url": base_url, "key_configured": key_configured}))
 
+          assert os.getenv("TENDER_DISCOVERY_ROLE") == "standalone"
+          assert os.getenv("GOSPLAN_API_DISABLED") == "0"
+          assert os.getenv("TENDER_DISCOVERY_ENRICH_AFTER_PULL") == "0"
+          assert os.getenv("GOSPLAN_QUOTA_DIR") != os.getenv("TENDER_DISCOVERY_FEED_DIR")
+          print("Independent TEST discovery enabled; mirror removed; shared pacing only")
           import django
           os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
           django.setup()

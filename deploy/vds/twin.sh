@@ -24,6 +24,13 @@ case "${1:-}" in
     twin build test-web
     twin up -d test-db
     twin run --rm -T test-web python manage.py migrate --noinput
+    # Retire only the old TEST mirror. Never remove other profiles or volumes.
+    mirror_id="$(docker ps -aq --filter label=com.docker.compose.project=psadmin-test --filter label=com.docker.compose.service=test-discovery-mirror)"
+    if [ -n "$mirror_id" ]; then
+      docker stop "$mirror_id"
+      docker rm "$mirror_id"
+    fi
+    twin run --rm -T test-web python manage.py initialize_incoming_filter --apply
     twin up -d
     wait_healthy
     ;;

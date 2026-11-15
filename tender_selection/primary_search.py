@@ -118,11 +118,7 @@ def validate_primary(value):
 
 
 def word_pattern(words):
-    """Literal, case-insensitive OR. Compounds are checked locally at step 4.
-
-    Each compound contributes its first part upstream, a safe superset even on
-    providers without regex lookahead. No input is treated as executable regex.
-    """
+    """Literal OR alternatives; all parts of a + compound are required upstream."""
     alternatives = word_alternatives(words)
     return '(?i)(?:' + '|'.join(alternatives) + ')' if alternatives else None
 
@@ -133,7 +129,9 @@ def word_alternatives(words):
         root = term[0]
         if len(root) < 3:
             raise ValueError('Плюс-слово должно содержать не менее трёх символов до знака +.')
-        literal = ''.join('[её]' if c == 'е' else re.escape(c) for c in root)
+        parts = [''.join('[её]' if c == 'е' else re.escape(c) for c in part) for part in term]
+        literal = parts[0] if len(parts) == 1 else '(?:' + ''.join(
+            '(?=[\\s\\S]*' + part + ')' for part in parts[1:]) + '[\\s\\S]*' + parts[0] + ')'
         if literal not in alternatives:
             alternatives.append(literal)
     return alternatives
