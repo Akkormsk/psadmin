@@ -110,7 +110,10 @@ def _record_outcome(user, payload):
 register_tool(AssistantTool(
     "tender.discovery_settings", "Настроить поиск и отбор закупок",
     "Изменяет действующие правила поиска тем же общим исполнителем, что и настройки сайта. Источники загрузки отделены от законов и отбора во входящие.",
-    {'primary_filters': assistant_primary_argument(), 'sources': {'type': 'string[]', 'required': False, 'label': 'Источники закупок', 'choices': [('eis', 'ЕИС'), ('eat', 'ЕАТ «Берёзка»')]}, 'include_words': 'string?', 'exclude_words': 'string?', 'profile_triage_enabled': {'type': 'boolean', 'required': False, 'label': 'Помечать сомнительные тендеры'}, 'min_price': 'number?', 'window_days': 'integer?', 'okpd2_codes': 'string[]?', 'regions': 'string[]?', 'laws': {'type': 'string[]', 'required': False, 'label': 'Законы о закупках', 'choices': Tender.LAW_CHOICES}},
+    {'primary_filters': assistant_primary_argument(), 'sources': {'type': 'string[]', 'required': False, 'label': 'Источники закупок', 'choices': [('eis', 'ЕИС'), ('eat', 'ЕАТ «Берёзка»')]}, 'include_words': {'type': 'string', 'required': False, 'source_from_user': False,
+        'description': 'Полный список плюс-слов. Можно составить или изменить по цели пользователя; перед записью показать в карточке подтверждения. Корни через запятую или новую строку, + означает все части одновременно.'},
+     'exclude_words': {'type': 'string', 'required': False, 'source_from_user': False,
+        'description': 'Полный список минус-слов. Можно составить или изменить по цели пользователя; перед записью показать в карточке подтверждения. Корни через запятую или новую строку, + означает все части одновременно.'}, 'profile_triage_enabled': {'type': 'boolean', 'required': False, 'label': 'Помечать сомнительные тендеры'}, 'min_price': 'number?', 'window_days': 'integer?', 'okpd2_codes': 'string[]?', 'regions': 'string[]?', 'laws': {'type': 'string[]', 'required': False, 'label': 'Законы о закупках', 'choices': Tender.LAW_CHOICES}},
     False, True, True, _save_discovery_settings,
     ui={'model': 'tender_selection.FilterSettings'}, source="tender_selection.services.save_selection_settings",
 ))

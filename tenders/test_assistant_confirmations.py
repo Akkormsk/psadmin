@@ -38,6 +38,55 @@ class AssistantConfirmationSafetyTests(TestCase):
     def url(self, card):
         return reverse("assistant_conversation_action_confirm", args=[self.conversation.pk, card["id"]])
 
+    def prepare_generated_filters(self):
+        from tender_selection.models import FilterSettings
+        settings = FilterSettings.load()
+        settings.include_words = "старый поиск"
+        settings.exclude_words = "старое исключение"
+        settings.save()
+        arguments = {"include_words": "сувенир\nнанесени+логотип", "exclude_words": "бланочн\nмедал\nкубок"}
+        self.gateway.side_effect = [planned_call("tender.discovery_settings"),
+            function_call("assistant_ask", {"question": "Предлагаю сувенир, нанесени+логотип; исключить бланочн, медал, кубок."}),
+            function_call("tender_discovery_settings", arguments),
+            function_call("assistant_finish", {"answer": "Настройки сохранены"})]
+        respond(self.conversation, self.user, "Смести поиск на сувенирку и убери наградную и бланочную продукцию")
+        card = respond(self.conversation, self.user, "Утверждаю, ставь их в фильтры")[-1]
+        self.assertEqual(card["kind"], "confirmation_required")
+        self.assertEqual(card["data"]["arguments"], arguments)
+        settings.refresh_from_db()
+        self.assertEqual(settings.include_words, "старый поиск")
+        self.assertEqual(settings.exclude_words, "старое исключение")
+        return settings, arguments, card
+
+    def test_generated_filter_words_are_previewed_and_only_button_saves(self):
+        settings, arguments, card = self.prepare_generated_filters()
+        self.assertEqual(self.client.post(self.url(card), {"accept": "yes"}).status_code, 200)
+        settings.refresh_from_db()
+        self.assertEqual(settings.include_words, arguments["include_words"])
+        self.assertEqual(settings.exclude_words, arguments["exclude_words"])
+        self.assertEqual(self.client.post(self.url(card), {"accept": "yes"}).status_code, 409)
+
+    def test_generated_filter_words_can_prepare_card_without_textual_approval(self):
+        from tender_selection.models import FilterSettings
+        settings = FilterSettings.load()
+        before = (settings.include_words, settings.exclude_words)
+        arguments = {"include_words": "сувенир\nнанесени+логотип", "exclude_words": "бланочн"}
+        self.gateway.side_effect = [planned_call("tender.discovery_settings"),
+            function_call("tender_discovery_settings", arguments)]
+        card = respond(self.conversation, self.user, "Предложи настройки поиска сувенирки без бланков")[-1]
+        self.assertEqual(card["kind"], "confirmation_required")
+        self.assertEqual(card["data"]["arguments"], arguments)
+        settings.refresh_from_db()
+        self.assertEqual((settings.include_words, settings.exclude_words), before)
+        self.assertEqual(self.gateway.call_count, 2)
+
+    def test_cancelling_generated_filter_words_preserves_settings(self):
+        settings, arguments, card = self.prepare_generated_filters()
+        self.assertEqual(self.client.post(self.url(card), {"accept": "no"}).status_code, 200)
+        settings.refresh_from_db()
+        self.assertEqual(settings.include_words, "старый поиск")
+        self.assertEqual(settings.exclude_words, "старое исключение")
+
     def test_invalid_references_never_produce_a_confirmation_card(self):
         for value in (372200255926000168, "1", True):
             with self.subTest(value=value), self.assertRaises(AssistantToolError):

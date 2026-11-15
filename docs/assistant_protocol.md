@@ -600,6 +600,8 @@ Optional compose profile `intake` использует `run_calculation_v2_job -
 
 ### M3 и операции пользователя
 
+CODE_ONLY — 2026-11-15, ветка `fix/assistant-proposed-settings`, база TEST `5c63f59`; deployed SHA исправления не подтверждён. Для `tender.discovery_settings` плюс-/минус-слова являются предлагаемой настройкой по цели пользователя, а не дословной цитатой пользователя (`source_from_user=False`). Ассистент может составить список и сразу подготовить штатную карточку; запись только кнопкой с прежними правами, аудитом и защитой повторов. Общий guard происхождения свободного текста и расчётные/поисковые алгоритмы не меняются. Проверено: 160 тестов `test_assistant_confirmations`, `test_assistant_conversations`, `test_assistant_tools` PASS; после добавления прямого preview без текстового согласия — 14 confirmation-тестов PASS. Проверяются предложение → карточка без записи → сохранение кнопкой либо отмена. Живой AI-диалог и TEST-deploy этим не подтверждаются.
+
 Актуальный TEST `assistant_agent.py` использует Chat Completions Function Calling, app-owned capabilities и `assistant_read.py`; старые JSON next_step/assistant.navigate-графы не восстанавливать по историческим инструкциям. Код plan/ask/finish/cancel, verified references и compact memory не является новой live-приёмкой чата в рамках уборки.
 
 - READ строится из Django metadata и проверяется ORM validator; SQL от LLM запрещён. `verbose_name`, help_text, choices, права/связи и общий selector экрана определяют смысл, не phrase-specific hardcode.
