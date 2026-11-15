@@ -20,12 +20,22 @@ METHODS = [
     ('purchaseNoticeEP', 'Единственный поставщик (223-ФЗ)'),
     ('purchaseNotice', 'Другой способ (223-ФЗ)'),
 ]
-# Provider notification types, rather than a guessed grouping of procurement methods.
-OTHER_METHODS = ['fcsNotification111', 'epNotificationEOK', 'epNotificationEOKD',
-                 'epNotificationEOKOU', 'epNotificationEZK', 'purchaseNoticeOA', 'purchaseNoticeAE94FZ',
-                 'purchaseNoticeAESMBO', 'purchaseNoticeKESMBO', 'purchaseNoticeZKESMBO',
-                 'purchaseNoticeZPESMBO', 'pprf615NotificationPO', 'pprf615NotificationEF']
-METHODS += [(x, x) for x in OTHER_METHODS]
+# Keep provider values unchanged; present readable labels instead of XML names.
+METHODS += [
+    ('fcsNotification111', 'Особый порядок закупки, статья 111'),
+    ('epNotificationEOK', 'Открытый конкурс — прежняя форма (44-ФЗ)'),
+    ('epNotificationEOKD', 'Двухэтапный конкурс (44-ФЗ)'),
+    ('epNotificationEOKOU', 'Конкурс с ограниченным участием (44-ФЗ)'),
+    ('epNotificationEZK', 'Запрос котировок — прежняя форма (44-ФЗ)'),
+    ('purchaseNoticeOA', 'Открытый аукцион (223-ФЗ)'),
+    ('purchaseNoticeAE94FZ', 'Электронный аукцион по 94-ФЗ'),
+    ('purchaseNoticeAESMBO', 'Электронный аукцион для МСП (223-ФЗ)'),
+    ('purchaseNoticeKESMBO', 'Электронный конкурс для МСП (223-ФЗ)'),
+    ('purchaseNoticeZKESMBO', 'Электронные котировки для МСП (223-ФЗ)'),
+    ('purchaseNoticeZPESMBO', 'Электронный запрос предложений для МСП (223-ФЗ)'),
+    ('pprf615NotificationPO', 'Предварительный отбор по ПП № 615'),
+    ('pprf615NotificationEF', 'Электронный аукцион по ПП № 615'),
+]
 
 
 class PrimaryFilterForm(forms.Form):
@@ -34,7 +44,7 @@ class PrimaryFilterForm(forms.Form):
     max_price_le = forms.DecimalField(label='Максимальная НМЦК, ₽', required=False, min_value=0,
                                      max_digits=16, decimal_places=2)
     purchase_type = forms.MultipleChoiceField(label='Способ закупки', choices=METHODS, required=False,
-                                            widget=forms.SelectMultiple)
+                                            widget=forms.CheckboxSelectMultiple)
     for prefix, label in [('published', 'Публикация'), ('updated', 'Обновление'), ('deadline', 'Окончание подачи')]:
         for bound, suffix in [('after', 'с'), ('before', 'до')]:
             locals()[f'{prefix}_{bound}'] = forms.DateTimeField(

@@ -1229,7 +1229,13 @@ def filter_settings(request):
     chosen_laws = set(request.POST.getlist("law") if request.method == "POST" else effective_laws(settings))
     return render(request, "tender_selection/settings.html", {
         "settings": settings, "primary_form": primary_form,
-        "advanced_fields": [field for field in primary_form if field.name not in {"stage", "max_price_le", "purchase_type"}],
+        "advanced_groups": [(label, [primary_form[name] for name in names]) for label, names in [
+            ("Даты", ["published_after", "published_before", "updated_after", "updated_before", "deadline_after", "deadline_before"]),
+            ("Организации", ["customer", "owner", "responsible", "placer"]),
+            ("Номера и идентификаторы", ["purchase_number", "plan_number", "position_number", "ikz"]),
+            ("Обеспечение контракта", ["contract_guarantee_amount_ge", "contract_guarantee_amount_le", "contract_guarantee_part_ge", "contract_guarantee_part_le"]),
+            ("Другие условия", ["drug", "medical_product", "currency_code"]),
+        ]],
         "regions": [(code, name, str(code) in chosen_regions) for code, name in sorted(REGION_NAMES.items(), key=lambda x: x[1])],
         "laws": [(code, label, code in chosen_laws) for code, label in Tender.LAW_CHOICES],
         "form_values": request.POST if request.method == "POST" else {
