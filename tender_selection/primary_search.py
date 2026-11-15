@@ -39,7 +39,7 @@ class PrimaryFilterForm(forms.Form):
         for bound, suffix in [('after', 'с'), ('before', 'до')]:
             locals()[f'{prefix}_{bound}'] = forms.DateTimeField(
                 label=f'{label}: {suffix}', required=False,
-                widget=forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
+                widget=forms.DateTimeInput(attrs={'type': 'datetime-local', 'step': '1'}, format='%Y-%m-%dT%H:%M:%S'),
                 help_text='Часовой пояс сайта. Пусто — без ограничения.')
     del prefix, label, bound, suffix
     for key, label in [('customer', 'ИНН заказчика'), ('owner', 'ИНН владельца (44-ФЗ)'),
@@ -63,6 +63,14 @@ class PrimaryFilterForm(forms.Form):
                                       choices=[('', 'Не ограничивать'), ('true', 'Да'), ('false', 'Нет')])
     currency_code = forms.ChoiceField(label='Валюта', required=False,
                                      choices=[('', 'Любая'), ('RUB', 'Рубли'), ('not_RUB', 'Кроме рублей')])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.initial = dict(self.initial)
+        for name, field in self.fields.items():
+            value = self.initial.get(name)
+            if isinstance(field, forms.DateTimeField) and isinstance(value, str) and value:
+                self.initial[name] = field.to_python(value)
 
     def clean(self):
         data = super().clean()
@@ -129,7 +137,12 @@ def split_primary_requests(params, words, law):
     def request(group):
         return {**params, 'object_info': '(?i)(?:' + '|'.join(group) + ')'}
     def length(group):
-        return len(('GET /' + law + '/purchases?' + urlencode(request(group), doseq=True)
+        candidate = request(group)
+        # prepare_discovery and the classifier job add these after grouping.
+        candidate.setdefault('updated_after', '2000-01-01T00:00:00.000000+00:00')
+        candidate.setdefault('updated_before', '2000-01-01T00:00:00.000000+00:00')
+        candidate.setdefault('classifier', ['9' * 50])
+        return len(('GET /' + law + '/purchases?' + urlencode(candidate, doseq=True)
                     + '&limit=100&skip=1000 HTTP/1.1\r\n').encode())
     if not params.get('object_info'):
         return [params]
