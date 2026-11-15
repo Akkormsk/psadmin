@@ -106,7 +106,7 @@ if directory:
         for line in deque(receipt.open(), maxlen=20):
             try:
                 event = json.loads(line)
-                events.append({key: event.get(key) for key in ("at", "event", "status", "remaining")})
+                events.append({key: event.get(key) for key in ("at", "event", "status", "remaining", "retry_after", "reset", "age", "limit", "client", "query_hash")})
             except ValueError:
                 pass
         print(json.dumps({"rate_receipts_tail": events}))
