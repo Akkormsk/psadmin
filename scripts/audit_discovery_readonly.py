@@ -51,6 +51,8 @@ if hasattr(FilterSettings, "primary_filters"):
             max_pattern = max((len(query.get("object_info", "")) for queries in plans.values() for query in queries), default=0)
             print(json.dumps({"primary_search_plan": {"valid": True,
                 "keyword_entries": len(parse_terms(selection.include_words)), "or_groups_by_law": groups,
+                "full_pattern_chars": len(build_primary_params(selection, effective_laws(selection)[0], timezone.now()).get("object_info", "")),
+                "raw_words_chars": len(selection.include_words),
                 "max_pattern_chars": max_pattern,
                 "selected_classifiers": len(selection.okpd2_codes or []),
                 "jobs": sum(groups.values()) * max(1, len(selection.okpd2_codes or [])),
