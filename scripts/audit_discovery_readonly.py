@@ -154,3 +154,12 @@ try:
 except Exception as exc:
     egress_hash=type(exc).__name__
 print(json.dumps({"census_overlap":{"from":"2026-11-15T14:43:07Z","to":"2026-11-15T14:48:57Z","requests_by_path":dict(paths),"requests_by_client":dict(clients),"responses":dict(counts),"egress_hash":egress_hash}}))
+# Read every archived title; report aggregate vocabulary only, no client records.
+import re
+from collections import Counter
+from tender_selection.models import TenderHistory
+archive = TenderHistory.objects.filter(status='dismissed')
+frequency=Counter()
+for title in archive.values_list('title',flat=True).iterator(chunk_size=500):
+    frequency.update(set(re.findall(r'[а-яёa-z]{4,}',(title or '').lower())))
+print(json.dumps({'archive_vocabulary':{'rows':archive.count(),'top_tokens':frequency.most_common(100)}},ensure_ascii=False))
