@@ -27,10 +27,21 @@ def protected_existing(tender, history):
 def decide(tender_id, selection=None, *, existing=False, preserve_existing=False, primary_context=None):
     tender = Tender.objects.select_for_update().only(
         'pk', 'status', 'review', 'opened_at', 'kanban_visible_until', 'title', 'object_info',
-        'collecting_finished_at', 'source',
+        'collecting_finished_at', 'source', 'archived_at', 'archived_from_stage',
     ).get(pk=tender_id)
     history = TenderHistory.objects.select_for_update().defer('legacy_data').get(tender_id=tender_id)
     if 'intake' in history.filter_snapshot:
+        if (tender.status == Tender.DISMISSED and tender.review == Tender.UNREVIEWED
+                and tender.archived_from_stage == 'incoming' and history.reason_code == 'expired'
+                and history.decision_source == 'auto' and not history.minus_hits
+                and tender.collecting_finished_at and tender.collecting_finished_at > timezone.now()):
+            tender.status, tender.archived_at, tender.archived_from_stage = Tender.NEW, None, ''
+            tender.save(update_fields=['status', 'archived_at', 'archived_from_stage'])
+            history.reason_code = ''
+            history.reason_text = ''
+            history.filter_snapshot = {**history.filter_snapshot, 'deadline_reopened_at': timezone.now().isoformat()}
+            history.decision_at = timezone.now()
+            history.save(update_fields=['reason_code', 'reason_text', 'filter_snapshot', 'decision_at'])
         return tender.status != Tender.DISMISSED
     selection = selection or FilterSettings.load()
     preserve = existing and (preserve_existing or protected_existing(tender, history))

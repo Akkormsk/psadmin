@@ -142,6 +142,7 @@ def split_primary_requests(params, words, law):
     # HTTP request-line transport limit (nginx's usual 8 KiB), not a cap on
     # keywords or business coverage. Every alternative survives partitioning.
     limit = int(os.getenv('GOSPLAN_MAX_REQUEST_LINE_BYTES', '8192'))
+    search_limit = int(os.getenv('GOSPLAN_MAX_SEARCH_CHARS', '128'))
     def request(group):
         return {**params, 'object_info': '(?i)(?:' + '|'.join(group) + ')'}
     def length(group):
@@ -156,9 +157,9 @@ def split_primary_requests(params, words, law):
         return [params]
     groups, group = [], []
     for alternative in word_alternatives(words):
-        if length([alternative]) > limit:
-            raise ValueError('Одно плюс-слово с выбранными фильтрами превышает допустимую длину запроса.')
-        if group and length(group + [alternative]) > limit:
+        if length([alternative]) > limit or len(request([alternative])['object_info']) > search_limit:
+            raise ValueError('Одно плюс-условие превышает предел ГосПлана: сократите сочетание слов.')
+        if group and (length(group + [alternative]) > limit or len(request(group + [alternative])['object_info']) > search_limit):
             groups.append(request(group))
             group = []
         group.append(alternative)
