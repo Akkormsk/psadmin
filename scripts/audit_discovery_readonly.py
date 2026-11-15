@@ -128,3 +128,29 @@ if hasattr(FilterSettings, "primary_filters"):
         "current_archived_reasons": list(history.objects.filter(status="dismissed").values("reason_code").annotate(n=Count("pk"))),
         "recent_runs": latest_runs,
     }}, ensure_ascii=False, default=str))
+
+# Correlate actual provider traffic with the isolated census, without upstream calls.
+from collections import Counter
+import hashlib
+from urllib.request import urlopen
+lower = datetime.fromisoformat("2026-11-15T14:43:07+00:00").timestamp()
+upper = datetime.fromisoformat("2026-11-15T14:48:57+00:00").timestamp()
+root = Path(os.getenv("GOSPLAN_QUOTA_DIR") or os.getenv("TENDER_DISCOVERY_FEED_DIR") or "/tmp/psadmin-discovery-quota")
+file = root/"requests.jsonl"
+counts, paths, clients = Counter(), Counter(), Counter()
+if file.is_file():
+    for line in file.open():
+        try: event=json.loads(line)
+        except ValueError: continue
+        if not lower <= event.get("at",0) <= upper: continue
+        if event.get("event")=="request":
+            paths[event.get("path","unknown")]+=1
+            clients[event.get("client","unknown")]+=1
+        elif event.get("event")=="response":
+            counts[str(event.get("status"))]+=1
+try:
+    with urlopen("https://api.ipify.org",timeout=10) as response:
+        egress_hash=hashlib.sha256(response.read().strip()).hexdigest()
+except Exception as exc:
+    egress_hash=type(exc).__name__
+print(json.dumps({"census_overlap":{"from":"2026-11-15T14:43:07Z","to":"2026-11-15T14:48:57Z","requests_by_path":dict(paths),"requests_by_client":dict(clients),"responses":dict(counts),"egress_hash":egress_hash}}))
