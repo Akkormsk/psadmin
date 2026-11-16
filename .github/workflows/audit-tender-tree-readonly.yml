@@ -1,6 +1,14 @@
 name: Audit tender working tree TEST read only
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Read-only audit scope
+        type: choice
+        options:
+          - tree
+          - data
+        default: tree
 permissions:
   contents: read
 jobs:
@@ -14,8 +22,14 @@ jobs:
           SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
           SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+          AUDIT_SCOPE: ${{ inputs.scope || 'tree' }}
         run: |
           set -euo pipefail
+          case "$AUDIT_SCOPE" in
+            tree) audit_script=scripts/audit_tender_tree_readonly.py ;;
+            data) audit_script=scripts/audit_tender_data_readonly.py ;;
+            *) exit 2 ;;
+          esac
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
@@ -24,5 +38,5 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
               "deploy@$SSH_HOST" \
-              "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py shell --no-imports" \
-              < scripts/audit_tender_tree_readonly.py
+              "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e PGOPTIONS='-c default_transaction_read_only=on' test-web python -B manage.py shell --no-imports" \
+              < "$audit_script"
