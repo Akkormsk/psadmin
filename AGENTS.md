@@ -1,62 +1,20 @@
-# PSADMIN: правила разработки
+# PSADMIN: Project Contract
 
-## Инварианты
+## 1. Environments & Core Invariants
+- **Sources of Truth:** GitHub for code; Timeweb PostgreSQL for operational data. Never commit secrets, dumps, or client/supplier exports.
+- **Safety Gates:** Work only in `feature/*` branches and TEST. Never touch PROD, prod flags, destructive migrations, deploy, or mass AI/backfill without explicit owner approval (silence is not consent).
+- **Architecture:** Preserve V1 until V2 is accepted. Always inspect data structures, entities, and relations before searching, filtering, or building UI. Use existing Django models and services; no parallel registries or calculation engines. LLM interprets language; backend executes math, filtering, and ranking.
+- **Django & UI:** New user-facing fields exposed to assistant READ must have `verbose_name` (reply with human labels, not field names). Verify deploy via actual commit SHA and health; verify UI in a real browser.
 
-- GitHub — источник истины для кода; production PostgreSQL на Timeweb — для операционных знаний. Не копировать production-данные в Git.
-- Работать только в изолированной ветке и TEST-среде. Без прямого разрешения владельца не менять PROD, production-флаги, секреты и не запускать destructive migrations, deploy или массовый AI/backfill; для backfill нужен определённый бюджет.
-- Сохранять V1 до принятия соответствующего V2. Использовать существующие модели и доменные сервисы, не создавать параллельные реестры, calculation engines или learning stores.
-- LLM интерпретирует язык; backend выполняет расчёты, валидацию, фильтрацию каталога и ранжирование. Не хардкодить поставщиков, товары или бизнес-правила в core. Подтверждённая обратная связь и вытесненные знания должны быть версионируемы и восстанавливаемы.
-- Локальные тесты не подключаются к production и не меняют его. Git содержит код, миграции и curated fixtures, но не credentials, production dumps, клиентские документы или выгрузки поставщиков. Интеграции поставщиков не скачивают изображения без явного запроса.
-- Не объявлять deploy состоявшимся без проверки фактического commit SHA и health. UI проверять в реальном браузере, когда доступна аутентификация; новые экраны соблюдают navigation contract: логический parent fallback, Home и отсутствие navigation traps.
-- В отчёте этапа указать изменения, проверку, commit, состояние TEST-deploy, ограничения и конкретную ручную проверку.
-- Новая пользовательская Django-модель или поле, доступное через assistant READ, имеет осмысленный `verbose_name`, а при необходимости `help_text`; не создавать assistant-only каталог имён и отвечать пользователю человеческими подписями, а не техническими именами. Для составного отбора публиковать existing generic READ hook модели и общий read-only service экрана, не копировать правило в агента и не делать phrase-specific tool; проверять их одинаковое поведение.
+## 2. Branch Lifecycle & Cleanup
+- **Hierarchy:** `main` (PROD) ← `test-server` (staging, auto-deploys on push) ← `feature/*` (1 chat = 1 feature).
+- **Periodic Branch Cleanup:** Whenever a `feature/*` branch is merged into `test-server` or `main`, immediately propose deleting the merged local and remote `feature/*` branch and its temporary handoff file. Also proactively flag stale/merged `feature/*` branches for cleanup at the start of new tasks.
 
-## Минимальный, проверяемый код
+## 3. Documentation & Modular Protocols
+- **Single Source of Truth:** `docs/assistant_protocol.md` is the high-level system index and invariant registry. Do not create `CLAUDE.md` or random notes.
+- **Domain Modularity:** When updating documentation adds or expands a distinct business domain, proactively split that domain into `docs/protocols/<domain>.md` and link it in the main index. Read ONLY the protocol file relevant to the current task.
+- **Statuses & Sync:** Use honest statuses (`PROD_VERIFIED`, `TEST_VERIFIED`, `CODE_ONLY`, `DECIDED_BACKLOG`, `DEFERRED`, `REJECTED`) with deployed SHA. Update the relevant protocol in the same commit set as code/TEST changes. Remember: `test-server` deploys on every push; PROD deploy requires explicit approval (and extra confirmation during 09:00–19:00 MSK).
 
-- Сначала проверить и подготовить структуру данных: существующие сущности, ключи, связи, хранение и совместимость. Если нужна новая схема — подготовить её и безопасный перенос существующих данных до поиска, фильтров и интерфейса; не создавать параллельный реестр вместо согласованной модели. Это не требование менять схему без необходимости.
-- Сначала назвать допущения и неоднозначности; при существенной неясности остановиться и спросить. Делать минимальное решение без спекулятивных функций, абстракций и рефакторинга по соседству.
-- Менять только необходимое, сохранять стиль; удалять лишь созданные своими изменениями orphaned imports/variables/functions. Каждый изменённый фрагмент должен относиться к задаче.
-- Задать проверяемый критерий успеха. Для бага по возможности сначала воспроизвести его тестом; для новой логики сначала написать проверку. Если test-first невозможен, назвать причину.
-- Код должен объяснять себя; комментарии нужны только для нетривиальных ограничений, схем или причин, не для механики языка.
-
-## Документация и расход контекста
-
-`AGENTS.md` задаёт нормы разработки; `docs/assistant_protocol.md` — единственный источник подтверждённого поведения, решений и состояния системы. Не создавать новые человеческие `*.md`/`*.txt` как roadmap, handoff, prompt, архитектурные заметки, TODO, отчёты или параллельные протоколы. Новые сведения — в существующий протокол; старые документы не удалять без проверки переноса и разрешения владельца. Машинные тестовые артефакты допустимы и не являются вторым источником решений.
-
-Эти правила едины для Claude, Codex, ChatGPT, локальных и облачных агентов; не вводить и не требовать `CLAUDE.md`.
-
-- Перед задачей сначала посмотреть структуру протокола и прочитать только разделы, относящиеся к изменяемому поведению, данным, рискам и проверкам. Полностью читать обе версии (`main` и `test-server`) нужно только для релизной сверки или когда задача действительно требует полного контракта.
-- Начинать с точечного `rg`, импортов и определений, затем читать нужные диапазоны файлов. Не загружать целиком большие документы, JSON, логи или результаты тестов без причины.
-- Для бага: воспроизведение → целевые тесты после исправления → необходимая регрессия. Полный набор — перед завершением значимого изменения или при затрагивании общей логики. Не повторять неизменившиеся тесты без причины.
-- Не использовать субагентов и широкое исследование репозитория по умолчанию. Экономия контекста не отменяет проверок безопасности, прав, сохранности данных, миграций и релиза.
-
-## Протокол, окружения и релизы
-
-- `main/docs/assistant_protocol.md` описывает только подтверждённый PROD; `test-server/docs/assistant_protocol.md` — подтверждённый TEST, отличия и план. Ветка, PR, mock-тест или локальный тест не являются релизом.
-- Для каждой возможности использовать честный статус: `PROD_VERIFIED`, `TEST_VERIFIED`, `CODE_ONLY`, `DECIDED_BACKLOG`, `DEFERRED` или `REJECTED`. Подтверждение требует server/release SHA: для TEST — `.twin-version` или равный достоверный источник, для PROD — deployed Git SHA/версия. В протоколе фиксировать дату, ветку, source SHA, deployed SHA либо «не подтверждён», проверки и известные пробелы; не включать персональные данные, секреты или реальные выгрузки.
-- Не смешивать согласованный план, код/автотесты и проверенную работу сервера. Изменение архитектуры/тестового кода, принятое решение, находка, эксперимент или перенос в TEST обновляет протокол в том же наборе коммитов; после TEST-deploy сверить SHA и health. Перед PROD-deploy подготовить обновление `main` и после него сверить SHA и основные сценарии. Расхождения фиксировать, а не угадывать.
-- Любое слияние, удаление документов, migration production DB, test/prod deploy или массовый AI backfill требует ранее данного явного разрешения владельца; молчание не является согласием. `test-server` деплоится при любом push, включая документацию: перед merge проверить workflow и текущий релиз, после разрешённого push дождаться deploy+health. PROD запрещён без прямой команды; в 09:00–19:00 Москвы нужно отдельное однозначное подтверждение запуска в рабочее окно, вне окна тоже нужна явная команда. Использовать реальные backup/migration/health scripts.
-- Перед передачей или релизной сверкой: проверить ветку, status, HEAD, base/PR, дату и deployed SHA; при необходимости прочитать обе версии протокола и сравнить схему/алгоритмы с кодом, миграциями и тестами; запустить нужные тесты; сообщить изменения, SHA, результаты, серверную приёмку, долг и требуемый approval. Не удалять неперенесённые требования и не считать один адаптер принятым V2.
-
-## Ассистент и пользовательские операции
-
-- Единица capabilities — законченная пользовательская макрофункция: назначение, обязательные входы, результат, побочные эффекты, подтверждение и общий executor. Любая новая/изменённая пользовательская возможность в том же PR изменяет декларацию capabilities и тесты; если её нельзя безопасно публиковать, указать причину в протоколе.
-- Автоматизированный реестр не даёт AI разрешение на выполнение. Для записи обязательны права, preview/confirmation, идемпотентность и аудит. Логику HTTP/JavaScript сначала выносить в реальный общий backend executor для сайта и агента, не в assistant-only helper.
-- Сохранять аргументы из нескольких сообщений, спрашивать только недостающие, заменять исправленное значение и выполнять запись лишь после полного контракта и server-side confirmation. Web и Telegram — адаптеры общего диалогового состояния и семантических действий; Telegram не имеет отдельной бизнес-логики.
-- M3.1 — одна макрооперация с её штатными backend-шагами и одним итоговым подтверждением. Несколько независимых READ/ACTION — M3.2, не маскировать их одним гигантским AI-only executor. Для нового приложения или изменения ACTION тестировать разрешение каждого опубликованного `source` в callable и единый executor для UI/ассистента; Python-функция сама по себе не даёт `TEST_VERIFIED` или `PROD_VERIFIED`.
-
-## Актуальность checkout и веток
-
-- Перед работой получить актуальные refs GitHub, проверить HEAD/status и сравнить с нужной базой. Старый checkout не является источником текущих инструкций. Не сбрасывать чужие изменения. `main` — PROD, `test-server` — TEST.
-- Для задачи использовать одну рабочую ветку от актуальной базы. После завершения удалять разрешённые владельцем старые ветки только после проверки достижимости всех коммитов из сохраняемой ветки либо exact head слитого PR и отсутствия последующих уникальных изменений. Закрытый PR сам по себе недостаточен.
-- Последний отчёт/решение сначала переносить в сохраняемую историю. Не удалять ветки с уникальной работой. Архив удалённых инструкций хранится в Git, не в новом handoff.
-- Протокол начинается актуальным снимком, источниками подтверждения, ограничениями и следующим шагом. Обновлять тематические разделы вместо добавления копий всей истории и отменённых промежуточных инструкций. Проверенный release и HEAD документации различать.
-
-## Доставка и чтение серверов без личного SSH
-
-- Каждый push в `test-server`, включая документацию, запускает `.github/workflows/deploy-test-vds.yml`. GitHub Actions через существующие `PSADMIN_TEST_SSH_*` сохраняет проверенный backup TEST, доставляет архив, вызывает `deploy/vds/twin.sh up`, проверяет offline tests, host/container `.twin-version`, флаги и public health. Не задавать pilot inputs при документационном деплое.
-- Каждый push в `main`, включая документацию, запускает `.github/workflows/deploy-prod-vds.yml` и существующий `deploy.sh`: backup, миграции, health и проверка `.release-sha`. Это production release. Без прямой команды на PROD подготовить отдельную ветку/PR; не обходить ограничение. Правило дополнительного подтверждения в 09:00–19:00 МСК сохраняется.
-- Личный SSH агенту не требуется: соединение выполняет Actions. Не заменять эту доставку прямыми действиями Timeweb или новым workflow. Чтение workflow/runs/jobs/logs доступно через GitHub API.
-- TEST input `inspect_tender_number` запускает `scripts/inspect_tender_analysis.py`, пропускает deploy/ИИ и использует PostgreSQL `READ ONLY`. Сначала читать workflow выбранной ветки: расширенные диагностические режимы других веток могут иметь побочные эффекты.
-- Timeweb Cloud GET `/api/v1/servers` и `/api/v1/servers/{id}` дают состояние инфраструктуры, не Django/PostgreSQL. Использовать настроенный `TIMEWEB_API_TOKEN` только для `api.timeweb.cloud`. Не выводить полные ответы: они могут содержать пароли/cloud-init; не сохранять их в Git.
-- PROD проверяет версию через `X-PSADMIN-Revision`/`.release-sha`; TEST — host/container `.twin-version`. Успешный inspect не равен deploy, а неудачный pilot после запуска healthy-контейнера не доказывает откат кода.
+## 4. Assistant Capabilities (M3.1 / M3.2)
+- **Shared Executors:** Put HTTP/JS/write logic in a shared backend executor for Web and Telegram (no Telegram-specific business logic, no assistant-only helpers). Require permissions, preview/confirmation, idempotency, and audit.
+- **Scope:** M3.1 = one macro-operation with one final confirmation. Multiple independent READ/ACTION = M3.2. Test every published `source` and unified executor before marking `TEST_VERIFIED`.
