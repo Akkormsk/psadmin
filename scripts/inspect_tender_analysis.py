@@ -273,6 +273,56 @@ def inspect_binding_request(tender):
     return report
 
 
+def probe_binding(number, budget):
+    from decimal import Decimal
+    from collections import Counter
+    from unittest.mock import patch
+    from tender_selection.models import Tender, DocumentPreview
+    from tender_selection.notification import parse_notification
+    from tenders.models import TenderComputeJob
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, ingest_source_items
+    if not budget.is_finite() or not Decimal('0') < budget <= Decimal('0.5924615'):
+        raise ValueError('Probe exceeds remaining approved budget')
+    tender = Tender.objects.get(purchase_number=number)
+    sources = ingest_source_items(tender)
+    docs = parse_notification(tender.notification_raw or {}).get('documents', [])
+    cached = set(DocumentPreview.objects.exclude(html='').values_list('url', flat=True))
+    docs = [d for d in docs if d.get('url') in cached]
+    if not docs:
+        raise ValueError('No cached document; no provider call made')
+    engine = GatewayDocumentEnricher(max_cost_rub=budget)
+    with patch('tender_selection.services.documents_html'):
+        engine.prepare_stages(tender, sources, docs)
+    if engine.document_images:
+        raise ValueError('This isolated probe requires textual sources')
+    job = TenderComputeJob.objects.create(tender=tender, version='v2-isolated-binding-probe', diagnostics={'refresh':{}})
+    error = None
+    try:
+        engine.read_source_memory(job)
+        engine.bind_source_memory(job)
+    except Exception as exc:
+        error = str(exc)
+    memory = getattr(engine, 'source_memory', None)
+    rows = list(memory.assignments.values()) if memory else []
+    stages = job.diagnostics.get('stages', {})
+    read_ids = {i for n,r in stages.items() if n.startswith('reading:') for i in r.get('fragment_ids', [])}
+    bind_ids = {i for n,r in stages.items() if n.startswith('binding:') for i in r.get('fragment_ids', [])}
+    def examples(source):
+        values = [memory.blocks[r['id']]['text'] for r in rows if source.pk in r.get('source_ids', []) and r['id'] in memory.blocks]
+        return [v[:180] for v in values if any(word in v.casefold() for word in ('золот', 'серебр', 'бронз'))][:3]
+    print(json.dumps({'binding_probe':True, 'number':number, 'documents':[d.get('name') for d in docs],
+        'items':len(sources), 'fragments':len(memory.blocks) if memory else 0, 'reading':job.diagnostics.get('source_reading',{}).get('read',0),
+        'assigned':len(rows), 'pending':len(memory.pending_assignments()) if memory else None,
+        'scopes':dict(Counter(r['scope'] for r in rows)), 'error':error,
+        'per_item':[{'name':s.original_text, 'fragments':sum(s.pk in r.get('source_ids',[]) for r in rows), 'colour_examples':examples(s) if memory else []} for s in sources],
+        'unresolved':[{'reason':r.get('reason')} for r in rows if r['scope']=='unassigned'][:10],
+        'repeat_fragments':len(read_ids & bind_ids), 'reading_calls':sum(bool(r.get('usage')) for k,r in stages.items() if k.startswith('reading:')),
+        'binding_calls':sum(bool(r.get('usage')) for k,r in stages.items() if k.startswith('binding:')),
+        'cost_rub':str(engine.cost_rub), 'persisted_writes':False,
+        'scope':'deployed TEST reading and binding methods on cached TEST document; no composition or routes'}, ensure_ascii=False), flush=True)
+
+
+
 def main():
     import django
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
@@ -284,12 +334,41 @@ def main():
     if connection.vendor != 'postgresql':
         raise RuntimeError('Live inspection requires PostgreSQL read-only transaction')
     with transaction.atomic():
+        if os.environ.get('BINDING_PROBE_BUDGET_RUB'):
+            from decimal import Decimal
+            probe_binding(number, Decimal(os.environ['BINDING_PROBE_BUDGET_RUB']))
+            transaction.set_rollback(True)
+            return
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
-        print(json.dumps({'source_reading_history': source_reading_history(Tender.objects.get(purchase_number=number))}, ensure_ascii=False, default=str), flush=True)
+        from tenders.models import TenderComputeJob
+        from collections import Counter
         tender = Tender.objects.get(purchase_number=number)
-        print(json.dumps({'binding_request': inspect_binding_request(tender)}, ensure_ascii=False, default=str), flush=True)
+        job = TenderComputeJob.objects.get(pk=166, tender=tender)
+        memory = job.diagnostics.get('source_reading') or {}
+        rows = list((memory.get('assignments') or {}).values())
+        fragments = memory.get('fragments') or {}
+        stages = job.diagnostics.get('stages') or {}
+        tz = (stages.get('tz') or {}).get('result') or []
+        unassigned = [row for row in rows if row.get('scope') == 'unassigned']
+        samples = []
+        for row in unassigned[:5]:
+            block = fragments.get(row['id'], {})
+            occ = (block.get('occurrences') or [{}])[0]
+            loc = occ.get('structure') or {}
+            nearby = []
+            for other in fragments.values():
+                for o in other.get('occurrences', []):
+                    st = o.get('structure') or {}
+                    if o.get('doc_id') == occ.get('doc_id') and st.get('table') == loc.get('table') and type(st.get('row')) is int and type(loc.get('row')) is int and abs(st['row']-loc['row']) <= 1:
+                        nearby.append({'row':st['row'], 'text':other.get('text','')[:180]})
+            samples.append({'text':block.get('text','')[:400], 'location':occ.get('location'), 'structure':loc, 'nearby':nearby[:8], 'reason':row.get('reason')})
+        print(json.dumps({'job':job.pk,'status':job.status,'read':memory.get('read'),'total':memory.get('total'),
+            'scopes':dict(Counter(row.get('scope') for row in rows)), 'tz_rows':len(tz),
+            'tz_chars':sum(len(row.get('characteristics') or []) for row in tz if isinstance(row,dict)),
+            'samples':samples, 'jobs':list(TenderComputeJob.objects.filter(tender=tender).order_by('-pk').values('pk','status','completed_at')[:3])}, ensure_ascii=False, default=str), flush=True)
+
 
 
 if __name__ == '__main__':
