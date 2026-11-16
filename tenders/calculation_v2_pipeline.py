@@ -10,12 +10,12 @@ import time
 import os
 from typing import Protocol
 
-from django.db import transaction
+from django.db import DEFAULT_DB_ALIAS, transaction
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from tender_selection.filtering import match_title, parse_terms
-from tender_selection.models import DocumentPreview, FilterSettings, Tender
+from tender_selection.models import FilterSettings, Tender
 from tender_selection.notification import parse_notification
 
 from .calculation_v2 import claim_next_job
@@ -369,7 +369,7 @@ class GatewayDocumentEnricher:
         from .requirement_values import _unit_aliases
         self.unit_aliases = _unit_aliases()
         self.stage_sources = {source.pk: source for source in sources}
-        self.stage_documents, considered = self._bounded_documents(documents, compact=True)
+        self.stage_documents, considered = self._bounded_documents(documents, compact=True, tender=tender)
         self.input_gaps = [doc for doc in considered if doc['reading_status'] != 'read']
         readable_urls = {doc['url'] for doc in considered if doc['reading_status'] != 'unreadable'}
         self.stage_documents = [doc for doc in self.stage_documents if doc['url'] in readable_urls]
@@ -1491,20 +1491,23 @@ class GatewayDocumentEnricher:
             raise ValueError('ТЗ получено не для всех товаров.')
         return result
 
-    def _bounded_documents(self, documents, *, compact=False):
+    def _bounded_documents(self, documents, *, compact=False, using=DEFAULT_DB_ALIAS, tender=None):
         """Prepare full extracted text; budget checks must reject, never clip, the request."""
         from lxml import html as html_parser
         from tender_selection.documents import MAX_BYTES
 
         candidates = []
         self.document_images = []
+        from .tender_data import document_preview_map
+        cached_previews = {url: {'html': preview.html, 'kind': preview.kind, 'error': preview.error}
+                           for url, preview in document_preview_map(tender, [doc['url'] for doc in documents if doc.get('url')], using=using).items()}
         for doc in documents:
             url = doc.get("url")
             if not url:
                 continue
             image_start = len(self.document_images)
             try:
-                cached = DocumentPreview.objects.filter(url=url).values("html", "kind", "error").first() or {}
+                cached = cached_previews.get(url, {})
                 html = cached.get("html") or ""
                 if len(html.encode("utf-8")) > MAX_BYTES:
                     raise ValueError("Document preview exceeds the parsing size limit; no model request was sent")
@@ -1641,7 +1644,7 @@ class GatewayDocumentEnricher:
         allowed_source_ids = {item.pk for item in source_items}
         from tender_selection.services import documents_html
         documents_html(tender, [doc for doc in documents if doc.get("url")], timeout=5, archive_timeout=5, direct_timeout=5)
-        available, considered = self._bounded_documents(documents)
+        available, considered = self._bounded_documents(documents, tender=tender)
         incomplete = any(doc["reading_status"] != "read" for doc in considered)
         if not any(doc["text"] or doc["image_indexes"] for doc in available):
             self.diagnostics = {"outcome": "document_reading_incomplete", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "documents": {"considered": considered, "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
@@ -1761,10 +1764,13 @@ class GatewayDocumentEnricher:
         started = time.monotonic()
         self.diagnostics = {}
         available = []
+        from .tender_data import document_preview_map
+        previews = document_preview_map(tender, [doc['url'] for doc in documents if doc.get('url')])
         for doc in documents:
             if not doc.get("url"):
                 continue
-            html = (DocumentPreview.objects.filter(url=doc["url"]).values_list("html", flat=True).first() or "")[:30000]
+            cached = previews.get(doc['url'])
+            html = (cached.html if cached else '')[:30000]
             available.append({"url": doc["url"], "name": doc.get("name", ""), "text": html, "tables": document_table_payload(html)})
         if not any(doc["text"] for doc in available):
             self.diagnostics = {"outcome": "system_extraction_failure", "model": self.model, "duration_ms": round((time.monotonic() - started) * 1000, 2), "triage": {"documents_considered": [{"url": doc["url"], "name": doc["name"], "cached_text_chars": len(doc["text"]), "table_count": len(doc["tables"])} for doc in available], "selected_urls": [], "skipped_reason": "document_preview_missing"}, "extraction": {"accepted_count": 0, "rejected_count": 0, "rejections": []}}
@@ -1953,6 +1959,8 @@ def _as_decimal(value) -> Decimal | None:
 
 def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
     """Append-only-ish notification ingestion; changed rows supersede, never overwrite source truth."""
+    from .tender_data import prepare_tender_for_write
+    prepare_tender_for_write(tender)
     result = []
     for index, row in enumerate(_notification_rows(tender)):
         name = str(row.get("name") or "").strip()
@@ -2255,17 +2263,34 @@ def routing_source_items(tender):
     return [item for item in active if item.pk not in replaced] + proposals
 
 
-def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
+@transaction.atomic
+def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, sources=None) -> list[TenderCommercialItem]:
     """Turn immutable source evidence into commercial items and calculation components."""
-    tender = job.tender
-    active = routing_source_items(tender)
+    tender = job.tender if job is not None else tender
+    if tender is None:
+        raise ValueError('Не указан тендер для рабочих товаров.')
+    active = routing_source_items(tender) if sources is None else sources
     result = []
     for source in active:
+        if source.tender_id != tender.pk:
+            raise ValueError('Исходная позиция принадлежит другому тендеру.')
         component_sources = list(source.derived_items.filter(is_active=True, source_type="document_component").order_by("source_key", "pk"))
         structure = TenderCommercialItem.Structure.COMPOSITE if component_sources else TenderCommercialItem.Structure.SIMPLE
+        previous_ids, previous = [], source.supersedes
+        while previous is not None:
+            if previous.tender_id != tender.pk or previous.pk in previous_ids or previous.pk == source.pk:
+                raise ValueError('Цикл редакций исходной позиции.')
+            previous_ids.append(previous.pk)
+            previous = previous.supersedes
+        current = TenderCommercialItem.objects.filter(tender=tender, source_key=f'commercial:{source.pk}').first()
+        if current is None and previous_ids:
+            candidates = list(TenderCommercialItem.objects.filter(tender=tender, source_items__pk__in=previous_ids).distinct())
+            if len(candidates) > 1:
+                raise ValueError('Неоднозначная связь предыдущей редакции рабочего товара.')
+            current = candidates[0] if candidates else None
         commercial, _ = TenderCommercialItem.objects.update_or_create(
-            tender=tender, source_key=f"commercial:{source.pk}",
-            defaults={"job": job, "display_name": source.original_text, "quantity": source.quantity, "unit": source.unit,
+            tender=tender, source_key=current.source_key if current else f"commercial:{source.pk}",
+            defaults={**({'job': job} if job is not None else {}), "display_name": source.original_text, "quantity": source.quantity, "unit": source.unit,
                       "requirements": _commercial_requirements(source), "provenance": {"source_item_ids": [source.pk], "draft": not source.is_active},
                       "structure": structure, "status": "active"},
         )
@@ -2273,6 +2298,13 @@ def build_commercial_items(job: TenderComputeJob) -> list[TenderCommercialItem]:
         component_rows = component_sources or [source]
         for index, component_source in enumerate(component_rows):
             per_parent = _as_decimal((component_source.metadata or {}).get("quantity_per_parent")) or Decimal("1")
+            if component_source.pk == source.pk and previous_ids:
+                old_components = list(CalculationComponent.objects.filter(commercial_item=commercial, source_item_id__in=previous_ids, parent__isnull=True))
+                if len(old_components) > 1:
+                    raise ValueError('Неоднозначная связь компонента предыдущей редакции.')
+                if old_components:
+                    old_components[0].source_item = component_source
+                    old_components[0].save(update_fields=['source_item'])
             CalculationComponent.objects.update_or_create(
                 commercial_item=commercial, source_item=component_source,
                 defaults={"name": component_source.original_text, "quantity_per_parent": per_parent, "unit": component_source.unit,

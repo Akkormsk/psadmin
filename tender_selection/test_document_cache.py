@@ -10,7 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from . import documents, services
-from .models import DocumentPreview, Tender
+from .models import DocumentPreview, Tender, TenderDocument
 
 CONTRACT_URL = "https://zakupki.gov.ru/contract"
 SPEC_URL = "https://zakupki.gov.ru/spec"
@@ -92,7 +92,8 @@ class TenderDocumentExecutorTests(TestCase):
             html = services.document_html(self.tender, CONTRACT_URL, "Проект контракта.doc.zip")
 
         self.assertEqual(html, "<p>контракт</p>")
-        self.assertEqual(DocumentPreview.objects.get(url=CONTRACT_URL).kind, "pdf")
+        self.assertEqual(TenderDocument.objects.get(tender=self.tender, is_current=True).preview.kind, "pdf")
+        self.assertTrue(DocumentPreview.objects.filter(url=CONTRACT_URL, kind='zip').exists())
 
 
 class ArchivePreviewTests(TestCase):
@@ -128,10 +129,9 @@ class RiskAssessmentDocumentsTests(TestCase):
     def test_refresh_does_not_replace_full_assessment_with_worse_one(self):
         with patch("tender_selection.risk_assessment.assess", return_value=_sufficient()):
             services.risk_assessment_for(self.tender)
-        DocumentPreview.objects.all().delete()
 
         insufficient = {"data": {"risk_facts": {"documents_sufficient": "false"}, "legal_risks": "без документов"}}
-        with patch.object(services, "_fetch_doc_bytes", side_effect=services.DocumentError("ЕИС молчит")), \
+        with patch.object(services, 'documents_html', return_value={}), \
                 patch("tender_selection.risk_assessment.assess", return_value=insufficient):
             result = services.risk_assessment_for(self.tender, force=True)
         self.tender.refresh_from_db()

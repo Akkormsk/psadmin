@@ -22,7 +22,7 @@ import os
 from . import gosplan
 from .discovery_feed import discovery_run, publish
 from .discovery_cursor import prepare as prepare_discovery, advance as advance_discovery
-from .documents import MAX_BYTES, DocumentError, extract_preview, fetch_document
+from .documents import MAX_BYTES, PREVIEW_VERSION, DocumentError, extract_preview, fetch_document
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
 
@@ -437,21 +437,18 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
             raise DocumentError(f"{eis_exc} Прямая ссылка тоже не сработала: {direct_exc}") from direct_exc
 
 
-def store_document_preview(url, name, data: bytes) -> dict:
+def store_document_preview(url, name, data: bytes, *, tender) -> dict:
     """Run the site's document parser and persist its preview cache once."""
-    return _save_document_preview(url, name, extract_preview(data, name, read_archive=True))
-
-
-def _save_document_preview(url, name, result):
-    DocumentPreview.objects.update_or_create(url=url, defaults={
-        "filename": name, "kind": result.get("kind", ""),
-        "html": result.get("html", ""), "error": str(result.get("error", ""))[:DocumentPreview._meta.get_field("error").max_length],
-    })
+    from hashlib import sha256
+    from pathlib import Path
+    from tenders.tender_data import publish_document_preview
+    content_hash = sha256(data).hexdigest()
+    parser_version = PREVIEW_VERSION + ':' + Path(name).suffix.lower()
+    cached = DocumentPreview.objects.filter(url=url, content_hash=content_hash, parser_version=parser_version).first()
+    result = ({'kind': cached.kind, 'html': cached.html, 'error': cached.error} if cached else
+              extract_preview(data, name, read_archive=True))
+    publish_document_preview(tender, url, name, result, content_hash=content_hash, parser_version=parser_version)
     return result
-
-
-def _store_preview(url, name, data: bytes) -> str:
-    return store_document_preview(url, name, data).get("html", "")
 
 
 def _tender_documents(user, tender_id):
@@ -507,11 +504,14 @@ def preview_tender_document(user, tender_id, document_index, *, refresh=False, b
             return _document_result(name, extract_preview(_fetch_doc_bytes(tender, url, name), name, browse_archive=True))
         except DocumentError as exc:
             return _document_result(name, {"error": str(exc)})
-    cached = DocumentPreview.objects.filter(url=url).first()
+    from tenders.tender_data import document_preview_map
+    cached = document_preview_map(tender, [url]).get(url)
     if cached and not refresh:
         return _document_result(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
+    if tender.status == Tender.DISMISSED:
+        return _document_result(name, {'error': 'Содержимое не сохранено. Для обновления верните тендер в работу.'})
     try:
-        result = store_document_preview(url, name, _fetch_doc_bytes(tender, url, name))
+        result = store_document_preview(url, name, _fetch_doc_bytes(tender, url, name), tender=tender)
     except DocumentError as exc:
         return _document_result(name, {"error": str(exc)})
     return _document_result(name, result)
@@ -519,12 +519,12 @@ def preview_tender_document(user, tender_id, document_index, *, refresh=False, b
 
 def upload_tender_document_preview(user, tender_id, document_index, content):
     """Parse a manually supplied replacement file for an existing tender attachment."""
-    _tender, url, name = _tender_document(user, tender_id, document_index)
+    tender, url, name = _tender_document(user, tender_id, document_index)
     if not isinstance(content, bytes) or not content:
         raise ValueError("Файл не выбран")
     if len(content) > MAX_BYTES:
         raise ValueError("Файл слишком большой для предпросмотра")
-    return _document_result(name, store_document_preview(url, name, content))
+    return _document_result(name, store_document_preview(url, name, content, tender=tender))
 
 
 def document_html(tender, url, name, **fetch_kwargs) -> str:
@@ -532,12 +532,15 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
     чтобы следующий просмотр или оценка рисков не ходили в ЕИС повторно.
     Скачанный, но нечитаемый файл (архив, битый .doc) тоже в кэше — с пустым HTML,
     повторно за ним не ходим. DocumentError — документ сейчас не получить."""
-    cached = DocumentPreview.objects.filter(url=url).first()
+    from tenders.tender_data import document_preview_map
+    cached = document_preview_map(tender, [url]).get(url)
     if cached:
-        if not _preview_needs_upgrade(cached.kind, cached.html):
+        if tender.status == Tender.DISMISSED or not _preview_needs_upgrade(cached.kind, cached.html):
             return cached.html
         return documents_html(tender, [{"url": url, "name": name}], **fetch_kwargs).get(url, cached.html)
-    return _store_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs))
+    if tender.status == Tender.DISMISSED:
+        return ''
+    return store_document_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs), tender=tender).get('html', '')
 
 
 def _preview_needs_upgrade(kind, html):
@@ -548,13 +551,16 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
     """{url: HTML} для нескольких документов: кэш, остальное с ЕИС параллельно.
     В потоках только сеть — база читается и пишется в вызывающем потоке."""
     from concurrent.futures import ThreadPoolExecutor
+    from tenders.tender_data import document_preview_map, record_document_error
 
+    previews = document_preview_map(tender, [doc['url'] for doc in documents])
     htmls = {
-        url: html
-        for url, kind, html in DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", "kind", "html")
-        if not _preview_needs_upgrade(kind, html)
+        url: preview.html for url, preview in previews.items()
+        if tender.status == Tender.DISMISSED or not _preview_needs_upgrade(preview.kind, preview.html)
     }
-    existing = set(DocumentPreview.objects.filter(url__in=[doc["url"] for doc in documents]).values_list("url", flat=True))
+    if tender.status == Tender.DISMISSED:
+        return htmls
+    existing = set(previews)
     missing = [doc for doc in documents if doc["url"] not in htmls]
 
     def fetch_one(doc):
@@ -568,13 +574,13 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
             fetched = list(pool.map(fetch_one, missing))
         for doc, data, error in fetched:
             if error and doc["url"] in existing:
-                DocumentPreview.objects.filter(url=doc["url"]).update(error=error[:DocumentPreview._meta.get_field("error").max_length])
+                record_document_error(tender, doc['url'], error)
             if data is not None:
-                result = extract_preview(data, doc["name"], read_archive=True)
+                result = store_document_preview(doc['url'], doc['name'], data, tender=tender)
                 if doc["url"] in existing and not result.get("html"):
-                    DocumentPreview.objects.filter(url=doc["url"]).update(error=str(result.get("error") or "Не удалось обновить документ")[:DocumentPreview._meta.get_field("error").max_length])
+                    record_document_error(tender, doc['url'], result.get('error') or 'Не удалось обновить документ')
                     continue  # Keep usable legacy evidence when conversion/download fails.
-                htmls[doc["url"]] = _save_document_preview(doc["url"], doc["name"], result).get("html", "")
+                htmls[doc["url"]] = result.get('html', '')
     return htmls
 
 
@@ -584,6 +590,8 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     Побочно кладёт имя/город заказчика в кэш Organization — список это подхватит без
     отдельных запросов.
     """
+    if tender.status == Tender.DISMISSED:
+        return tender.notification_raw or None
     if tender.source == Tender.EAT:
         return tender.notification_raw or None
     if tender.law != "fz44":
@@ -613,6 +621,8 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     if changed_profile_input:
         tender.profile_assessment = {}
         tender.profile_checked_at = None
+        from tenders.tender_data import invalidate_analysis
+        invalidate_analysis(tender, kind='profile')
     tender.notification_checked_at = timezone.now()
     tender.notification_error = ""
     tender.save(update_fields=["notification_raw", "notification_checked_at", "notification_error", "profile_assessment", "profile_checked_at"])
@@ -891,6 +901,14 @@ def _keeps_previous_assessment(tender, new_data) -> bool:
     return False
 
 
+def _save_risk_result(tender, data, document_names):
+    from tenders.tender_data import save_analysis_projection
+    save_analysis_projection(tender, kind='risk', input_fingerprint=_document_input_fingerprint(tender),
+        values={'risk_assessment': data, 'risk_assessment_docs': document_names,
+                'risk_checked_at': timezone.now(), 'risk_error': ''},
+        basis=[{'document_name': name} for name in document_names])
+
+
 def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     """Оценка рисков тендера по вложенным документам (см. risk_assessment.py):
     срок исполнения, обеспечение, ст.96 44-ФЗ, штрафы, нацрежим, образцы + свободный текст.
@@ -901,6 +919,8 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     Сбой не роняет карточку: отмечаем попытку и сохраняем причину в risk_error.
     """
     from .national_regime import risk_projection
+    if tender.status == Tender.DISMISSED:
+        return risk_projection(tender, tender.risk_assessment) if tender.risk_assessment else None
     if tender.law != "fz44":
         return None
     if tender.risk_assessment and "risk_factors" in tender.risk_assessment and not force:
@@ -945,11 +965,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         if _keeps_previous_assessment(tender, data):
             return risk_projection(tender, tender.risk_assessment)
         data = risk_projection(tender, data)
-        tender.risk_assessment = data
-        tender.risk_assessment_docs = []
-        tender.risk_checked_at = timezone.now()
-        tender.risk_error = ""
-        tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
+        _save_risk_result(tender, data, [])
         return risk_projection(tender, tender.risk_assessment)
 
     try:
@@ -969,11 +985,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     if _keeps_previous_assessment(tender, data):
         return risk_projection(tender, tender.risk_assessment)
     data = risk_projection(tender, data)
-    tender.risk_assessment = data
-    tender.risk_assessment_docs = used_names
-    tender.risk_checked_at = timezone.now()
-    tender.risk_error = ""
-    tender.save(update_fields=["risk_assessment", "risk_assessment_docs", "risk_checked_at", "risk_error"])
+    _save_risk_result(tender, data, used_names)
     return risk_projection(tender, tender.risk_assessment)
 
 
@@ -1026,12 +1038,23 @@ def push_to_estimate(tender, user):
     existing = tender.estimates.order_by('pk').first()
     if existing:
         return existing.pk
+    from tenders.tender_data import prepare_tender_for_write
+    prepare_tender_for_write(tender)
     card = parse_notification(tender.notification_raw) if tender.notification_raw else None
-    from tenders.calculation_v2_pipeline import active_calculation_items
+    from tenders.calculation_v2_pipeline import active_calculation_items, ingest_source_items, build_commercial_items
     from tenders.document_enrichment import effective_item_requirements, notification_origin, notification_quote_source
     items = (card or {}).get('items', [])
     originals = items
     sources = active_calculation_items(tender)
+    if not sources and items:
+        sources = ingest_source_items(tender)
+    working = build_commercial_items(tender=tender, sources=sources) if sources else []
+    working_by_source = {}
+    for product in working:
+        for source in product.source_items.all():
+            if source.pk in working_by_source:
+                raise ValueError('Неоднозначная связь рабочей позиции; требуется проверка.')
+            working_by_source[source.pk] = product.pk
     financials = {}
     if sources:
         source_group_members = {}
@@ -1116,6 +1139,7 @@ def push_to_estimate(tender, user):
         code = "; ".join(c for c in [item.get("code"), item.get("code_name")] if c)
         lines.append(TenderLine(
             estimate=estimate, sort_order=i, group_key=item.get("group_key", ""), group_name=item.get("group_name", ""),
+            commercial_item_id=working_by_source.get(item.get('source_item_id')),
             name=(item.get("name") or "Позиция")[:500],
             quantity=_parse_price(item.get("quantity")) or _D("0"),
             nmck_unit=_parse_price(item.get("price")) or _D("0"),
@@ -1541,11 +1565,15 @@ def check_protocol(tender) -> bool:
     return True
 
 
+@transaction.atomic
 def set_our_bid(estimate, *, bid_number: str, bid_price) -> None:
-    tender = estimate.tender
+    from tenders.tender_data import prepare_tender_for_write
+    tender = prepare_tender_for_write(estimate.tender)
+    estimate.tender = tender
     tender.bid_number = (bid_number or "").strip()[:40]
     tender.bid_price = bid_price
-    tender.save(update_fields=["bid_number", "bid_price"])
+    tender.selected_estimate = estimate
+    tender.save(update_fields=["bid_number", "bid_price", "selected_estimate"])
     _decide_status_from_protocol(tender)
 
 
@@ -2039,6 +2067,8 @@ def refresh_document_analysis(user, tender_id, *, routes_only=False):
     tender = Tender.objects.select_for_update().get(pk=tender_id)
     if tender.source == Tender.EAT:
         raise ValueError("Разбор документов ЕАТ ещё не подключён; используйте ссылку на исходную сессию.")
+    from tenders.tender_data import prepare_tender_for_write
+    prepare_tender_for_write(tender)
     active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued", "routing", "preparing"]).first()
     if active and active.updated_at < timezone.now() - timedelta(minutes=15):
         active.status = "partial"; active.error = {"message": "Предыдущее обновление прервано. Запущена повторная попытка."}; active.completed_at = timezone.now()
@@ -2080,10 +2110,12 @@ def _document_input_fingerprint(tender):
     from tenders.calculation_v2_pipeline import _fingerprint, active_calculation_items
     from tenders.document_enrichment import effective_item_requirements
     from .notification import parse_notification
+    from tenders.tender_data import document_preview_map
     urls = [item["url"] for item in parse_notification(tender.notification_raw or {}).get("documents", []) if item.get("url")]
     return _fingerprint({"notification": tender.notification_raw,
         "items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity), "unit": item.unit, "requirements": effective_item_requirements(item)} for item in active_calculation_items(tender)],
-        "documents": list(DocumentPreview.objects.filter(url__in=urls).order_by("url").values("url", "html", "error", "kind"))})
+        "documents": [{'url': url, 'html': preview.html, 'error': preview.error, 'kind': preview.kind}
+                      for url, preview in sorted(document_preview_map(tender, urls).items())]})
 
 
 def _staged_input_fingerprint(tender, enricher):

@@ -48,6 +48,7 @@ def duplicate_estimate(user, estimate_id, pipeline):
             material_unit=line.material_unit, application_unit=line.application_unit,
             logistics_unit=line.logistics_unit, product_url=line.product_url,
             comment=line.comment, requirements=line.requirements, group_key=line.group_key, group_name=line.group_name,
+            **({"commercial_item_id": line.commercial_item_id, "component_id": line.component_id} if pipeline else {}),
         )
         for line in original.lines.all()
     ])
@@ -104,6 +105,10 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     (kept even on a validation error so the form can re-render them).
     Shared by the plain form POST and the autosave endpoint."""
     meta = {"incomplete": False, "posted_lines": None, "posted_analysis": None}
+    if estimate and estimate.pk:
+        estimate = type(estimate).objects.select_for_update().get(pk=estimate.pk)
+    if pipeline and estimate and estimate.status == TenderEstimate.Status.FINALIZED:
+        return estimate, "Зафиксированный расчёт нельзя изменить. Создайте его копию.", meta
     try:
         raw_lines = json.loads(data.get("lines_json", "[]"))
         raw_analysis = json.loads(data.get("document_analysis_json", "{}"))
@@ -119,6 +124,7 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
         if not tender_number or not name or not Decimal("0") <= reduction_percent <= Decimal("100") or russia_delivery < 0:
             raise ValueError
         lines = []
+        line_ids, seen_ids = [], set()
         group_names = {}
         existing_lines = {line.pk: line for line in estimate.lines.all()} if estimate and estimate.pk else {}
         if (any(line.group_key for line in existing_lines.values()) and
@@ -130,6 +136,11 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
             if not isinstance(row, dict):
                 raise ValueError
             existing = existing_lines.get(row.get("id"))
+            if row.get('id') is not None:
+                if type(row['id']) is not int or existing is None or row['id'] in seen_ids:
+                    raise ValueError
+                seen_ids.add(row['id'])
+            line_ids.append(existing.pk if existing else None)
             group_key = str(row.get("group_key", existing.group_key if existing else "") or "").strip()
             group_name = str(row.get("group_name", existing.group_name if existing else "") or "").strip()
             if (bool(group_key) != bool(group_name) or len(group_name) > 120 or
@@ -151,6 +162,15 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
                 "comment": str(row.get("comment", "")).strip(),
                 "requirements": requirements if isinstance(requirements, dict) else {},
             }
+            if pipeline and existing:
+                line.update(commercial_item_id=existing.commercial_item_id, component_id=existing.component_id)
+                if existing.commercial_item_id or existing.component_id:
+                    source_id = (existing.requirements or {}).get('source_item_id')
+                    supplied_id = line['requirements'].get('source_item_id')
+                    if supplied_id is not None and supplied_id != source_id:
+                        raise ValueError
+                    if source_id is not None:
+                        line['requirements'] = {**line['requirements'], 'source_item_id': source_id}
             supplied_quote = line["requirements"].get("source_group")
             stored_quote = source_quotes.get(line["requirements"].get("source_item_id"))
             if supplied_quote and supplied_quote != stored_quote:
@@ -166,11 +186,18 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
             lines.append(line)
         if not lines:
             lines.append({"name": "", "quantity": Decimal("0"), "nmck_unit": Decimal("0"), "material_unit": Decimal("0"), "application_unit": Decimal("0"), "logistics_unit": Decimal("0"), "product_url": "", "comment": "", "requirements": {}})
+            line_ids.append(None)
             calculation_complete = False
     except (ValueError, TypeError, InvalidOperation):
         return estimate, "Проверьте реквизиты тендера и товарные позиции.", meta
 
     quotes = calculation_group_quotes(lines)
+    if pipeline and estimate and estimate.tender_id:
+        from .tender_data import prepare_tender_for_write
+        try:
+            prepare_tender_for_write(estimate.tender)
+        except ValueError as exc:
+            return estimate, str(exc), meta
     if any(line["nmck_unit"] <= 0 and line.get("group_key") not in quotes for line in lines):
         calculation_complete = False
     _calculated, summary = calculate_tender(lines, reduction_percent, russia_delivery, settings.vat_rate)
@@ -192,8 +219,22 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
         estimate.order.name = estimate.name
         estimate.order.save(update_fields=["name", "updated_at"])
     estimate.save()
-    estimate.lines.all().delete()
     line_model = TenderLine if pipeline else OrderLine
-    line_model.objects.bulk_create([line_model(estimate=estimate, sort_order=index, **line) for index, line in enumerate(lines)])
+    kept, created, updated = [], [], []
+    for index, (line, pk) in enumerate(zip(lines, line_ids)):
+        if pk is None:
+            created.append(line_model(estimate=estimate, sort_order=index, **line))
+        else:
+            obj = existing_lines[pk]
+            obj.sort_order = index
+            for field, value in line.items():
+                setattr(obj, field, value)
+            updated.append(obj)
+            kept.append(pk)
+    estimate.lines.exclude(pk__in=kept).delete()
+    if updated:
+        line_model.objects.bulk_update(updated, ['sort_order', *lines[0].keys()])
+    if created:
+        line_model.objects.bulk_create(created)
     meta["incomplete"] = not calculation_complete
     return estimate, None, meta

@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from django.utils.html import escape
 
 ALLOWED_PREFIX = "https://zakupki.gov.ru/"
+PREVIEW_VERSION = "document-preview-v1"
 MAX_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 300
 MAX_PDF_PAGES = 40

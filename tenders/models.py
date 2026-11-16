@@ -510,6 +510,12 @@ class TenderEstimate(models.Model):
     пересчитать или удалить, а факт того, что случилось с тендером, должен
     остаться."""
 
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Черновик"
+        FINALIZED = "finalized", "Зафиксирован"
+
+    status = models.CharField("Состояние версии расчёта", max_length=16, choices=Status.choices, default=Status.DRAFT)
+    supersedes = models.ForeignKey("self", verbose_name="Предыдущий расчёт", null=True, blank=True, on_delete=models.PROTECT, related_name="revisions")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tender_estimates", verbose_name="Ответственный")
     tender = models.ForeignKey(
         "tender_selection.Tender", on_delete=models.SET_NULL, null=True, blank=True,
@@ -533,6 +539,11 @@ class TenderEstimate(models.Model):
 
     def __str__(self):
         return f"{self.tender_number} — {self.name}"
+
+    def clean(self):
+        super().clean()
+        if self.supersedes_id and (self.supersedes_id == self.pk or self.supersedes.tender_id != self.tender_id):
+            raise ValidationError({"supersedes": "Предыдущий расчёт должен принадлежать тому же тендеру."})
 
     def display_status(self):
         """Черновик/Готово — не хранимый статус, а вид по полноте ЭТОГО расчёта
@@ -561,6 +572,8 @@ class TenderEstimate(models.Model):
 
 class TenderLine(models.Model):
     estimate = models.ForeignKey(TenderEstimate, verbose_name="Расчёт тендера", on_delete=models.CASCADE, related_name="lines")
+    commercial_item = models.ForeignKey("TenderCommercialItem", verbose_name="Рабочий товар", null=True, blank=True, on_delete=models.PROTECT, related_name="estimate_lines")
+    component = models.ForeignKey("CalculationComponent", verbose_name="Компонент", null=True, blank=True, on_delete=models.PROTECT, related_name="estimate_lines")
     name = models.CharField("Наименование", max_length=500)
     quantity = models.DecimalField("Количество", max_digits=14, decimal_places=2)
     nmck_unit = models.DecimalField("НМЦК за единицу", max_digits=14, decimal_places=2)
@@ -578,9 +591,18 @@ class TenderLine(models.Model):
         ordering = ["sort_order", "pk"]
         verbose_name = "Товар"
         verbose_name_plural = "Товары"
+        constraints = [models.CheckConstraint(condition=models.Q(commercial_item__isnull=True) | models.Q(component__isnull=True), name="tender_line_one_subject")]
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        if self.commercial_item_id and self.component_id:
+            raise ValidationError("У строки расчёта должен быть один предмет расчёта.")
+        subject = self.component.commercial_item if self.component_id else self.commercial_item
+        if subject and self.estimate_id and subject.tender_id != self.estimate.tender_id:
+            raise ValidationError("Предмет расчёта должен принадлежать тендеру расчёта.")
 
 
 class Order(models.Model):
@@ -1039,6 +1061,7 @@ class TenderComputeLine(models.Model):
     source_item=models.ForeignKey(TenderSourceItem,on_delete=models.PROTECT,related_name="compute_lines")
     commercial_item=models.ForeignKey("TenderCommercialItem",null=True,blank=True,on_delete=models.SET_NULL,related_name="compute_lines")
     component=models.ForeignKey("CalculationComponent",null=True,blank=True,on_delete=models.SET_NULL,related_name="compute_lines")
+    provider_quote = models.ForeignKey(ProviderCalculationQuote, verbose_name="Расчёт исполнителя", null=True, blank=True, on_delete=models.PROTECT, related_name="compute_lines")
     input_snapshot=models.JSONField(default=dict,blank=True); route_key=models.CharField(max_length=100,blank=True); engine_key=models.CharField(max_length=100,blank=True); route_confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); route_metadata=models.JSONField(default=dict,blank=True)
     status=models.CharField(max_length=32,default="queued"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=["job","source_item"],name="unique_v2_compute_line")]
@@ -1047,6 +1070,7 @@ class TenderComputeWorkUnit(models.Model):
     job=models.ForeignKey(TenderComputeJob,on_delete=models.CASCADE,related_name="work_units")
     component=models.ForeignKey("CalculationComponent",null=True,blank=True,on_delete=models.SET_NULL,related_name="work_units")
     operation_step=models.ForeignKey("ComponentOperationStep",null=True,blank=True,on_delete=models.SET_NULL,related_name="work_units")
+    provider_quote = models.ForeignKey(ProviderCalculationQuote, verbose_name="Расчёт исполнителя", null=True, blank=True, on_delete=models.PROTECT, related_name="work_units")
     engine_key=models.CharField(max_length=100); dedupe_key=models.CharField(max_length=128); input_fingerprint=models.CharField(max_length=128); status=models.CharField(max_length=32,default="queued")
     lines=models.ManyToManyField(TenderComputeLine,related_name="work_units"); result=models.JSONField(default=dict,blank=True); diagnostics=models.JSONField(default=dict,blank=True); attempt_count=models.PositiveIntegerField(default=0); error=models.JSONField(default=dict,blank=True)
     operation_steps=models.ManyToManyField("ComponentOperationStep", related_name="preparation_work_units", blank=True)
@@ -1139,6 +1163,7 @@ class ComponentRoutePlan(models.Model):
     scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.COMPONENT)
     status = models.CharField(max_length=32, default="planned")
     metadata = models.JSONField(default=dict, blank=True)
+    supersedes = models.ForeignKey("self", verbose_name="Предыдущий маршрут", null=True, blank=True, on_delete=models.PROTECT, related_name="revisions")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1159,3 +1184,43 @@ class ComponentOperationStep(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["route_plan", "position"], name="unique_v2_route_step_position")]
         ordering = ["position", "pk"]
+
+
+class TenderAnalysis(models.Model):
+    tender = models.ForeignKey("tender_selection.Tender", verbose_name="Тендер", on_delete=models.PROTECT, related_name="analyses")
+    commercial_item = models.ForeignKey(TenderCommercialItem, verbose_name="Рабочий товар", null=True, blank=True, on_delete=models.PROTECT, related_name="analyses")
+    component = models.ForeignKey(CalculationComponent, verbose_name="Компонент", null=True, blank=True, on_delete=models.PROTECT, related_name="analyses")
+    kind = models.CharField("Вид анализа", max_length=64)
+    input_fingerprint = models.CharField("Отпечаток входных данных", max_length=128, blank=True)
+    result = models.JSONField("Результат", default=dict, blank=True)
+    basis = models.JSONField("Ссылки на основания", default=list, blank=True)
+    is_current = models.BooleanField("Текущий результат", default=True)
+    supersedes = models.ForeignKey("self", verbose_name="Предыдущий результат", null=True, blank=True, on_delete=models.PROTECT, related_name="revisions")
+    job = models.ForeignKey(TenderComputeJob, verbose_name="Задание обработки", null=True, blank=True, on_delete=models.SET_NULL, related_name="analyses")
+    created_at = models.DateTimeField("Создано", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Результат анализа тендера"
+        verbose_name_plural = "Результаты анализа тендера"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(commercial_item__isnull=True) | models.Q(component__isnull=True), name="tender_analysis_one_subject"),
+            models.UniqueConstraint(fields=["tender", "kind"], condition=models.Q(is_current=True, commercial_item__isnull=True, component__isnull=True), name="unique_current_tender_analysis"),
+            models.UniqueConstraint(fields=["commercial_item", "kind"], condition=models.Q(is_current=True, commercial_item__isnull=False), name="unique_current_item_analysis"),
+            models.UniqueConstraint(fields=["component", "kind"], condition=models.Q(is_current=True, component__isnull=False), name="unique_current_component_analysis"),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.commercial_item_id and self.component_id:
+            raise ValidationError("У результата анализа должна быть одна область действия.")
+        subject = self.component.commercial_item if self.component_id else self.commercial_item
+        if subject and subject.tender_id != self.tender_id:
+            raise ValidationError("Область анализа должна принадлежать этому тендеру.")
+        if self.job_id and self.job.tender_id != self.tender_id:
+            raise ValidationError({"job": "Задание должно принадлежать этому тендеру."})
+        if self.supersedes_id:
+            previous = self.supersedes
+            if (self.supersedes_id == self.pk or
+                    (previous.tender_id, previous.kind, previous.commercial_item_id, previous.component_id) !=
+                    (self.tender_id, self.kind, self.commercial_item_id, self.component_id)):
+                raise ValidationError({"supersedes": "Предыдущий результат должен иметь тот же вид и область анализа."})

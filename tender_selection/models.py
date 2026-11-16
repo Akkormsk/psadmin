@@ -1,7 +1,8 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import models, transaction
+from django.core.exceptions import ValidationError
+from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils import timezone
 from .primary_search_defaults import default_primary_filters
 
@@ -83,6 +84,12 @@ class Tender(models.Model):
     """Единая карточка тендера от импорта до архива."""
 
     objects = TenderQuerySet.as_manager()
+
+    class DataVersion(models.TextChoices):
+        LEGACY = "legacy", "Прежнее хранение"
+        CURRENT = "current", "Единые операции записи"
+
+    data_version = models.CharField("Архитектура данных", max_length=16, choices=DataVersion.choices, default=DataVersion.CURRENT)
 
     def save(self, *args, **kwargs):
         from .history import sync_tenders
@@ -211,6 +218,16 @@ class Tender(models.Model):
     contract_exe_start = models.DateField("Исполнение контракта с", null=True, blank=True)
     contract_exe_end = models.DateField("Исполнение контракта по", null=True, blank=True)
     contract_checked_at = models.DateTimeField("Контракт проверен", null=True, blank=True)
+    conditions = models.JSONField("Общие условия", default=dict, blank=True)
+    selected_estimate = models.ForeignKey(
+        "tenders.TenderEstimate", verbose_name="Расчёт для предложения", null=True, blank=True,
+        on_delete=models.PROTECT, related_name="selected_for_tenders",
+    )
+
+    def clean(self):
+        super().clean()
+        if self.selected_estimate_id and self.selected_estimate.tender_id != self.pk:
+            raise ValidationError({"selected_estimate": "Расчёт должен принадлежать этому тендеру."})
 
     class Meta:
         constraints = [
@@ -247,19 +264,80 @@ class Organization(models.Model):
 class DocumentPreview(models.Model):
     """Кэш разобранного документа извещения (по прямой ссылке ЕИС)."""
 
-    url = models.URLField("Ссылка", max_length=600, unique=True)
+    url = models.URLField("Ссылка", max_length=600, db_index=True)
     filename = models.CharField("Имя файла", max_length=400, blank=True)
     kind = models.CharField("Тип", max_length=16, blank=True)
     html = models.TextField("Содержимое (HTML)", blank=True)
     error = models.CharField("Ошибка", max_length=400, blank=True)
     fetched_at = models.DateTimeField("Загружено", auto_now=True)
+    content_hash = models.CharField("Отпечаток содержимого", max_length=64, blank=True)
+    parser_version = models.CharField("Версия обработчика", max_length=128, blank=True)
+    structure = models.JSONField("Структура документа", default=dict, blank=True)
+    extraction = models.JSONField("Извлечённые сведения", default=dict, blank=True)
 
     class Meta:
         verbose_name = "Предпросмотр документа"
         verbose_name_plural = "Предпросмотры документов"
+        constraints = [
+            models.UniqueConstraint(fields=["url"], condition=models.Q(content_hash=""), name="unique_legacy_preview_url"),
+            models.UniqueConstraint(fields=["url", "content_hash", "parser_version"], condition=~models.Q(content_hash=""), name="unique_preview_content_version"),
+        ]
 
     def __str__(self):
         return self.filename or self.url
+
+
+class TenderDocument(models.Model):
+    tender = models.ForeignKey(Tender, verbose_name="Тендер", on_delete=models.PROTECT, related_name="document_versions")
+    preview = models.ForeignKey(DocumentPreview, verbose_name="Содержимое документа", on_delete=models.PROTECT, related_name="tender_versions")
+    source_key = models.CharField("Идентификатор документа у источника", max_length=600)
+    is_current = models.BooleanField("Текущая версия", default=True)
+    assignments = models.JSONField("Назначения сведений", default=list, blank=True)
+    last_error = models.TextField("Последняя ошибка получения", blank=True)
+    created_at = models.DateTimeField("Создано", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлено", auto_now=True)
+
+    class Meta:
+        verbose_name = "Версия документа тендера"
+        verbose_name_plural = "Версии документов тендера"
+        constraints = [
+            models.UniqueConstraint(fields=["tender", "source_key", "preview"], name="unique_tender_document_version"),
+            models.UniqueConstraint(fields=["tender", "source_key"], condition=models.Q(is_current=True), name="unique_current_tender_document"),
+        ]
+
+    def clean(self):
+        super().clean()
+        from tenders.models import CalculationComponent, TenderCommercialItem
+
+        if not isinstance(self.assignments, list):
+            raise ValidationError({"assignments": "Назначения должны быть списком."})
+        extraction = self.preview.extraction if self.preview_id else {}
+        if not isinstance(extraction, dict):
+            raise ValidationError({"assignments": "Неверный формат извлечения документа."})
+        facts = extraction.get("facts", {})
+        if not isinstance(facts, dict):
+            raise ValidationError({"assignments": "Неверный формат сведений документа."})
+        item_ids, component_ids = set(), set()
+        for row in self.assignments:
+            if not isinstance(row, dict) or not isinstance(row.get("fact_key"), str) or row["fact_key"] not in facts:
+                raise ValidationError({"assignments": "Неизвестное сведение документа."})
+            scope, target = row.get("scope"), row.get("target_id")
+            if scope in {"item", "component"}:
+                if type(target) is not int or target <= 0:
+                    raise ValidationError({"assignments": "Не указан адресат сведения."})
+                (item_ids if scope == "item" else component_ids).add(target)
+            elif scope == "tender":
+                if target is not None:
+                    raise ValidationError({"assignments": "Общее сведение не имеет товарного адресата."})
+            elif scope == "unassigned":
+                if target is not None or not isinstance(row.get("reason"), str) or not row["reason"].strip():
+                    raise ValidationError({"assignments": "Для неясной привязки требуется причина."})
+            else:
+                raise ValidationError({"assignments": "Неизвестная область назначения."})
+        using = self._state.db or DEFAULT_DB_ALIAS
+        if (TenderCommercialItem.objects.using(using).filter(tender_id=self.tender_id, pk__in=item_ids).count() != len(item_ids)
+                or CalculationComponent.objects.using(using).filter(commercial_item__tender_id=self.tender_id, pk__in=component_ids).count() != len(component_ids)):
+            raise ValidationError({"assignments": "Адресат должен принадлежать этому тендеру."})
 
 
 class ContractStatQuerySet(models.QuerySet):

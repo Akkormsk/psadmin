@@ -38,7 +38,8 @@ class ManualDocumentAnalysisTests(TestCase):
             refresh_document_analysis(viewer, self.tender.pk)
         self.assertFalse(TenderComputeJob.objects.exists())
 
-    def test_worker_passes_budget_and_does_not_accept_data(self):
+    @patch('django.db.close_old_connections')
+    def test_worker_passes_budget_and_does_not_accept_data(self, _close_connections):
         from tenders.test_calculation_v2_pipeline import notification, raw_item
         self.tender.notification_raw = notification([raw_item("Товар", "1")])
         self.tender.save()

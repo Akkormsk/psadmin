@@ -194,7 +194,9 @@ def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostic
                 basis.append(proof)
             if valid:
                 if basis != assessment.get('basis', []):
-                    Tender.objects.filter(pk=tender.pk, review=Tender.UNREVIEWED).update(profile_assessment={**assessment, 'basis': basis})
+                    from tenders.tender_data import save_analysis_projection
+                    save_analysis_projection(tender, kind='profile', input_fingerprint=_input_hash(state),
+                        values={'profile_assessment': {**assessment, 'basis': basis}}, basis=basis, expected_title=tender.title)
                 continue
         pending.append(tender)
     tenders = pending
@@ -202,7 +204,9 @@ def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostic
     for tender in tenders:
         if tender.profile_assessment:
             tender.profile_assessment = {**tender.profile_assessment, 'stale': True}
-            Tender.objects.filter(pk=tender.pk, review=Tender.UNREVIEWED).update(profile_assessment=tender.profile_assessment)
+            from tenders.tender_data import save_analysis_projection
+            save_analysis_projection(tender, kind='profile', input_fingerprint=_input_hash(_state(tender, selection)),
+                values={'profile_assessment': tender.profile_assessment}, expected_title=tender.title)
     checked = 0
     spent = Decimal('0')
     if diagnostics is not None:
@@ -252,10 +256,13 @@ def triage_tenders(ids: list[int], *, force=False, max_cost_rub=None, diagnostic
             if tender_id in seen or counts[tender_id] != 1:
                 continue
             seen.add(tender_id)
-            updated = Tender.objects.filter(pk=tender_id, status=Tender.NEW, review=Tender.UNREVIEWED, title=next(tender.title for tender in batch if tender.pk == tender_id)).update(
-                profile_signal=signal, profile_confidence=Decimal(str(round(confidence, 3))),
-                profile_reason=reason, profile_model=MODEL, profile_assessment={**assessment, "billing": metrics}, profile_checked_at=now,
-            )
+            from tenders.tender_data import save_analysis_projection
+            target = next(tender for tender in batch if tender.pk == tender_id)
+            updated = save_analysis_projection(target, kind='profile', input_fingerprint=_input_hash(states[tender_id]),
+                expected_title=target.title, basis=assessment.get('basis', []),
+                values={'profile_signal': signal, 'profile_confidence': Decimal(str(round(confidence, 3))),
+                        'profile_reason': reason, 'profile_model': MODEL,
+                        'profile_assessment': {**assessment, 'billing': metrics}, 'profile_checked_at': now})
             checked += updated
     return checked
 
