@@ -2099,7 +2099,8 @@ def _document_input_fingerprint(tender):
     urls = [item["url"] for item in parse_notification(tender.notification_raw or {}).get("documents", []) if item.get("url")]
     return _fingerprint({"notification": tender.notification_raw,
         "items": [{"id": item.pk, "name": item.original_text, "quantity": str(item.quantity), "unit": item.unit, "requirements": effective_item_requirements(item)} for item in active_calculation_items(tender)],
-        "documents": [{'url': url, 'html': preview.html, 'error': preview.error, 'kind': preview.kind}
+        "documents": [{'url': url, 'preview_id': preview.pk, 'content_hash': preview.content_hash,
+                       'parser_version': preview.parser_version, 'html': preview.html, 'error': preview.error, 'kind': preview.kind}
                       for url, preview in sorted(document_preview_map(tender, urls).items())]})
 
 
@@ -2156,9 +2157,18 @@ def _staged_document_analysis(job, enricher):
         and candidate.diagnostics['stages'][name].get('outcome') != 'source_only'
         for name in ('structure', 'national_regime', 'tz'))
         and not any(gap.get('stage') in {'source_binding', 'structure', 'national_regime', 'tz'} for gap in candidate.diagnostics.get('analysis_gaps', []))), None)
+    adopted = False
+    if previous and previous.diagnostics.get('source_reading', {}).get('storage') != 'documents':
+        legacy_reading = previous.diagnostics.get('source_reading', {})
+        if legacy_reading:
+            adopted = enricher.adopt_source_memory(job, legacy_reading)
+            if not adopted:
+                previous = None
+        elif previous.diagnostics.get('tender_conditions'):
+            previous = None
     if previous:
         for key in ('source_reading', 'tender_conditions'):
-            if key in previous.diagnostics:
+            if key in previous.diagnostics and not adopted:
                 job.diagnostics[key] = previous.diagnostics[key]
         job.diagnostics["analysis_gaps"].extend(gap for gap in previous.diagnostics.get("analysis_gaps", []) if gap.get("stage") in {"structure", "national_regime", "tz"})
         for key in ('structure', 'national_regime', 'tz'):

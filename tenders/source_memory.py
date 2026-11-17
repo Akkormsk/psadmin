@@ -167,6 +167,9 @@ class SourceMemory:
         self.assignments = {}
 
     def restore(self, state):
+        if state.get('storage') == 'documents':
+            # References are resolved by DocumentEvidence against the exact document version.
+            return
         if state.get('version') == VERSION:
             self.records.update({key: row for key, row in state.get('records', {}).items() if key not in self.records})
             source_ids = {row['source_id'] for row in self.inventory}

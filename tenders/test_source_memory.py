@@ -126,7 +126,7 @@ class SourceMemoryPipelineTests(TestCase):
         with patch('tenders.services._ai_gateway_json', side_effect=answer):
             engine.read_source_memory(job)
         self.assertTrue(job.diagnostics['source_reading']['complete'])
-        self.assertTrue(all(row['scope'] == 'unassigned' for row in job.diagnostics['source_reading']['records'].values()))
+        self.assertTrue(all(row['scope'] == 'unassigned' for row in engine.source_memory.snapshot()['records'].values()))
 
     def test_grouped_references_attach_exact_originals_without_model_copying_text(self):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
@@ -138,7 +138,7 @@ class SourceMemoryPipelineTests(TestCase):
         with patch('tenders.services._ai_gateway_json', side_effect=answer):
             engine.read_source_memory(job)
         self.assertTrue(job.diagnostics['source_reading']['complete'])
-        for row in job.diagnostics['source_reading']['records'].values():
+        for row in engine.source_memory.snapshot()['records'].values():
             self.assertEqual(row['facts'], [{'quote': engine.source_memory.blocks[row['id']]['text']}])
 
     def test_partial_reading_continues_without_repeating_confirmed_sources(self):

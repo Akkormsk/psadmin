@@ -70,11 +70,20 @@ def publish_document_preview(tender, url, name, result, *, content_hash, parser_
             defaults={'filename': name, 'kind': result.get('kind', ''), 'html': result.get('html', ''),
                       'error': str(result.get('error') or '')[:DocumentPreview._meta.get_field('error').max_length]},
         )
+        previous_ids = set(TenderDocument.objects.using(using).filter(
+            tender=current, source_key=url, is_current=True).exclude(preview=preview).values_list('pk', flat=True))
         TenderDocument.objects.using(using).filter(tender=current, source_key=url, is_current=True).exclude(preview=preview).update(is_current=False)
         link, created = TenderDocument.objects.using(using).get_or_create(tender=current, source_key=url, preview=preview)
         if not created and (not link.is_current or link.last_error):
             link.is_current, link.last_error = True, ''
             link.save(using=using, update_fields=['is_current', 'last_error', 'updated_at'])
+        if previous_ids and current.conditions:
+            conditions = {purpose: [ref for ref in rows if not isinstance(ref, dict) or ref.get('document_id') not in previous_ids]
+                          if isinstance(rows, list) else rows for purpose, rows in current.conditions.items()}
+            if conditions != current.conditions:
+                current.conditions = conditions
+                current.save(using=using, update_fields=['conditions'])
+                tender.conditions = conditions
         return preview
 
 

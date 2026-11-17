@@ -307,7 +307,7 @@ class TenderDocument(models.Model):
 
     def clean(self):
         super().clean()
-        from tenders.models import CalculationComponent, TenderCommercialItem
+        from tenders.models import CalculationComponent, TenderCommercialItem, TenderSourceItem
 
         if not isinstance(self.assignments, list):
             raise ValidationError({"assignments": "Назначения должны быть списком."})
@@ -317,8 +317,22 @@ class TenderDocument(models.Model):
         facts = extraction.get("facts", {})
         if not isinstance(facts, dict):
             raise ValidationError({"assignments": "Неверный формат сведений документа."})
-        item_ids, component_ids = set(), set()
+        item_ids, component_ids, source_ids = set(), set(), set()
         for row in self.assignments:
+            if isinstance(row, dict) and 'fragment_id' in row:
+                fragments = self.preview.structure.get('fragments', {})
+                if not isinstance(row['fragment_id'], str) or row['fragment_id'] not in fragments:
+                    raise ValidationError({'assignments': 'Неизвестный фрагмент документа.'})
+                refs = row.get('source_ids')
+                if not isinstance(refs, list) or any(type(pk) is not int or pk <= 0 for pk in refs):
+                    raise ValidationError({'assignments': 'Неверные исходные позиции документа.'})
+                from tenders.source_memory import validate_reading
+                try:
+                    validate_reading([{**row, 'id': row['fragment_id']}], [{'id': row['fragment_id']}], set(refs))
+                except ValueError as exc:
+                    raise ValidationError({'assignments': str(exc)}) from exc
+                source_ids.update(refs)
+                continue
             if not isinstance(row, dict) or not isinstance(row.get("fact_key"), str) or row["fact_key"] not in facts:
                 raise ValidationError({"assignments": "Неизвестное сведение документа."})
             scope, target = row.get("scope"), row.get("target_id")
@@ -335,6 +349,8 @@ class TenderDocument(models.Model):
             else:
                 raise ValidationError({"assignments": "Неизвестная область назначения."})
         using = self._state.db or DEFAULT_DB_ALIAS
+        if TenderSourceItem.objects.using(using).filter(tender_id=self.tender_id, pk__in=source_ids).count() != len(source_ids):
+            raise ValidationError({'assignments': 'Исходные позиции должны принадлежать этому тендеру.'})
         if (TenderCommercialItem.objects.using(using).filter(tender_id=self.tender_id, pk__in=item_ids).count() != len(item_ids)
                 or CalculationComponent.objects.using(using).filter(commercial_item__tender_id=self.tender_id, pk__in=component_ids).count() != len(component_ids)):
             raise ValidationError({"assignments": "Адресат должен принадлежать этому тендеру."})

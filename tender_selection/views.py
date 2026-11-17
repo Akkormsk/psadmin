@@ -847,11 +847,13 @@ def tender_detail(request, pk):
         return HttpResponse(status=409)
     from .national_regime import risk_projection
     risk = risk_projection(tender, risk, card)
+    from tenders.document_evidence import condition_context
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
         "display_purchase_number": (tender.raw or {}).get("display_number") or tender.purchase_number,
         "card": card,
+        "tender_conditions": condition_context(tender, v2_job),
         "org": org,
         "region_label": region_name(tender.region) if tender.region else "",
         "fetch_failed": payload is None and tender.law == "fz44",
