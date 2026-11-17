@@ -210,8 +210,11 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     estimate.russia_delivery = russia_delivery
     estimate.result_notes = data.get("result_notes", "").strip()[:5000]
     estimate.vat_rate_snapshot = settings.vat_rate
+    conditions_basis = (estimate.summary_snapshot or {}).get('conditions_fingerprint') if pipeline else None
     estimate.summary_snapshot = {key: value if key == "groups" else str(value) for key, value in summary.items()}
     estimate.summary_snapshot["is_incomplete"] = not calculation_complete
+    if conditions_basis is not None:
+        estimate.summary_snapshot['conditions_fingerprint'] = conditions_basis
     estimate.document_analysis = meta["posted_analysis"] or {}
     if not pipeline and not estimate.order_id:
         estimate.order = Order.objects.create(name=estimate.name)

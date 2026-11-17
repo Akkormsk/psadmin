@@ -1,4 +1,5 @@
 {% if risk %}
+{% if risk.stale %}<p class="ts-warn">Исходные сведения изменились. Сохранённую оценку рисков нужно проверить повторно.</p>{% endif %}
 {% if risk.preliminary %}<p class="ts-sub">Предварительно, бесплатно — по сохранённым сведениям. Для полной оценки нужны доступные документы.</p>{% endif %}
 {% if risk_error %}<p class="ts-warn">{{ risk_error }} <button type="button" class="ts-doc-link" data-risk-refresh>Повторить проверку документов</button></p>{% endif %}
 {% if risk.degraded %}<p class="ts-warn">⚠ Ограниченный режим: документы закупки недоступны, оценка построена только по данным извещения — менее надёжна, чем по полному тексту контракта.</p>{% endif %}

@@ -33,8 +33,12 @@ def _resolved_variant(component, binding):
 def calculate_routed_provider_lines(job):
     calculated = []
     for line in job.lines.select_related("component").filter(component__isnull=False).order_by("pk"):
-        route = ComponentRoutePlan.objects.filter(component=line.component).prefetch_related("steps").first()
-        if not route:
+        route = ComponentRoutePlan.objects.filter(component=line.component).prefetch_related("steps").order_by('-pk').first()
+        if not route or route.status not in {'planned', 'ready'}:
+            continue
+        snapshot = line.input_snapshot or {}
+        if (snapshot.get('input_fingerprint') and snapshot['input_fingerprint'] != route.metadata.get('input_fingerprint')
+                or line.component.source_item_id and line.source_item_id != line.component.source_item_id):
             continue
         bindings = ProviderCalculatorBinding.objects.filter(
             link__stage_id__in=[step.process_id for step in route.steps.all()],

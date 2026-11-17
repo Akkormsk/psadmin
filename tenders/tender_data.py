@@ -1,5 +1,6 @@
 """Shared writes for new/active tenders; legacy archive reads stay side-effect free."""
 from django.db import DEFAULT_DB_ALIAS, transaction
+from copy import deepcopy
 
 from tender_selection.models import DocumentPreview, Tender, TenderDocument
 from .models import TenderAnalysis
@@ -84,6 +85,8 @@ def publish_document_preview(tender, url, name, result, *, content_hash, parser_
                 current.conditions = conditions
                 current.save(using=using, update_fields=['conditions'])
                 tender.conditions = conditions
+        if previous is None or previous.pk != preview.pk:
+            mark_tender_inputs_changed(tender)
         return preview
 
 
@@ -105,8 +108,11 @@ def publish_analysis(tender, *, kind, input_fingerprint, result, basis=None, com
         previous = TenderAnalysis.objects.using(using).filter(
             tender=current, kind=kind, commercial_item=commercial_item, component=component, is_current=True,
         ).first()
+        if previous is None:
+            previous = TenderAnalysis.objects.using(using).filter(tender=current, kind=kind,
+                commercial_item=commercial_item, component=component).order_by('-pk').first()
         basis = basis if basis is not None else []
-        if previous and previous.input_fingerprint == input_fingerprint and previous.result == result and previous.basis == basis:
+        if previous and previous.is_current and previous.input_fingerprint == input_fingerprint and previous.result == result and previous.basis == basis:
             return previous
         analysis = TenderAnalysis(tender=current, kind=kind, input_fingerprint=input_fingerprint, result=result,
                                   basis=basis, commercial_item=commercial_item, component=component, job=job,
@@ -122,11 +128,16 @@ def publish_analysis(tender, *, kind, input_fingerprint, result, basis=None, com
         return analysis
 
 
-def save_analysis_projection(tender, *, kind, values, input_fingerprint, basis=None, expected_title=None):
+def save_analysis_projection(tender, *, kind, values, input_fingerprint, basis=None, expected_title=None, expected_inputs=None):
     """Legacy read fields are projections; publication and projection commit together."""
     using = tender._state.db or DEFAULT_DB_ALIAS
     with transaction.atomic(using=using):
         current = Tender.objects.using(using).select_for_update().get(pk=tender.pk)
+        if expected_inputs is not None:
+            from tender_selection.services import _risk_input_fingerprint, _document_input_fingerprint
+            actual_inputs = _risk_input_fingerprint(current) if kind == 'risk' else _document_input_fingerprint(current)
+            if actual_inputs != expected_inputs:
+                return False
         if expected_title is not None and (current.title != expected_title or current.status != Tender.NEW or current.review != Tender.UNREVIEWED):
             return False
         if kind == 'risk':
@@ -150,3 +161,28 @@ def save_analysis_projection(tender, *, kind, values, input_fingerprint, basis=N
 def invalidate_analysis(tender, *, kind):
     using = tender._state.db or DEFAULT_DB_ALIAS
     TenderAnalysis.objects.using(using).filter(tender=tender, kind=kind, is_current=True).update(is_current=False)
+
+
+def mark_tender_inputs_changed(tender, *, commercial_ids=()):
+    """Keep old results; require verification without scheduling any paid work."""
+    from .models import ComponentRoutePlan
+    using = tender._state.db or DEFAULT_DB_ALIAS
+    with transaction.atomic(using=using):
+        current = Tender.objects.using(using).select_for_update().get(pk=tender.pk)
+        if current.status == Tender.DISMISSED:
+            return
+        if current.risk_assessment and not current.risk_assessment.get('stale'):
+            saved = TenderAnalysis.objects.using(using).filter(tender=current, kind='risk', commercial_item__isnull=True, component__isnull=True).order_by('-pk').first()
+            if saved is None or saved.result != current.risk_assessment:
+                historical = TenderAnalysis(tender=current, kind='risk', result=deepcopy(current.risk_assessment),
+                    is_current=False, supersedes=saved, basis=[{'legacy_checked_at': current.risk_checked_at.isoformat() if current.risk_checked_at else None}])
+                historical.save(using=using)
+            data = deepcopy(current.risk_assessment)
+            data['stale'] = True
+            current.risk_assessment = data
+            current.save(using=using, update_fields=['risk_assessment'])
+        invalidate_analysis(current, kind='risk')
+        tender.risk_assessment = current.risk_assessment
+        if commercial_ids:
+            ComponentRoutePlan.objects.using(using).filter(commercial_item__tender=current, commercial_item_id__in=commercial_ids,
+                status__in=['planned', 'ready', 'needs_review']).update(status='stale')

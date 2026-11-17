@@ -626,6 +626,9 @@ def notification_for(tender, *, force: bool = False) -> dict | None:
     tender.notification_checked_at = timezone.now()
     tender.notification_error = ""
     tender.save(update_fields=["notification_raw", "notification_checked_at", "notification_error", "profile_assessment", "profile_checked_at"])
+    if changed_profile_input:
+        from tenders.tender_data import mark_tender_inputs_changed
+        mark_tender_inputs_changed(tender)
     from tenders.calculation_v2_pipeline import trigger_visible_tender
     trigger_visible_tender(tender)
 
@@ -901,12 +904,18 @@ def _keeps_previous_assessment(tender, new_data) -> bool:
     return False
 
 
-def _save_risk_result(tender, data, document_names):
+def _risk_input_fingerprint(tender):
+    from tenders.input_freshness import conditions_fingerprint
+    from tenders.source_memory import signature
+    return signature([_document_input_fingerprint(tender), conditions_fingerprint(tender.conditions)])
+
+
+def _save_risk_result(tender, data, document_names, *, expected_inputs=None):
     from tenders.tender_data import save_analysis_projection
-    save_analysis_projection(tender, kind='risk', input_fingerprint=_document_input_fingerprint(tender),
+    return save_analysis_projection(tender, kind='risk', input_fingerprint=expected_inputs or _risk_input_fingerprint(tender),
         values={'risk_assessment': data, 'risk_assessment_docs': document_names,
                 'risk_checked_at': timezone.now(), 'risk_error': ''},
-        basis=[{'document_name': name} for name in document_names])
+        basis=[{'document_name': name} for name in document_names], expected_inputs=expected_inputs)
 
 
 def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
@@ -931,7 +940,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         return available_facts() if tender.risk_assessment or tender.notification_raw else None
     if tender.law != "fz44":
         return None
-    if tender.risk_assessment and "risk_factors" in tender.risk_assessment and not force:
+    if tender.risk_assessment and ("risk_factors" in tender.risk_assessment or tender.risk_assessment.get('stale')) and not force:
         return risk_projection(tender, tender.risk_assessment)
     if not tender.notification_raw:
         return available_facts() if tender.v2_source_items.exists() else None
@@ -956,6 +965,7 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         tender.save(update_fields=["risk_checked_at", "risk_error"])
         return available_facts()
 
+    expected_inputs = _risk_input_fingerprint(tender)
     try:
         result = assess(context)
     except RiskAssessmentError as exc:
@@ -968,9 +978,11 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     policy = _classify(data.get("risk_facts"))
     data.update(policy)
     if _keeps_previous_assessment(tender, data):
+        tender.refresh_from_db(fields=['risk_assessment', 'risk_checked_at', 'risk_error'])
         return risk_projection(tender, tender.risk_assessment)
     data = risk_projection(tender, data)
-    _save_risk_result(tender, data, used_names)
+    if not _save_risk_result(tender, data, used_names, expected_inputs=expected_inputs):
+        tender.refresh_from_db(fields=['risk_assessment', 'risk_checked_at', 'risk_error'])
     return risk_projection(tender, tender.risk_assessment)
 
 
@@ -1088,7 +1100,9 @@ def push_to_estimate(tender, user):
         tender.market_forecast_sample_count = stats["count"]
         tender.market_forecast_at = timezone.now()
         tender.save(update_fields=["market_forecast_percent", "market_forecast_sample_count", "market_forecast_at"])
-    snapshot = {"is_incomplete": True, "source_financials": list(financials.values()), "source_nmck_total": str(tender.max_price) if tender.max_price is not None else None}
+    from tenders.input_freshness import conditions_fingerprint
+    snapshot = {"is_incomplete": True, "source_financials": list(financials.values()), "source_nmck_total": str(tender.max_price) if tender.max_price is not None else None,
+                'conditions_fingerprint': conditions_fingerprint(tender.conditions)}
     if stats:
         snapshot["price_stats"] = {
             "median": stats["median"],
@@ -2031,6 +2045,8 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
         retired = TenderCommercialItem.objects.filter(pk__in=affected_goods).exclude(pk__in=[item.pk for item in accepted])
         CalculationComponent.objects.filter(commercial_item__in=retired).update(status='superseded')
         retired.update(status='superseded')
+        from tenders.tender_data import mark_tender_inputs_changed
+        mark_tender_inputs_changed(tender, commercial_ids=[item.pk for item in accepted])
     else:
         # Proposed routes may already reference these sources. Retain their evidence.
         for proposal in proposals:

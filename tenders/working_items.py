@@ -172,7 +172,11 @@ def tender_working_items(tender):
                 quantity_matches = Decimal(str(snapshot['quantity'])) == component.effective_quantity
             except (InvalidOperation, TypeError, ValueError):
                 quantity_matches = False
-            if not quantity_matches or snapshot['requirements'] != component.requirements:
+            saved_requirements, current_requirements = snapshot['requirements'], component.requirements
+            if isinstance(saved_requirements, dict) and isinstance(current_requirements, dict):
+                saved_requirements = {key: value for key, value in saved_requirements.items() if key != 'owner_answers'}
+                current_requirements = {key: value for key, value in current_requirements.items() if key != 'owner_answers'}
+            if not quantity_matches or saved_requirements != current_requirements:
                 freshness = 'stale'
             elif snapshot.get('input_fingerprint') and route.get('plan_id'):
                 route_plan = stored_plans.get(route['plan_id'])

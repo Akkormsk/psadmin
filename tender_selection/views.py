@@ -73,6 +73,8 @@ def tender_viewer_required(view):
 
 def _risk_badge(tender) -> dict:
     """Светофор по итоговому уровню оценки, а пока её нет — её состояние."""
+    if (tender.risk_assessment or {}).get('stale'):
+        return {'state': 'warn', 'text': 'риск: нужна повторная проверка'}
     if tender.risk_error:
         return {"state": "error", "text": "риск: ошибка"}
     if not tender.risk_checked_at or "risk_factors" not in (tender.risk_assessment or {}):
@@ -836,7 +838,7 @@ def tender_detail(request, pk):
         # расчёт уходит в фон (см. risk_status ниже, дергается JS-ом со
         # спиннером). Уже посчитанное (успех или ошибка — risk_checked_at не
         # пуст) отдаём сразу, без лишнего похода в шлюз.
-        risk_needs_fetch = card is not None and (
+        risk_needs_fetch = card is not None and not (tender.risk_assessment or {}).get('stale') and (
             tender.risk_checked_at is None or "risk_factors" not in (tender.risk_assessment or {})
         )
         risk = None if risk_needs_fetch else (tender.risk_assessment or None)

@@ -206,8 +206,9 @@
 
   {% if pushed_estimate_id or is_archived %}
   <details class="panel panel--separated" {% if active_stage == "calculation" %}open{% endif %}>
-    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><span class="ts-stage-summary">{% if calc_verdict %}<span class="ts-summary-pill ts-summary-pill--positive">Готов</span><span class="ts-summary-value">Прибыль {{ calc_verdict.net_profit|floatformat:0|group_number }} ₽</span><span class="ts-summary-pill ts-summary-pill--roi">ROI {{ calc_verdict.roi|group_number }}%</span>{% else %}<span class="ts-summary-pill ts-summary-pill--neutral">Расчёт не завершён</span>{% endif %}</span></summary>
+    <summary class="panel-header"><h2 class="panel-title">Расчёт</h2><span class="ts-stage-summary">{% if calc_verdict %}{% if calc_verdict.requires_review %}<span class="ts-summary-pill ts-summary-pill--warning">Требует проверки</span>{% else %}<span class="ts-summary-pill ts-summary-pill--positive">Готов</span>{% endif %}<span class="ts-summary-value">Прибыль {{ calc_verdict.net_profit|floatformat:0|group_number }} ₽</span><span class="ts-summary-pill ts-summary-pill--roi">ROI {{ calc_verdict.roi|group_number }}%</span>{% else %}<span class="ts-summary-pill ts-summary-pill--neutral">Расчёт не завершён</span>{% endif %}</span></summary>
     {% if calc_verdict %}
+    {% if calc_verdict.requires_review %}<p class="ts-warn">Исходные данные изменились. Здесь сохранены прежние суммы; проверьте расчёт по новым требованиям.</p>{% endif %}
     <div class="tender-verdict__stats">
       {% if calc_verdict.purchase_total is not None %}
       <div class="tender-verdict__stat"><small>Себестоимость</small><strong>{{ calc_verdict.purchase_total|floatformat:2|group_number }} ₽</strong></div>

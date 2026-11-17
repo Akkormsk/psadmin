@@ -216,3 +216,25 @@ class DocumentEvidenceSmokeTests(TestCase):
         self.assertEqual(proposal.provenance['document_ref'], proof['document_ref'])
         link = TenderDocument.objects.get(pk=proof['document_ref']['document_id'])
         self.assertIn(proof['document_ref']['fragment_id'], link.preview.structure['fragments'])
+
+    def test_new_shared_conditions_mark_saved_estimate_without_rewriting_it(self):
+        from django.contrib.auth import get_user_model
+        from tender_selection.services import push_to_estimate
+        from .input_freshness import estimate_input_status
+        from .models import TenderEstimate
+        from copy import deepcopy
+        self.tender.notification_raw = {'source': {'attachmentsInfo': {'attachmentInfo': [
+            {'url': self.documents[0]['url'], 'fileName': 'Условия поставки'}]}}}
+        self.tender.save(update_fields=['notification_raw'])
+        DocumentPreview.objects.filter(url=self.documents[0]['url']).update(html='<p>Поставка осуществляется одной партией по адресу заказчика.</p>')
+        owner = get_user_model().objects.create_superuser('conditions-estimate-owner', password='test')
+        estimate = TenderEstimate.objects.get(pk=push_to_estimate(self.tender, owner))
+        before = deepcopy(estimate.summary_snapshot)
+        self.assertEqual(estimate_input_status(estimate)['state'], 'current')
+        job = TenderComputeJob.objects.create(tender=self.tender)
+        engine = self.read(job, scope='global', purposes=('delivery',))
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Repeated reading')):
+            engine.bind_source_memory(job)
+        self.assertEqual(estimate_input_status(estimate)['state'], 'stale')
+        estimate.refresh_from_db()
+        self.assertEqual(estimate.summary_snapshot, before)

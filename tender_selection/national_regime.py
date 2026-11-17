@@ -148,7 +148,7 @@ def risk_projection(tender, assessment=None, card=None):
             factors.append({"code": "item_1875_" + code, "level": level, "text": caption + ": " + "; ".join(item["name"] for item in selected), "items": selected})
     rank = {"low": 0, "unknown": 0, "medium": 1, "high": 2}
     severity = max((factor["level"] for factor in factors), key=lambda value: rank.get(value, 0), default="low")
-    if severity == "low" and (any(item["regime"]["status"] == "unknown" for item in items) or not items or str((data.get("risk_facts") or {}).get("documents_sufficient")).lower() != "true"):
+    if severity == "low" and (data.get('stale') or any(item["regime"]["status"] == "unknown" for item in items) or not items or str((data.get("risk_facts") or {}).get("documents_sufficient")).lower() != "true"):
         severity = "unknown"
     facts = deepcopy(data.get("risk_facts") or {})
     statuses = {item["regime"]["status"] for item in items}

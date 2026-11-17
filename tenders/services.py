@@ -3407,6 +3407,8 @@ def verdict_for(estimate, source_tender) -> dict | None:
         return None
 
     good, thin = roi_thresholds()
+    from .input_freshness import estimate_input_status
+    input_status = estimate_input_status(estimate)
     if roi >= good:
         roi_label, roi_state = "хороший", "positive"
     elif roi >= thin:
@@ -3414,6 +3416,8 @@ def verdict_for(estimate, source_tender) -> dict | None:
     else:
         roi_label, roi_state = "не держится", "negative"
 
+    if input_status['state'] == 'stale':
+        roi_label, roi_state = 'проверьте расчёт по новым требованиям', 'warning'
     risk = source_tender.risk_assessment if source_tender else None
     try:
         price = Decimal(str(snapshot["rrp_total"]))
@@ -3438,4 +3442,6 @@ def verdict_for(estimate, source_tender) -> dict | None:
         "legal_risks": (risk or {}).get("legal_risks"),
         "risk_available": bool(risk),
         "price_thresholds": price_thresholds_for(estimate),
+        "input_status": input_status,
+        "requires_review": input_status['state'] == 'stale',
     }

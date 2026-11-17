@@ -1121,7 +1121,8 @@ def _risk_summary_for(tender):
         return None
     from tender_selection.views import _risk_badge
 
-    risk = tender.risk_assessment or {}
+    from tender_selection.national_regime import risk_projection
+    risk = risk_projection(tender, tender.risk_assessment)
     delivery_mode = risk.get("delivery_mode")
     batch_days = (risk.get("risk_facts") or {}).get("batch_days")
     # Срок на одну заявку — деталь именно способа поставки, не срока
@@ -1194,7 +1195,9 @@ def home(request, pk=None, pipeline=False, minimal=False):
     saved_estimates, kind_filter, worklist_filter = _saved_estimates_for(request) if shell != "pipeline" else ([], "tender", "active")
 
     risk_summary = _risk_summary_for(source_tender) if shell == "worklist" else None
-    return render(request, "tenders/home.html", {"estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "return_to_archive": request.GET.get("from") == "archive", "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
+    from .input_freshness import estimate_input_status
+    input_status = estimate_input_status(estimate) if pipeline and estimate else None
+    return render(request, "tenders/home.html", {"input_status": input_status, "estimate": estimate, "source_tender": source_tender, "shell": shell, "risk_summary": risk_summary, "saved_estimates": saved_estimates, "kind_filter": kind_filter, "worklist_filter": worklist_filter, "form_state": form_state, "initial_lines_json": json.dumps(initial_lines, ensure_ascii=False), "initial_analysis_json": json.dumps(initial_analysis, ensure_ascii=False), "knowledge_sources_json": json.dumps(knowledge_sources, ensure_ascii=False), "vat_rate": settings.vat_rate, "auto_start_product_search": settings.auto_start_product_search, "auto_recalculate_requirements": settings.auto_recalculate_requirements, "users": users, "is_superuser": request.user.is_superuser, "pipeline": pipeline, "return_to_archive": request.GET.get("from") == "archive", "estimate_route": route_prefix, "duplicate_route": f"{route_prefix}_duplicate", "delete_route": f"{route_prefix}_delete", "save_url": reverse(f"{route_prefix}_save", args=[estimate.pk]) if estimate else reverse(f"{route_prefix}_create")})
 
 
 @login_required

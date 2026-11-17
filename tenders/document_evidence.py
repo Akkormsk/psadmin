@@ -211,9 +211,14 @@ class DocumentEvidence:
                 pk__in=[link.pk for link in self.links.values()]).order_by('pk').values('is_current', 'assignments'))
             superseded = any(row.get('last_job_id', 0) > self.job.pk for doc in documents for row in doc['assignments'])
             if complete and documents and signature(tender.notification_raw) == self.notification_version and all(doc['is_current'] for doc in documents) and not superseded:
+                from .input_freshness import conditions_fingerprint
+                changed = conditions_fingerprint(tender.conditions) != conditions_fingerprint(conditions)
                 tender.conditions = conditions
                 tender.save(using=self.using, update_fields=['conditions'])
                 self.job.tender.conditions = conditions
+                if changed:
+                    from .tender_data import mark_tender_inputs_changed
+                    mark_tender_inputs_changed(self.job.tender)
         return conditions
 
 

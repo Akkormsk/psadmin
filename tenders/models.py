@@ -553,10 +553,18 @@ class TenderEstimate(models.Model):
 
         if self.tender_id and self.tender.outcome_status != Tender.OUTCOME_DRAFT:
             return self.tender.get_outcome_status_display()
-        return "Готово" if not self.summary_snapshot.get("is_incomplete", True) else "Черновик"
+        if self.summary_snapshot.get("is_incomplete", True):
+            return "Черновик"
+        from .input_freshness import estimate_input_status
+        return "Требует проверки" if estimate_input_status(self)['state'] == 'stale' else "Готово"
+
+    def input_status_label(self):
+        from .input_freshness import estimate_input_status
+        return estimate_input_status(self)['label']
 
     assistant_read_computed_fields = {
         "display_status": models.CharField("Статус расчёта", help_text="Статус расчёта как на сайте; не статус связанного тендера."),
+        "input_status_label": models.CharField("Актуальность требований и условий расчёта"),
     }
     assistant_read_computed_related = ("tender",)
 
@@ -567,7 +575,12 @@ class TenderEstimate(models.Model):
         incomplete = self.summary_snapshot.get("is_incomplete", True)
         if not self.tender_id:
             return incomplete
-        return self.tender.outcome_status == Tender.OUTCOME_DRAFT and incomplete
+        if self.tender.outcome_status != Tender.OUTCOME_DRAFT:
+            return False
+        if incomplete:
+            return True
+        from .input_freshness import estimate_input_status
+        return estimate_input_status(self)['state'] == 'stale'
 
 
 class TenderLine(models.Model):

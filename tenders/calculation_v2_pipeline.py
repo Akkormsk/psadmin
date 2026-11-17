@@ -1992,7 +1992,7 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
     """Append-only-ish notification ingestion; changed rows supersede, never overwrite source truth."""
     from .tender_data import prepare_tender_for_write
     prepare_tender_for_write(tender)
-    result = []
+    result, changed = [], False
     for index, row in enumerate(_notification_rows(tender)):
         name = str(row.get("name") or "").strip()
         from .requirement_values import normalized_fact, _unit_aliases
@@ -2038,6 +2038,10 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
             },
         )
         result.append(item)
+        changed = changed or current is not None
+    if changed:
+        from .tender_data import mark_tender_inputs_changed
+        mark_tender_inputs_changed(tender)
     return result
 
 
@@ -2311,8 +2315,9 @@ def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, 
     tender = job.tender if job is not None else tender
     if tender is None:
         raise ValueError('Не указан тендер для рабочих товаров.')
+    tender = Tender.objects.select_for_update().get(pk=tender.pk)
     active = routing_source_items(tender) if sources is None else sources
-    result = []
+    result, changed_ids = [], []
     for source in active:
         if source.tender_id != tender.pk:
             raise ValueError('Исходная позиция принадлежит другому тендеру.')
@@ -2350,10 +2355,14 @@ def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, 
             if len(candidates) > 1:
                 raise ValueError('Неоднозначная связь предыдущей редакции рабочего товара.')
             current = candidates[0] if candidates else current
+        requirements = _commercial_requirements(source)
+        changed = bool(current and current.status == 'active' and source.is_active and
+            (current.pk not in {item.pk for item in linked} or current.display_name != source.original_text or
+             current.quantity != source.quantity or current.unit != source.unit or current.requirements != requirements))
         commercial, _ = TenderCommercialItem.objects.update_or_create(
             tender=tender, source_key=current.source_key if current else f"commercial:{source.pk}",
             defaults={**({'job': job} if job is not None else {}), "display_name": source.original_text, "quantity": source.quantity, "unit": source.unit,
-                      "requirements": _commercial_requirements(source), "provenance": {"source_item_ids": [source.pk], "draft": not source.is_active},
+                      "requirements": requirements, "provenance": {"source_item_ids": [source.pk], "draft": not source.is_active},
                       "structure": structure, "status": "active" if source.is_active else "draft"},
         )
         commercial.source_items.set([source])
@@ -2376,6 +2385,11 @@ def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, 
                           "status": "active", "sort_order": index},
             )
         result.append(commercial)
+        if changed:
+            changed_ids.append(commercial.pk)
+    if changed_ids:
+        from .tender_data import mark_tender_inputs_changed
+        mark_tender_inputs_changed(tender, commercial_ids=changed_ids)
     return result
 
 
@@ -2496,7 +2510,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
     processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
     knowledge = _knowledge_for([])
     fingerprints = {item.pk: source_route_fingerprint(item.source_item, processes, knowledge, answers[item.source_item_id]) for item in items}
-    plans = {plan.component_id: plan for plan in ComponentRoutePlan.objects.filter(component__in=items, scope="component").prefetch_related("steps")}
+    plans = {plan.component_id: plan for plan in ComponentRoutePlan.objects.filter(component__in=items, scope="component").prefetch_related("steps").order_by('pk')}
     cached, pending = [], []
     for item in items:
         plan = plans.get(item.pk)
@@ -2556,7 +2570,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
                         job.diagnostics['billing_uncertain'] = True
                     job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'running', **router.diagnostics}
                     job.save(update_fields=['diagnostics', 'updated_at'])
-            saved = {plan.component_id: plan for plan in ComponentRoutePlan.objects.filter(component__in=pending, scope='component').prefetch_related('steps')}
+            saved = {plan.component_id: plan for plan in ComponentRoutePlan.objects.filter(component__in=pending, scope='component').prefetch_related('steps').order_by('pk')}
             cached.extend(_saved_route_decision(item.pk, saved[item.pk]) for item in pending)
             fresh, pending = [], []
     else:
@@ -2569,10 +2583,14 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
         current_knowledge = _knowledge_for([])
         current_sources = {source.pk: source for source in routing_source_items(job.tender)}
         current_answers = _route_owner_answer_map(current_sources.values())
+        completed_lines = {line.component_id: line for line in job.lines.filter(component__in=items).exclude(result={})}
         for item in items:
             source = current_sources.get(item.source_item_id)
             if source is None or source_route_fingerprint(source, current_processes, current_knowledge, current_answers[source.pk]) != fingerprints[item.pk]:
                 raise ValueError("ТЗ или этапы изменились во время построения; обновите маршруты.")
+            saved_line = completed_lines.get(item.pk)
+            if saved_line and saved_line.input_snapshot.get('input_fingerprint') != fingerprints[item.pk]:
+                raise ValueError('В задании уже сохранён расчёт по прежним требованиям; создайте новое обновление.')
         job.diagnostics.update(routing_reused_count=len(cached), routing_batch_count=getattr(router, 'diagnostics', {}).get('provider_batch_count', 1 if pending and processes else 0))
         decisions = cached + fresh
         cached_ids = {decision.component_id for decision in cached}
@@ -2626,12 +2644,15 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
                           "route_metadata": effective.rationale, "status": "needs_review" if effective.needs_review else "routed",
                           "input_snapshot": {"name": item.name, "quantity": str(item.effective_quantity), "requirements": item.requirements, "input_fingerprint": fingerprints[item.pk]}},
             )
-            plan, _ = ComponentRoutePlan.objects.update_or_create(
-                commercial_item=item.commercial_item, component=item, scope=ComponentRoutePlan.Scope.COMPONENT,
-                defaults={"status": "needs_review" if effective.needs_review else "planned", "metadata": {**effective.rationale, "input_fingerprint": fingerprints[item.pk], "confidence": str(effective.confidence or 0), "question": effective.question, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names), "choices": list(effective.choices), "selected_choice": effective.selected_choice}},
-            )
+            plan = plans.get(item.pk)
             if item.pk not in cached_ids:
-                plan.steps.all().delete()
+                previous = plan
+                if previous:
+                    previous.status = 'superseded'
+                    previous.save(update_fields=['status', 'updated_at'])
+                plan = ComponentRoutePlan.objects.create(
+                    commercial_item=item.commercial_item, component=item, scope=ComponentRoutePlan.Scope.COMPONENT, supersedes=previous,
+                    status="needs_review" if effective.needs_review else "planned", metadata={**effective.rationale, "input_fingerprint": fingerprints[item.pk], "confidence": str(effective.confidence or 0), "question": effective.question, "question_kind": effective.question_kind, "missing_requirement_names": list(effective.missing_requirement_names), "choices": list(effective.choices), "selected_choice": effective.selected_choice})
                 for position, process_id in enumerate(effective.process_ids, start=1):
                     ComponentOperationStep.objects.create(route_plan=plan, process_id=process_id, position=position)
             # Optional working assumptions live inside the route, never as blocking customer questions.
@@ -2671,7 +2692,7 @@ def source_route_snapshots(tender, sources=None):
     processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
     knowledge = _knowledge_for([])
     plans = {}
-    for plan in ComponentRoutePlan.objects.filter(commercial_item__tender=tender, component__source_item_id__in=[item.pk for item in sources], component__status="active", commercial_item__status="active", scope="component").select_related("component").prefetch_related("steps__process").order_by("-updated_at", "-pk"):
+    for plan in ComponentRoutePlan.objects.filter(commercial_item__tender=tender, component__source_item_id__in=[item.pk for item in sources], component__status="active", commercial_item__status__in=['active', 'draft'], scope="component").select_related("component").prefetch_related("steps__process").order_by("-pk"):
         plans.setdefault(plan.component.source_item_id, plan)
     job = TenderComputeJob.objects.filter(tender=tender, version__startswith="v2").order_by("-pk").first()
     active = bool(job and job.status in {"queued", "preparing_input", "running", "routing", "preparing"})

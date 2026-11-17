@@ -4,6 +4,7 @@
 {% block content %}
 <div class="wrap app-home"><div class="container tender-page">
 {% if shell == "pipeline" %}{% if return_to_archive %}<a class="back-link" href="{% url 'tender_selection:detail' source_tender.pk %}?from=archive">← к архивному тендеру</a>{% else %}{% include "tender_selection/_nav.html" with active="board" %}{% endif %}{% else %}<a class="back-link" href="{% url 'index' %}">← На главную</a>{% endif %}<h1>{% if source_tender %}Расчёт по тендеру{% else %}Расчёты заказов{% endif %}</h1>
+{% if input_status.state == 'stale' %}<p class="ts-warn">Исходные данные изменились. Здесь сохранены прежние суммы; проверьте расчёт по новым требованиям.</p>{% endif %}
 <form method="post" id="tender-form" class="content-stack">{% csrf_token %}<input type="hidden" name="lines_json" id="tender-lines-json"><input type="hidden" name="document_analysis_json" id="tender-document-analysis-json">
 <section class="panel"><div class="panel-header"><h2 class="panel-title">Расчёт</h2><div class="panel-actions"><span class="autosave-status" id="tender-autosave-status" role="status" aria-live="polite">{% if estimate %}Сохранено{% endif %}</span>{% if shell != "pipeline" %}<button type="button" class="button-secondary" id="new-tender">Новый расчёт</button>{% endif %}<button type="button" class="button-success" id="save-tender"{% if estimate %} hidden{% endif %}>Сохранить</button></div></div>
 <div class="tender-meta">

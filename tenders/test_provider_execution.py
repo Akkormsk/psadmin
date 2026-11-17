@@ -29,6 +29,11 @@ class ProviderExecutionTests(TestCase):
         self.assertEqual(line.status, "ready")
         self.assertEqual(line.result["provider_binding_id"], binding.pk)
         self.assertEqual(line.result["provider_quote"]["total"], "41480.0000000")
+        previous_result = dict(line.result)
+        ComponentRoutePlan.objects.create(commercial_item=commercial, component=component, status='stale', supersedes=plan)
+        self.assertEqual(calculate_routed_provider_lines(job), [])
+        line.refresh_from_db()
+        self.assertEqual(line.result, previous_result)
 
     def test_pipeline_resolves_one_variant_from_normalized_requirements(self):
         user = get_user_model().objects.create_user("pipeline-sewing-auto")
