@@ -59,6 +59,12 @@ on:
         default: ""
         type: string
 
+      inspect_eis:
+        description: "Check direct EIS notice access for the selected tender, without writes or AI"
+        required: false
+        default: false
+        type: boolean
+
       binding_probe_budget_rub:
         description: "Explicit isolated binding probe budget; DB changes rolled back, no deploy"
         required: false
@@ -344,6 +350,7 @@ jobs:
       SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
       SSH_USER: deploy
       INSPECT_NUMBER: ${{ inputs.inspect_tender_number }}
+      INSPECT_EIS: ${{ inputs.inspect_eis }}
       BINDING_PROBE_BUDGET_RUB: ${{ inputs.binding_probe_budget_rub }}
     steps:
       - uses: actions/checkout@v4
@@ -363,7 +370,9 @@ jobs:
           set -euo pipefail
           [[ "$INSPECT_NUMBER" =~ ^[0-9]{19}$ ]]
           [[ -z "$BINDING_PROBE_BUDGET_RUB" || "$BINDING_PROBE_BUDGET_RUB" =~ ^[0-9]+([.][0-9]+)?$ ]]
-          inspection_code="$(base64 -w 0 scripts/inspect_tender_analysis.py)"
+          inspection_script=scripts/inspect_tender_analysis.py
+          if [ "$INSPECT_EIS" = true ]; then inspection_script=scripts/check_eis_notification.py; fi
+          inspection_code="$(base64 -w 0 "$inspection_script")"
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
             "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER -e BINDING_PROBE_BUDGET_RUB=$BINDING_PROBE_BUDGET_RUB test-web python -u -c 'import base64; exec(base64.b64decode(\"$inspection_code\"))'" </dev/null
