@@ -919,25 +919,31 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     Сбой не роняет карточку: отмечаем попытку и сохраняем причину в risk_error.
     """
     from .national_regime import risk_projection
+    from .risk_assessment import preliminary_summary
+    from .notification import parse_notification
+
+    card = parse_notification(tender.notification_raw or {})
+
+    def available_facts():
+        return risk_projection(tender, tender.risk_assessment or preliminary_summary(card), card)
+
     if tender.status == Tender.DISMISSED:
-        return risk_projection(tender, tender.risk_assessment) if tender.risk_assessment else None
+        return available_facts() if tender.risk_assessment or tender.notification_raw else None
     if tender.law != "fz44":
         return None
     if tender.risk_assessment and "risk_factors" in tender.risk_assessment and not force:
         return risk_projection(tender, tender.risk_assessment)
     if not tender.notification_raw:
-        return None
+        return available_facts() if tender.v2_source_items.exists() else None
 
-    from .notification import parse_notification
     from .risk_assessment import RiskAssessmentError, assess, build_context, select_documents
 
-    card = parse_notification(tender.notification_raw)
     documents = select_documents(card.get("documents") or [])
     if not documents:
         tender.risk_checked_at = timezone.now()
         tender.risk_error = "В извещении нет подходящих документов (проект контракта/ТЗ/описание)."
         tender.save(update_fields=["risk_checked_at", "risk_error"])
-        return None
+        return available_facts()
 
     # Короткий таймаут (5с на попытку — ЕИС либо отвечает сразу, либо не отвечает вовсе):
     # автооценке важнее быстро понять, что документы недоступны, и уйти в аварийный
@@ -945,28 +951,10 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
     htmls = documents_html(tender, documents, timeout=5, archive_timeout=5, direct_timeout=5)
     context, used_names = build_context(card, documents, htmls)
     if not used_names:
-        # Документы не прочитались (типично — локальная сеть не видит ЕИС, только
-        # прод) — аварийный режим: контекст всё равно не пуст (build_context кладёт
-        # туда сводку извещения всегда), поэтому пробуем оценку по одним только
-        # структурным данным извещения, явно помечая её как менее надёжную —
-        # не подменяем молча настоящую оценку по документам.
-        try:
-            result = assess(context)
-        except RiskAssessmentError as exc:
-            tender.risk_checked_at = timezone.now()
-            tender.risk_error = f"Документы недоступны, аварийная оценка тоже не удалась: {exc}"
-            tender.save(update_fields=["risk_checked_at", "risk_error"])
-            return None
-        data = dict(result["data"])
-        from .risk_policy import classify_risk
-
-        data.update(_classify(data.get("risk_facts")))
-        data["degraded"] = True
-        if _keeps_previous_assessment(tender, data):
-            return risk_projection(tender, tender.risk_assessment)
-        data = risk_projection(tender, data)
-        _save_risk_result(tender, data, [])
-        return risk_projection(tender, tender.risk_assessment)
+        tender.risk_checked_at = timezone.now()
+        tender.risk_error = "Документы недоступны; показаны сохранённые сведения."
+        tender.save(update_fields=["risk_checked_at", "risk_error"])
+        return available_facts()
 
     try:
         result = assess(context)
@@ -974,12 +962,9 @@ def risk_assessment_for(tender, *, force: bool = False) -> dict | None:
         tender.risk_checked_at = timezone.now()
         tender.risk_error = str(exc)
         tender.save(update_fields=["risk_checked_at", "risk_error"])
-        return None
-
-    from .risk_policy import classify_risk
+        return available_facts()
 
     data = dict(result["data"])
-    settings = FilterSettings.load()
     policy = _classify(data.get("risk_facts"))
     data.update(policy)
     if _keeps_previous_assessment(tender, data):
@@ -2379,27 +2364,25 @@ def _staged_document_analysis(job, enricher):
         _publish_intake(job)
 
     if os.getenv('PSADMIN_ITEM_COLLECTION_ONLY') != '1':
-        originals = parse_notification(job.tender.notification_raw or {}).get('items', [])
+        from .national_regime import notification_item_regime
         native = {}
         for good in goods:
-            from tenders.document_enrichment import notification_origin
-            origin = notification_origin(enricher.stage_sources[good['source_id']])
-            index = (origin.metadata or {}).get('notification_index') if origin else None
-            native[good['key']] = originals[index].get('national_regime') if type(index) is int and 0 <= index < len(originals) else None
+            native[good['key']] = notification_item_regime(enricher.stage_sources[good['source_id']])
+        unchecked = [good for good in goods if resolve_item(native[good['key']], component=good['kind']=='kit')['status'] == 'unknown']
         national = {}
         _refresh_phase(job, 'national_regime', 'Проверяем требования 1875…')
-        if any('1875' in doc.get('evidence_text', '') for doc in enricher.stage_documents):
+        if unchecked and any('1875' in doc.get('evidence_text', '') for doc in enricher.stage_documents):
             def verify_national(rows):
                 if any(not isinstance(row, dict) or not isinstance(row.get('key'), str)
                         or row.get('status') not in {'ban', 'restriction', 'advantage', 'none', 'unknown'}
                         or not isinstance(row.get('basis'), list) or any(not isinstance(basis, dict) for basis in row['basis']) for row in rows):
                     raise ValueError('Проверка 1875 вернула некорректный формат позиций или оснований.')
                 mapped = {row.get('key'): row for row in rows}
-                if len(mapped) != len(rows) or set(mapped) != {good['key'] for good in goods}:
+                if len(mapped) != len(rows) or set(mapped) != {good['key'] for good in unchecked}:
                     raise ValueError('Проверка 1875 пропустила товарные позиции.')
                 documents = {doc['url']: {**doc, 'text': doc.get('evidence_text', '')} for doc in enricher.stage_documents}
                 result = {}
-                for good in goods:
+                for good in unchecked:
                     row = mapped[good['key']]
                     evidence = row.get('basis', [])
                     for basis in evidence:
@@ -2409,14 +2392,13 @@ def _staged_document_analysis(job, enricher):
                 return result
             national = ask('national_regime', 'Проверяем требования 1875…',
                 '''Определи только подтверждённые требования заказчика по ПП1875 для каждого переданного товара. Не делай вывод по коду/названию или общему знанию закона. Если явного требования нет — unknown. Формат {"items":[{"key":"ключ товара","status":"ban|restriction|advantage|none|unknown","basis":[{"doc_id":integer,"quote":"точная цитата с требованием, 1875 и названием товара либо явным применением ко всем товарам","page_or_section":"раздел","scope":"item|all_items"}]}]}. Не переноси требование к набору автоматически на части. Для unknown basis пустой.''',
-                {'goods': goods, 'notification_evidence': native}, verify_national, min(16000, 10000 + len(goods)*400), lambda: {})
+                {'goods': unchecked, 'notification_evidence': {good['key']: native[good['key']] for good in unchecked}}, verify_national, min(16000, 10000 + len(unchecked)*400), lambda: {})
         else:
             stages['national_regime'] = {'state': 'complete', 'result': [], 'cost_rub': '0'}
         # Only evidence verified by the existing national-regime service can be persisted.
-        national = {good['key']: resolve_item(native.get(good['key']), national.get(good['key']), component=good['kind']=='kit') for good in goods}
         for item in result['created']:
             match = next((good for good in goods if good['source_id'] == item.parent_id and good['name'] == item.original_text), None)
-            if match:
+            if match and match['key'] in national:
                 item.metadata['national_regime'] = national[match['key']]
                 item.save(update_fields=['metadata'])
         _publish_intake(job)

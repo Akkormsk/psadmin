@@ -1968,15 +1968,23 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
         raw_requirements = {"characteristics": row.get("characteristics") or []}
         requirements = {"characteristics": [normalized_fact(fact, aliases=_unit_aliases()) for fact in raw_requirements['characteristics']]}
         payload = {"name": name, "quantity": row.get("quantity"), "unit": row.get("unit"), "requirements": raw_requirements, "code": row.get("code") or ""}
+        legacy_fingerprint = _fingerprint(payload)
+        from tender_selection.national_regime import annotation
+        native = row.get("national_regime") or annotation()
+        payload["national_regime"] = native
         source_key = ("document_subject:" if row.get("document_subject") else "") + _source_key(row, index)
         fingerprint = _fingerprint(payload)
         family = TenderSourceItem.objects.filter(tender=tender).filter(
             Q(source_key=source_key) | Q(source_key__startswith=source_key + ':v:'))
         current = family.filter(is_active=True).order_by('-pk').first()
-        matching = next((item for item in family.order_by('pk') if item.metadata.get('source_fingerprint') == fingerprint), None)
+        matching = next((item for item in family.order_by('pk') if item.metadata.get('source_fingerprint') == fingerprint
+                         or ('notification_national_regime' not in item.metadata and item.metadata.get('source_fingerprint') == legacy_fingerprint)), None)
         if matching:
             family.exclude(pk=matching.pk).filter(is_active=True).update(is_active=False)
             current = matching
+            if 'notification_national_regime' not in current.metadata:
+                current.metadata = {**current.metadata, 'source_fingerprint': fingerprint, 'notification_national_regime': native}
+                current.save(update_fields=['metadata'])
             if not current.is_active and not current.derived_items.filter(is_active=True).exists():
                 current.is_active = True
                 current.save(update_fields=['is_active'])
@@ -1994,7 +2002,7 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
             defaults={
                 "source_type": "document_subject" if row.get("document_subject") else "notification", "original_text": name, "quantity": _as_decimal(row.get("quantity")),
                 "unit": str(row.get("unit") or ""), "requirements": requirements,
-                "metadata": {"source_fingerprint": fingerprint, "notification_index": index, "code": row.get("code") or ""},
+                "metadata": {"source_fingerprint": fingerprint, "notification_index": index, "code": row.get("code") or "", "notification_national_regime": native},
                 "provenance": {"kind": "tender_subject", "field": "title" if tender.title else "object_info"} if row.get("document_subject") else {"kind": "notification", "notification_index": index}, "supersedes": current,
             },
         )

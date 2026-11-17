@@ -99,6 +99,24 @@ def resolve_item(native=None, documented=None, *, component=False):
     return annotation(max(known, key=lambda item: priority[item["status"]])["status"], [basis for item in known for basis in item["basis"]])
 
 
+def notification_item_regime(source, card=None):
+    """Use the saved source revision; legacy rows retain their existing reader."""
+    from tenders.document_enrichment import notification_origin
+    origin = notification_origin(source)
+    if origin and "notification_national_regime" in (origin.metadata or {}):
+        return deepcopy(origin.metadata["notification_national_regime"])
+    from .notification import parse_notification
+    card = card if card is not None else parse_notification(source.tender.notification_raw or {})
+    index = (origin.metadata or {}).get("notification_index") if origin else None
+    items = card.get("items", [])
+    return items[index].get("national_regime") if type(index) is int and 0 <= index < len(items) else annotation()
+
+
+def source_item_status(source, card=None):
+    return resolve_item(notification_item_regime(source, card), source.metadata.get("national_regime"),
+                        component=source.metadata.get("relationship") == "component")
+
+
 def tender_items(tender, card=None):
     from .notification import parse_notification
     from tenders.calculation_v2_pipeline import active_calculation_items
@@ -108,13 +126,11 @@ def tender_items(tender, card=None):
     rows, groups = [], set()
     for source in active_calculation_items(tender):
         origin = notification_origin(source)
-        index = (origin.metadata or {}).get("notification_index") if origin else None
-        item = original[index] if type(index) is int and 0 <= index < len(original) else {}
         component = source.metadata.get("relationship") == "component"
-        native = item.get("national_regime")
-        rows.append({"source_id": source.pk, "name": source.original_text, "regime": resolve_item(native, source.metadata.get("national_regime"), component=component)})
+        rows.append({"source_id": source.pk, "name": source.original_text, "regime": source_item_status(source, card)})
         if component and origin and origin.pk not in groups:
             groups.add(origin.pk)
+            native = notification_item_regime(origin, card)
             rows.append({"group_id": origin.pk, "name": source.metadata.get("parent_display_name") or origin.original_text, "regime": native or annotation()})
     return rows or [{"position": index, "name": item.get("name", "Товар"), "regime": item.get("national_regime") or annotation()} for index, item in enumerate(original)]
 
@@ -141,13 +157,3 @@ def risk_projection(tender, assessment=None, card=None):
     data["risk_facts"] = facts
     data.update(risk_factors=factors, risk_level=severity, national_regime="; ".join(item["name"] + " — " + item["regime"]["label"] for item in items) or "1875: требуется проверка")
     return data
-
-
-def source_item_status(source):
-    from .notification import parse_notification
-    from tenders.document_enrichment import notification_origin
-    origin = notification_origin(source)
-    index = (origin.metadata or {}).get("notification_index") if origin else None
-    items = parse_notification(source.tender.notification_raw or {}).get("items", [])
-    native = items[index].get("national_regime") if type(index) is int and 0 <= index < len(items) else None
-    return resolve_item(native, source.metadata.get("national_regime"), component=source.metadata.get("relationship") == "component")

@@ -1,5 +1,6 @@
 {% if risk %}
-{% if risk.preliminary %}<p class="ts-sub">Предварительно, бесплатно — только то, что уже есть в извещении, без документов и без ИИ. Полная оценка запустится автоматически при переводе «В работу».</p>{% endif %}
+{% if risk.preliminary %}<p class="ts-sub">Предварительно, бесплатно — по сохранённым сведениям. Для полной оценки нужны доступные документы.</p>{% endif %}
+{% if risk_error %}<p class="ts-warn">{{ risk_error }} <button type="button" class="ts-doc-link" data-risk-refresh>Повторить проверку документов</button></p>{% endif %}
 {% if risk.degraded %}<p class="ts-warn">⚠ Ограниченный режим: документы закупки недоступны, оценка построена только по данным извещения — менее надёжна, чем по полному тексту контракта.</p>{% endif %}
 <div class="table-wrapper"><table class="table ts-risk-table">
   <tbody>

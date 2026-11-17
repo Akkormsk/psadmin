@@ -81,6 +81,99 @@ class ItemRiskTests(TestCase):
         self.assertEqual(result["risk_level"], "unknown")
         self.assertFalse(any(factor["level"] in {"high", "medium"} for factor in result["risk_factors"]))
 
+    def test_import_reuses_notice_and_keeps_previous_item_evidence(self):
+        from tenders.calculation_v2_pipeline import ingest_source_items
+        from .national_regime import source_item_status, tender_items
+        sources = ingest_source_items(self.tender)
+        self.assertEqual([row.pk for row in ingest_source_items(self.tender)], [row.pk for row in sources])
+        pen = sources[0]
+        raw = deepcopy(self.tender.notification_raw)
+        raw['source']['notificationInfo']['purchaseObjectsInfo']['notDrugPurchaseObjectsInfo']['purchaseObject'][0]['restrictionsInfo'] = {'isRestrictForeignPurchaseObjects': True}
+        self.tender.notification_raw = raw
+        self.tender.save(update_fields=['notification_raw'])
+        # A different current notice must not rewrite the saved position's origin.
+        self.assertEqual(source_item_status(pen)['status'], 'ban')
+        self.assertEqual(tender_items(self.tender)[0]['regime']['status'], 'ban')
+        updated = ingest_source_items(self.tender)
+        self.assertNotEqual(updated[0].pk, pen.pk)
+        self.assertEqual(updated[0].supersedes_id, pen.pk)
+        self.assertEqual(source_item_status(updated[0])['status'], 'restriction')
+        self.assertEqual(source_item_status(pen)['status'], 'ban')
+
+    def test_known_risk_without_documents_does_not_call_ai(self):
+        from .services import risk_assessment_for
+        with patch('tender_selection.risk_assessment.assess') as ai:
+            result = risk_assessment_for(self.tender)
+        ai.assert_not_called()
+        self.assertEqual(result['risk_level'], 'high')
+        self.assertTrue(result['preliminary'])
+        self.assertEqual(result['risk_facts']['national_regime_items'][0]['regime']['status'], 'ban')
+        self.assertNotEqual(result['risk_facts'].get('documents_sufficient'), True)
+        from django.template.loader import render_to_string
+        html = render_to_string('tender_selection/_risk_block.html', {'risk': result, 'risk_error': self.tender.risk_error})
+        self.assertIn('Ручка', html)
+        self.assertIn('Повторить проверку документов', html)
+        self.assertIn('Для полной оценки нужны доступные документы', html)
+
+    def test_existing_position_gains_saved_evidence_without_replacing_accepted_changes(self):
+        from tenders.calculation_v2_pipeline import ingest_source_items, _fingerprint, _notification_rows
+        from tenders.models import TenderSourceItem
+        from .national_regime import source_item_status
+        source = ingest_source_items(self.tender)[0]
+        row = _notification_rows(self.tender)[0]
+        source.metadata.pop('notification_national_regime')
+        source.metadata['source_fingerprint'] = _fingerprint({'name': row['name'], 'quantity': row['quantity'],
+            'unit': row['unit'], 'requirements': {'characteristics': row.get('characteristics') or []}, 'code': row.get('code') or ''})
+        source.is_active = False
+        source.save(update_fields=['metadata', 'is_active'])
+        accepted = TenderSourceItem.objects.create(tender=self.tender, source_key='accepted-pen',
+            source_type='document_enrichment', parent=source, original_text='Ручка синяя', metadata={'relationship': 'enrich'})
+        self.assertEqual(ingest_source_items(self.tender)[0].pk, source.pk)
+        source.refresh_from_db()
+        accepted.refresh_from_db()
+        self.assertFalse(source.is_active)
+        self.assertTrue(accepted.is_active)
+        self.assertEqual(source_item_status(accepted)['status'], 'ban')
+
+    def test_known_risk_survives_document_and_ai_failure(self):
+        from .services import risk_assessment_for
+        from .risk_assessment import RiskAssessmentError
+        with patch('tender_selection.risk_assessment.select_documents', return_value=[{'name': 'Проект контракта', 'url': 'https://zakupki.gov.ru/contract'}]), patch('tender_selection.services.documents_html', return_value={}), patch('tender_selection.risk_assessment.assess', side_effect=RiskAssessmentError('Недоступно')) as ai:
+            result = risk_assessment_for(self.tender)
+        ai.assert_not_called()
+        self.assertEqual(result['risk_level'], 'high')
+        self.assertTrue(result['preliminary'])
+
+    def test_ai_error_does_not_hide_saved_facts_or_replace_previous_assessment(self):
+        from .services import risk_assessment_for
+        from .risk_assessment import RiskAssessmentError
+        previous = {'risk_factors': [{'code': 'short_deadline', 'level': 'high', 'text': 'Короткий срок'}], 'risk_facts': {'documents_sufficient': True}}
+        self.tender.risk_assessment = previous
+        self.tender.save(update_fields=['risk_assessment'])
+        with patch('tender_selection.risk_assessment.select_documents', return_value=[{'name': 'Проект контракта', 'url': 'https://zakupki.gov.ru/contract'}]), patch('tender_selection.services.documents_html', return_value={'https://zakupki.gov.ru/contract': '<p>Срок исполнения десять дней</p>'}), patch('tender_selection.risk_assessment.assess', side_effect=RiskAssessmentError('Недоступно')) as ai:
+            result = risk_assessment_for(self.tender, force=True)
+        ai.assert_called_once()
+        self.assertIn('item_1875_ban', {factor['code'] for factor in result['risk_factors']})
+        self.assertIn('short_deadline', {factor['code'] for factor in result['risk_factors']})
+        self.tender.refresh_from_db()
+        self.assertEqual(self.tender.risk_assessment, previous)
+
+    def test_all_saved_states_are_shared_with_assistant_without_current_notice(self):
+        from tenders.calculation_v2_pipeline import ingest_source_items
+        from .national_regime import source_item_status, tender_items, FIELDS
+        rows = self.tender.notification_raw['source']['notificationInfo']['purchaseObjectsInfo']['notDrugPurchaseObjectsInfo']['purchaseObject']
+        rows.extend([{'name': 'Открытка', 'restrictionsInfo': {'isPreferenseRFPurchaseObjects': True}}, {'name': 'Коробка', 'restrictionsInfo': dict.fromkeys(FIELDS, False)}])
+        self.tender.save(update_fields=['notification_raw'])
+        sources = ingest_source_items(self.tender)
+        self.tender.notification_raw = {}
+        self.tender.save(update_fields=['notification_raw'])
+        expected = ['ban', 'restriction', 'unknown', 'advantage', 'none']
+        self.assertEqual({row['source_id']: row['regime']['status'] for row in tender_items(self.tender)},
+                         {source.pk: status for source, status in zip(sources, expected)})
+        for source, status in zip(sources, expected):
+            self.assertEqual(source_item_status(source)['status'], status)
+            self.assertIn(source_item_status(source)['label'], source.national_regime())
+
 
 class NationalReviewTests(TestCase):
     from tenders.test_document_components import DocumentComponentAcceptanceTests as Fixtures

@@ -725,14 +725,11 @@ def tender_detail(request, pk):
                     item["composition_question"] = question.question
                     item["composition_question_id"] = question.pk
                     item["composition_options"] = list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else []
-    from .national_regime import annotation, resolve_item
+    from .national_regime import annotation, source_item_status
     for item in display_items:
         if active_sources:
             source = next((source for source in active_sources if source.pk == item.get("source_id")), None)
-            origin = notification_origin(source) if source else None
-            position = (origin.metadata or {}).get("notification_index") if origin else None
-            original = notification_by_index.get(position, {})
-            item["national_regime"] = resolve_item(original.get("national_regime"), (source.metadata or {}).get("national_regime") if source else None, component=bool(source and source.metadata.get("relationship") == "component"))
+            item["national_regime"] = source_item_status(source, card) if source else annotation()
         else:
             item["national_regime"] = item.get("national_regime") or annotation()
     from tenders.calculation_v2_pipeline import source_route_snapshots

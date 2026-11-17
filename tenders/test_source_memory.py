@@ -231,6 +231,40 @@ class AddressedContextTests(SimpleTestCase):
 class SourceRetrievalTests(TestCase):
     setUp = SourceMemoryPipelineTests.setUp
     engine = SourceMemoryPipelineTests.engine
+
+    @override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True)
+    def test_saved_notice_requirement_is_not_sent_for_another_ai_check(self):
+        from tender_selection.national_regime import structured_item
+        from tender_selection.services import _staged_document_analysis
+        self.source.metadata = {'notification_national_regime': structured_item(
+            {'restrictionsInfo': {'isProhibitionForeignPurchaseObjects': True}}, '$.position')}
+        self.source.save(update_fields=['metadata'])
+        self.tender.notification_raw = {'source': {'attachmentsInfo': {'attachmentInfo': [
+            {'url': self.documents[0]['url'], 'fileName': 'ТЗ'}]}}}
+        self.tender.save(update_fields=['notification_raw'])
+        DocumentPreview.objects.filter(url=self.documents[0]['url']).update(
+            html='<p>Изделие поставляется в синем цвете. Применяется ПП 1875.</p>')
+        engine = GatewayDocumentEnricher(max_cost_rub=10)
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            if 'blocks' in task:
+                return {'items': [{'id': block['id'], 'scope': 'item', 'source_ids': [self.source.pk],
+                    'facts': [{'quote': block['text']}]} for block in task['blocks']]}, {}
+            if 'requested_source_ids' in task:
+                block = next(iter(engine.source_memory.blocks.values()))
+                return {'items': [{'source_id': self.source.pk, 'kind': 'finished', 'name': 'Изделие',
+                    'reason': 'Один готовый товар', 'evidence': [{'fragment_id': block['id'], 'quote': block['text']}],
+                    'goods': [{'name': 'Изделие', 'unit': 'шт', 'quantity_per_parent': 1}]}]}, {}
+            self.assertNotIn('notification_evidence', task, 'Saved requirement was sent to AI again')
+            return {'items': [{'key': good['key'], 'characteristics': []} for good in task.get('goods', [])]}, {}
+
+        with patch('tender_selection.services.documents_html'), patch('tenders.services._ai_gateway_json', side_effect=answer):
+            _staged_document_analysis(job, engine)
+        self.assertFalse(job.diagnostics.get('analysis_gaps'))
+        self.assertEqual(job.diagnostics['stages']['national_regime']['cost_rub'], '0')
+
     @override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True)
     def test_addressed_document_pipeline_completes_without_repeating_original_documents(self):
         for count in (1, 90):
