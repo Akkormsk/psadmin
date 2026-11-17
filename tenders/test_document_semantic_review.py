@@ -30,8 +30,20 @@ class SemanticReviewTests(SimpleTestCase):
         for refs in ([], [0, 0], [100], [True]):
             with self.assertRaises(ValueError):
                 merge_item_requirements(self.base, self.proposal({'name': 'Упаковка', 'value': 'пакет', 'resolution': 'keep', 'baseline_refs': refs}))
-        with self.assertRaises(ValueError):
-            merge_item_requirements(self.base, {'reconciled': True, 'characteristics': [{'resolution': 'keep', 'baseline_refs': [0]}]})
+
+    def test_partial_review_retains_unmentioned_original_characteristics(self):
+        before = deepcopy(self.base)
+        result = merge_item_requirements(self.base, {
+            'reconciled': True,
+            'characteristics': [{'resolution': 'keep', 'baseline_refs': [0]}],
+        })
+        self.assertEqual(self.base, before)
+        self.assertEqual(
+            [(fact['name'], fact['value']) for fact in result['characteristics']],
+            [(fact['name'], fact['value']) for fact in self.base['characteristics']],
+        )
+        self.assertEqual(result['characteristics'][1]['source_facts'], [self.base['characteristics'][1]])
+        self.assertEqual(merge_item_requirements(self.base, result), result)
 
     def test_keep_cannot_silently_change_an_existing_fact(self):
         with self.assertRaises(ValueError):
