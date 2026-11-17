@@ -2491,6 +2491,6 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 
 /* Tender number remains selectable and is also a touch/keyboard copy button. */
 .copy-notice { appearance:none; border:0; background:transparent; color:inherit; font:inherit; padding:.35em .15em; cursor:pointer; touch-action:manipulation; }
-.copy-notice:hover { text-decoration:underline; }
+.copy-notice { text-decoration:underline dotted; text-underline-offset:.2em; }
+.copy-notice:hover { text-decoration-style:solid; }
 .copy-notice:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
-[data-copy-status] { font-size:.85em; }

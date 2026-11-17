@@ -13,7 +13,7 @@
     <tr><th>Обеспечение контракта</th><td>{{ risk.contract_security|default:"нет данных" }}</td></tr>
     <tr><th>Освобождение по ст. 96 44-ФЗ</th><td>{{ risk.security_exemption|default:"нет данных" }}</td></tr>
     <tr><th>Пени и штрафы</th><td>{{ risk.penalties|default:"нет данных" }}</td></tr>
-    <tr><th>Национальный режим</th><td>{{ risk.national_regime|default:"нет данных" }}{% if risk.risk_facts.national_regime_items %}<details class="ts-national-risk-basis"><summary>По товарам и источникам</summary><ul>{% for item in risk.risk_facts.national_regime_items %}<li><strong>{{ item.name }}</strong> — {{ item.regime.label|cut:"1875: " }}{% if item.regime.basis %}<ul>{% include "tender_selection/_1875_basis.html" with regime=item.regime %}</ul>{% endif %}</li>{% endfor %}</ul></details>{% endif %}</td></tr>
+    <tr><th>Национальный режим</th><td>{{ risk.national_regime|default:"нет данных" }}{% if risk.national_regime_details %}<details class="ts-national-risk-basis"><summary>По товарам и источникам</summary><ul>{% for item in risk.national_regime_details %}<li><strong>{{ item.name }}</strong> — {{ item.regime.label|cut:"1875: " }}{% if item.regime.basis %}<ul>{% include "tender_selection/_1875_basis.html" with regime=item.regime %}</ul>{% endif %}</li>{% endfor %}</ul></details>{% endif %}</td></tr>
     <tr><th>Требования к образцам</th><td>{{ risk.sample_requirements|default:"нет данных" }}</td></tr>
     <tr><th>Способ поставки</th><td>{{ risk.delivery_mode|default:"нет данных" }}</td></tr>
   </tbody>

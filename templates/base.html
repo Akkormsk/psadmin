@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=copy-notice-20261117">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=copy-notice-toast-20261117">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -28,13 +28,11 @@
     {% if request.user.is_authenticated and request.path != "/" and not request.GET.workspace %}
     <nav class="app-navigation" aria-label="Навигация"><a href="{% if navigation_parent_url %}{{ navigation_parent_url }}{% else %}/{% endif %}" data-navigation-back>← Назад</a><a href="/" data-navigation-home>На главную</a></nav>
     {% endif %}
-    {% if messages %}
     <div class="toast-stack" aria-live="polite" aria-atomic="true">
         {% for message in messages %}
         <div class="toast{% if message.tags %} toast--{{ message.tags }}{% endif %}" role="status">{{ message }}</div>
         {% endfor %}
     </div>
-    {% endif %}
 
     {% block content %}{% endblock %}
     <div class="app-workspace-stack" id="app-workspace-stack" aria-live="polite"></div>
@@ -194,15 +192,22 @@
     </script>
     {% endif %}
     <script>(function(){const back=document.querySelector("[data-navigation-back]");const localBack = document.querySelector(".container > .back-link:first-child");if(back&&localBack)back.href=localBack.href;if(back&&document.referrer){const referrer=new URL(document.referrer);if(referrer.origin===location.origin)back.addEventListener("click",function(event){event.preventDefault();history.back();});}})();</script>
-    {% if messages %}
     <script>
-      document.querySelectorAll(".toast").forEach(function (toast, index) {
+      function initializeToast(toast, index = 0) {
         toast.addEventListener("click", function () { toast.classList.add("is-hiding"); });
         window.setTimeout(function () { toast.classList.add("is-hiding"); }, 3200 + index * 250);
         toast.addEventListener("transitionend", function () { if (toast.classList.contains("is-hiding")) toast.remove(); });
-      });
+      }
+      document.querySelectorAll(".toast").forEach(initializeToast);
+      window.showToast = function (message) {
+        const toast = document.createElement("div");
+        toast.className = "toast";
+        toast.setAttribute("role", "status");
+        toast.textContent = message;
+        document.querySelector(".toast-stack").replaceChildren(toast);
+        initializeToast(toast);
+      };
     </script>
-    {% endif %}
     <script>
       (function () {
         document.querySelectorAll(".mobile-actions-toggle").forEach(function (button) {
@@ -335,7 +340,6 @@
         if (!button) return;
         event.preventDefault();
         const number = button.dataset.copyNotice;
-        const status = button.parentElement.querySelector("[data-copy-status]");
         function fallback() {
           const field = document.createElement("textarea");
           field.value = number;
@@ -363,7 +367,8 @@
         } catch (error) {
           copied = fallback();
         }
-        if (status) status.textContent = copied ? " Скопировано" : " Не удалось скопировать";
+        const host = window.parent !== window && window.parent.location.origin === location.origin ? window.parent : window;
+        host.showToast(copied ? "Скопировано" : "Не удалось скопировать");
       });
     </script>
     <script>
@@ -679,17 +684,12 @@
               }
               if (trailIndex === index && item.noticeNumber) {
                 crumb.type = "button";
+                crumb.classList.add("copy-notice");
                 crumb.dataset.copyNotice = item.noticeNumber;
                 crumb.title = "Скопировать номер извещения";
               }
               crumb.textContent = item.title;
               trail.append(crumb);
-              if (trailIndex === index && item.noticeNumber) {
-                const status = document.createElement("span");
-                status.dataset.copyStatus = "";
-                status.setAttribute("role", "status");
-                trail.append(status);
-              }
             });
           });
         }

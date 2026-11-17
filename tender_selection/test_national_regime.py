@@ -99,7 +99,7 @@ class ItemRiskTests(TestCase):
         self.assertFalse(result['risk_factors'])
         from django.template.loader import render_to_string
         rendered = render_to_string('tender_selection/_risk_block.html', {'risk': result})
-        self.assertEqual(rendered.count('По товарам и источникам'), 1)
+        self.assertNotIn('По товарам и источникам', rendered)
         self.assertNotIn('требует проверки', rendered)
         self.assertEqual(result['risk_level'], 'low')
         self.assertTrue(all(item['regime']['status'] == 'unknown' for item in result['risk_facts']['national_regime_items']))

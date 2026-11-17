@@ -200,6 +200,7 @@ def risk_projection(tender, assessment=None, card=None):
     if conflicts:
         summary = (summary + ' ' if summary else '') + 'Есть сведения, требующие уточнения.'
     data.update(risk_factors=factors, risk_level=severity, national_regime=summary,
-                national_regime_checked=checked)
+                national_regime_checked=checked,
+                national_regime_details=[item for item in items if item['regime'].get('basis')])
 
     return data

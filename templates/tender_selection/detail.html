@@ -12,7 +12,7 @@
   {% elif pushed_estimate_id %}
   <a href="{% url 'tender_pipeline_estimate' pushed_estimate_id %}" class="back-link">← назад к просчёту</a>
   {% endif %}
-  <div class="ts-mobile-close-row" id="ts-mobile-close-row" hidden><span>Тендер № <button type="button" class="copy-notice" data-copy-notice="{{ tender.purchase_number }}" title="Скопировать номер извещения">{{ tender.purchase_number }}</button><span data-copy-status role="status"></span></span><a href="{% if not request.user.is_superuser and pushed_estimate_id %}{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% else %}{{ return_url }}{% endif %}" aria-label="Закрыть тендер">Закрыть <span aria-hidden="true">×</span></a></div>
+  <div class="ts-mobile-close-row" id="ts-mobile-close-row" hidden><span>Тендер № <button type="button" class="copy-notice" data-copy-notice="{{ tender.purchase_number }}" title="Скопировать номер извещения">{{ tender.purchase_number }}</button></span><a href="{% if not request.user.is_superuser and pushed_estimate_id %}{% url 'tender_pipeline_estimate' pushed_estimate_id %}{% else %}{{ return_url }}{% endif %}" aria-label="Закрыть тендер">Закрыть <span aria-hidden="true">×</span></a></div>
   <script>if(window.parent===window)document.getElementById('ts-mobile-close-row').hidden=false;</script>
   <h1>Тендеры</h1>
   {% if request.user.is_superuser %}{% if estimate or tender.review != "unreviewed" %}{% include "tender_selection/_nav.html" with active="board" %}{% else %}{% include "tender_selection/_nav.html" with active="incoming" %}{% endif %}{% endif %}
@@ -29,7 +29,7 @@
       <div class="ts-detail__head">
         <h2 class="panel-title">{{ tender.title|default:tender.object_info }}</h2>
         <p class="ts-row__meta">
-          <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button><span data-copy-status role="status"></span></span>
+          <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button></span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Обновить данные, ТЗ, требования 1875 и маршруты в фоне">↻ Обновить</button></form>{% endif %}
