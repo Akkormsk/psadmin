@@ -71,6 +71,12 @@ on:
         default: false
         type: boolean
 
+      source_duplicate_repair:
+        description: "Selected TEST tender only: preview or apply retirement of identical source groups; no deletion or AI"
+        required: false
+        default: ""
+        type: string
+
       binding_probe_budget_rub:
         description: "Explicit isolated binding probe budget; DB changes rolled back, no deploy"
         required: false
@@ -262,6 +268,7 @@ jobs:
           docker compose -f compose.test.yml exec -T -e DJANGO_SECURE_COOKIES=0 test-web python manage.py test \
             tenders.test_source_memory \
             tenders.test_document_evidence \
+            tenders.test_document_acceptance.DocumentRepeatSmokeTests \
             tenders.test_input_dependencies \
             tenders.test_tender_data_operations \
             tenders.test_document_semantic_review.SemanticReviewTests \
@@ -358,6 +365,7 @@ jobs:
       INSPECT_NUMBER: ${{ inputs.inspect_tender_number }}
       INSPECT_EIS: ${{ inputs.inspect_eis }}
       INSPECT_NATIONAL_REGIME: ${{ inputs.inspect_national_regime }}
+      SOURCE_DUPLICATE_REPAIR: ${{ inputs.source_duplicate_repair }}
       BINDING_PROBE_BUDGET_RUB: ${{ inputs.binding_probe_budget_rub }}
     steps:
       - uses: actions/checkout@v4
@@ -372,18 +380,20 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Inspect deployed TEST data without writes
+      - name: Inspect TEST data or reconcile explicitly selected duplicate sources
         run: |
           set -euo pipefail
           [[ "$INSPECT_NUMBER" =~ ^[0-9]{19}$ ]]
           [[ -z "$BINDING_PROBE_BUDGET_RUB" || "$BINDING_PROBE_BUDGET_RUB" =~ ^[0-9]+([.][0-9]+)?$ ]]
+          [[ -z "$SOURCE_DUPLICATE_REPAIR" || "$SOURCE_DUPLICATE_REPAIR" = preview || "$SOURCE_DUPLICATE_REPAIR" = apply ]]
           inspection_script=scripts/inspect_tender_analysis.py
           if [ "$INSPECT_EIS" = true ]; then inspection_script=scripts/check_eis_notification.py; fi
           if [ "$INSPECT_NATIONAL_REGIME" = true ]; then inspection_script=scripts/inspect_national_regime.py; fi
+          if [ -n "$SOURCE_DUPLICATE_REPAIR" ]; then inspection_script=scripts/reconcile_tender_duplicates.py; fi
           inspection_code="$(base64 -w 0 "$inspection_script")"
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER -e BINDING_PROBE_BUDGET_RUB=$BINDING_PROBE_BUDGET_RUB test-web python -u -c 'import base64; exec(base64.b64decode(\"$inspection_code\"))'" </dev/null
+            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER -e BINDING_PROBE_BUDGET_RUB=$BINDING_PROBE_BUDGET_RUB -e SOURCE_DUPLICATE_REPAIR=$SOURCE_DUPLICATE_REPAIR test-web python -u -c 'import base64; exec(base64.b64decode(\"$inspection_code\"))'" </dev/null
 
   refresh_estimates:
     if: github.event_name == 'workflow_dispatch' && inputs.refresh_estimates != '' && github.ref == 'refs/heads/feature/m3-agent-simple'

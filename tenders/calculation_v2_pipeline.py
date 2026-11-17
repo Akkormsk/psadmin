@@ -1988,28 +1988,34 @@ def _as_decimal(value) -> Decimal | None:
         return None
 
 
+@transaction.atomic
 def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
     """Append-only-ish notification ingestion; changed rows supersede, never overwrite source truth."""
-    from .tender_data import prepare_tender_for_write
+    from .tender_data import prepare_tender_for_write, notification_source_fingerprint, reconcile_duplicate_notice_items
     prepare_tender_for_write(tender)
+    reconcile_duplicate_notice_items(tender, apply=True)
     result, changed = [], False
     for index, row in enumerate(_notification_rows(tender)):
         name = str(row.get("name") or "").strip()
         from .requirement_values import normalized_fact, _unit_aliases
         raw_requirements = {"characteristics": row.get("characteristics") or []}
         requirements = {"characteristics": [normalized_fact(fact, aliases=_unit_aliases()) for fact in raw_requirements['characteristics']]}
-        payload = {"name": name, "quantity": row.get("quantity"), "unit": row.get("unit"), "requirements": raw_requirements, "code": row.get("code") or ""}
-        legacy_fingerprint = _fingerprint(payload)
         from tender_selection.national_regime import annotation
         native = row.get("national_regime") or annotation()
-        payload["national_regime"] = native
         source_key = ("document_subject:" if row.get("document_subject") else "") + _source_key(row, index)
-        fingerprint = _fingerprint(payload)
         family = TenderSourceItem.objects.filter(tender=tender).filter(
             Q(source_key=source_key) | Q(source_key__startswith=source_key + ':v:'))
-        current = family.filter(is_active=True).order_by('-pk').first()
-        matching = next((item for item in family.order_by('pk') if item.metadata.get('source_fingerprint') == fingerprint
-                         or ('notification_national_regime' not in item.metadata and item.metadata.get('source_fingerprint') == legacy_fingerprint)), None)
+        family_rows = list(family.order_by('pk'))
+        current = next((item for item in reversed(family_rows) if not item.metadata.get('duplicate_of')), None)
+        candidate = TenderSourceItem(original_text=name, quantity=_as_decimal(row.get('quantity')),
+            unit=str(row.get('unit') or ''), requirements=requirements,
+            metadata={'code': row.get('code') or '', 'notification_national_regime': native})
+        fingerprint = notification_source_fingerprint(candidate)
+        legacy_fingerprint = _fingerprint({'name': name, 'quantity': row.get('quantity'), 'unit': row.get('unit'),
+                                           'requirements': raw_requirements, 'code': row.get('code') or ''})
+        matching = next((item for item in family_rows if not item.metadata.get('duplicate_of')
+                         and (notification_source_fingerprint(item) == fingerprint or
+                              'notification_national_regime' not in item.metadata and item.metadata.get('source_fingerprint') == legacy_fingerprint)), None)
         if matching:
             family.exclude(pk=matching.pk).filter(is_active=True).update(is_active=False)
             current = matching
@@ -2197,13 +2203,28 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
                     return {"created": [], "state": "validation_failure", "diagnostics": [detail]}
                 entry = replace(entry, quantity=entry.quantity if entry.quantity is not None else parent.quantity, unit=entry.unit or parent.unit, requirements=combined)
             prepared.append((entry, parent))
+        # Review a replacement group as a whole: keep unchanged siblings when one changes.
+        group_changes, composition_changes = {}, {}
+        for parent_id, old_ids in replacement_groups.items():
+            previous = list(TenderSourceItem.objects.filter(pk__in=old_ids, tender=tender))
+            entries = [entry for entry, parent in prepared if parent.pk == parent_id]
+            def shape(name, per_parent, unit):
+                return (_normal(name), str(Decimal(str(per_parent)).normalize()), _normal(unit))
+            composition_changes[parent_id] = sorted(shape(entry.name, entry.quantity_per_parent, entry.unit) for entry in entries) != sorted(
+                shape(item.original_text, item.metadata.get('quantity_per_parent'), item.unit) for item in previous)
+        from .document_enrichment import document_proposal_changes
+        for entry, parent in prepared:
+            candidate = TenderSourceItem(source_type='document_proposal', parent=parent, provenance=entry.provenance,
+                original_text=entry.name, quantity=entry.quantity, unit=entry.unit, requirements=entry.requirements,
+                metadata={'relationship': entry.relationship, 'replaces_source_ids': replacement_groups.get(parent.pk, []),
+                          'quantity_per_parent': str(entry.quantity_per_parent), 'supply_kind': entry.supply_kind,
+                          'composition_changed': composition_changes.get(parent.pk, False), 'national_regime': entry.national_regime})
+            group_changes[parent.pk] = group_changes.get(parent.pk, False) or bool(document_proposal_changes(candidate))
         with transaction.atomic():
             for entry, parent in prepared:
-                payload = {"parent": parent.pk, "parent_display_name": entry.parent_display_name, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent), "replaces_source_ids": sorted(replacement_groups.get(parent.pk, [])), "supply_kind": entry.supply_kind, "structure_reason": entry.structure_reason, "national_regime": entry.national_regime}
-                from .document_enrichment import document_proposal_changes
-                candidate = TenderSourceItem(source_type="document_proposal", parent=parent, provenance=entry.provenance, original_text=entry.name, quantity=entry.quantity, unit=entry.unit, requirements=entry.requirements, metadata=payload)
-                if not document_proposal_changes(candidate):
+                if not group_changes[parent.pk]:
                     continue
+                payload = {"parent": parent.pk, "parent_display_name": entry.parent_display_name, "name": entry.name, "quantity": str(entry.quantity or ""), "unit": entry.unit, "requirements": entry.requirements, "provenance": entry.provenance, "relationship": entry.relationship, "quantity_per_parent": str(entry.quantity_per_parent), "replaces_source_ids": sorted(replacement_groups.get(parent.pk, [])), "supply_kind": entry.supply_kind, "structure_reason": entry.structure_reason, "national_regime": entry.national_regime}
                 proposal, _ = TenderSourceItem.objects.get_or_create(
                     tender=tender,
                     source_key=f"proposal:{parent.pk}:{_fingerprint(payload)[:20]}",
@@ -2213,9 +2234,12 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
                                        "supply_kind": entry.supply_kind, "structure_reason": entry.structure_reason,
                                        "national_regime": entry.national_regime,
                                        "replaces_source_ids": sorted(replacement_groups.get(parent.pk, [])),
+                                       "review_group_changed": True, "composition_changed": composition_changes.get(parent.pk, False),
                                            **({"quantity_per_parent": str(entry.quantity_per_parent)} if entry.relationship == "component" else {})},
                               "confidence": entry.confidence, "parent": parent, "is_active": False},
                 )
+                if proposal.is_active:
+                    continue
                 if proposal.source_type == 'document_rejected':
                     proposal.source_type = 'document_proposal'
                     proposal.save(update_fields=['source_type'])

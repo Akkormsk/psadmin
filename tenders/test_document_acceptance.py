@@ -88,3 +88,91 @@ class DocumentAcceptanceSmokeTests(TestCase):
         self.assertEqual(result['state'], 'needs_review')
         proposal = result['created'][0]
         self.assertEqual({fact['name'] for fact in proposal.requirements['characteristics']}, {'Материал', 'Цвет', 'Упаковка'})
+
+
+class DocumentRepeatSmokeTests(DocumentAcceptanceSmokeTests):
+    """Repeat the accepted kit through the real shared writer; never call paid APIs."""
+    def test_badge_wording_does_not_create_another_notice_position(self):
+        from unittest.mock import patch
+        from tender_selection.national_regime import LABELS
+        from .calculation_v2_pipeline import ingest_source_items
+        before = [row.pk for row in self.parents]
+        with patch.dict(LABELS, {'unknown': ('gray', 'Сведения не указаны', 'Изменён только текст бейджа')}):
+            self.assertEqual([row.pk for row in ingest_source_items(self.tender)], before)
+        self.assertEqual(self.tender.v2_source_items.count(), len(before))
+
+    def test_identical_accepted_composition_does_not_request_another_decision(self):
+        parent = self.parents[0]
+        row = self.row(parent)
+        self.stage([row])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        accepted = parent.derived_items.get(is_active=True)
+        result = self.stage([row])
+        self.assertEqual(result['state'], 'no_change')
+        self.assertFalse(result['created'])
+        accepted.refresh_from_db()
+        self.assertTrue(accepted.is_active)
+        self.assertEqual(accepted.source_type, 'document_extraction')
+
+    def test_one_changed_part_keeps_unchanged_siblings_and_does_not_highlight_same_quantity(self):
+        from .document_enrichment import document_proposal_changes
+        parent = self.parents[0]
+        rows = [self.row(parent, name='Изделие А'), self.row(parent, name='Изделие Б')]
+        self.stage(rows)
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        rows[0]['requirements'] = {'characteristics': [{'name': 'Цвет', 'value': 'Красный'}]}
+        result = self.stage(rows)
+        self.assertEqual(len(result['created']), len(rows))
+        for proposal in result['created']:
+            changes = document_proposal_changes(proposal)
+            self.assertFalse(changes['quantity'])
+            self.assertFalse(changes['unit'])
+        self.assertEqual([len(document_proposal_changes(row)['rows']) for row in result['created']], [1, 0])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        self.assertEqual(parent.derived_items.filter(is_active=True).count(), len(rows))
+
+    def _duplicate_accepted_group(self, *, changed=False):
+        from copy import deepcopy
+        from .models import TenderSourceItem
+        parent = self.parents[0]
+        self.stage([self.row(parent)])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        source = parent.derived_items.get(is_active=True)
+        duplicate_root = TenderSourceItem.objects.create(tender=self.tender, source_key=parent.source_key + ':v:old-label',
+            source_type='notification', original_text=parent.original_text, quantity=parent.quantity, unit=parent.unit,
+            requirements=deepcopy(parent.requirements), metadata=deepcopy(parent.metadata), is_active=False)
+        duplicate = TenderSourceItem.objects.create(tender=self.tender, source_key='duplicate-evidence', parent=duplicate_root,
+            source_type='document_extraction', original_text=source.original_text, quantity=source.quantity, unit=source.unit,
+            requirements={'characteristics': [{'name': 'Цвет', 'value': 'Другой'}]} if changed else deepcopy(source.requirements),
+            metadata=deepcopy(source.metadata), is_active=True)
+        good = build_commercial_items(tender=self.tender, sources=[duplicate])[0]
+        return source, duplicate, good
+
+    def test_equal_duplicates_retire_without_deleting_goods_or_saved_estimate(self):
+        from .tender_data import reconcile_duplicate_notice_items
+        source, duplicate, good = self._duplicate_accepted_group()
+        previous_good = source.commercial_items.get()
+        estimate = TenderEstimate.objects.create(owner=self.admin, tender=self.tender, name='Сохранённый расчёт')
+        line = TenderLine.objects.create(estimate=estimate, commercial_item=previous_good, name='Прежний товар', quantity=200, nmck_unit=100)
+        preview = reconcile_duplicate_notice_items(self.tender)
+        source.refresh_from_db()
+        self.assertTrue(source.is_active)
+        self.assertEqual(preview['source_aliases'], {source.pk: duplicate.pk})
+        self.assertEqual(reconcile_duplicate_notice_items(self.tender, apply=True), preview)
+        source.refresh_from_db(); previous_good.refresh_from_db(); good.refresh_from_db(); line.refresh_from_db()
+        self.assertFalse(source.is_active)
+        self.assertEqual(previous_good.status, 'superseded')
+        self.assertEqual(good.status, 'active')
+        self.assertEqual(line.commercial_item_id, previous_good.pk)
+        self.assertEqual(line.nmck_unit, 100)
+        self.assertFalse(reconcile_duplicate_notice_items(self.tender, apply=True)['source_aliases'])
+
+    def test_different_accepted_requirements_are_not_merged_by_name(self):
+        from .tender_data import reconcile_duplicate_notice_items
+        source, duplicate, good = self._duplicate_accepted_group(changed=True)
+        plan = reconcile_duplicate_notice_items(self.tender, apply=True)
+        self.assertTrue(plan['conflicting_groups'])
+        self.assertFalse(plan['source_aliases'])
+        source.refresh_from_db(); duplicate.refresh_from_db()
+        self.assertTrue(source.is_active)
+        self.assertTrue(duplicate.is_active)

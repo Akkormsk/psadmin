@@ -392,6 +392,16 @@ def document_proposal_changes(item):
     parent = item.parent
     metadata = item.metadata or {}
     normalize = lambda value: " ".join(str(value if value is not None else "").split()).casefold()
+    original_parent = parent
+    if metadata.get('relationship') == 'component' and metadata.get('replaces_source_ids'):
+        from .models import TenderSourceItem
+        candidates = [row for row in TenderSourceItem.objects.filter(
+            pk__in=metadata['replaces_source_ids'], parent_id=parent.pk,
+            tender_id=parent.tender_id, is_active=True, source_type='document_extraction')
+            if normalize(row.original_text) == normalize(item.original_text)]
+        # Comparison only, never identity reassignment. Ambiguous names require review.
+        if len(candidates) == 1:
+            parent = candidates[0]
     def identity(row):
         import json
         value = row.get("value")
@@ -416,7 +426,7 @@ def document_proposal_changes(item):
     for row in after:
         source_identities(row)
     changes = {
-        "structural": metadata.get("relationship") != "enrich" or bool(metadata.get("replaces_source_ids")) or metadata.get("supply_kind") == "unclear",
+        "structural": (metadata.get("relationship") != "enrich" and parent is original_parent) or bool(metadata.get("composition_changed")) or (bool(metadata.get("replaces_source_ids")) and metadata.get("relationship") != "component") or metadata.get("supply_kind") == "unclear",
         "name": normalize(item.original_text) != normalize(parent.original_text),
         "quantity": item.quantity != parent.quantity,
         "unit": normalize(item.unit).rstrip('.') != normalize(parent.unit).rstrip('.'),
@@ -429,4 +439,4 @@ def document_proposal_changes(item):
     previous = previous if isinstance(previous, dict) else {}
     if national.get("status") not in (None, "unknown") and national.get("basis") and national != previous:
         changes["national_regime"] = national
-    return changes if any(changes.values()) else {}
+    return changes if any(changes.values()) or metadata.get("review_group_changed") else {}

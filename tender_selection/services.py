@@ -2160,6 +2160,7 @@ def _publish_intake(job):
 
 def _save_intake_proposals(job, result, *, incomplete):
     from tenders.models import TenderSourceItem
+    result['created'] = [item for item in result['created'] if not item.is_active and item.source_type not in {'document_extraction', 'document_enrichment'}]
     ids = [item.pk for item in result['created']]
     with transaction.atomic():
         Tender.objects.select_for_update().get(pk=job.tender_id)

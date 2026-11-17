@@ -186,3 +186,81 @@ def mark_tender_inputs_changed(tender, *, commercial_ids=()):
         if commercial_ids:
             ComponentRoutePlan.objects.using(using).filter(commercial_item__tender=current, commercial_item_id__in=commercial_ids,
                 status__in=['planned', 'ready', 'needs_review']).update(status='stale')
+
+
+def notification_source_fingerprint(source):
+    """Business input only: presentation labels never create notice revisions."""
+    from .source_memory import signature
+    national = source.metadata.get('notification_national_regime') or {}
+    quantity = source.quantity.normalize() if source.quantity is not None else None
+    return signature([source.original_text, str(quantity), source.unit, source.requirements,
+                      source.metadata.get('code') or '',
+                      national.get('status', 'unknown'), national.get('basis') or []])
+
+
+def reconcile_duplicate_notice_items(tender, *, apply=False):
+    """Retire only equal accepted groups from equal versions of one notice row."""
+    from collections import defaultdict
+    from django.utils import timezone
+    from .models import TenderSourceItem, TenderCommercialItem, CalculationComponent, TenderComputeJob
+    from .source_memory import signature
+    using = tender._state.db or DEFAULT_DB_ALIAS
+    with transaction.atomic(using=using):
+        owners = Tender.objects.using(using)
+        current = (owners.select_for_update() if apply else owners).get(pk=tender.pk)
+        if apply and current.status == Tender.DISMISSED:
+            raise ValueError('Сначала верните тендер из архива в работу.')
+        rows = list(TenderSourceItem.objects.using(using).filter(tender=tender).order_by('pk'))
+        groups = defaultdict(list)
+        for row in rows:
+            if row.source_type == 'notification' and not row.metadata.get('duplicate_of'):
+                groups[(row.source_key.split(':v:')[0], notification_source_fingerprint(row))].append(row)
+        aliases, retired, conflicts = {}, {}, []
+        def content(row):
+            return signature([row.original_text, str(row.quantity.normalize()) if row.quantity is not None else None,
+                              row.unit, row.requirements,
+                              {key: row.metadata.get(key) for key in ('relationship', 'quantity_per_parent', 'supply_kind', 'national_regime')}])
+        for roots in groups.values():
+            accepted = [(root, [row for row in rows if row.parent_id == root.pk and row.is_active
+                               and row.source_type == 'document_extraction']) for root in roots]
+            accepted = [(root, children) for root, children in accepted if children]
+            if len(accepted) < 2:
+                continue
+            contents = [{content(row): row for row in children} for _, children in accepted]
+            if any(len(keys) != len(children) for keys, (_, children) in zip(contents, accepted)) or any(set(keys) != set(contents[0]) for keys in contents[1:]):
+                conflicts.append([root.pk for root, _ in accepted])
+                continue
+            def decision(group):
+                return max((event.get('at', '') for row in group[1] for event in row.metadata.get('review_history', [])
+                            if event.get('decision') == 'accept'), default=''), group[0].pk
+            keep_root, keep_children = max(accepted, key=decision)
+            kept = {content(row): row for row in keep_children}
+            for root, children in accepted:
+                if root.pk == keep_root.pk:
+                    continue
+                aliases[root.pk] = keep_root.pk
+                retired.update({row.pk: kept[content(row)].pk for row in children})
+        plan = {'root_aliases': aliases, 'source_aliases': retired, 'conflicting_groups': conflicts}
+        if apply and retired:
+            from tender_selection.services import _document_input_fingerprint
+            previous_input = _document_input_fingerprint(tender)
+            goods = list(TenderCommercialItem.objects.using(using).filter(tender=tender, source_items__pk__in=retired).distinct())
+            for good in goods:
+                if set(good.source_items.values_list('pk', flat=True)) - retired.keys():
+                    raise ValueError('Повтор связан с общим рабочим товаром; требуется отдельная проверка.')
+            for row in rows:
+                replacement = retired.get(row.pk) or aliases.get(row.pk)
+                if replacement:
+                    row.is_active = False
+                    row.metadata = {**row.metadata, 'duplicate_of': replacement, 'duplicate_retired_at': timezone.now().isoformat()}
+                    row.save(using=using, update_fields=['is_active', 'metadata'])
+            ids = [good.pk for good in goods]
+            CalculationComponent.objects.using(using).filter(commercial_item_id__in=ids).update(status='superseded')
+            TenderCommercialItem.objects.using(using).filter(pk__in=ids).update(status='superseded')
+            # Same evidence and same accepted values: only duplicate identities disappear.
+            current_input = _document_input_fingerprint(tender)
+            for job in TenderComputeJob.objects.using(using).filter(tender=tender, diagnostics__document_input_fingerprint=previous_input):
+                job.diagnostics = {**job.diagnostics, 'document_input_fingerprint': current_input,
+                                   'duplicate_source_aliases': {str(key): value for key, value in retired.items()}}
+                job.save(using=using, update_fields=['diagnostics', 'updated_at'])
+        return plan
