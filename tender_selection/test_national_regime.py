@@ -103,6 +103,17 @@ class ItemRiskTests(TestCase):
         self.assertNotIn('требует проверки', rendered)
         self.assertEqual(result['risk_level'], 'low')
         self.assertTrue(all(item['regime']['status'] == 'unknown' for item in result['risk_facts']['national_regime_items']))
+        stale_risk = risk_projection(self.tender, {'stale': True, 'risk_facts': {'documents_sufficient': True}})
+        self.assertTrue(stale_risk['stale'])
+        self.assertTrue(stale_risk['national_regime_checked'])
+        self.assertNotIn('Проверка документов не завершена', stale_risk['national_regime'])
+        job.diagnostics['source_reading'] = {'read': 2, 'total': 2, 'complete': True}
+        job.save(update_fields=['diagnostics'])
+        self.assertTrue(risk_projection(self.tender, {'stale': True})['national_regime_checked'])
+        job.diagnostics['source_reading'] = {'read': 1, 'total': 2, 'complete': False}
+        job.save(update_fields=['diagnostics'])
+        self.assertFalse(risk_projection(self.tender)['national_regime_checked'])
+        job.diagnostics.pop('source_reading')
         job.diagnostics['analysis_gaps'] = [{'stage': 'documents', 'reason': 'Файл недоступен'}]
         job.save(update_fields=['diagnostics'])
         incomplete = risk_projection(self.tender, {'risk_facts': {'documents_sufficient': True}})

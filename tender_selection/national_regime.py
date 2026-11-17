@@ -135,10 +135,8 @@ def tender_items(tender, card=None):
     return rows or [{"position": index, "name": item.get("name", "Товар"), "regime": item.get("national_regime") or annotation()} for index, item in enumerate(original)]
 
 
-def _national_review_complete(tender, assessment):
+def _national_review_complete(tender):
     """Confirm saved coverage for current inputs; never run document processing."""
-    if assessment.get('stale') or assessment.get('degraded'):
-        return False
     from .notification import parse_notification
     if not parse_notification(tender.notification_raw or {}).get('documents'):
         return False
@@ -166,7 +164,7 @@ def risk_projection(tender, assessment=None, card=None):
     """Read-only overlay: no manual review decisions or accepted facts are rewritten."""
     data = deepcopy(assessment or {})
     items = tender_items(tender, card)
-    checked = _national_review_complete(tender, data)
+    checked = _national_review_complete(tender)
     missing = [item for item in items if item['regime']['status'] == 'unknown' and not item['regime'].get('basis')]
     conflicts = [item for item in items if item['regime']['status'] == 'unknown' and item['regime'].get('basis')]
     factors = [factor for factor in (data.get("risk_factors") or []) if factor.get("code") != "national_regime" and not str(factor.get("code", "")).startswith("item_1875_")]

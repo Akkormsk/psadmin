@@ -2493,4 +2493,5 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .copy-notice { appearance:none; border:0; background:transparent; color:inherit; font:inherit; padding:.35em .15em; cursor:pointer; touch-action:manipulation; }
 .copy-notice { text-decoration:underline dotted; text-underline-offset:.2em; }
 .copy-notice:hover { text-decoration-style:solid; }
+.copy-notice--plain { text-decoration-line:none; }
 .copy-notice:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
