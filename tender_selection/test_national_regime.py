@@ -198,12 +198,15 @@ class NationalReviewTests(TestCase):
         parent.refresh_from_db(); self.tender.refresh_from_db()
         self.assertTrue(parent.is_active)
         self.assertEqual(self.tender.review, initial_review)
-        self.assertFalse(TenderSourceItem.objects.filter(pk=proposal.pk).exists())
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.source_type, 'document_rejected')
+        self.assertFalse(proposal.is_active)
         proposal = self.stage([row])["created"][0]
         decide_document_proposals(self.admin, self.tender.pk, parent.pk, "accept")
         proposal.refresh_from_db()
         self.assertEqual(source_item_status(proposal)["color"], "red")
         self.assertEqual(source_item_status(proposal)["basis"][0]["quote"], quote)
+        self.assertEqual([row['decision'] for row in proposal.metadata['review_history']], ['reject', 'accept'])
 
     def test_complete_response_wrappers_keep_validation_and_use_one_gateway_call(self):
         from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality

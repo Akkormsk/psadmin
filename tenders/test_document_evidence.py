@@ -193,3 +193,26 @@ class DocumentEvidenceSmokeTests(TestCase):
         fragment = preview.structure['fragments'][facts[0]['fragment_id']]
         self.assertEqual(len(fragment['occurrences']), 2)
         self.assertEqual(len({occurrence['location'] for occurrence in fragment['occurrences']}), 2)
+
+    def test_document_proposal_keeps_reference_to_shared_reading(self):
+        from .calculation_v2_pipeline import assess_quality, enrich_suspicious_tender
+        self.tender.notification_raw = {'source': {'attachmentsInfo': {'attachmentInfo': [
+            {'url': self.documents[0]['url'], 'fileName': 'ТЗ'}]}}}
+        self.tender.save(update_fields=['notification_raw'])
+        job = TenderComputeJob.objects.create(tender=self.tender)
+        engine = self.read(job)
+        identity, block = next(iter(engine.source_memory.blocks.items()))
+        proof = engine.stage_quote({'fragment_id': identity, 'quote': block['text']})
+        self.assertIn('document_ref', proof)
+        goods = [{'key': 'good', 'source_id': self.source.pk, 'kind': 'finished', 'name': self.source.original_text,
+            'unit': self.source.unit, 'quantity_per_parent': '1', 'parent_name': self.source.original_text,
+            'reason': 'Один готовый товар', 'provenance': proof}]
+        specs = engine.validate_specifications([{'key': 'good', 'characteristics': [{'name': 'Требование',
+            'value': block['text'], 'resolution': 'new', 'baseline_refs': [], 'fragment_id': identity, 'quote': block['text']}]}], goods)
+        engine.prepared_entries(goods, specs)
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Repeated reading')):
+            result = enrich_suspicious_tender(self.tender, assess_quality(self.tender, [self.source]), engine)
+        proposal = result['created'][0]
+        self.assertEqual(proposal.provenance['document_ref'], proof['document_ref'])
+        link = TenderDocument.objects.get(pk=proof['document_ref']['document_id'])
+        self.assertIn(proof['document_ref']['fragment_id'], link.preview.structure['fragments'])

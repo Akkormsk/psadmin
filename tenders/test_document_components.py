@@ -145,7 +145,9 @@ class DocumentComponentAcceptanceTests(TestCase):
     def test_reject_does_not_change_notification_or_other_parents(self):
         proposal = self.stage([self.row(self.parents[0])])["created"][0]
         decide_document_proposals(self.admin, self.tender.pk, self.parents[0].pk, "reject")
-        self.assertFalse(TenderSourceItem.objects.filter(pk=proposal.pk).exists())
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.source_type, 'document_rejected')
+        self.assertFalse(proposal.is_active)
         self.parents[0].refresh_from_db()
         self.assertTrue(self.parents[0].is_active)
 

@@ -359,7 +359,7 @@ class GatewayDocumentEnricher:
 
     STAGED_CONTRACT = "intake-steps-v4-anchored-specification"
     STAGED_VALIDATION_VERSION = "canonical-fact-sources-v10-resilient"
-    SPECIFICATION_ASSEMBLY = "verified-additions-v2"
+    SPECIFICATION_ASSEMBLY = "verified-review-v3"
 
     def prepare_stages(self, tender, sources, documents):
         from tender_selection.services import documents_html
@@ -1115,6 +1115,11 @@ class GatewayDocumentEnricher:
         else:
             fragment = None
             doc = self.document_lookup.get(row.get('doc_id'))
+        document_ref = None
+        if fragment and hasattr(self, 'document_evidence'):
+            memory = self.document_evidence.memory
+            key = memory.key(anchor, memory.page_keys[0])
+            document_ref = self.document_evidence.job.diagnostics.get('source_reading', {}).get('records', {}).get(key)
         quote = str(row.get('quote') or '').strip()
         def normalize(value):
             # Document converters and LLM output use equivalent mathematical glyphs.
@@ -1145,6 +1150,7 @@ class GatewayDocumentEnricher:
                     raise ValueError('Для изображения не указан подтверждающий текст.')
                 return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000],
                     'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT,
+                    **({'document_ref': document_ref} if document_ref else {}),
                     'verification': 'visual', 'requires_review': True}
             source_text = normalize(fragment['text'])
             if not quote or normalize(quote) not in source_text:
@@ -1165,6 +1171,7 @@ class GatewayDocumentEnricher:
                     raise ValueError('Значение не найдено в выбранном фрагменте источника.')
             return {'document_url': doc['url'], 'page_or_section': section, 'evidence': quote[:1000],
                     'extraction_model': self.model, 'extraction_version': self.STAGED_CONTRACT,
+                    **({'document_ref': document_ref} if document_ref else {}),
                     **({'source_value': source_value} if source_value else {})}
         verified = bool(doc and quote and normalize(quote) in normalize(doc.get('evidence_text', '')))
         if doc and quote and not verified:
@@ -2205,6 +2212,9 @@ def enrich_suspicious_tender(tender: Tender, quality: dict, enricher: DocumentEn
                                            **({"quantity_per_parent": str(entry.quantity_per_parent)} if entry.relationship == "component" else {})},
                               "confidence": entry.confidence, "parent": parent, "is_active": False},
                 )
+                if proposal.source_type == 'document_rejected':
+                    proposal.source_type = 'document_proposal'
+                    proposal.save(update_fields=['source_type'])
                 proposals.append(proposal)
         return {"created": proposals, "state": "needs_review" if proposals else "document_reading_incomplete" if outcome == "document_reading_incomplete" else ("no_change" if prepared else "no_data"), "diagnostics": [detail]}
     else:
@@ -2314,22 +2324,44 @@ def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, 
                 raise ValueError('Цикл редакций исходной позиции.')
             previous_ids.append(previous.pk)
             previous = previous.supersedes
-        current = TenderCommercialItem.objects.filter(tender=tender, source_key=f'commercial:{source.pk}').first()
-        if current is None and previous_ids:
-            candidates = list(TenderCommercialItem.objects.filter(tender=tender, source_items__pk__in=previous_ids).distinct())
+        if source.is_active:
+            from .document_enrichment import is_item_enrichment
+            parent = source
+            lineage = {source.pk}
+            while is_item_enrichment(parent) and parent.parent_id:
+                parent = parent.parent
+                if parent.tender_id != tender.pk or parent.pk in lineage:
+                    raise ValueError('Неоднозначная цепочка исходных сведений товара.')
+                lineage.add(parent.pk)
+                if parent.pk not in previous_ids:
+                    previous_ids.append(parent.pk)
+        linked = list(TenderCommercialItem.objects.filter(tender=tender, source_items=source, status__in=['active', 'draft']).distinct())
+        accepted = [item for item in linked if item.status == 'active']
+        if len(accepted) > 1 or not accepted and len(linked) > 1:
+            raise ValueError('Исходная позиция связана с несколькими рабочими товарами.')
+        if accepted:
+            current = accepted[0]
+        elif linked:
+            current = linked[0]
+        else:
+            current = TenderCommercialItem.objects.filter(tender=tender, source_key=f'commercial:{source.pk}').first()
+        if previous_ids and (current is None or source.is_active and current.status != 'active'):
+            candidates = list(TenderCommercialItem.objects.filter(tender=tender, source_items__pk__in=previous_ids, status='active').distinct())
             if len(candidates) > 1:
                 raise ValueError('Неоднозначная связь предыдущей редакции рабочего товара.')
-            current = candidates[0] if candidates else None
+            current = candidates[0] if candidates else current
         commercial, _ = TenderCommercialItem.objects.update_or_create(
             tender=tender, source_key=current.source_key if current else f"commercial:{source.pk}",
             defaults={**({'job': job} if job is not None else {}), "display_name": source.original_text, "quantity": source.quantity, "unit": source.unit,
                       "requirements": _commercial_requirements(source), "provenance": {"source_item_ids": [source.pk], "draft": not source.is_active},
-                      "structure": structure, "status": "active"},
+                      "structure": structure, "status": "active" if source.is_active else "draft"},
         )
         commercial.source_items.set([source])
         component_rows = component_sources or [source]
         for index, component_source in enumerate(component_rows):
-            per_parent = _as_decimal((component_source.metadata or {}).get("quantity_per_parent")) or Decimal("1")
+            per_parent = Decimal('1') if component_source.pk == source.pk else _as_decimal((component_source.metadata or {}).get("quantity_per_parent"))
+            if per_parent is None or not per_parent.is_finite() or per_parent <= 0:
+                raise ValueError('Не определено количество компонента в составе.')
             if component_source.pk == source.pk and previous_ids:
                 old_components = list(CalculationComponent.objects.filter(commercial_item=commercial, source_item_id__in=previous_ids, parent__isnull=True))
                 if len(old_components) > 1:

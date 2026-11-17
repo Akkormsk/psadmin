@@ -1967,7 +1967,9 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
     _ensure_document_review_ready(Tender.objects.get(pk=tender_id))
     if decision not in {"accept", "reject"}:
         raise ValueError("Нужно выбрать: принять или отклонить предложения")
-    Tender.objects.select_for_update().get(pk=tender_id)
+    tender = Tender.objects.select_for_update().get(pk=tender_id)
+    from tenders.tender_data import prepare_tender_for_write
+    prepare_tender_for_write(tender)
     parent = TenderSourceItem.objects.select_for_update().filter(pk=parent_id, tender_id=tender_id).first()
     if parent is None:
         raise ValueError("Исходная позиция тендера не найдена")
@@ -1984,6 +1986,17 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
     verified_job = TenderComputeJob.objects.filter(tender_id=tender_id).order_by('-pk').first()
     if not (verified_job and verified_job.diagnostics.get('document_input_fingerprint') == _document_input_fingerprint(parent.tender)):
         verified_job = None
+    from tenders.models import TenderCommercialItem, CalculationComponent
+    affected_sources = {parent.pk, *(item.pk for item in proposals)}
+    for proposal in proposals:
+        affected_sources.update(proposal.metadata.get('replaces_source_ids', []))
+    affected_goods = list(TenderCommercialItem.objects.filter(
+        tender_id=tender_id, source_items__pk__in=affected_sources).values_list('pk', flat=True).distinct())
+    reviewed_at = timezone.now().isoformat()
+    for proposal in proposals:
+        proposal.metadata = {**proposal.metadata, 'review_history': [*proposal.metadata.get('review_history', []),
+            {'decision': decision, 'actor_id': user.pk, 'at': reviewed_at,
+             'analysis_job_id': proposal.metadata.get('analysis_job_id')}]}
     if decision == "accept":
         from tenders.document_enrichment import component_total_quantity, effective_item_requirements, is_item_enrichment
         if len(proposals) > 1 and any(is_item_enrichment(item) for item in proposals):
@@ -2008,13 +2021,24 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
                 proposal.requirements = effective_item_requirements(proposal, strict=True)
             proposal.source_type = "document_extraction"
             proposal.is_active = True
-            proposal.save(update_fields=["source_type", "is_active", "quantity", "requirements"])
+            proposal.save(update_fields=["source_type", "is_active", "quantity", "requirements", "metadata"])
         if replacement_ids:
             TenderSourceItem.objects.filter(pk__in=replacement_ids, tender_id=tender_id).update(is_active=False)
         parent.is_active = False
         parent.save(update_fields=["is_active"])
+        from tenders.calculation_v2_pipeline import build_commercial_items
+        accepted = build_commercial_items(tender=parent.tender, sources=proposals)
+        retired = TenderCommercialItem.objects.filter(pk__in=affected_goods).exclude(pk__in=[item.pk for item in accepted])
+        CalculationComponent.objects.filter(commercial_item__in=retired).update(status='superseded')
+        retired.update(status='superseded')
     else:
-        TenderSourceItem.objects.filter(pk__in=[proposal.pk for proposal in proposals]).delete()
+        # Proposed routes may already reference these sources. Retain their evidence.
+        for proposal in proposals:
+            proposal.source_type, proposal.is_active = 'document_rejected', False
+        TenderSourceItem.objects.bulk_update(proposals, ['source_type', 'is_active', 'metadata'])
+        drafts = TenderCommercialItem.objects.filter(tender_id=tender_id, source_items__in=proposals, provenance__draft=True)
+        CalculationComponent.objects.filter(commercial_item__in=drafts).update(status='rejected')
+        drafts.update(status='rejected')
     if verified_job:
         # Promoting this job's reviewed facts changes row ids, not the analysed evidence.
         verified_job.diagnostics['document_input_fingerprint'] = _document_input_fingerprint(parent.tender)
@@ -2417,11 +2441,11 @@ def _staged_document_analysis(job, enricher):
         national = {}
         stages['national_regime'] = {'state': 'deferred', 'cost_rub': '0'}
 
-    instruction = """Извлеки требования из документов для каждого товара task.goods. Верни одну запись для каждого key, даже если дополнений нет. Исходные сведения извещения сохраняются программой автоматически: не заменяй и не переписывай их. Если документ указывает другое значение, верни значение документа отдельно, без объединения с извещением. Не придумывай требования. Избегай повторения идентичных исходным сведений.
+    instruction = """Собери сведения из всех доступных источников для каждого товара task.goods и предложи пользователю понятное, полное описание. Верни одну запись для каждого key, даже если дополнений нет. Ни извещение, ни документ не имеют безусловного приоритета. Исходные сведения сохраняются программой автоматически, пропуск в ответе их не удаляет. Добавляй новые факты через new; подтверждённое уточнение известного факта предложи через merge с baseline_refs, точным document_value и объяснением. Неразрешённое противоречие помечай conflict, сохраняя оба основания. Предпочитай более читаемое и полное подтверждённое значение; новизну редакции учитывай только при наличии основания, не угадывай по имени файла. Не придумывай требования и избегай бессмысленного повторения одинаковых сведений.
 
 Для товара из набора (kind=kit) характеристики извещения относятся к набору целиком. Привязывай их к составляющей только если это явно следует из исходных данных: укажи notification_refs с номерами фактов и точным исходным значением. Не присваивай сомнительные характеристики составляющим.
 
-Формат: {"items":[{"key":"ключ товара","characteristics":[{"name":"характеристика","value":"значение документа","resolution":"new","baseline_refs":[],"notification_refs":[],"quote":"точная цитата документа","scope":"product|completeness"}]}]}. Для сведения исключительно из извещения в составе набора укажи notification_refs, без ссылки на документ. Не изменяй состав товаров и не делай выводов по 1875."""
+Формат: {"items":[{"key":"ключ товара","characteristics":[{"name":"характеристика","value":"предлагаемое подтверждённое значение","resolution":"new|merge|conflict","baseline_refs":[],"notification_refs":[],"document_value":"точное значение документа для уточнения или расхождения","reason":"объяснение уточнения или расхождения","quote":"точная цитата документа","scope":"product|completeness"}]}]}. Для сведения исключительно из извещения в составе набора укажи notification_refs, без ссылки на документ. Не изменяй состав товаров и не делай выводов по 1875."""
     if hasattr(enricher, 'source_fragments'):
         instruction += "\nДля каждого дополнения верни fragment_id из документа: у абзаца это поле fragment_id, у строки таблицы — соответствующий элемент row_fragment_ids, у изображения — из image_fragments. Не придумывай ID. value и quote скопируй дословно из одного выбранного фрагмента; для таблицы скопируй значение из той же строки. Не объединяй значения из разных фрагментов в одну запись. Номер документа не нужен."
     else:

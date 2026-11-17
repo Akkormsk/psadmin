@@ -325,8 +325,13 @@ def reconcile_item_requirements(baseline, proposal, *, provenance=None):
             final["scope"] = scope
         final.update(source_facts=facts, reason=reason)
         output.append(final)
-    if covered != set(range(len(base))):
-        raise ValueError("Не все исходные факты учтены в итоговом описании")
+    # A document may only add a few details. Silence never removes known facts.
+    for index, fact in enumerate(base):
+        if index not in covered:
+            retained = deepcopy(fact)
+            retained.setdefault('source', 'notification')
+            retained.setdefault('source_facts', [deepcopy(fact)])
+            output.append(retained)
     unique, values = {}, {}
     for fact in output:
         attribute = (" ".join(str(fact["name"]).casefold().split()), fact.get("scope", "product"))

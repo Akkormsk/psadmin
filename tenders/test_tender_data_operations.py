@@ -121,6 +121,7 @@ class TenderDataOperationsTests(TestCase):
         working = build_commercial_items(tender=self.tender, sources=sources)
         self.assertEqual(working[0].pk, original_item)
         self.assertEqual(working[0].components.get().pk, original_component)
+        self.assertEqual(build_commercial_items(tender=self.tender, sources=sources)[0].pk, original_item)
         line.refresh_from_db()
         self.assertEqual(line.quantity, 100)
         self.assertEqual(line.commercial_item.quantity, 200)
