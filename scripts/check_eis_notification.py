@@ -1,6 +1,7 @@
 """One direct EIS notice read from TEST; no application writes or AI calls."""
 import json
 import os
+from urllib.parse import urlsplit
 
 import django
 
@@ -34,4 +35,9 @@ with transaction.atomic():
                       customer_present=bool((card.get('customer') or {}).get('name')))
     except eis_docs.EisDocsError as exc:
         report.update(direct_eis='error', error=eis_docs._redact(str(exc)))
+        if 'за пределами доверенного домена' in str(exc):
+            report['archive_locations'] = [
+                {'scheme': urlsplit(url).scheme, 'host': urlsplit(url).hostname}
+                for url in eis_docs.fetch_archive_urls(number)
+            ]
     print(json.dumps(report, ensure_ascii=False))
