@@ -65,6 +65,12 @@ on:
         default: false
         type: boolean
 
+      inspect_national_regime:
+        description: "Read saved national-regime and document coverage without AI or source requests"
+        required: false
+        default: false
+        type: boolean
+
       binding_probe_budget_rub:
         description: "Explicit isolated binding probe budget; DB changes rolled back, no deploy"
         required: false
@@ -351,6 +357,7 @@ jobs:
       SSH_USER: deploy
       INSPECT_NUMBER: ${{ inputs.inspect_tender_number }}
       INSPECT_EIS: ${{ inputs.inspect_eis }}
+      INSPECT_NATIONAL_REGIME: ${{ inputs.inspect_national_regime }}
       BINDING_PROBE_BUDGET_RUB: ${{ inputs.binding_probe_budget_rub }}
     steps:
       - uses: actions/checkout@v4
@@ -372,6 +379,7 @@ jobs:
           [[ -z "$BINDING_PROBE_BUDGET_RUB" || "$BINDING_PROBE_BUDGET_RUB" =~ ^[0-9]+([.][0-9]+)?$ ]]
           inspection_script=scripts/inspect_tender_analysis.py
           if [ "$INSPECT_EIS" = true ]; then inspection_script=scripts/check_eis_notification.py; fi
+          if [ "$INSPECT_NATIONAL_REGIME" = true ]; then inspection_script=scripts/inspect_national_regime.py; fi
           inspection_code="$(base64 -w 0 "$inspection_script")"
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
