@@ -39,7 +39,9 @@ with transaction.atomic():
         'reading_counts': {key: reading.get(key) for key in ('read', 'total', 'complete', 'storage')},
         'reading_keys': list(reading),
         'source_rows': [{'id': row.pk, 'parent': row.parent_id, 'supersedes': row.supersedes_id,
-            'type': row.source_type, 'active': row.is_active, 'name_key': signature(row.original_text),
+            'type': row.source_type, 'active': row.is_active, 'key': row.source_key,
+            'index': row.metadata.get('notification_index'), 'code': row.metadata.get('code'),
+            'notice_regime_key': signature({key: (row.metadata.get('notification_national_regime') or {}).get(key) for key in ('status', 'basis')}), 'name_key': signature(row.original_text),
             'quantity': str(row.quantity), 'relationship': row.metadata.get('relationship'),
             'replaces': row.metadata.get('replaces_source_ids'),
             'requirements_key': signature(row.requirements), 'review_count': len(row.metadata.get('review_history', []))}
