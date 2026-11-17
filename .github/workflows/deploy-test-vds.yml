@@ -249,6 +249,11 @@ jobs:
           # these tests never call a paid AI provider.
           docker compose -f compose.test.yml exec -T -e DJANGO_SECURE_COOKIES=0 test-web python manage.py test \
             tenders.test_source_memory \
+            tenders.test_document_evidence \
+            tenders.test_input_dependencies \
+            tenders.test_tender_data_operations \
+            tenders.test_document_semantic_review.SemanticReviewTests \
+            tender_selection.test_national_regime.ItemRiskTests \
             tenders.test_document_reading_input.InlineDocumentVisionTests.test_gateway_sends_identical_images_once_without_losing_original_reference_numbers \
             tenders.test_document_components.StagedCanonicalAcceptanceTests \
             tenders.test_document_components.IntakeProposalHistoryTests \
