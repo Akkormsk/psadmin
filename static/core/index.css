@@ -2488,3 +2488,9 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 @media (prefers-reduced-motion:reduce) { .ts-refresh-progress [data-analysis-code="PROCESSING"]::before, .ts-item-route[data-route-state="building"]::before { animation:none; } }
 
 .tender-requirements-drawer .modal-close { min-width:44px; min-height:44px; flex:none; }
+
+/* Tender number remains selectable and is also a touch/keyboard copy button. */
+.copy-notice { appearance:none; border:0; background:transparent; color:inherit; font:inherit; padding:.35em .15em; cursor:pointer; touch-action:manipulation; }
+.copy-notice:hover { text-decoration:underline; }
+.copy-notice:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+[data-copy-status] { font-size:.85em; }

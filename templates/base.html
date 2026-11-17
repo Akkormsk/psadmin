@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PSADMIN{% endblock %}</title>
     {% if request.GET.workspace %}<style>body{visibility:hidden}body.is-ready{visibility:visible}</style>{% endif %}
-    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=intake-routes-20261030">
+    <link rel="stylesheet" href="{% static 'core/index.css' %}?v=copy-notice-20261117">
     {% block extra_head %}{% endblock %}
     {% if request.user.is_authenticated and request.user.profile.has_background %}<style>:root{--app-background-image:url("{% url 'account_background' %}?v={{ request.user.profile.background_updated_at|date:'U' }}")}</style>{% endif %}
 </head>
@@ -330,6 +330,43 @@
       })();
     </script>
     <script>
+      document.addEventListener("click", async function (event) {
+        const button = event.target.closest("[data-copy-notice]");
+        if (!button) return;
+        event.preventDefault();
+        const number = button.dataset.copyNotice;
+        const status = button.parentElement.querySelector("[data-copy-status]");
+        function fallback() {
+          const field = document.createElement("textarea");
+          field.value = number;
+          field.readOnly = true;
+          field.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px";
+          document.body.append(field);
+          try {
+            field.focus();
+            field.select();
+            field.setSelectionRange(0, number.length);
+            return document.execCommand("copy");
+          } catch (error) {
+            return false;
+          } finally {
+            field.remove();
+            button.focus({preventScroll:true});
+          }
+        }
+        let copied = false;
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(number);
+            copied = true;
+          } else copied = fallback();
+        } catch (error) {
+          copied = fallback();
+        }
+        if (status) status.textContent = copied ? " Скопировано" : " Не удалось скопировать";
+      });
+    </script>
+    <script>
       (function () {
         const embedded = window.parent !== window && document.body.classList.contains("workspace-embedded");
         let workspaceApi = null;
@@ -631,7 +668,7 @@
             const trail = layer.element.querySelector("[data-workspace-trail]");
             trail.innerHTML = "";
             layers.slice(0, index + 1).forEach(function (item, trailIndex) {
-              const crumb = document.createElement(trailIndex === index ? "span" : "button");
+              const crumb = document.createElement(trailIndex === index && !item.noticeNumber ? "span" : "button");
               if (trailIndex !== index) {
                 crumb.type = "button";
                 crumb.addEventListener("click", function () {
@@ -640,8 +677,19 @@
                   if (historyEnabled) browserHistory.go(-distance);
                 });
               }
+              if (trailIndex === index && item.noticeNumber) {
+                crumb.type = "button";
+                crumb.dataset.copyNotice = item.noticeNumber;
+                crumb.title = "Скопировать номер извещения";
+              }
               crumb.textContent = item.title;
               trail.append(crumb);
+              if (trailIndex === index && item.noticeNumber) {
+                const status = document.createElement("span");
+                status.dataset.copyStatus = "";
+                status.setAttribute("role", "status");
+                trail.append(status);
+              }
             });
           });
         }
@@ -691,6 +739,8 @@
           frame.addEventListener("load", function () {
             element.classList.remove("is-loading");
             try {
+              const notice = frame.contentDocument.querySelector("[data-copy-notice]");
+              layer.noticeNumber = notice ? notice.dataset.copyNotice : "";
               const frameTitle = frame.contentDocument.title.trim();
               if (frameTitle && title === "Рабочее окно") layer.title = frameTitle;
             } catch (error) {}
