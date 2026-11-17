@@ -9,7 +9,8 @@ django.setup()
 from django.db import connection, transaction
 from tender_selection.models import Tender
 from tender_selection.national_regime import tender_items, risk_projection
-from tenders.models import TenderComputeJob
+from tenders.models import TenderComputeJob, TenderSourceItem, TenderCommercialItem
+from tenders.source_memory import signature
 
 number = os.environ['INSPECT_TENDER_NUMBER']
 if len(number) != 19 or not number.isascii() or not number.isdigit():
@@ -37,4 +38,13 @@ with transaction.atomic():
         'gap_stages': [row.get('stage') for row in diagnostics.get('analysis_gaps', [])],
         'reading_counts': {key: reading.get(key) for key in ('read', 'total', 'complete', 'storage')},
         'reading_keys': list(reading),
+        'source_rows': [{'id': row.pk, 'parent': row.parent_id, 'supersedes': row.supersedes_id,
+            'type': row.source_type, 'active': row.is_active, 'name_key': signature(row.original_text),
+            'quantity': str(row.quantity), 'relationship': row.metadata.get('relationship'),
+            'replaces': row.metadata.get('replaces_source_ids'),
+            'requirements_key': signature(row.requirements), 'review_count': len(row.metadata.get('review_history', []))}
+            for row in TenderSourceItem.objects.filter(tender=tender).order_by('pk')],
+        'working_rows': [{'id': row.pk, 'status': row.status, 'source_ids': list(row.source_items.values_list('pk', flat=True)),
+            'draft': row.provenance.get('draft')}
+            for row in TenderCommercialItem.objects.filter(tender=tender).order_by('pk')],
     }, ensure_ascii=False))
