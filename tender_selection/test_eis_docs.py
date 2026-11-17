@@ -46,6 +46,16 @@ class EisServiceResponseTests(SimpleTestCase):
             with self.assertRaisesMessage(eis_docs.EisDocsError, "не вернул архив"):
                 eis_docs.fetch_archive_urls("123")
 
+    def test_archive_url_is_xml_text_not_cdata_markup(self):
+        url = 'https://int.zakupki.gov.ru/archive.zip?a=1&b=2'
+        responses = [
+            '<response><archiveUrl><![CDATA[' + url + ']]></archiveUrl></response>',
+            '<response xmlns:e="urn:eis"><e:archiveUrl>\n ' + url.replace('&', '&amp;') + ' \n</e:archiveUrl></response>',
+        ]
+        for response in responses:
+            with self.subTest(response=response), patch.object(eis_docs, '_soap_call', return_value=response):
+                self.assertEqual(eis_docs.fetch_archive_urls('123'), [url])
+
     def test_malformed_response_reports_xml_failure(self):
         with patch.object(eis_docs, "_soap_call", return_value="not XML"):
             with self.assertRaisesMessage(eis_docs.EisDocsError, "некорректный XML"):

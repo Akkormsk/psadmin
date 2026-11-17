@@ -62,7 +62,6 @@ _ENVELOPE = """<?xml version="1.0" encoding="UTF-8"?>
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-_ARCHIVE_URL_RE = re.compile(r"<(?:\w+:)?archiveUrl>(.*?)</(?:\w+:)?archiveUrl>", re.S)
 _FAULT_RE = re.compile(r"<(?:\w+:)?faultstring>(.*?)</(?:\w+:)?faultstring>", re.S)
 _JUNK_RE = re.compile(r"[^a-zа-яё0-9]+", re.I)
 
@@ -141,7 +140,8 @@ def fetch_archive_urls(reestr_number: str, *, timeout: float = REQUEST_TIMEOUT) 
             detail = detail.replace(secret, "[скрыто]")
         code = fields.get("code", "")
         raise EisDocsError(f"ЕИС отклонил запрос документов (код {code}): {detail[:500]}")
-    urls = _ARCHIVE_URL_RE.findall(text)
+    urls = [node.text.strip() for node in root.iter()
+            if node.tag.rsplit("}", 1)[-1] == "archiveUrl" and node.text and node.text.strip()]
     if not urls:
         raise EisDocsError("ЕИС не вернул архив документов для этой закупки.")
     return urls
