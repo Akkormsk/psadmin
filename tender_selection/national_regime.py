@@ -12,7 +12,7 @@ LABELS = {"ban": ("red", "запрет", "Заказчик указал запр
           "restriction": ("yellow", "ограничение / подтверждение", "Заказчик указал ограничение или подтверждение происхождения/реестра."),
           "advantage": ("green", "преимущество", "Заказчик указал преимущество российским товарам."),
           "none": ("green", "без специальных требований", "Отсутствие специальных требований подтверждено источником."),
-          "unknown": ("gray", "требуется проверка", "Недостаточно подтверждённых сведений по этому товару.")}
+          "unknown": ("gray", "не указано", "В сохранённых сведениях требования по этому товару не указаны.")}
 
 
 def annotation(status="unknown", basis=None, description=None):
@@ -135,25 +135,71 @@ def tender_items(tender, card=None):
     return rows or [{"position": index, "name": item.get("name", "Товар"), "regime": item.get("national_regime") or annotation()} for index, item in enumerate(original)]
 
 
+def _national_review_complete(tender, assessment):
+    """Confirm saved coverage for current inputs; never run document processing."""
+    if assessment.get('stale') or assessment.get('degraded'):
+        return False
+    from .notification import parse_notification
+    if not parse_notification(tender.notification_raw or {}).get('documents'):
+        return False
+    from tenders.models import TenderComputeJob
+    from .services import _document_input_fingerprint
+    job = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
+    if job is None:
+        return False
+    diagnostics = job.diagnostics or {}
+    stages = diagnostics.get('stages') or {}
+    if any(stages.get(name, {}).get('state') != 'complete'
+           or stages.get(name, {}).get('outcome') == 'source_only'
+           for name in ('documents', 'national_regime')):
+        return False
+    if any(gap.get('stage') in {'documents', 'source_reading', 'source_binding', 'national_regime'}
+           for gap in diagnostics.get('analysis_gaps', [])):
+        return False
+    reading = diagnostics.get('source_reading') or {}
+    if reading and not reading.get('complete'):
+        return False
+    return diagnostics.get('document_input_fingerprint') == _document_input_fingerprint(tender)
+
+
 def risk_projection(tender, assessment=None, card=None):
     """Read-only overlay: no manual review decisions or accepted facts are rewritten."""
     data = deepcopy(assessment or {})
     items = tender_items(tender, card)
+    checked = _national_review_complete(tender, data)
+    missing = [item for item in items if item['regime']['status'] == 'unknown' and not item['regime'].get('basis')]
+    conflicts = [item for item in items if item['regime']['status'] == 'unknown' and item['regime'].get('basis')]
     factors = [factor for factor in (data.get("risk_factors") or []) if factor.get("code") != "national_regime" and not str(factor.get("code", "")).startswith("item_1875_")]
     from .models import FilterSettings
     levels = FilterSettings.objects.filter(pk=1).values_list("risk_factor_levels", flat=True).first() or {}
-    for status, code, level, caption in [("ban", "ban", levels.get("national_blocked", "high"), "Запрет заказчика"), ("restriction", "confirmation", levels.get("national_confirmation", "medium"), "Ограничение / подтверждение происхождения"), ("unknown", "unknown", "unknown", "1875 требует проверки")]:
+    for status, code, level, caption in [("ban", "ban", levels.get("national_blocked", "high"), "Запрет заказчика"), ("restriction", "confirmation", levels.get("national_confirmation", "medium"), "Ограничение / подтверждение происхождения")]:
         selected = [item for item in items if item["regime"]["status"] == status and (status == "unknown" or item["regime"].get("basis"))]
         if selected:
             factors.append({"code": "item_1875_" + code, "level": level, "text": caption + ": " + "; ".join(item["name"] for item in selected), "items": selected})
+    if conflicts:
+        factors.append({'code': 'item_1875_unknown', 'level': 'unknown',
+                        'text': 'Применимость требований 1875 требует уточнения: ' + '; '.join(item['name'] for item in conflicts),
+                        'items': conflicts})
     rank = {"low": 0, "unknown": 0, "medium": 1, "high": 2}
     severity = max((factor["level"] for factor in factors), key=lambda value: rank.get(value, 0), default="low")
-    if severity == "low" and (data.get('stale') or any(item["regime"]["status"] == "unknown" for item in items) or not items or str((data.get("risk_facts") or {}).get("documents_sufficient")).lower() != "true"):
+    if severity == "low" and (data.get('stale') or (conflicts or (missing and not checked)) or not items or str((data.get("risk_facts") or {}).get("documents_sufficient")).lower() != "true"):
         severity = "unknown"
     facts = deepcopy(data.get("risk_facts") or {})
     statuses = {item["regime"]["status"] for item in items}
     facts["national_regime"] = "blocked" if "ban" in statuses else "confirmation_required" if "restriction" in statuses else "unknown" if not statuses or "unknown" in statuses else "none"
     facts["national_regime_items"] = items
     data["risk_facts"] = facts
-    data.update(risk_factors=factors, risk_level=severity, national_regime="; ".join(item["name"] + " — " + item["regime"]["label"] for item in items) or "1875: требуется проверка")
+    labels = dict.fromkeys(item['regime']['label'].removeprefix('1875: ') for item in items if item['regime']['status'] != 'unknown')
+    summary = '; '.join(labels)
+    if missing or not items:
+        absence = ('Требования по ПП №1875 в проверенных материалах не указаны.' if checked
+                   else 'Сведения по ПП №1875 не указаны. Проверка документов не завершена.')
+        if summary:
+            absence = 'Для остальных товаров: ' + absence[0].lower() + absence[1:]
+        summary = (summary + '. ' if summary else '') + absence
+    if conflicts:
+        summary = (summary + ' ' if summary else '') + 'Есть сведения, требующие уточнения.'
+    data.update(risk_factors=factors, risk_level=severity, national_regime=summary,
+                national_regime_checked=checked)
+
     return data

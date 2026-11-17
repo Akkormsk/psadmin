@@ -8,7 +8,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
 django.setup()
 from django.db import connection, transaction
 from tender_selection.models import Tender
-from tender_selection.national_regime import tender_items
+from tender_selection.national_regime import tender_items, risk_projection
 from tenders.models import TenderComputeJob
 
 number = os.environ['INSPECT_TENDER_NUMBER']
@@ -24,7 +24,11 @@ with transaction.atomic():
     diagnostics = job.diagnostics if job else {}
     reading = diagnostics.get('source_reading') or {}
     risk = tender.risk_assessment or {}
+    projected = risk_projection(tender, risk)
     print(json.dumps({'number': number, 'regime_counts': dict(Counter(row['regime']['status'] for row in tender_items(tender))),
+        'national_summary': projected.get('national_regime'),
+        'national_checked': projected.get('national_regime_checked'),
+        'display_factor_codes': [row.get('code') for row in projected.get('risk_factors', [])],
         'risk_flags': {key: risk.get(key) for key in ('stale', 'preliminary', 'degraded')},
         'risk_documents_sufficient': (risk.get('risk_facts') or {}).get('documents_sufficient'),
         'risk_factor_codes': [row.get('code') for row in risk.get('risk_factors', [])],

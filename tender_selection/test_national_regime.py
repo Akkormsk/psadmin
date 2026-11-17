@@ -67,7 +67,7 @@ class ItemRiskTests(TestCase):
         review = self.tender.review
         result = risk_projection(self.tender, original)
         self.assertEqual(result["risk_level"], "high")
-        self.assertEqual({factor["code"] for factor in result["risk_factors"]}, {"item_1875_ban", "item_1875_confirmation", "item_1875_unknown"})
+        self.assertEqual({factor["code"] for factor in result["risk_factors"]}, {"item_1875_ban", "item_1875_confirmation"})
         ban = next(factor for factor in result["risk_factors"] if factor["code"] == "item_1875_ban")
         self.assertIn("Ручка", ban["text"])
         self.assertTrue(ban["items"][0]["regime"]["basis"])
@@ -80,6 +80,48 @@ class ItemRiskTests(TestCase):
         result = risk_projection(self.tender, {"risk_level": "high", "risk_facts": {"documents_sufficient": True}, "risk_factors": [{"code": "national_regime", "level": "high", "text": "Догадка по ОКПД2"}]})
         self.assertEqual(result["risk_level"], "unknown")
         self.assertFalse(any(factor["level"] in {"high", "medium"} for factor in result["risk_factors"]))
+
+    def test_checked_absence_is_one_quiet_summary_without_unknown_risk_factor(self):
+        from tenders.models import TenderComputeJob
+        from .services import _document_input_fingerprint
+        self.tender.notification_raw = {'source': {'notificationInfo': {'purchaseObjectsInfo': {
+            'notDrugPurchaseObjectsInfo': {'purchaseObject': [{'name': 'Блокнот'}, {'name': 'Ручка'}]}}}}}
+        self.tender.save(update_fields=['notification_raw'])
+        self.tender.notification_raw['source']['attachmentsInfo'] = {'attachmentInfo': [{'url': 'https://zakupki.gov.ru/spec', 'fileName': 'ТЗ.docx'}]}
+        self.tender.save(update_fields=['notification_raw'])
+        job = TenderComputeJob.objects.create(tender=self.tender, version='v2-intake', status='needs_review', diagnostics={
+            'document_input_fingerprint': _document_input_fingerprint(self.tender),
+            'stages': {'documents': {'state': 'complete'}, 'national_regime': {'state': 'complete'}},
+        })
+        result = risk_projection(self.tender, {'risk_facts': {'documents_sufficient': True}})
+        self.assertTrue(result['national_regime_checked'])
+        self.assertEqual(result['national_regime'], 'Требования по ПП №1875 в проверенных материалах не указаны.')
+        self.assertFalse(result['risk_factors'])
+        from django.template.loader import render_to_string
+        rendered = render_to_string('tender_selection/_risk_block.html', {'risk': result})
+        self.assertEqual(rendered.count('По товарам и источникам'), 1)
+        self.assertNotIn('требует проверки', rendered)
+        self.assertEqual(result['risk_level'], 'low')
+        self.assertTrue(all(item['regime']['status'] == 'unknown' for item in result['risk_facts']['national_regime_items']))
+        job.diagnostics['analysis_gaps'] = [{'stage': 'documents', 'reason': 'Файл недоступен'}]
+        job.save(update_fields=['diagnostics'])
+        incomplete = risk_projection(self.tender, {'risk_facts': {'documents_sufficient': True}})
+        self.assertFalse(incomplete['national_regime_checked'])
+        self.assertIn('Проверка документов не завершена', incomplete['national_regime'])
+        self.assertEqual(incomplete['risk_level'], 'unknown')
+        job.diagnostics.pop('analysis_gaps')
+        job.diagnostics['document_input_fingerprint'] = 'old-inputs'
+        job.save(update_fields=['diagnostics'])
+        self.assertFalse(risk_projection(self.tender)['national_regime_checked'])
+
+    def test_unknown_item_has_no_repeated_expander_but_conflicting_evidence_remains_visible(self):
+        from django.template.loader import render_to_string
+        from .national_regime import annotation
+        quiet = render_to_string('tender_selection/_1875.html', {'regime': annotation()})
+        self.assertNotIn('<details', quiet)
+        self.assertIn('1875: не указано', quiet)
+        conflict = render_to_string('tender_selection/_1875.html', {'regime': annotation(basis=[{'quote': 'Источники расходятся'}])})
+        self.assertIn('<details', conflict)
 
     def test_import_reuses_notice_and_keeps_previous_item_evidence(self):
         from tenders.calculation_v2_pipeline import ingest_source_items
@@ -218,7 +260,7 @@ class NationalReviewTests(TestCase):
             self.assertEqual(len(output), 1)
             self.assertEqual(gateway.call_count, 1)
             self.assertIn("response_contract", gateway.call_args.kwargs)
-        self.assertIn("1875: требуется проверка", self.parents[0].national_regime())
+        self.assertIn("1875: не указано", self.parents[0].national_regime())
 
     def test_card_renders_separate_item_statuses_and_exact_structured_evidence(self):
         from django.urls import reverse
@@ -239,7 +281,7 @@ class NationalReviewTests(TestCase):
         self.assertContains(response, "Запрет на иностранные товары: да")
         self.assertNotContains(response, "isProhibitionForeignPurchaseObjects")
         self.assertNotContains(response, "$.source.notificationInfo")
-        self.assertContains(response, "Товары и основания")
+        self.assertContains(response, "По товарам и источникам")
 
     def test_assistant_read_uses_same_item_evidence_service(self):
         from tenders.assistant_tools import execute_tool
