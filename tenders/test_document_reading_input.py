@@ -715,6 +715,32 @@ class ResilientIntakeTests(TestCase):
         self.assertEqual(result[0]['source'], 'notification')
         self.assertEqual(result[-1]['source'], 'document')
 
+    def test_empty_optional_document_value_keeps_extracted_value_and_checks_evidence(self):
+        # Real saved response shape: valid main value plus an empty optional field.
+        for empty in (None, '', [], {}):
+            with self.subTest(optional=empty):
+                rows = [{'key': self.good['key'], 'characteristics': [{
+                    'name': 'Цвет', 'value': 'синий', 'document_value': empty,
+                    'resolution': 'new', 'doc_id': 1, 'quote': 'Цвет синий'}]}]
+                result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+                self.assertIn(('Цвет', 'синий'), [(fact['name'], fact['value']) for fact in result])
+                self.assertFalse(self.engine.specification_gaps)
+                rows[0]['characteristics'][0]['quote'] = 'Несуществующая цитата'
+                result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+                self.assertNotIn('Цвет', [fact['name'] for fact in result])
+                self.assertTrue(self.engine.specification_gaps)
+
+    def test_explicit_document_value_preserves_zero_and_false(self):
+        for value, quote in ((0, '0'), (False, 'False'), ('синий', 'синий')):
+            with self.subTest(value=value):
+                self.engine.document_lookup[1]['evidence_text'] = quote
+                rows = [{'key': self.good['key'], 'characteristics': [{
+                    'name': 'Признак', 'value': 'другое значение', 'document_value': value,
+                    'resolution': 'new', 'doc_id': 1, 'quote': quote}]}]
+                result = self.engine.reconcile_specifications(rows, [self.good])[self.good['key']]['characteristics']
+                self.assertTrue(any(fact['name'] == 'Признак' and fact['value'] == value for fact in result))
+                self.assertFalse(self.engine.specification_gaps)
+
     def test_no_model_additions_retains_every_original_fact(self):
         result = self.engine.reconcile_specifications([], [self.good])[self.good['key']]
         self.assertEqual(len(result['characteristics']), 2)

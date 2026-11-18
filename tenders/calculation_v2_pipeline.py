@@ -1358,8 +1358,14 @@ class GatewayDocumentEnricher:
                     documented = [entry for entry in (fact.get('document_facts') or [])
                                   if isinstance(entry, dict) and (entry.get('fragment_id') or entry.get('doc_id') is not None)]
                     if not documented and (fact.get('fragment_id') or fact.get('doc_id') is not None):
+                        # Optional response fields may be present but empty. Only a
+                        # supplied document value overrides the main value; zero and
+                        # False are real values. Evidence validation still runs below.
+                        document_value = fact.get('document_value')
+                        if document_value in (None, '', [], {}):
+                            document_value = fact.get('value')
                         documented = [{'doc_id': fact.get('doc_id'), 'fragment_id': fact.get('fragment_id'), 'quote': fact.get('quote'),
-                                       'section': fact.get('section'), 'value': fact.get('document_value', fact.get('value'))}]
+                                       'section': fact.get('section'), 'value': document_value}]
                     if not documented and fact.get('resolution') not in {'keep', 'omit'}:
                         self.specification_gaps.append(self.specification_gap(good, fact, 'Дополнение не подтверждено документом; исходные сведения сохранены.'))
                     for entry in documented:

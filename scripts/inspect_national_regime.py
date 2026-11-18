@@ -49,7 +49,27 @@ with transaction.atomic():
             'accept_button': 'Принять все правки' in html,
             'technical_quote_warning': 'Цитата отсутствует в выбранном фрагменте источника' in html,
             'visible_issues': context.get('analysis_issues')}
-    print(json.dumps({'number': number, 'review_view': review_view, 'regime_counts': dict(Counter(row['regime']['status'] for row in tender_items(tender))),
+    # Replay saved model output through the real validators, without applying it.
+    from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality
+    from tenders.source_memory import SourceMemory, document_blocks
+    structure = diagnostics.get('stages', {}).get('structure', {}).get('result') or []
+    saved_tz = diagnostics.get('stages', {}).get('tz', {}).get('result') or []
+    replay = {'available': bool(structure and saved_tz)}
+    if replay['available']:
+        sources = list(TenderSourceItem.objects.filter(tender=tender, pk__in=[row['source_id'] for row in structure]))
+        engine = GatewayDocumentEnricher()
+        with patch('tender_selection.services.documents_html'), \
+             patch('socket.socket.connect', side_effect=AssertionError('Read-only replay attempted network')), \
+             patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Read-only replay attempted AI')):
+            engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+            memory = SourceMemory(document_blocks(engine.document_lookup, engine.document_images), [], engine.model)
+            engine.source_fragments = {key: {'doc_id': block['doc_id'], 'text': block['text'], 'section': block['location'],
+                **({'visual': True} if block.get('image_index') else {})} for key, block in memory.blocks.items()}
+            goods = engine.reconcile_structure(structure)
+            compiled = engine.reconcile_specifications(saved_tz, goods)
+            replay.update(structure_gaps=engine.validation_gaps, specification_gaps=engine.specification_gaps,
+                items=[{'name': good['name'], 'characteristics': compiled[good['key']]['characteristics']} for good in goods])
+    print(json.dumps({'number': number, 'saved_specification_replay': replay, 'review_view': review_view, 'regime_counts': dict(Counter(row['regime']['status'] for row in tender_items(tender))),
         'national_summary': projected.get('national_regime'),
         'national_checked': projected.get('national_regime_checked'),
         'display_factor_codes': [row.get('code') for row in projected.get('risk_factors', [])],
