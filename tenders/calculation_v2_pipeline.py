@@ -2387,7 +2387,7 @@ def _commercial_requirements(source: TenderSourceItem) -> dict:
 
 
 def routing_source_items(tender, *, include_proposals=False):
-    """Route accepted goods; profile checks may explicitly inspect proposed goods."""
+    """Select accepted goods or the complete proposed composition for preparation."""
     from .document_enrichment import document_proposal_changes
     active = active_calculation_items(tender)
     if not include_proposals:
@@ -2587,9 +2587,9 @@ def _saved_route_decision(component_id, plan):
         tuple(data.get('missing_requirement_names', [])), tuple(data.get('choices', [])), data.get('selected_choice', ''))
 
 
-def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=None) -> list[RouteDecision]:
+def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=None, include_proposals=False) -> list[RouteDecision]:
     if _items is None:
-        commercials = build_commercial_items(job)
+        commercials = build_commercial_items(job, sources=routing_source_items(job.tender, include_proposals=include_proposals))
         items = list(CalculationComponent.objects.filter(commercial_item__in=commercials, status="active").select_related("commercial_item", "source_item").order_by("commercial_item_id", "sort_order", "pk"))
     else:
         items = _items
@@ -2600,13 +2600,23 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
     knowledge = _knowledge_for([])
     fingerprints = {item.pk: source_route_fingerprint(item.source_item, processes, knowledge, answers[item.source_item_id]) for item in items}
     plans = {plan.component_id: plan for plan in ComponentRoutePlan.objects.filter(component__in=items, scope="component").prefetch_related("steps").order_by('pk')}
-    cached, pending = [], []
+    # Acceptance may keep the existing working good rather than its draft.
+    # Reuse the draft decision only after the normal full-input check.
+    draft_plans = {(plan.component.source_item_id, plan.metadata.get('input_fingerprint')): plan
+        for plan in ComponentRoutePlan.objects.filter(
+            component__source_item_id__in=[item.source_item_id for item in items], scope='component',
+            commercial_item__provenance__draft=True, commercial_item__status__in=['draft', 'superseded'],
+            status__in=['planned', 'ready', 'needs_review']).select_related('component').prefetch_related('steps').order_by('pk')}
+    cached, pending, reused_decisions = [], [], []
     for item in items:
         plan = plans.get(item.pk)
         if plan and plan.metadata.get("input_fingerprint") == fingerprints[item.pk] and plan.status in {"planned", "ready", "needs_review"}:
             cached.append(_saved_route_decision(item.pk, plan))
+        elif item.source_item.is_active and (draft := draft_plans.get((item.source_item_id, fingerprints[item.pk]))):
+            reused_decisions.append(_saved_route_decision(item.pk, draft))
         else:
             pending.append(item)
+    provider_work = bool(pending and processes)
     if pending and processes:
         # Reuse only when every input actually sent to the router is identical.
         # Quantity and owner decisions remain part of the key; names alone are
@@ -2643,7 +2653,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
             for batch in (pending[:middle], pending[middle:]):
                 child = GatewayBatchRouter(model=router.model, max_cost_rub=max(Decimal('0'), router.max_cost_rub - costs))
                 try:
-                    fresh.extend(route_tender_batch(job, child, _items=batch))
+                    fresh.extend(route_tender_batch(job, child, _items=batch, include_proposals=include_proposals))
                 finally:
                     costs += Decimal(str(child.cost_rub or 0))
                     add_usage(usage, child.usage)
@@ -2666,11 +2676,12 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
         fresh = [RouteDecision(item.pk, (), Decimal("0"), {"reason": "Нет активных этапов производства"}, True, "Добавьте доступные этапы в базу производства.") for item in pending]
     if len(fresh) != len(pending) or {decision.component_id for decision in fresh} != {item.pk for item in pending}:
         raise ValueError("Batch router must return exactly one decision per calculation component")
+    fresh.extend(reused_decisions)
     with transaction.atomic():
         Tender.objects.select_for_update().get(pk=job.tender_id)
         current_processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
         current_knowledge = _knowledge_for([])
-        current_sources = {source.pk: source for source in routing_source_items(job.tender)}
+        current_sources = {source.pk: source for source in routing_source_items(job.tender, include_proposals=include_proposals)}
         current_answers = _route_owner_answer_map(current_sources.values())
         completed_lines = {line.component_id: line for line in job.lines.filter(component__in=items).exclude(result={})}
         for item in items:
@@ -2680,7 +2691,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
             saved_line = completed_lines.get(item.pk)
             if saved_line and saved_line.input_snapshot.get('input_fingerprint') != fingerprints[item.pk]:
                 raise ValueError('В задании уже сохранён расчёт по прежним требованиям; создайте новое обновление.')
-        job.diagnostics.update(routing_reused_count=len(cached), routing_batch_count=getattr(router, 'diagnostics', {}).get('provider_batch_count', 1 if pending and processes else 0))
+        job.diagnostics.update(routing_reused_count=len(cached) + len(reused_decisions), routing_batch_count=getattr(router, 'diagnostics', {}).get('provider_batch_count', 1 if provider_work else 0))
         decisions = cached + fresh
         cached_ids = {decision.component_id for decision in cached}
         by_item = {decision.component_id: decision for decision in decisions}

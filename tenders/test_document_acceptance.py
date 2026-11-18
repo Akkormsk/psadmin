@@ -283,17 +283,17 @@ class AcceptedRoutingFlowTests(TransactionTestCase):
         job.refresh_from_db()
         return job
 
-    def test_pending_tz_waits_then_acceptance_routes_once_and_update_reuses(self):
+    def test_pending_tz_routes_before_acceptance_then_reuses(self):
         from unittest.mock import patch
         from django.urls import reverse
         from .models import ComponentRoutePlan
         proposal = self.stage([self.row(self.parents[0])])['created'][0]
         router = self.router()
         waiting = self.run_routes(router)
-        router.route.assert_not_called()
+        router.route.assert_called_once()
         self.assertEqual(waiting.status, 'needs_review')
-        self.assertEqual(waiting.diagnostics['stages']['routing']['outcome'], 'awaiting_review')
-        self.assertFalse(TenderCommercialItem.objects.filter(source_items=proposal).exists())
+        self.assertEqual(waiting.diagnostics['stages']['routing']['state'], 'complete')
+        self.assertTrue(TenderCommercialItem.objects.filter(source_items=proposal, status='draft').exists())
         response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'})
         self.assertNotContains(response, f'data-route-source="{proposal.pk}"')
         with patch('tender_selection.services.refresh_document_analysis') as scheduled:
@@ -308,7 +308,7 @@ class AcceptedRoutingFlowTests(TransactionTestCase):
         self.assertEqual(list(ComponentRoutePlan.objects.values_list('pk', flat=True)), plans)
         self.assertFalse(self.tender.estimates.exists())
 
-    def test_full_refresh_with_pending_tz_defers_routes_without_draft_goods(self):
+    def test_full_refresh_builds_draft_routes_before_review(self):
         from unittest.mock import Mock, patch
         from tender_selection.services import _run_document_analysis
         proposal = self.stage([self.row(self.parents[0])])['created'][0]
@@ -319,9 +319,61 @@ class AcceptedRoutingFlowTests(TransactionTestCase):
             _run_document_analysis(job.pk, enricher=Mock(cost_rub=0, diagnostics={}), router=router)
         job.refresh_from_db()
         self.assertEqual(job.status, 'needs_review')
-        self.assertEqual(job.diagnostics['stages']['routing']['outcome'], 'awaiting_review')
-        router.route.assert_not_called()
-        self.assertFalse(TenderCommercialItem.objects.filter(source_items=proposal).exists())
+        self.assertEqual(job.diagnostics['stages']['routing']['state'], 'complete')
+        router.route.assert_called_once()
+        self.assertTrue(TenderCommercialItem.objects.filter(source_items=proposal, status='draft').exists())
+
+    def test_preliminary_routes_preserve_accepted_routes_and_accept_without_model_repeat(self):
+        from .calculation_v2_pipeline import source_route_snapshots
+        router = self.router()
+        self.run_routes(router)
+        original = source_route_snapshots(self.tender)
+        parent = self.parents[0]
+        good = TenderCommercialItem.objects.get(source_items=parent, status='active')
+        proposal = self.stage([self.row(parent, relationship='enrich', quantity=parent.quantity,
+            name='Уточнённый товар')])['created'][0]
+        self.run_routes(router)
+        current = source_route_snapshots(self.tender)
+        self.assertEqual({key: (row['plan_id'], row['steps'], row['state']) for key, row in current.items()},
+            {key: (row['plan_id'], row['steps'], row['state']) for key, row in original.items()})
+        self.assertEqual(router.route.call_count, 2)
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        good.refresh_from_db()
+        self.assertEqual(good.status, 'active')
+        self.assertEqual(list(good.source_items.values_list('pk', flat=True)), [proposal.pk])
+        self.run_routes(router)
+        self.assertEqual(router.route.call_count, 2)
+        self.assertEqual(source_route_snapshots(self.tender)[proposal.pk]['state'], 'ready')
+
+    def test_reject_keeps_accepted_route_and_does_not_call_router_again(self):
+        from .calculation_v2_pipeline import source_route_snapshots
+        router = self.router()
+        self.run_routes(router)
+        original = source_route_snapshots(self.tender)
+        parent = self.parents[0]
+        proposal = self.stage([self.row(parent, relationship='enrich', quantity=parent.quantity,
+            name='Уточнённый товар')])['created'][0]
+        self.run_routes(router)
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'reject', schedule_routes=False)
+        self.run_routes(router)
+        self.assertEqual(router.route.call_count, 2)
+        self.assertEqual(source_route_snapshots(self.tender), original)
+        self.assertEqual(TenderCommercialItem.objects.get(source_items=proposal).status, 'rejected')
+
+    def test_edit_rebuilds_only_changed_proposal_route(self):
+        router = self.router()
+        proposals = self.stage([self.row(parent) for parent in self.parents])['created']
+        self.run_routes(router)
+        proposal = proposals[0]
+        proposal.original_text = 'Изделие после корректировки'
+        proposal.save(update_fields=['original_text'])
+        self.run_routes(router)
+        self.assertEqual(router.route.call_count, 2)
+        self.assertEqual([item.source_item_id for item in router.route.call_args.kwargs['items']], [proposal.pk])
+        for parent in self.parents:
+            decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        self.run_routes(router)
+        self.assertEqual(router.route.call_count, 2)
 
     def test_legacy_route_for_exact_proposal_survives_promotion(self):
         from .models import ComponentRoutePlan, ComponentOperationStep

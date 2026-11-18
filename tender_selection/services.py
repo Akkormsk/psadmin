@@ -2637,20 +2637,13 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         from tenders.document_enrichment import document_proposal_changes
         pending_proposals = any(document_proposal_changes(item) for item in
             TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).select_related("parent"))
-        if pending_proposals:
-            # A draft specification is not an instruction to manufacture it.
-            # Acceptance schedules the existing routes-only job for accepted data.
-            job.status = 'needs_review'
-            job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'pending', 'cost_rub': '0', 'outcome': 'awaiting_review'}
-            job.diagnostics['refresh'] = {'stage': 'complete', 'label': 'ТЗ ожидает согласования · маршруты после принятия', 'warnings': warnings}
-            return job
         _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
         route_cap = max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)))
         router = router or GatewayBatchRouter(**({'max_cost_rub': route_cap} if route_cap is not None else {}))
         routing_started = timezone.now()
         from tenders.services import TenderAIError
         try:
-            decisions = route_tender_batch(job, router)
+            decisions = route_tender_batch(job, router, include_proposals=pending_proposals)
         except (ValueError, TenderAIError) as exc:
             decisions = []
             job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing',
