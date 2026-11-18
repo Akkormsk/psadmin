@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 
 from tender_selection.services import decide_document_proposals
 from . import test_document_components as fixtures
@@ -261,7 +261,7 @@ class DocumentRepeatSmokeTests(DocumentAcceptanceSmokeTests):
         self.assertEqual(old.source_type, 'document_superseded')
 
 
-class AcceptedRoutingFlowTests(TestCase):
+class AcceptedRoutingFlowTests(TransactionTestCase):
     setUp = fixtures.DocumentComponentAcceptanceTests.setUp
     row = fixtures.DocumentComponentAcceptanceTests.row
     stage = fixtures.DocumentComponentAcceptanceTests.stage
@@ -296,7 +296,7 @@ class AcceptedRoutingFlowTests(TestCase):
         self.assertFalse(TenderCommercialItem.objects.filter(source_items=proposal).exists())
         response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'})
         self.assertNotContains(response, f'data-route-source="{proposal.pk}"')
-        with patch('tender_selection.services.refresh_document_analysis') as scheduled, self.captureOnCommitCallbacks(execute=True):
+        with patch('tender_selection.services.refresh_document_analysis') as scheduled:
             decide_document_proposals(self.admin, self.tender.pk, self.parents[0].pk, 'accept')
         scheduled.assert_called_once_with(self.admin, self.tender.pk, routes_only=True)
         first = self.run_routes(router)
@@ -307,6 +307,21 @@ class AcceptedRoutingFlowTests(TestCase):
         self.assertEqual(router.route.call_count, 1)
         self.assertEqual(list(ComponentRoutePlan.objects.values_list('pk', flat=True)), plans)
         self.assertFalse(self.tender.estimates.exists())
+
+    def test_full_refresh_with_pending_tz_defers_routes_without_draft_goods(self):
+        from unittest.mock import Mock, patch
+        from tender_selection.services import _run_document_analysis
+        proposal = self.stage([self.row(self.parents[0])])['created'][0]
+        router = self.router()
+        job = TenderComputeJob.objects.create(tender=self.tender, version='v2-intake-refresh',
+            trigger='manual_document_refresh', status='queued', diagnostics={})
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services._refresh_intake_profile'), patch('tenders.calculation_v2_pipeline.enrich_suspicious_tender', return_value={'created': [proposal], 'state': 'needs_review', 'diagnostics': []}):
+            _run_document_analysis(job.pk, enricher=Mock(cost_rub=0, diagnostics={}), router=router)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'needs_review')
+        self.assertEqual(job.diagnostics['stages']['routing']['outcome'], 'awaiting_review')
+        router.route.assert_not_called()
+        self.assertFalse(TenderCommercialItem.objects.filter(source_items=proposal).exists())
 
     def test_legacy_route_for_exact_proposal_survives_promotion(self):
         from .models import ComponentRoutePlan, ComponentOperationStep
