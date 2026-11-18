@@ -325,3 +325,30 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
   .ts-tabs [role="tab"] { flex:0 0 auto; padding:13px 12px 11px; font-size:13px; }
   .ts-tab-panel { padding:16px; }
 }
+
+.ts-products-workspace { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,0fr); transition:grid-template-columns .2s ease; }
+.ts-products-workspace.has-selection { grid-template-columns:minmax(0,1fr) minmax(0,2fr); }
+.ts-products-list,.ts-product-inspector { min-width:0; }
+.ts-product-inspector { padding-left:22px; margin-left:18px; border-left:1px solid var(--separator); }
+.ts-product-content[hidden],.ts-product-inspector[hidden] { display:none!important; }
+.ts-product-select { display:flex; align-items:center; gap:14px; width:100%; padding:14px 8px; border:0; border-bottom:1px solid var(--separator); border-radius:0; background:transparent; color:var(--ink); text-align:left; font:inherit; cursor:pointer; }
+.ts-product-select > span:first-child { flex:1; min-width:0; overflow-wrap:anywhere; }
+.ts-product-select small { display:block; color:var(--ink-3); }
+.ts-product-select[aria-expanded="true"] { background:var(--tint-neutral); }
+.ts-product-list-regime,.ts-product-list-price { color:var(--ink-2); font-size:12px; }
+.has-selection .ts-product-list-regime,.has-selection .ts-product-list-price { display:none; }
+.ts-products-children { margin-left:18px; padding-left:10px; border-left:1px solid var(--separator); }
+.ts-products-group { margin-top:14px; }
+.ts-product-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.ts-product-heading h3 { margin:0; }
+.ts-product-component { display:block; width:100%; padding:10px 0; background:transparent; border:0; border-bottom:1px solid var(--separator); text-align:left; color:var(--ink); cursor:pointer; }
+.ts-product-content > strong { display:none; }
+.ts-product-content .ts-item-tools { display:block; }
+.ts-product-content .ts-item-tz { margin:16px 0; }
+@media(max-width:650px) {
+  .ts-products-workspace,.ts-products-workspace.has-selection { display:block; }
+  .ts-products-workspace.has-selection > .ts-products-list { display:none; }
+  .ts-product-inspector { padding:0; margin:0; border:0; }
+  .ts-product-list-regime,.ts-product-list-price { display:none; }
+}
+@media(prefers-reduced-motion:reduce) { .ts-products-workspace { transition:none; } }
