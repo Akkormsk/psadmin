@@ -60,7 +60,7 @@ with transaction.atomic():
         'stages': {key: {field: stage.get(field) for field in ('state', 'outcome')} for key, stage in diagnostics.get('stages', {}).items()},
         'gap_stages': [row.get('stage') for row in diagnostics.get('analysis_gaps', [])],
         'gap_details': diagnostics.get('analysis_gaps', []),
-        'tz_rejected_candidates': [{'key': row.get('key'), 'facts': [fact for fact in row.get('document_facts', []) if isinstance(fact, dict) and fact.get('name') in {gap.get('name') for gap in diagnostics.get('analysis_gaps', [])}]} for row in (diagnostics.get('stages', {}).get('tz', {}).get('result') or []) if isinstance(row, dict)],
+        'tz_rejected_candidates': [{'key': row.get('key'), 'facts': [fact for fact in row.get('characteristics', []) if isinstance(fact, dict) and fact.get('name') in {gap.get('name') for gap in diagnostics.get('analysis_gaps', [])}]} for row in (diagnostics.get('stages', {}).get('tz', {}).get('result') or []) if isinstance(row, dict)],
         'reading_counts': {key: reading.get(key) for key in ('read', 'total', 'complete', 'storage')},
         'reading_keys': list(reading),
         'source_rows': [{'id': row.pk, 'parent': row.parent_id, 'supersedes': row.supersedes_id,
