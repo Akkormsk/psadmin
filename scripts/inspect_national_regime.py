@@ -27,7 +27,28 @@ with transaction.atomic():
     reading = diagnostics.get('source_reading') or {}
     risk = tender.risk_assessment or {}
     projected = risk_projection(tender, risk)
-    print(json.dumps({'number': number, 'regime_counts': dict(Counter(row['regime']['status'] for row in tender_items(tender))),
+    from django.contrib.auth import get_user_model
+    from django.test import RequestFactory
+    from django.urls import reverse
+    from django.shortcuts import render
+    from unittest.mock import patch
+    from tender_selection.views import tender_detail
+    owner = get_user_model().objects.filter(is_superuser=True, is_active=True).order_by('pk').first()
+    request = RequestFactory().get(reverse('tender_selection:detail', args=[tender.pk]),
+        {'workspace': '1', 'analysis_snapshot': '1', 'full_card': '1'}, secure=True, HTTP_HOST='test.admin.psodin.ru')
+    request.user, request.session = owner, {}
+    with patch('tender_selection.views.notification_for', side_effect=AssertionError('Snapshot attempted notice fetch')), \
+         patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Snapshot attempted AI')), \
+         patch('tender_selection.views.render', wraps=render) as rendered:
+        response = tender_detail(request, tender.pk)
+        context = rendered.call_args.args[2]
+        html = response.content.decode()
+        review_view = {'http': response.status_code, 'accepted_items': len(context.get('display_items') or []),
+            'needs_refresh': context.get('document_review_needs_refresh'),
+            'accept_button': 'Принять все правки' in html,
+            'technical_quote_warning': 'Цитата отсутствует в выбранном фрагменте источника' in html,
+            'visible_issues': context.get('analysis_issues')}
+    print(json.dumps({'number': number, 'review_view': review_view, 'regime_counts': dict(Counter(row['regime']['status'] for row in tender_items(tender))),
         'national_summary': projected.get('national_regime'),
         'national_checked': projected.get('national_regime_checked'),
         'display_factor_codes': [row.get('code') for row in projected.get('risk_factors', [])],
