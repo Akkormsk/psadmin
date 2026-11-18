@@ -191,7 +191,7 @@ body.workspace-embedded .ts-detail--document > .ts-sheet {
   background: var(--surface);
   box-shadow: none;
 }
-body.workspace-embedded .ts-detail--document > details.panel {
+body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel {
   margin: 0 !important;
   padding: 0 clamp(20px, 4vw, 44px) 22px;
   border: 0;
@@ -200,18 +200,18 @@ body.workspace-embedded .ts-detail--document > details.panel {
   background: var(--surface);
   box-shadow: none;
 }
-body.workspace-embedded .ts-detail--document > details.panel > summary.panel-header {
+body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel > summary.panel-header {
   min-height: 70px;
   margin: 0;
   padding: 0;
 }
-body.workspace-embedded .ts-detail--document > details.panel[open] > summary.panel-header {
+body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel[open] > summary.panel-header {
   margin-bottom: 18px;
 }
-body.workspace-embedded .ts-detail--document > details.panel > :not(summary) {
+body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel > :not(summary) {
   margin-bottom: 0;
 }
-body.workspace-embedded .ts-detail--document > details.panel[open] > :last-child {
+body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel[open] > :last-child {
   padding-bottom: 2px;
 }
 body.workspace-embedded .ts-detail--document .ts-detail__head .panel-title {
@@ -225,10 +225,10 @@ body.workspace-embedded .ts-detail--document .ts-linkchip {
   body.workspace-embedded .ts-detail--document > .ts-sheet {
     padding-top: 20px;
   }
-  body.workspace-embedded .ts-detail--document > details.panel > summary.panel-header {
+  body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel > summary.panel-header {
     min-height: 62px;
   }
-  body.workspace-embedded .ts-detail--document > details.panel > summary.panel-header .panel-title {
+  body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel > summary.panel-header .panel-title {
     font-size: 16px;
   }
 }
@@ -308,3 +308,20 @@ body.workspace-embedded .ts-detail--document .ts-linkchip {
 .item-route-assumption summary { cursor:pointer; font-weight:600; color:var(--ink-2); }
 .item-route-assumption form { margin-top:12px; }
 .item-route-assumption textarea { width:100%; box-sizing:border-box; margin-bottom:8px; }
+
+/* Tender sections share the existing card surface and palette. */
+.ts-detail > .ts-tabs-workspace { margin-top:14px; padding:0; overflow:hidden; }
+.ts-tabs { display:flex; overflow-x:auto; border-bottom:1px solid var(--separator); padding:0 16px; }
+.ts-tabs [role="tab"] { flex:1 0 auto; white-space:nowrap; padding:15px 18px 12px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--ink-2); font:inherit; cursor:pointer; }
+.ts-tabs [aria-selected="true"] { color:var(--ink); font-weight:650; border-bottom-color:var(--positive-ink); }
+.ts-tab-panel { padding:22px; min-width:0; }
+.ts-tab-panel[hidden] { display:none !important; }
+.ts-detail .ts-tab-panel > .panel { margin:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.ts-detail .ts-tab-panel > .panel + .panel { margin-top:18px; padding-top:18px; border-top:1px solid var(--separator); }
+body.workspace-embedded .ts-detail--document > .ts-tabs-workspace { margin:0; border:0; border-radius:0; box-shadow:none; background:var(--surface); }
+body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { padding:0; border-bottom:0; }
+@media (max-width:700px) {
+  .ts-tabs { padding:0 7px; }
+  .ts-tabs [role="tab"] { flex:0 0 auto; padding:13px 12px 11px; font-size:13px; }
+  .ts-tab-panel { padding:16px; }
+}
