@@ -13,6 +13,7 @@ from tenders.models import TenderComputeJob, TenderSourceItem, TenderCommercialI
 from tenders.source_memory import signature
 from tenders.document_enrichment import document_proposal_changes
 
+print('Read-only tender inspection started', flush=True)
 number = os.environ['INSPECT_TENDER_NUMBER']
 if len(number) != 19 or not number.isascii() or not number.isdigit():
     raise ValueError('Expected one purchase number')
@@ -49,6 +50,7 @@ with transaction.atomic():
             'accept_button': 'Принять все правки' in html,
             'technical_quote_warning': 'Цитата отсутствует в выбранном фрагменте источника' in html,
             'visible_issues': context.get('analysis_issues')}
+    print('Saved card inspected; replaying specifications', flush=True)
     # Replay saved model output through the real validators, without applying it.
     from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality
     from tenders.source_memory import SourceMemory, document_blocks
@@ -69,6 +71,7 @@ with transaction.atomic():
             compiled = engine.reconcile_specifications(saved_tz, goods)
             replay.update(structure_gaps=engine.validation_gaps, specification_gaps=engine.specification_gaps,
                 items=[{'name': good['name'], 'characteristics': compiled[good['key']]['characteristics']} for good in goods])
+    print(json.dumps({'replay_summary': {'available': replay['available'], 'structure_gaps': replay.get('structure_gaps'), 'specification_gaps': replay.get('specification_gaps'), 'items': [{'name': item['name'], 'fact_count': len(item['characteristics'])} for item in replay.get('items', [])]}}, ensure_ascii=False), flush=True)
     print(json.dumps({'number': number, 'saved_specification_replay': replay, 'review_view': review_view, 'regime_counts': dict(Counter(row['regime']['status'] for row in tender_items(tender))),
         'national_summary': projected.get('national_regime'),
         'national_checked': projected.get('national_regime_checked'),
