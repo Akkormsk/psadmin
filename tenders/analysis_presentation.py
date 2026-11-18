@@ -95,7 +95,7 @@ def _job_analysis_cost(job) -> dict:
 _STATUS = {
     "NOT_CHECKED": ("Не проверено", "not-checked"),
     "PROCESSING": ("Проверяем ТЗ…", "processing"),
-    "CHECKED_NO_CHANGES": ("ТЗ проверено", "checked"),
+    "CHECKED_NO_CHANGES": ("Разбор завершён", "checked"),
     "ENRICHED": ("Позиции уточнены по ТЗ", "enriched"),
     "NEEDS_OWNER_INPUT": ("Нужно уточнить", "review"),
     "ANALYSIS_INCOMPLETE": ("Проверка ТЗ не завершена", "incomplete"),
@@ -298,3 +298,62 @@ def resolve_tender_analysis_statuses(tenders) -> dict[int, TenderAnalysisStatus]
     from .document_enrichment import document_proposal_changes
     pending = Counter(item.tender_id for item in TenderSourceItem.objects.filter(tender_id__in=ids, source_type="document_proposal", is_active=False).select_related("parent") if document_proposal_changes(item))
     return {tender.pk: _status_for(tender, jobs.get(tender.pk), counts[tender.pk], tender.pk in enriched_ids, pending[tender.pk]) for tender in tenders}
+
+
+def specification_status(tender, *, job=None):
+    """Read-only coverage of available specifications, independent of UI diagnostics and routes."""
+    from tender_selection.notification import parse_notification
+    from tender_selection.services import _document_input_fingerprint
+    if job is None:
+        job = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
+    def result(state, details):
+        labels = {'original': 'ТЗ исходное', 'partial': 'ТЗ частичное', 'checked': 'ТЗ проверено'}
+        return {'state': state, 'label': labels[state], 'details': list(dict.fromkeys(details))}
+    if job is None:
+        return result('original', ['Доступны исходные сведения и файлы. Проверку можно запустить кнопкой «Обновить».'])
+    diagnostics, details = job.diagnostics or {}, []
+    stages = diagnostics.get('stages') or {}
+    relevant = {'notification', 'documents', 'source_reading', 'source_binding', 'structure', 'tz', 'national_regime'}
+    for gap in diagnostics.get('analysis_gaps', []):
+        stage = gap.get('stage')
+        if stage not in relevant or gap.get('affects_specification') is False:
+            continue
+        if stage == 'tz' and gap.get('name'):
+            item = f'Товар «{gap["item_name"]}»: ' if gap.get('item_name') else ''
+            details.append(f'{item}не удалось подтвердить характеристику «{gap["name"]}». Известные сведения сохранены.')
+        elif stage == 'documents':
+            name = f' «{gap["name"]}»' if gap.get('name') else ''
+            details.append('Документ' + name + ' прочитан не полностью. Можно продолжить с полученными сведениями.')
+        elif stage == 'structure':
+            details.append('Состав части товаров требует уточнения.')
+        elif stage == 'national_regime':
+            details.append('Часть сведений о требованиях заказчика не удалось проверить.')
+        else:
+            details.append('Часть сведений ТЗ не прочитана или не привязана к товарам. Можно продолжить с имеющимися данными.')
+    if any(name in stages and (stages[name].get('state') != 'complete' or stages[name].get('outcome') == 'source_only')
+           for name in ('source_reading', 'source_binding', 'national_regime')):
+        details.append('Часть проверки сведений ТЗ не завершена. Уже полученные данные доступны.')
+    if diagnostics.get('structure_requires_review'):
+        details.append('Состав части товаров требует уточнения.')
+    reading = diagnostics.get('source_reading') or {}
+    if reading and not reading.get('complete'):
+        details.append('Документы прочитаны не полностью. Уже полученные сведения сохранены.')
+    if not reading:
+        prepared = (stages.get('documents') or {}).get('result')
+        considered = prepared.get('documents', []) if isinstance(prepared, dict) else []
+        if not considered or any(document.get('reading_status') != 'read' for document in considered):
+            details.append('Полнота чтения документов пока не подтверждена. Уже полученные сведения доступны.')
+    required = ('documents', 'structure', 'tz')
+    completed = all(stages.get(name, {}).get('state') == 'complete'
+                    and stages[name].get('outcome') != 'source_only' for name in required)
+    if not completed:
+        if not stages and not job.error and job.status in _ACTIVE and not TenderComputeJob.objects.filter(tender=tender, pk__lt=job.pk).exists():
+            return result('original', ['Проверка выполняется. Пока доступны исходные сведения и файлы.'])
+        details.append('Проверка ТЗ не завершена. Прежние данные доступны; повторить проверку можно кнопкой «Обновить».')
+    if not parse_notification(tender.notification_raw or {}).get('documents'):
+        details.append('Документы для проверки ТЗ ещё не получены.')
+    if completed and not details and diagnostics.get('document_input_fingerprint') != _document_input_fingerprint(tender):
+        details.append('Исходные сведения изменились после проверки. Уже полученное ТЗ сохранено; его можно обновить.')
+    if details:
+        return result('partial', details)
+    return result('checked', ['Доступные материалы проверены. Значимых пропусков разбора не обнаружено. Статус не заменяет согласование предложенных правок.'])

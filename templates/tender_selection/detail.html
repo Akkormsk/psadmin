@@ -32,10 +32,14 @@
           <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button></span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
         </p>
+        <div class="ts-refresh-actions">
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Обновить данные, ТЗ, требования 1875 и маршруты в фоне">↻ Обновить</button></form>{% endif %}
+        <details class="ts-specification" data-specification-status="{{ tender.pk }}" data-specification-state="{{ specification_status.state }}">
+          <summary title="Подробности о полноте ТЗ"><span class="ts-specification__dot" aria-hidden="true"></span><span data-specification-label>{{ specification_status.label }}</span></summary>
+          <div class="ts-specification__details"><ul data-specification-details>{% for detail in specification_status.details %}<li>{{ detail }}</li>{% endfor %}</ul></div>
+        </details>
+        </div>
         <div id="analysis-status" class="ts-sub"><span class="ts-refresh-progress"><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span><span data-analysis-clock="{{ tender.pk }}" hidden></span>{% if request.user.is_superuser %}<span data-analysis-cost="{{ tender.pk }}" title="{{ analysis_status.cost.description }}" {% if not analysis_status.cost %}hidden{% endif %}>· {{ analysis_status.cost.label }}</span>{% endif %}</span><small data-analysis-steps="{{ tender.pk }}" style="display:block"></small><small data-analysis-connection="{{ tender.pk }}" hidden></small>
-          <p data-analysis-reason="{{ tender.pk }}" {% if not analysis_status.reason %}hidden{% endif %}>{{ analysis_status.reason }}</p>
-          <details data-analysis-extra="{{ tender.pk }}" {% if analysis_issues|length < 2 %}hidden{% endif %}><summary>Подробности</summary><div data-analysis-issues="{{ tender.pk }}"><ul>{% for issue in analysis_issues|slice:"1:" %}<li>{{ issue }}</li>{% endfor %}</ul></div></details>
         </div>
         <p class="ts-detail__links" data-card-refresh="links">
           {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
@@ -547,6 +551,15 @@
   .ts-item-tz, .ts-item-completeness, .ts-item-audit { margin-top: 8px; }
   .ts-item-audit p { margin: 6px 0; }
   .ts-document-proposal > summary { cursor: pointer; padding: 8px 0; }
+  .ts-refresh-actions { position:relative; display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; }
+  .ts-specification { position:static; display:inline-block; font-size:12px; }
+  .ts-specification > summary { display:flex; align-items:center; gap:.4em; cursor:pointer; list-style:none; }
+  .ts-specification > summary::-webkit-details-marker { display:none; }
+  .ts-specification__dot { display:inline-block; width:.6em; height:.6em; border-radius:50%; background:var(--ink-3); }
+  .ts-specification[data-specification-state="partial"] .ts-specification__dot { background:#c58a16; }
+  .ts-specification[data-specification-state="checked"] .ts-specification__dot { background:#24934b; }
+  .ts-specification__details { position:absolute; top:100%; left:0; z-index:3; width:max-content; max-width:100%; box-sizing:border-box; margin-top:.4rem; padding:.6rem .9rem; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); box-shadow:var(--shadow-pop); }
+  .ts-specification__details ul { margin:0; padding-left:1rem; }
   .ts-review-value { color: var(--ink); }
   .ts-fact-added { color: #1769aa; }
   .ts-items .ts-fact-added, .ts-item-group > summary .ts-fact-added { color: inherit; }

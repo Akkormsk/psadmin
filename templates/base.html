@@ -414,7 +414,6 @@
             badge.dataset.analysisCode = "PROCESSING";
             if (badge.classList.contains("ts-analysis-line")) badge.className = "ts-analysis-line ts-analysis-line--processing";
           });
-          document.querySelectorAll('[data-analysis-reason="' + id + '"]').forEach(node => { node.textContent = ''; node.hidden = true; });
           requestAnalysisCheck();
         }
 
@@ -502,7 +501,10 @@
             try {
               const url = new URL(endpoint, location.origin);
               url.searchParams.set('ids', [...analysisStates.keys()].join(','));
-              const card = document.querySelector('[data-analysis-result]'); if (card) url.searchParams.set('details', card.dataset.analysisResult);
+              const specification = document.querySelector('[data-specification-status]');
+              const card = document.querySelector('[data-analysis-result]');
+              if (specification) url.searchParams.set('details', specification.dataset.specificationStatus);
+              else if (card) url.searchParams.set('details', card.dataset.analysisResult);
               const response = await fetch(url, {cache: 'no-store'});
               if (!response.ok || response.redirected) throw new Error('Status unavailable');
               const payload = await response.json(); lastStatusAt = performance.now();
@@ -519,15 +521,13 @@
                   const link = node.closest('a[data-workspace-open]');
                   if (link) { const href = new URL(link.href); href.hash = data.code === 'ANALYSIS_INCOMPLETE' ? 'analysis-status' : ''; link.href = href; }
                 });
-                document.querySelectorAll('[data-analysis-reason="' + id + '"]').forEach(node => { node.textContent = data.reason || ''; node.hidden = !data.reason; });
-                document.querySelectorAll('[data-analysis-issues="' + id + '"]').forEach(node => {
-                  node.textContent = '';
-                  const list = document.createElement('ul');
-                  for (const issue of (data.reason ? (data.issues || []).slice(1) : data.issues || [])) { const item = document.createElement('li'); item.textContent = issue; list.appendChild(item); }
-                  if (list.childElementCount) node.appendChild(list);
-                  else node.textContent = data.processing ? 'Разбор выполняется в фоне.' : data.pending_count ? 'Есть предложения, ожидающие вашей проверки.' : 'Разбор завершён без ошибок.';
+                if (data.specification) document.querySelectorAll('[data-specification-status="' + id + '"]').forEach(node => {
+                  node.dataset.specificationState = data.specification.state;
+                  node.querySelector('[data-specification-label]').textContent = data.specification.label;
+                  const list = node.querySelector('[data-specification-details]');
+                  list.replaceChildren();
+                  for (const text of data.specification.details || []) { const item = document.createElement('li'); item.textContent = text; list.append(item); }
                 });
-                document.querySelectorAll('[data-analysis-extra="' + id + '"]').forEach(node => { node.hidden = (data.reason ? (data.issues || []).slice(1) : data.issues || []).length === 0; });
                 document.querySelectorAll('form[data-analysis-tender="' + id + '"] button').forEach(button => {
                   if (!button.dataset.analysisCaption) button.dataset.analysisCaption = button.textContent;
                   button.disabled = data.processing && !data.progress?.retryable;

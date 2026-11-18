@@ -1306,6 +1306,20 @@ class GatewayDocumentEnricher:
         source = previous if previous is not None else self.stage_sources[good['source_id']]
         return effective_item_requirements(source).get('characteristics', [])
 
+    def specification_gap(self, good, fact, reason):
+        """Only a proven duplicate of known data is harmless to specification coverage."""
+        from .requirement_values import equivalent, unit_from_label
+        known = [] if good['kind'] == 'kit' and not good.get('accepted_source_item_id') else self.good_baseline(good)
+        name = ' '.join(str(fact.get('name') or '').casefold().split())
+        duplicate = any(
+            name == ' '.join(str(previous.get('name') or '').casefold().split())
+            and fact.get('scope', 'product') == previous.get('scope', 'product')
+            and equivalent(fact.get('value'), previous.get('value'), unit=unit_from_label(previous.get('name', '')),
+                           aliases=getattr(self, 'unit_aliases', None))
+            for previous in known)
+        return {'stage': 'tz', 'key': good['key'], 'name': fact.get('name', ''),
+                'item_name': good.get('name', ''), 'reason': reason, 'affects_specification': not duplicate}
+
     def reconcile_specifications(self, rows, goods):
         """Compile verified additions atomically; originals are retained by the backend."""
         pending = {good['key']: [] for good in goods}
@@ -1347,8 +1361,7 @@ class GatewayDocumentEnricher:
                         documented = [{'doc_id': fact.get('doc_id'), 'fragment_id': fact.get('fragment_id'), 'quote': fact.get('quote'),
                                        'section': fact.get('section'), 'value': fact.get('document_value', fact.get('value'))}]
                     if not documented and fact.get('resolution') not in {'keep', 'omit'}:
-                        self.specification_gaps.append({'stage': 'tz', 'key': key, 'name': fact.get('name', ''),
-                            'reason': 'Дополнение не подтверждено документом; исходные сведения сохранены.'})
+                        self.specification_gaps.append(self.specification_gap(good, fact, 'Дополнение не подтверждено документом; исходные сведения сохранены.'))
                     for entry in documented:
                         addition = {'name': fact.get('name'), 'value': entry.get('value'), 'resolution': 'new',
                                     'baseline_refs': [], 'doc_id': entry.get('doc_id'), 'fragment_id': entry.get('fragment_id'), 'quote': entry.get('quote'),
@@ -1358,7 +1371,7 @@ class GatewayDocumentEnricher:
                             result = compile_current()
                         except (ValueError, TypeError, KeyError) as exc:
                             pending[key].pop()
-                            self.specification_gaps.append({'stage': 'tz', 'key': key, 'name': fact.get('name', ''), 'reason': str(exc)})
+                            self.specification_gaps.append(self.specification_gap(good, fact, str(exc)))
                     continue
                 if fact.get('resolution') == 'omit' or (fact.get('resolution') == 'keep' and good['kind'] != 'kit'):
                     continue
@@ -1367,8 +1380,7 @@ class GatewayDocumentEnricher:
                     result = compile_current()
                 except (ValueError, TypeError, KeyError) as exc:
                     pending[key].pop()
-                    self.specification_gaps.append({'stage': 'tz', 'key': key,
-                        'name': fact.get('name', '') if isinstance(fact, dict) else '', 'reason': str(exc)})
+                    self.specification_gaps.append(self.specification_gap(good, fact, str(exc)))
         for key in pending.keys() - seen:
             self.specification_gaps.append({'stage': 'tz', 'key': key, 'reason': 'Дополнения не получены; исходные требования сохранены.'})
         return result

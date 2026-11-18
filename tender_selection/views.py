@@ -548,7 +548,7 @@ def tender_detail(request, pk):
     card = parse_notification(payload) if payload else None
     estimate_id = tender.estimates.order_by("-updated_at").values_list("pk", flat=True).first()
     from tenders.models import OwnerInteraction, TenderComputeLine, TenderComputeJob, TenderSourceItem
-    from tenders.analysis_presentation import analysis_issues, resolve_tender_analysis_status
+    from tenders.analysis_presentation import analysis_issues, resolve_tender_analysis_status, specification_status
     analysis_status = resolve_tender_analysis_status(tender)
     v2_source_items = list(tender.v2_source_items.select_related("parent", "supersedes").order_by("source_type", "source_key", "pk"))
     from tenders.document_enrichment import characteristic_display, item_name_parts, effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
@@ -878,6 +878,7 @@ def tender_detail(request, pk):
         "document_review_needs_refresh": any(document_proposal_changes(item).get("error") for item in document_proposals),
         "document_proposals_incomplete": any(item.metadata.get("analysis_incomplete") or document_proposal_changes(item).get("error") for item in document_proposals),
         "analysis_status": analysis_status,
+        "specification_status": specification_status(tender, job=v2_job),
         "analysis_issues": analysis_issues(v2_job),
         "v2_lines": v2_lines,
         "v2_questions": v2_questions,
@@ -1661,7 +1662,7 @@ def analysis_status(request):
     statuses = resolve_tender_analysis_statuses(tenders)
     from tenders.calculation_v2_pipeline import source_route_snapshots
     return JsonResponse({'statuses': [{
-        **tender_refresh_status_for(request.user, tender.pk, status=status),
+        **tender_refresh_status_for(request.user, tender.pk, status=status, include_specification=request.GET.get('details') == str(tender.pk)),
         'result_url': reverse('tender_selection:detail', args=[tender.pk]) + '?analysis_snapshot=1&full_card=1',
         **({'item_routes': source_route_snapshots(tender)} if request.GET.get('details') == str(tender.pk) else {}),
     } for tender in tenders for status in [statuses[tender.pk]]]})

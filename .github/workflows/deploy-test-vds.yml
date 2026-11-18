@@ -270,6 +270,7 @@ jobs:
             tenders.test_document_evidence \
             tenders.test_document_acceptance.DocumentRepeatSmokeTests \
             tenders.test_analysis_presentation.ActionableAnalysisMessagesTests \
+            tenders.test_specification_status \
             tenders.test_input_dependencies \
             tenders.test_tender_data_operations \
             tenders.test_document_semantic_review.SemanticReviewTests \
