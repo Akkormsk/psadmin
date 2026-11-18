@@ -99,6 +99,14 @@ with transaction.atomic():
             'accept_button': 'Принять все правки' in html,
             'technical_quote_warning': 'Цитата отсутствует в выбранном фрагменте источника' in html,
             'visible_issues': context.get('analysis_issues')}
+        status = context['analysis_status']
+        from tenders.calculation_v2_pipeline import source_route_snapshots
+        print(json.dumps({'card_summary': {'number': number, 'job_id': status.job_id,
+            'http': response.status_code, 'code': status.code, 'label': status.label,
+            'processing': status.processing, 'progress': status.progress,
+            'accepted_items': review_view['accepted_items'], 'specification': review_view['specification'],
+            'routes': {source_id: {'state': row['state'], 'plan_id': row['plan_id']}
+                for source_id, row in source_route_snapshots(tender).items()}}}, ensure_ascii=False), flush=True)
     print('Saved card inspected; replaying specifications', flush=True)
     # Replay saved model output through the real validators, without applying it.
     from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality
