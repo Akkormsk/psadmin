@@ -395,13 +395,16 @@ def document_proposal_changes(item):
     original_parent = parent
     if metadata.get('relationship') == 'component' and metadata.get('replaces_source_ids'):
         from .models import TenderSourceItem
-        candidates = [row for row in TenderSourceItem.objects.filter(
+        accepted_id = metadata.get('accepted_source_item_id')
+        previous = (TenderSourceItem.objects.filter(pk=accepted_id,
             pk__in=metadata['replaces_source_ids'], parent_id=parent.pk,
-            tender_id=parent.tender_id, is_active=True, source_type='document_extraction')
-            if normalize(row.original_text) == normalize(item.original_text)]
-        # Comparison only, never identity reassignment. Ambiguous names require review.
-        if len(candidates) == 1:
-            parent = candidates[0]
+            tender_id=parent.tender_id, is_active=True, source_type='document_extraction').first()
+            if type(accepted_id) is int else None)
+        if previous is not None:
+            parent = previous
+        elif not metadata.get('is_new_product'):
+            return {'error': 'Не удалось связать предложение с ранее принятым товаром. Повторите «Обновить».',
+                    'structural': True, 'rows': [], 'removed': [], 'name': False, 'quantity': False, 'unit': False}
     def identity(row):
         import json
         value = row.get("value")

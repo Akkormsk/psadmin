@@ -158,17 +158,22 @@ def analysis_issues(job) -> list[str]:
     entries = [entries] if isinstance(entries, dict) else entries if isinstance(entries, list) else []
     issues = []
     for gap in diagnostics.get('analysis_gaps', []):
+        # Rejected individual facts stay in diagnostics; they are not an instruction to the owner.
+        if gap.get('stage') == 'tz' and gap.get('key') and gap.get('name'):
+            continue
         name = gap.get('name') or ''
-        reason = gap.get('reason') or 'Сведения требуют проверки.'
+        if gap.get('stage') == 'tz':
+            reason = 'Не удалось дополнить ТЗ части товаров. Прежние данные сохранены. Повторите «Обновить».'
+        else:
+            reason = gap.get('reason') or 'Часть проверки не завершена. Повторите «Обновить».'
         issues.append(f"{name}: {reason}" if name else reason)
     if job.error:
-        error = job.error.get("message") or job.error.get("detail") or "Ошибка анализа; подробности в журнале." if isinstance(job.error, dict) else job.error
-        issues.append(str(error))
+        issues.append('Разбор ТЗ не завершён. Прежние данные сохранены. Повторите «Обновить».')
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         if entry.get("final_failure_reason"):
-            issues.append(_VALIDATION_MESSAGES.get(str(entry["final_failure_reason"]), str(entry["final_failure_reason"])))
+            issues.append(_VALIDATION_MESSAGES.get(str(entry["final_failure_reason"]), "Не удалось проверить предложения ТЗ. Прежние данные сохранены. Повторите «Обновить»."))
         if (entry.get("extraction") or {}).get("rejections"):
             for rejection in entry["extraction"]["rejections"]:
                 issues.append(_REJECTION_MESSAGES.get(rejection.get("reason"), "Ответ по составу не прошёл проверку; изменения не применены."))
@@ -212,13 +217,14 @@ def document_item_has_change(item: TenderSourceItem) -> bool:
     return item.quantity != item.parent.quantity or (bool(item.unit) and item.unit != item.parent.unit)
 
 def _status_for(tender, job, question_count: int, has_enriched_items: bool, pending_count: int = 0) -> TenderAnalysisStatus:
+    issues = tuple(analysis_issues(job))
     if job is None:
         code = "NOT_CHECKED"
     elif _is_technical_failure(job):
         code = "ANALYSIS_INCOMPLETE"
     elif job.status in _ACTIVE:
         code = "PROCESSING"
-    elif job.diagnostics.get("analysis_gaps"):
+    elif issues:
         code = "CHECKED_WITH_GAPS"
     elif question_count or pending_count:
         code = "NEEDS_OWNER_INPUT"
@@ -227,7 +233,6 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     label, kind = ("Обновлено · есть замечания", "warning") if code == "CHECKED_WITH_GAPS" else _STATUS[code]
     if code == "NEEDS_OWNER_INPUT":
         label = f"{label} · {question_count}" if question_count else f"Нужно проверить правки ТЗ · {pending_count}"
-    issues = tuple(analysis_issues(job))
     reason = issues[0] if code in {"ANALYSIS_INCOMPLETE", "CHECKED_WITH_GAPS"} and issues else ""
     from django.utils import timezone
     now = timezone.now()

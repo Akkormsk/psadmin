@@ -58,7 +58,8 @@ class DocumentComponentAcceptanceTests(TestCase):
         self.assertTrue(all(not item.is_active for item in result["created"]))
         response = self.client.get(reverse("tender_selection:detail", args=[self.tender.pk]), {"workspace": 1})
         self.assertContains(response, "товар в составе Состав 1")
-        self.assertContains(response, "200 шт")
+        from django.utils.html import strip_tags
+        self.assertIn("200 шт", strip_tags(response.content.decode()))
         self.assertContains(response, "Состав 1")
         self.assertContains(response, "data-doc-preview=\"0\"")
 

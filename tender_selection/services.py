@@ -1994,6 +1994,8 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
     proposals = [item for item in proposals if document_proposal_changes(item)]
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
+    if decision == 'accept' and any(document_proposal_changes(item).get('error') for item in proposals):
+        raise ValueError('Не удалось связать предложения с принятыми товарами. Повторите «Обновить».')
     if any(item.metadata.get("analysis_incomplete") for item in proposals):
         raise ValueError("Сверка ТЗ ещё не завершена; предварительные изменения нельзя согласовать")
     from tenders.models import TenderComputeJob
@@ -2165,7 +2167,7 @@ def _save_intake_proposals(job, result, *, incomplete):
     with transaction.atomic():
         Tender.objects.select_for_update().get(pk=job.tender_id)
         previous = TenderSourceItem.objects.filter(tender_id=job.tender_id, source_type='document_proposal', is_active=False).exclude(pk__in=ids)
-        if ids or previous.filter(metadata__analysis_job_id=job.pk).exists():
+        if ids or (not incomplete and result.get('state') == 'no_change') or previous.filter(metadata__analysis_job_id=job.pk).exists():
             job.diagnostics.setdefault('superseded_pending_proposals', []).extend(json.loads(json.dumps(list(previous.values()), default=str)))
             job.save(update_fields=['diagnostics', 'updated_at'])
             for prior in previous:
@@ -2390,7 +2392,14 @@ def _staged_document_analysis(job, enricher):
         stages[name]['state'] = 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'complete'
         return validated
 
-    structure_instruction = '''Задача только структуры поставки. Прочитай извещение И ВСЕ документы; для КАЖДОГО working_item верни ровно одну запись; если task.requested_source_ids передан, верни ТОЛЬКО эти позиции, остальные будут разобраны отдельно с теми же документами. Раздели готовое изделие с комплектностью и набор самостоятельных товаров по смыслу, а не по слову в названии. Принадлежности, расходники, документы и штатная упаковка основного готового изделия — его комплектность. Набор разных самостоятельных изделий — kit, каждый товар отдельным элементом goods, включая отдельно описанную изготовляемую упаковку набора. Не требуй буквального слова «самостоятельные» в документе. Прежние характеристики могут ошибочно содержать разные товары как вложенные словари: обязательно переоцени такую структуру. Нельзя отвечать items:[] или пропускать позиции, даже если нет новых характеристик. Если данных недостаточно — unclear с объяснением, одна целая позиция. Количество внутри набора бери из документа с обоснованием, не выдумывай единицу при отсутствии основания. Не извлекай все характеристики и 1875 на этом шаге. Формат {"items":[{"source_id":integer,"kind":"finished|kit|unclear","name":"краткое название исходной поставки","reason":"обоснование структуры","evidence":[{"doc_id":integer,"quote":"ОДИН дословный непрерывный фрагмент ячейки/абзаца","section":"раздел/таблица"}],"goods":[{"name":"товар","quantity_per_parent":number,"unit":"единица"}]}]}. Для evidence копируй текст дословно, не соединяй разные ячейки через двоеточия/тире/точки с запятой и не вставляй многоточия. Если основания в разных местах — отдельные объекты evidence. Для unclear evidence может быть пустым. Для finished/unclear goods содержит один готовый товар, его название можно нормализовать; для kit перечисли ВСЕ составляющие. Цена принадлежит исходной поставке, цены частей не придумывай.'''
+    structure_instruction = '''Задача только структуры поставки. Прочитай извещение И ВСЕ документы; для КАЖДОГО working_item верни ровно одну запись; если task.requested_source_ids передан, верни ТОЛЬКО эти позиции, остальные будут разобраны отдельно с теми же документами. Раздели готовое изделие с комплектностью и набор самостоятельных товаров по смыслу, а не по слову в названии. Принадлежности, расходники, документы и штатная упаковка основного готового изделия — его комплектность. Набор разных самостоятельных изделий — kit, каждый товар отдельным элементом goods, включая отдельно описанную изготовляемую упаковку набора. Не требуй буквального слова «самостоятельные» в документе. Прежние характеристики могут ошибочно содержать разные товары как вложенные словари: обязательно переоцени такую структуру. Нельзя отвечать items:[] или пропускать позиции, даже если нет новых характеристик. Если данных недостаточно — unclear с объяснением, одна целая позиция. Количество внутри набора бери из документа с обоснованием, не выдумывай единицу при отсутствии основания. Не извлекай все характеристики и 1875 на этом шаге. Формат {"items":[{"source_id":integer,"kind":"finished|kit|unclear","name":"краткое название исходной поставки","reason":"обоснование структуры","evidence":[{"doc_id":integer,"quote":"ОДИН дословный непрерывный фрагмент ячейки/абзаца","section":"раздел/таблица"}],"goods":[{"accepted_source_item_id":integer|null,"is_new_product":boolean,"name":"товар","quantity_per_parent":number,"unit":"единица"}]}]}. Для evidence копируй текст дословно, не соединяй разные ячейки через двоеточия/тире/точки с запятой и не вставляй многоточия. Если основания в разных местах — отдельные объекты evidence. Для unclear evidence может быть пустым. Для finished/unclear goods содержит один готовый товар, его название можно нормализовать; для kit перечисли ВСЕ составляющие. Цена принадлежит исходной поставке, цены частей не придумывай.'''
+    structure_instruction += "\n" + enricher.PRODUCT_NAMING_RULE + (
+        "\nВ working_items.accepted_items переданы уже принятые товары. Для того же товара обязательно верни "
+        "accepted_source_item_id независимо от уточнения названия, порядка и количества. Сопоставляй по всему "
+        "содержимому и источникам. Не придумывай ID. Только для действительно нового товара верни "
+        "accepted_source_item_id=null и is_new_product=true. Неоднозначное соответствие не угадывай. "
+        "Характеристики, убранные из названия, должны остаться в ТЗ с источниками, а не исчезнуть."
+    )
     if os.getenv('PSADMIN_ITEM_COLLECTION_ONLY') == '1':
         goods = enricher.reconcile_structure([])
         enricher.validation_gaps = []
@@ -2467,7 +2476,14 @@ def _staged_document_analysis(job, enricher):
         instruction += "\nДля каждого дополнения верни fragment_id из документа: у абзаца это поле fragment_id, у строки таблицы — соответствующий элемент row_fragment_ids, у изображения — из image_fragments. Не придумывай ID. value и quote скопируй дословно из одного выбранного фрагмента; для таблицы скопируй значение из той же строки. Не объединяй значения из разных фрагментов в одну запись. Номер документа не нужен."
     else:
         instruction += "\nДля каждого дополнения укажи doc_id, точную цитату quote и раздел section."
-    baseline_task = {good['key']: enricher.baselines[good['source_id']] for good in goods}
+    instruction += "\n" + enricher.PRODUCT_NAMING_RULE + (
+        "\nДля товара с accepted_source_item_id baseline_facts — его собственное принятое ТЗ, "
+        "а не свойства набора. Сохраняй его; предлагай только факты, реально дополняющие или меняющие известные. "
+        "Не дублируй в ТЗ сведения, уже представленные в отдельных полях карточки. "
+        "Если дополнений нет, верни пустой characteristics. Не добавляй новые сведения без подтверждения в источнике."
+    )
+    baseline_task = {good['key']: [{'id': index, 'name': fact['name'], 'value': fact['value']}
+        for index, fact in enumerate(enricher.good_baseline(good))] for good in goods}
     specifications = ask('tz', 'Сопоставляем ТЗ и извещение по каждому товару…', instruction,
         {'goods': goods, 'baseline_facts': baseline_task}, lambda rows: enricher.reconcile_specifications(rows, goods), 32000, lambda: enricher.reconcile_specifications([], goods))
     job.diagnostics['analysis_gaps'].extend(enricher.specification_gaps)

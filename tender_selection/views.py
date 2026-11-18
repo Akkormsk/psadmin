@@ -610,7 +610,7 @@ def tender_detail(request, pk):
             "supply_kind": metadata.get("supply_kind", ""),
             "structure_reason": metadata.get("structure_reason", ""),
             "omitted_facts": requirements.get("omitted_facts", []),
-            "review_error": requirements.get("reconciliation_error", ""),
+            "review_error": changes.get("error") or requirements.get("reconciliation_error", ""),
             "provenance": proposal.provenance if isinstance(proposal.provenance, dict) else {},
             "document": proposal_documents.get((proposal.provenance or {}).get("document_url")),
         })
@@ -875,7 +875,8 @@ def tender_detail(request, pk):
         "document_proposals": document_proposals,
         "document_proposal_ids": [item.pk for item in document_proposals],
         "document_proposal_groups": document_proposal_groups,
-        "document_proposals_incomplete": any(item.metadata.get("analysis_incomplete") for item in document_proposals),
+        "document_review_needs_refresh": any(document_proposal_changes(item).get("error") for item in document_proposals),
+        "document_proposals_incomplete": any(item.metadata.get("analysis_incomplete") or document_proposal_changes(item).get("error") for item in document_proposals),
         "analysis_status": analysis_status,
         "analysis_issues": analysis_issues(v2_job),
         "v2_lines": v2_lines,

@@ -107,6 +107,7 @@ class DocumentRepeatSmokeTests(DocumentAcceptanceSmokeTests):
         self.stage([row])
         decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
         accepted = parent.derived_items.get(is_active=True)
+        row['accepted_source_item_id'] = accepted.pk
         result = self.stage([row])
         self.assertEqual(result['state'], 'no_change')
         self.assertFalse(result['created'])
@@ -120,6 +121,8 @@ class DocumentRepeatSmokeTests(DocumentAcceptanceSmokeTests):
         rows = [self.row(parent, name='Изделие А'), self.row(parent, name='Изделие Б')]
         self.stage(rows)
         decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        for row, accepted in zip(rows, parent.derived_items.filter(is_active=True).order_by('pk')):
+            row['accepted_source_item_id'] = accepted.pk
         rows[0]['requirements'] = {'characteristics': [{'name': 'Цвет', 'value': 'Красный'}]}
         result = self.stage(rows)
         self.assertEqual(len(result['created']), len(rows))
@@ -176,3 +179,83 @@ class DocumentRepeatSmokeTests(DocumentAcceptanceSmokeTests):
         source.refresh_from_db(); duplicate.refresh_from_db()
         self.assertTrue(source.is_active)
         self.assertTrue(duplicate.is_active)
+
+
+    def test_explicit_identity_survives_renaming_and_preserves_draft_boundary(self):
+        from .document_enrichment import document_proposal_changes
+        parent = self.parents[0]
+        self.stage([self.row(parent, name='Изготовление изделия по техническому заданию')])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        accepted = parent.derived_items.get(is_active=True)
+        current = accepted.commercial_items.get(status='active')
+        row = self.row(parent, name='Изделие', accepted_source_item_id=accepted.pk)
+        proposal = self.stage([row])['created'][0]
+        changes = document_proposal_changes(proposal)
+        self.assertTrue(changes['name'])
+        self.assertFalse(changes['quantity'])
+        self.assertFalse(changes['unit'])
+        self.assertFalse(changes['removed'])
+        build_commercial_items(tender=self.tender, sources=[proposal])
+        current.refresh_from_db()
+        self.assertEqual(current.status, 'active')
+        self.assertEqual(list(current.source_items.values_list('pk', flat=True)), [accepted.pk])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        current.refresh_from_db()
+        self.assertEqual(current.display_name, 'Изделие')
+        self.assertEqual(current.status, 'active')
+        self.assertEqual(list(current.source_items.values_list('pk', flat=True)), [proposal.pk])
+
+    def test_real_quantity_change_compares_to_accepted_part_not_aggregate(self):
+        from .document_enrichment import document_proposal_changes
+        parent = self.parents[0]
+        self.stage([self.row(parent)])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        accepted = parent.derived_items.get(is_active=True)
+        proposal = self.stage([self.row(parent, per_parent='0.5', name='Уточнённое изделие',
+                                       accepted_source_item_id=accepted.pk)])['created'][0]
+        changes = document_proposal_changes(proposal)
+        self.assertTrue(changes['quantity'])
+        self.assertFalse(changes['unit'])
+        self.assertEqual(proposal.quantity, parent.quantity * Decimal('0.5'))
+
+    def test_another_groups_identity_is_rejected_without_staging(self):
+        parent = self.parents[0]
+        before = self.tender.v2_source_items.count()
+        result = self.stage([self.row(parent, accepted_source_item_id=self.parents[1].pk)])
+        self.assertEqual(result['state'], 'validation_failure')
+        self.assertFalse(result['created'])
+        self.assertEqual(self.tender.v2_source_items.count(), before)
+
+    def test_staged_accepted_specification_survives_an_empty_model_addition(self):
+        from unittest.mock import patch
+        from .calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality
+        parent = self.parents[0]
+        self.stage([self.row(parent)])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        accepted = parent.derived_items.get(is_active=True)
+        engine = GatewayDocumentEnricher()
+        with patch('tender_selection.services.documents_html'):
+            engine.prepare_stages(self.tender, [parent], assess_quality(self.tender, [parent])['documents'])
+        good = {'key': 'accepted-part', 'source_id': parent.pk, 'accepted_source_item_id': accepted.pk,
+                'kind': 'kit', 'name': 'Изделие', 'provenance': {}}
+        result = engine.reconcile_specifications([{'key': good['key'], 'characteristics': []}], [good])
+        self.assertFalse(engine.specification_gaps)
+        self.assertEqual([(fact['name'], fact['value']) for fact in result[good['key']]['characteristics']],
+                         [(fact['name'], fact['value']) for fact in accepted.requirements['characteristics']])
+        self.assertIn('accepted_items', engine.working_context[parent.pk])
+
+
+    def test_completed_no_change_retires_old_proposal_without_touching_accepted_good(self):
+        from tender_selection.services import _save_intake_proposals
+        from .models import TenderSourceItem
+        parent = self.parents[0]
+        self.stage([self.row(parent)])
+        decide_document_proposals(self.admin, self.tender.pk, parent.pk, 'accept', schedule_routes=False)
+        accepted = parent.derived_items.get(is_active=True)
+        old = TenderSourceItem.objects.create(tender=self.tender, parent=parent, source_key='legacy-review',
+            source_type='document_proposal', original_text='Устаревшая формулировка', is_active=False)
+        job = TenderComputeJob.objects.create(tender=self.tender, version='v2-intake-refresh')
+        _save_intake_proposals(job, {'created': [], 'state': 'no_change'}, incomplete=False)
+        accepted.refresh_from_db(); old.refresh_from_db()
+        self.assertTrue(accepted.is_active)
+        self.assertEqual(old.source_type, 'document_superseded')

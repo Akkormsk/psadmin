@@ -78,3 +78,25 @@ class TenderAnalysisPresentationTests(TestCase):
         result = resolve_tender_analysis_status(tender)
         self.assertEqual(set(result.__dict__), {"tender", "code", "label", "kind", "question_count", "pending_count", "reason", "revision", "job_id", "processing", "issues"})
         self.assertNotIn("running", result.__dict__.values())
+
+
+class ActionableAnalysisMessagesTests(TestCase):
+    def test_rejected_fact_is_not_a_header_warning(self):
+        from .analysis_presentation import analysis_issues
+        tender = Tender.objects.create(purchase_number='fact-warning')
+        job = TenderComputeJob.objects.create(tender=tender, version='v2', status='ready', diagnostics={
+            'analysis_gaps': [{'stage': 'tz', 'key': 'part', 'name': 'Количество в документе',
+                               'reason': 'Цитата отсутствует в выбранном фрагменте источника.'}]})
+        self.assertEqual(analysis_issues(job), [])
+        self.assertEqual(resolve_tender_analysis_status(tender).code, 'CHECKED_NO_CHANGES')
+        self.assertTrue(job.diagnostics['analysis_gaps'])
+
+    def test_failed_analysis_explains_preservation_and_next_action(self):
+        from .analysis_presentation import analysis_issues
+        tender = Tender.objects.create(purchase_number='failed-analysis-message')
+        job = TenderComputeJob.objects.create(tender=tender, version='v2', status='failed',
+            error={'message': 'Internal parse traceback'}, diagnostics={})
+        message = ' '.join(analysis_issues(job))
+        self.assertIn('Прежние данные сохранены', message)
+        self.assertIn('Повторите «Обновить»', message)
+        self.assertNotIn('traceback', message)
