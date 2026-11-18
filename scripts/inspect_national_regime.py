@@ -11,6 +11,7 @@ from tender_selection.models import Tender
 from tender_selection.national_regime import tender_items, risk_projection
 from tenders.models import TenderComputeJob, TenderSourceItem, TenderCommercialItem
 from tenders.source_memory import signature
+from tenders.document_enrichment import document_proposal_changes
 
 number = os.environ['INSPECT_TENDER_NUMBER']
 if len(number) != 19 or not number.isascii() or not number.isdigit():
@@ -46,6 +47,12 @@ with transaction.atomic():
             'replaces': row.metadata.get('replaces_source_ids'),
             'requirements_key': signature(row.requirements), 'review_count': len(row.metadata.get('review_history', []))}
             for row in TenderSourceItem.objects.filter(tender=tender).order_by('pk')],
+        'pending_review': [{'id': row.pk, 'name': row.original_text, 'quantity': str(row.quantity), 'unit': row.unit,
+            'replaces': row.metadata.get('replaces_source_ids'),
+            'changes': {key: value for key, value in document_proposal_changes(row).items() if key not in {'rows', 'removed'}},
+            'added': [fact.get('name') for fact in document_proposal_changes(row).get('rows', [])],
+            'removed': [fact.get('name') for fact in document_proposal_changes(row).get('removed', [])]}
+            for row in TenderSourceItem.objects.filter(tender=tender, source_type='document_proposal').select_related('parent').order_by('pk')],
         'working_rows': [{'id': row.pk, 'status': row.status, 'source_ids': list(row.source_items.values_list('pk', flat=True)),
             'draft': row.provenance.get('draft')}
             for row in TenderCommercialItem.objects.filter(tender=tender).order_by('pk')],
