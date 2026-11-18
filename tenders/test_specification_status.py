@@ -75,6 +75,9 @@ class SpecificationStatusTests(TestCase):
         job.save(update_fields=['diagnostics'])
         self.assertFalse(job.diagnostics['analysis_gaps'][0]['affects_specification'])
         self.assertEqual(specification_status(self.tender, job=job)['state'], 'checked')
+        from .analysis_presentation import resolve_tender_analysis_status
+        progress = resolve_tender_analysis_status(self.tender).progress
+        self.assertEqual(next(step['state'] for step in progress['steps'] if step['id'] == 'tz'), 'complete')
 
     def test_incomplete_reading_and_changed_inputs_cannot_be_green(self):
         job = self.completed()

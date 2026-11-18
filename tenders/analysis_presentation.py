@@ -263,7 +263,8 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     labels = {'notification': 'Извещение', 'documents': 'Документы', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
     ledger = (job.diagnostics or {}).get('stages', {}) if job else {}
     progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
-    gap_stages = {gap.get('stage') for gap in (job.diagnostics or {}).get('analysis_gaps', [])} if job else set()
+    gap_stages = {gap.get('stage') for gap in (job.diagnostics or {}).get('analysis_gaps', [])
+                  if gap.get('affects_specification') is not False} if job else set()
     for step in progress['steps']:
         if step['id'] in gap_stages and step['state'] == 'complete':
             step['state'] = 'warning'
