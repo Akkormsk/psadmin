@@ -32,7 +32,7 @@ def _state(tender: Tender, settings: FilterSettings) -> dict:
     objects = parse_notification(tender.notification_raw or {}).get("items", [])
     objects = [{"name": item["name"], "characteristics": item.get("characteristics", [])} for item in objects]
     from tenders.calculation_v2_pipeline import routing_source_items, effective_item_requirements
-    working = list(routing_source_items(tender))
+    working = list(routing_source_items(tender, include_proposals=True))
     if working:
         objects = [{'name': source.original_text, 'source_item_id': source.pk,
             'characteristics': [{key: value for key,value in fact.items() if key in {'name','value','scope','conflict'}}

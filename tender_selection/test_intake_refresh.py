@@ -54,6 +54,21 @@ class IntakeRefreshTests(TestCase):
         job.refresh_from_db()
         return notification, enrich
 
+    def test_full_refresh_with_pending_tz_defers_routes_without_draft_goods(self):
+        from tenders.models import TenderSourceItem, TenderCommercialItem
+        proposal = TenderSourceItem.objects.create(tender=self.tender, parent=self.source,
+            source_key='document:review', source_type='document_proposal', is_active=False,
+            original_text='Уточнённое изделие', quantity=self.source.quantity, unit=self.source.unit,
+            requirements=self.source.requirements, metadata={'relationship': 'enrich'})
+        job = self.create_job()
+        with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tenders.calculation_v2_pipeline.enrich_suspicious_tender', return_value={'created': [proposal], 'state': 'needs_review', 'diagnostics': []}):
+            _run_document_analysis(job.pk, enricher=Mock(cost_rub=0, diagnostics={}), router=self.router)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'needs_review')
+        self.assertEqual(job.diagnostics['stages']['routing']['outcome'], 'awaiting_review')
+        self.router.route.assert_not_called()
+        self.assertFalse(TenderCommercialItem.objects.filter(source_items=proposal).exists())
+
     def test_incomplete_source_binding_does_not_run_routes(self):
         from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
         job = self.create_job()

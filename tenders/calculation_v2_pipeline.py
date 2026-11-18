@@ -2386,10 +2386,12 @@ def _commercial_requirements(source: TenderSourceItem) -> dict:
     return effective_item_requirements(source)
 
 
-def routing_source_items(tender):
-    """Plan complete proposed goods without accepting changes or creating an estimate."""
+def routing_source_items(tender, *, include_proposals=False):
+    """Route accepted goods; profile checks may explicitly inspect proposed goods."""
     from .document_enrichment import document_proposal_changes
     active = active_calculation_items(tender)
+    if not include_proposals:
+        return active
     proposals = [item for item in tender.v2_source_items.filter(source_type="document_proposal", is_active=False).select_related("parent").order_by("parent_id", "pk") if not item.metadata.get("analysis_incomplete") and document_proposal_changes(item)]
     replaced = {item.parent_id for item in proposals}
     replaced.update(source_id for item in proposals for source_id in item.metadata.get("replaces_source_ids", []))

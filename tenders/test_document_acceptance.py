@@ -259,3 +259,71 @@ class DocumentRepeatSmokeTests(DocumentAcceptanceSmokeTests):
         accepted.refresh_from_db(); old.refresh_from_db()
         self.assertTrue(accepted.is_active)
         self.assertEqual(old.source_type, 'document_superseded')
+
+
+class AcceptedRoutingFlowTests(TestCase):
+    setUp = fixtures.DocumentComponentAcceptanceTests.setUp
+    row = fixtures.DocumentComponentAcceptanceTests.row
+    stage = fixtures.DocumentComponentAcceptanceTests.stage
+
+    def router(self):
+        from unittest.mock import Mock
+        from .models import ProcessDefinition
+        from .calculation_v2_pipeline import RouteDecision
+        process = ProcessDefinition.objects.create(name='Исполнение')
+        router = Mock(cost_rub=0, diagnostics={})
+        router.route.side_effect = lambda **kw: [RouteDecision(item.pk, (process.pk,), Decimal('.9'), {}) for item in kw['items']]
+        return router
+
+    def run_routes(self, router):
+        from tender_selection.services import _run_document_analysis
+        job = TenderComputeJob.objects.create(tender=self.tender, version='v2-intake-refresh',
+            status='queued', diagnostics={'routes_only': True})
+        _run_document_analysis(job.pk, router=router)
+        job.refresh_from_db()
+        return job
+
+    def test_pending_tz_waits_then_acceptance_routes_once_and_update_reuses(self):
+        from unittest.mock import patch
+        from django.urls import reverse
+        from .models import ComponentRoutePlan
+        proposal = self.stage([self.row(self.parents[0])])['created'][0]
+        router = self.router()
+        waiting = self.run_routes(router)
+        router.route.assert_not_called()
+        self.assertEqual(waiting.status, 'needs_review')
+        self.assertEqual(waiting.diagnostics['stages']['routing']['outcome'], 'awaiting_review')
+        self.assertFalse(TenderCommercialItem.objects.filter(source_items=proposal).exists())
+        response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'})
+        self.assertNotContains(response, f'data-route-source="{proposal.pk}"')
+        with patch('tender_selection.services.refresh_document_analysis') as scheduled, self.captureOnCommitCallbacks(execute=True):
+            decide_document_proposals(self.admin, self.tender.pk, self.parents[0].pk, 'accept')
+        scheduled.assert_called_once_with(self.admin, self.tender.pk, routes_only=True)
+        first = self.run_routes(router)
+        self.assertEqual(first.status, 'ready')
+        plans = list(ComponentRoutePlan.objects.values_list('pk', flat=True))
+        second = self.run_routes(router)
+        self.assertEqual(second.status, 'ready')
+        self.assertEqual(router.route.call_count, 1)
+        self.assertEqual(list(ComponentRoutePlan.objects.values_list('pk', flat=True)), plans)
+        self.assertFalse(self.tender.estimates.exists())
+
+    def test_legacy_route_for_exact_proposal_survives_promotion(self):
+        from .models import ComponentRoutePlan, ComponentOperationStep
+        from .calculation_v2_pipeline import source_route_fingerprint, _knowledge_for, source_route_snapshots
+        proposal = self.stage([self.row(self.parents[0])])['created'][0]
+        draft = build_commercial_items(tender=self.tender, sources=[proposal])[0]
+        router = self.router()
+        from .models import ProcessDefinition
+        processes = list(ProcessDefinition.objects.filter(is_active=True).order_by('pk'))
+        plan = ComponentRoutePlan.objects.create(commercial_item=draft, component=draft.components.get(),
+            status='ready', metadata={'input_fingerprint': source_route_fingerprint(proposal, processes, _knowledge_for([])), 'confidence': '.9'})
+        step = ComponentOperationStep.objects.create(route_plan=plan, process=processes[0], position=1)
+        decide_document_proposals(self.admin, self.tender.pk, self.parents[0].pk, 'accept', schedule_routes=False)
+        plan.refresh_from_db()
+        self.assertEqual(plan.status, 'ready')
+        self.assertEqual(source_route_snapshots(self.tender)[proposal.pk]['state'], 'ready')
+        self.run_routes(router)
+        routed_ids = [item.source_item_id for item in router.route.call_args.kwargs['items']]
+        self.assertNotIn(proposal.pk, routed_ids)
+        self.assertEqual(plan.steps.get().pk, step.pk)

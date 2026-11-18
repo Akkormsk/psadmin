@@ -2048,7 +2048,9 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
         CalculationComponent.objects.filter(commercial_item__in=retired).update(status='superseded')
         retired.update(status='superseded')
         from tenders.tender_data import mark_tender_inputs_changed
-        mark_tender_inputs_changed(tender, commercial_ids=[item.pk for item in accepted])
+        # build_commercial_items invalidates routes only for changed working goods.
+        # Promotion alone must not invalidate a route already built for this source.
+        mark_tender_inputs_changed(tender)
     else:
         # Proposed routes may already reference these sources. Retain their evidence.
         for proposal in proposals:
@@ -2633,6 +2635,16 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
                 job.status, job.error = 'ready', {}
                 job.diagnostics.update(profile_excluded=True, refresh={'stage': 'complete', 'label': 'Не по профилю', 'warnings': []})
                 return job
+        from tenders.document_enrichment import document_proposal_changes
+        pending_proposals = any(document_proposal_changes(item) for item in
+            TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).select_related("parent"))
+        if pending_proposals:
+            # A draft specification is not an instruction to manufacture it.
+            # Acceptance schedules the existing routes-only job for accepted data.
+            job.status = 'needs_review'
+            job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'pending', 'cost_rub': '0', 'outcome': 'awaiting_review'}
+            job.diagnostics['refresh'] = {'stage': 'complete', 'label': 'ТЗ ожидает согласования · маршруты после принятия', 'warnings': warnings}
+            return job
         _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
         route_cap = max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)))
         router = router or GatewayBatchRouter(**({'max_cost_rub': route_cap} if route_cap is not None else {}))

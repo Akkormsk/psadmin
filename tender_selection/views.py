@@ -763,8 +763,6 @@ def tender_detail(request, pk):
         group["national_regime"] = group["original"].get("national_regime") or annotation()
         group["name_parts"] = characteristic_display({"value": group["name"], "source": "combined", "source_facts": [{"value": group["original"].get("name", ""), "source": "notification"}]})["parts"]
     for group in document_proposal_groups:
-        for proposal in group["items"]:
-            proposal["production_route"] = item_routes.get(proposal["source_id"])
         group["can_keep_quote"] = len(group["items"]) == 1 and group["items"][0]["quote_eligible"]
         group["is_kit"] = bool(group["items"]) and all(item["relationship"] == "component" for item in group["items"])
         group["supply_kind"] = group["items"][0].get("supply_kind") if group["items"] else ""
