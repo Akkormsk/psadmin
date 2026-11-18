@@ -441,16 +441,17 @@
                 const steps = progress?.steps || [];
                 node.replaceChildren();
                 steps.forEach((step, index) => {
-                  if (index) node.append(' · ');
-                  node.append(step.label);
-                  if (step.state === 'complete') node.append(' ✓');
-                  else if (step.state === 'failed' || step.state === 'warning') node.append(' !');
-                  else if (step.state === 'running') {
-                    const spinner = document.createElement('span');
-                    spinner.className = 'ts-step-spinner';
-                    spinner.setAttribute('aria-label', 'выполняется');
-                    node.append(' ', spinner);
-                  }
+                  const item = document.createElement('li');
+                  item.className = 'ts-processing-step';
+                  item.dataset.state = step.state;
+                  if (step.state === 'running') item.setAttribute('aria-current', 'step');
+                  const marker = document.createElement('span');
+                  marker.className = 'ts-processing-step__marker';
+                  marker.textContent = step.state === 'complete' ? '✓' : (step.state === 'failed' || step.state === 'warning') ? '!' : String(index + 1);
+                  const label = document.createElement('span');
+                  label.textContent = step.label;
+                  item.append(marker, label);
+                  node.append(item);
                 });
                 node.title = steps.map(step => step.label + ': ' + (step.reused ? 'из кэша' : step.seconds != null ? step.seconds + ' с' : step.state === 'pending' ? 'ожидает' : '') + (data.cost?.steps?.[step.id] ? ' · ' + data.cost.steps[step.id] + ' ₽' : '')).join('\n');
               });

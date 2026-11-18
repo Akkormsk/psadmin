@@ -31,6 +31,10 @@
         <p class="ts-row__meta">
           <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button></span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
+        <span class="ts-detail__links ts-notice-links" data-card-refresh="links">
+          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
+          {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
+        </span>
         </p>
         <div class="ts-refresh-actions">
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Обновить данные, ТЗ, требования 1875 и маршруты в фоне">↻ Обновить</button></form>{% endif %}
@@ -39,12 +43,8 @@
           <div class="ts-specification__details"><ul data-specification-details>{% for detail in specification_status.details %}<li>{{ detail }}</li>{% endfor %}</ul></div>
         </details>
         </div>
-        <div id="analysis-status" class="ts-sub"><span class="ts-refresh-progress"><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span><span data-analysis-clock="{{ tender.pk }}" hidden></span>{% if request.user.is_superuser %}<span data-analysis-cost="{{ tender.pk }}" title="{{ analysis_status.cost.description }}" {% if not analysis_status.cost %}hidden{% endif %}>· {{ analysis_status.cost.label }}</span>{% endif %}</span><small data-analysis-steps="{{ tender.pk }}" style="display:block"></small><small data-analysis-connection="{{ tender.pk }}" hidden></small>
+        <div id="analysis-status" class="ts-sub"><ol class="ts-processing-steps" data-analysis-steps="{{ tender.pk }}" aria-label="Этапы обработки тендера">{% for step in analysis_status.progress.steps %}<li class="ts-processing-step" data-state="{{ step.state }}"{% if step.state == "running" %} aria-current="step"{% endif %}><span class="ts-processing-step__marker">{% if step.state == "complete" %}✓{% elif step.state == "warning" or step.state == "failed" %}!{% else %}{{ forloop.counter }}{% endif %}</span><span>{{ step.label }}</span></li>{% endfor %}</ol><span class="ts-refresh-progress"><span data-analysis-status="{{ tender.pk }}" data-analysis-code="{{ analysis_status.code }}" data-analysis-revision="{{ analysis_status.revision }}" data-analysis-url="{% url 'tender_selection:analysis_status' %}">{{ analysis_status.label }}</span><span data-analysis-clock="{{ tender.pk }}" hidden></span>{% if request.user.is_superuser %}<span data-analysis-cost="{{ tender.pk }}" title="{{ analysis_status.cost.description }}" {% if not analysis_status.cost %}hidden{% endif %}>· {{ analysis_status.cost.label }}</span>{% endif %}</span><small data-analysis-connection="{{ tender.pk }}" hidden></small>
         </div>
-        <p class="ts-detail__links" data-card-refresh="links">
-          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
-          {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
-        </p>
         {% if is_manual %}<p class="ts-warn">Данные ЕИС не загружены. Карточка создана из ручного расчёта; недостающую информацию и документы можно будет добавить позже.</p>{% endif %}
       </div>
       <div class="panel-actions ts-detail__actions">
@@ -551,6 +551,15 @@
   .ts-item-tz, .ts-item-completeness, .ts-item-audit { margin-top: 8px; }
   .ts-item-audit p { margin: 6px 0; }
   .ts-document-proposal > summary { cursor: pointer; padding: 8px 0; }
+  .ts-notice-links { display:inline-flex; flex-wrap:wrap; gap:.6rem; margin:0; }
+  .ts-notice-links .ts-linkchip { padding:0; border:0; background:transparent; font-size:inherit; }
+  .ts-processing-steps { display:flex; flex-wrap:wrap; gap:.6rem 1rem; list-style:none; padding:0; margin:.9rem 0 .6rem; }
+  .ts-processing-step { display:flex; align-items:center; gap:.4rem; color:var(--ink-3); font-size:12px; }
+  .ts-processing-step__marker { display:inline-flex; align-items:center; justify-content:center; width:1.6em; height:1.6em; border:1px solid currentColor; border-radius:50%; flex-shrink:0; }
+  .ts-processing-step[data-state="complete"] { color:var(--ink-2); }
+  .ts-processing-step[data-state="running"] { color:var(--accent, #1769aa); font-weight:600; }
+  .ts-processing-step[data-state="warning"], .ts-processing-step[data-state="failed"] { color:#a66b00; }
+  .ts-refresh-progress { display:block; font-size:12px; color:var(--ink-3); }
   .ts-refresh-actions { position:relative; display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; }
   .ts-specification { position:static; display:inline-block; font-size:12px; }
   .ts-specification > summary { display:flex; align-items:center; gap:.4em; cursor:pointer; list-style:none; }
