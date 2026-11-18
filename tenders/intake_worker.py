@@ -1,5 +1,8 @@
 """Budgeted consumer for the existing durable intake jobs; no separate analyser."""
 from decimal import Decimal
+from copy import copy
+from datetime import timedelta
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -8,6 +11,45 @@ from .models import TenderComputeJob
 from .calculation_v2 import claim_next_job
 
 ACTIVE = {'running', 'preparing_input', 'routing', 'preparing'}
+
+
+def intake_heartbeat_timeout():
+    return timedelta(seconds=settings.CALCULATION_V2_INTAKE_HEARTBEAT_TIMEOUT_SECONDS)
+
+
+def interrupted_job_snapshot(job, *, now=None):
+    """Resolve a lost intake heartbeat without changing saved evidence during reads."""
+    now = now or timezone.now()
+    if (job is None or job.status not in ACTIVE or not job.diagnostics.get('intake_refresh')
+            or job.updated_at >= now - intake_heartbeat_timeout()):
+        return job
+    snapshot = copy(job)
+    stages = job.diagnostics.get('stages') or {}
+    snapshot.diagnostics = {**job.diagnostics,
+        'billing_uncertain': bool(job.diagnostics.get('billing_uncertain')) or any(
+            stage.get('state') == 'running' and stage.get('provider_call_happened') is not False
+            for stage in stages.values()),
+        'refresh': {**job.diagnostics.get('refresh', {}), 'failed': True},
+        'stages': {name: {**stage, 'state': 'failed', 'outcome': 'worker_interrupted'}
+            if stage.get('state') == 'running' else stage for name, stage in stages.items()},
+    }
+    snapshot.status, snapshot.completed_at = 'partial', job.updated_at
+    snapshot.error = {'class': 'WorkerInterrupted',
+        'message': 'Обновление прервано: нет подтверждения работы. Полученные результаты сохранены. Повторный запуск — только по вашему решению.',
+        'retryable': True}
+    return snapshot
+
+
+def save_interrupted_job(job, *, now=None):
+    snapshot = interrupted_job_snapshot(job, now=now)
+    if snapshot is job:
+        return False
+    from .analysis_presentation import _job_analysis_cost
+    job.status, job.error, job.diagnostics = snapshot.status, snapshot.error, snapshot.diagnostics
+    job.total_cost = Decimal(str(_job_analysis_cost(snapshot).get('known_rub') or job.total_cost or 0))
+    job.completed_at = now or timezone.now()
+    job.save(update_fields=['status', 'error', 'diagnostics', 'total_cost', 'completed_at', 'updated_at'])
+    return True
 
 
 def _held_cost(rows):
@@ -81,6 +123,8 @@ def _coverage(job):
 
 @transaction.atomic
 def queue_continuation(job, *, interrupted=False):
+    if interrupted and job.trigger == 'manual_document_refresh':
+        return None
     if job.attempt_count >= 3:
         return None
     stages = list(job.diagnostics.get('stages', {}).values()) + [job.diagnostics.get('routing', {})]
@@ -106,17 +150,11 @@ def queue_continuation(job, *, interrupted=False):
 
 @transaction.atomic
 def recover_interrupted_jobs(*, now=None):
-    from datetime import timedelta
-    from .analysis_presentation import _job_analysis_cost
     now = now or timezone.now()
     count = 0
-    for job in TenderComputeJob.objects.select_for_update(skip_locked=True).filter(status__in=ACTIVE, diagnostics__intake_refresh=True, updated_at__lt=now-timedelta(minutes=15)):
-        job.diagnostics['billing_uncertain'] = any(stage.get('state') == 'running' for stage in job.diagnostics.get('stages', {}).values())
-        job.total_cost = Decimal(str(_job_analysis_cost(job).get('known_rub') or job.total_cost or 0))
-        job.status, job.completed_at = 'partial', now
-        job.error = {'class': 'WorkerInterrupted', 'message': 'Обновление прервано. Полученные результаты сохранены.', 'retryable': True}
-        job.save(update_fields=['status','completed_at','error','total_cost','diagnostics','updated_at'])
-        count += bool(queue_continuation(job, interrupted=True))
+    for job in TenderComputeJob.objects.select_for_update(skip_locked=True).filter(status__in=ACTIVE, diagnostics__intake_refresh=True, updated_at__lt=now-intake_heartbeat_timeout()):
+        if save_interrupted_job(job, now=now):
+            count += bool(queue_continuation(job, interrupted=True))
     return count
 
 

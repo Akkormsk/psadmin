@@ -1,7 +1,8 @@
+from datetime import timedelta
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -17,6 +18,45 @@ class AnalysisUpdatesTests(TestCase):
         self.tender = Tender.objects.create(purchase_number='analysis-live', title='Проверка', notification_raw={'source': {}}, extras_checked_at=timezone.now())
         self.job = TenderComputeJob.objects.create(tender=self.tender, version='v2-document-manual', status='preparing_input')
         self.url = reverse('tender_selection:analysis_status') + '?ids=' + str(self.tender.pk)
+
+    @override_settings(CALCULATION_V2_INTAKE_HEARTBEAT_TIMEOUT_SECONDS=900)
+    def test_interrupted_manual_refresh_is_terminal_without_writes_or_paid_retry(self):
+        self.job.trigger = 'manual_document_refresh'
+        self.job.started_at = timezone.now() - timedelta(minutes=20)
+        self.job.diagnostics = {
+            'intake_refresh': True,
+            'refresh': {'stage': 'tz', 'label': 'Сопоставляем ТЗ…'},
+            'stages': {'structure': {'state': 'complete', 'result': [{'source_id': 1}],
+                'cost_rub': '2.65', 'actual_cost_rub': '2.65', 'usage': {'prompt_tokens': 1}},
+                'tz': {'state': 'running'}},
+            'source_reading': {'read': 392, 'total': 392, 'complete': True},
+        }
+        self.job.save()
+        last_seen = timezone.now() - timedelta(minutes=16)
+        TenderComputeJob.objects.filter(pk=self.job.pk).update(updated_at=last_seen)
+        with CaptureQueriesContext(connection) as queries, patch('tenders.services._ai_gateway_json') as gateway:
+            status = self.client.get(self.url).json()['statuses'][0]
+        self.assertFalse(status['processing'])
+        self.assertEqual(status['code'], 'ANALYSIS_INCOMPLETE')
+        self.assertIn('прервано', status['reason'])
+        self.assertTrue(status['cost']['incomplete'])
+        self.assertEqual(status['cost']['known_rub'], '2.65')
+        self.assertFalse(status['cost']['pending'])
+        self.assertEqual(status['progress']['completed_at'], last_seen.isoformat())
+        self.assertFalse(any(query['sql'].lstrip().upper().startswith(('UPDATE', 'INSERT', 'DELETE')) for query in queries))
+        gateway.assert_not_called()
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, 'preparing_input')
+        self.assertEqual(self.job.diagnostics['source_reading']['read'], 392)
+        self.assertEqual(self.job.diagnostics['stages']['tz']['state'], 'running')
+        self.assertEqual(self.job.diagnostics['stages']['structure']['result'], [{'source_id': 1}])
+        self.assertEqual(TenderComputeJob.objects.count(), 1)
+
+    def test_recent_heartbeat_keeps_manual_refresh_running(self):
+        self.job.started_at = timezone.now() - timedelta(hours=1)
+        self.job.diagnostics = {'intake_refresh': True, 'stages': {'tz': {'state': 'running'}}}
+        self.job.save()
+        self.assertTrue(self.client.get(self.url).json()['statuses'][0]['processing'])
 
     def test_status_is_read_only_and_reports_running_then_failure_reason(self):
         with CaptureQueriesContext(connection) as queries, patch('tenders.services._ai_gateway_json') as gateway:

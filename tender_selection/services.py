@@ -2098,10 +2098,9 @@ def refresh_document_analysis(user, tender_id, *, routes_only=False):
         raise ValueError("Разбор документов ЕАТ ещё не подключён; используйте ссылку на исходную сессию.")
     from tenders.tender_data import prepare_tender_for_write
     prepare_tender_for_write(tender)
-    active = TenderComputeJob.objects.filter(tender=tender, status__in=["preparing_input", "running", "queued", "routing", "preparing"]).first()
-    if active and active.updated_at < timezone.now() - timedelta(minutes=15):
-        active.status = "partial"; active.error = {"message": "Предыдущее обновление прервано. Запущена повторная попытка."}; active.completed_at = timezone.now()
-        active.save(update_fields=["status", "error", "completed_at", "updated_at"])
+    active = TenderComputeJob.objects.select_for_update().filter(tender=tender, status__in=["preparing_input", "running", "queued", "routing", "preparing"]).first()
+    from tenders.intake_worker import save_interrupted_job
+    if active and save_interrupted_job(active):
         active = None
     if active:
         if routes_only:

@@ -9,6 +9,7 @@ from collections import Counter
 from decimal import Decimal
 
 from .models import OwnerInteraction, TenderCommercialItem, TenderComputeJob, TenderSourceItem
+from .intake_worker import interrupted_job_snapshot, intake_heartbeat_timeout
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ def analysis_cost(job) -> dict:
 def _job_analysis_cost(job) -> dict:
     """Estimate this job's received model answers, including failed answers, not reservations."""
     from .gateway_budget import intake_spend_rub
+    job = interrupted_job_snapshot(job)
     if not job:
         return {}
     diagnostics = job.diagnostics or {}
@@ -151,6 +153,7 @@ _REJECTION_MESSAGES = {
 
 def analysis_issues(job) -> list[str]:
     """Explain saved diagnostics without calling a model or guessing missing evidence."""
+    job = interrupted_job_snapshot(job)
     if job is None:
         return []
     diagnostics = job.diagnostics if isinstance(job.diagnostics, dict) else {}
@@ -168,7 +171,7 @@ def analysis_issues(job) -> list[str]:
             reason = gap.get('reason') or 'Часть проверки не завершена. Повторите «Обновить».'
         issues.append(f"{name}: {reason}" if name else reason)
     if job.error:
-        issues.append('Разбор ТЗ не завершён. Прежние данные сохранены. Повторите «Обновить».')
+        issues.append(job.error['message'] if job.error.get('class') == 'WorkerInterrupted' else 'Разбор ТЗ не завершён. Прежние данные сохранены. Повторите «Обновить».')
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -217,6 +220,7 @@ def document_item_has_change(item: TenderSourceItem) -> bool:
     return item.quantity != item.parent.quantity or (bool(item.unit) and item.unit != item.parent.unit)
 
 def _status_for(tender, job, question_count: int, has_enriched_items: bool, pending_count: int = 0) -> TenderAnalysisStatus:
+    job = interrupted_job_snapshot(job)
     issues = tuple(analysis_issues(job))
     if job is None:
         code = "NOT_CHECKED"
@@ -243,7 +247,7 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     elif refresh and job.status == "ready":
         label = "Маршруты обновлены" if job.diagnostics.get("routes_only") else "Обновлено"
     elif refresh and code == "ANALYSIS_INCOMPLETE":
-        label = "Обновление не завершено"
+        label = "Обновление прервано" if job.error.get('class') == 'WorkerInterrupted' else "Обновление не завершено"
     if job and not active and job.diagnostics.get('awaiting_budget'):
         label = 'Прогресс сохранён · ожидает продолжения'
     started = (job.started_at or job.created_at) if job else None
@@ -259,7 +263,7 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
         "heartbeat_at": job.updated_at.isoformat() if job else None,
         "worker_alive": not active or not job.started_at or (now - job.updated_at).total_seconds() < 45,
         "stage": refresh.get("stage", ""), "full_refresh": bool(refresh), "published_revision": (job.diagnostics or {}).get("published_revision", 0) if job else 0,
-        "retryable": bool(active and (now - job.updated_at).total_seconds() > 900)}
+        "retryable": bool(active and now - job.updated_at > intake_heartbeat_timeout())}
     labels = {'notification': 'Извещение', 'documents': 'Документы', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
     ledger = (job.diagnostics or {}).get('stages', {}) if job else {}
     progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
@@ -307,6 +311,7 @@ def specification_status(tender, *, job=None):
     from tender_selection.services import _document_input_fingerprint
     if job is None:
         job = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
+    job = interrupted_job_snapshot(job)
     def result(state, details):
         labels = {'original': 'ТЗ исходное', 'partial': 'ТЗ частичное', 'checked': 'ТЗ проверено'}
         return {'state': state, 'label': labels[state], 'details': list(dict.fromkeys(details))}
@@ -350,7 +355,7 @@ def specification_status(tender, *, job=None):
     if not completed:
         if not stages and not job.error and job.status in _ACTIVE and not TenderComputeJob.objects.filter(tender=tender, pk__lt=job.pk).exists():
             return result('original', ['Проверка выполняется. Пока доступны исходные сведения и файлы.'])
-        details.append('Проверка ТЗ не завершена. Прежние данные доступны; повторить проверку можно кнопкой «Обновить».')
+        details.append(job.error['message'] if job.error.get('class') == 'WorkerInterrupted' else 'Проверка ТЗ не завершена. Прежние данные доступны; повторить проверку можно кнопкой «Обновить».')
     if not parse_notification(tender.notification_raw or {}).get('documents'):
         details.append('Документы для проверки ТЗ ещё не получены.')
     if completed and not details and diagnostics.get('document_input_fingerprint') != _document_input_fingerprint(tender):

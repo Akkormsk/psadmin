@@ -84,6 +84,54 @@ class IntakeWorkerTests(TestCase):
         child.save()
         self.assertIsNone(queue_continuation(child))
 
+    def test_interrupted_manual_refresh_keeps_evidence_without_automatic_continuation(self):
+        job = self.job(status='preparing_input', trigger='manual_document_refresh')
+        job.diagnostics.update(stages={'tz': {'state': 'running'},
+            'structure': {'state': 'complete', 'result': [{'source_id': 1}]}},
+            source_reading={'complete': True, 'read': 392})
+        job.save()
+        TenderComputeJob.objects.filter(pk=job.pk).update(updated_at=timezone.now()-timedelta(minutes=16))
+        with patch('tenders.services._ai_gateway_json') as gateway:
+            self.assertEqual(recover_interrupted_jobs(), 0)
+            self.assertEqual(recover_interrupted_jobs(), 0)
+        gateway.assert_not_called()
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'partial')
+        self.assertEqual(job.error['class'], 'WorkerInterrupted')
+        self.assertIsNotNone(job.completed_at)
+        self.assertTrue(job.diagnostics['billing_uncertain'])
+        self.assertEqual(job.diagnostics['source_reading']['read'], 392)
+        self.assertEqual(job.diagnostics['stages']['structure']['result'], [{'source_id': 1}])
+        self.assertEqual(TenderComputeJob.objects.count(), 1)
+
+    def test_old_queued_job_is_waiting_not_interrupted(self):
+        from .intake_worker import interrupted_job_snapshot
+        job = self.job()
+        TenderComputeJob.objects.filter(pk=job.pk).update(updated_at=timezone.now()-timedelta(hours=1))
+        job.refresh_from_db()
+        self.assertIs(interrupted_job_snapshot(job), job)
+
+    @override_settings(CALCULATION_V2_ENABLED=False)
+    def test_explicit_retry_records_interruption_and_starts_only_one_new_job(self):
+        from django.contrib.auth import get_user_model
+        from tender_selection.services import refresh_document_analysis
+        owner = get_user_model().objects.create_superuser('retry-owner', password='test')
+        job = self.job(status='preparing_input', trigger='manual_document_refresh')
+        job.diagnostics['stages'] = {'tz': {'state': 'running'}}
+        job.save()
+        TenderComputeJob.objects.filter(pk=job.pk).update(updated_at=timezone.now()-timedelta(minutes=16))
+        with patch('threading.Thread') as thread, self.captureOnCommitCallbacks(execute=True):
+            first = refresh_document_analysis(owner, self.tender.pk)
+            duplicate = refresh_document_analysis(owner, self.tender.pk)
+        self.assertTrue(first['started'])
+        self.assertFalse(duplicate['started'])
+        thread.return_value.start.assert_called_once()
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'partial')
+        self.assertEqual(job.error['class'], 'WorkerInterrupted')
+        self.assertTrue(job.diagnostics['billing_uncertain'])
+        self.assertEqual(TenderComputeJob.objects.count(), 2)
+
     @override_settings(CALCULATION_V2_ENABLED=True)
     def test_manual_update_uses_durable_worker_when_enabled(self):
         from django.contrib.auth import get_user_model
