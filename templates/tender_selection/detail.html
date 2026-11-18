@@ -28,13 +28,13 @@
     <div class="panel-header">
       <div class="ts-detail__head">
         <h2 class="panel-title">{{ tender.title|default:tender.object_info }}</h2>
+        <div class="ts-detail__links ts-notice-links" data-card-refresh="links">
+          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
+          {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
+        </div>
         <p class="ts-row__meta">
           <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button></span>
           <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
-        <span class="ts-detail__links ts-notice-links" data-card-refresh="links">
-          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
-          {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
-        </span>
         </p>
         <div class="ts-refresh-actions">
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Обновить данные, ТЗ, требования 1875 и маршруты в фоне">↻ Обновить</button></form>{% endif %}
@@ -551,8 +551,8 @@
   .ts-item-tz, .ts-item-completeness, .ts-item-audit { margin-top: 8px; }
   .ts-item-audit p { margin: 6px 0; }
   .ts-document-proposal > summary { cursor: pointer; padding: 8px 0; }
-  .ts-notice-links { display:inline-flex; flex-wrap:wrap; gap:.6rem; margin:0; }
-  .ts-notice-links .ts-linkchip { padding:0; border:0; background:transparent; font-size:inherit; }
+  .ts-notice-links { display:flex; flex-wrap:wrap; gap:.6rem; margin:.35rem 0 .5rem; }
+  .ts-notice-links .ts-linkchip { align-items:center; line-height:1.4; white-space:nowrap; }
   .ts-processing-steps { display:flex; flex-wrap:wrap; gap:.4rem .6rem; list-style:none; padding:0; margin:.7rem 0 .5rem; }
   .ts-processing-step { display:flex; align-items:center; gap:.25rem; color:var(--ink-3); font-size:11px; white-space:nowrap; }
   .ts-processing-step__marker { display:inline-flex; align-items:center; justify-content:center; width:1.4em; height:1.4em; border:1px solid currentColor; border-radius:50%; flex-shrink:0; }
