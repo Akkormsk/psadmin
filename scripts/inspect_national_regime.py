@@ -13,6 +13,43 @@ from tenders.models import TenderComputeJob, TenderSourceItem, TenderCommercialI
 from tenders.source_memory import signature
 from tenders.document_enrichment import document_proposal_changes
 
+
+def job_timeline(job, observed_at):
+    diagnostics = job.diagnostics or {}
+    stages = diagnostics.get('stages') or {}
+    stage_fields = (
+        'state', 'outcome', 'started_at', 'duration_ms', 'cost_rub', 'actual_cost_rub',
+        'reused_from', 'reused_records', 'batches', 'provider_call_happened',
+        'completed_tasks', 'remaining_tasks', 'item_count', 'requested_keys',
+    )
+    token_fields = (
+        'prompt_tokens', 'completion_tokens', 'cache_read_input_tokens',
+        'cache_creation_input_tokens', 'prompt_tokens_details',
+    )
+    return {
+        'id': job.pk, 'status': job.status, 'version': job.version, 'trigger': job.trigger,
+        'attempt_count': job.attempt_count, 'created_at': job.created_at,
+        'started_at': job.started_at, 'updated_at': job.updated_at,
+        'completed_at': job.completed_at,
+        'seconds_since_update': (observed_at - job.updated_at).total_seconds(),
+        'error': job.error, 'total_cost_rub': str(job.total_cost),
+        'flow': {key: diagnostics.get(key) for key in (
+            'intake_refresh', 'refresh_root_id', 'continuation_of', 'refresh_started_at',
+            'routes_only', 'awaiting_budget', 'billing_uncertain', 'published_revision',
+            'max_total_cost_rub', 'auto_reservation_rub', 'refresh_flow_limit_rub',
+        )},
+        'refresh': diagnostics.get('refresh'),
+        'stages': {name: {
+            **{key: stage[key] for key in stage_fields if key in stage},
+            'has_saved_result': 'result' in stage,
+            'result_count': len(stage['result']) if isinstance(stage.get('result'), list) else None,
+            'has_incomplete_response': bool(stage.get('incomplete_response')),
+            'error': stage.get('error'),
+            'usage': {key: value for key, value in (stage.get('usage') or {}).items() if key in token_fields},
+        } for name, stage in stages.items()},
+    }
+
+
 print('Read-only tender inspection started', flush=True)
 number = os.environ['INSPECT_TENDER_NUMBER']
 if len(number) != 19 or not number.isascii() or not number.isdigit():
@@ -25,6 +62,18 @@ with transaction.atomic():
     tender = Tender.objects.get(purchase_number=number)
     job = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
     diagnostics = job.diagnostics if job else {}
+    from django.conf import settings
+    from django.utils import timezone
+    from tenders.analysis_presentation import analysis_cost
+    observed_at = timezone.now()
+    print(json.dumps({'job_timeline': {
+        'number': number, 'observed_at': observed_at,
+        'calculation_v2_enabled': settings.CALCULATION_V2_ENABLED,
+        'auto_daily_budget_rub': os.getenv('CALCULATION_V2_AUTO_DAILY_BUDGET_RUB', '0'),
+        'reported_cost': analysis_cost(job),
+        'history': [job_timeline(previous, observed_at) for previous in
+            TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('pk')],
+    }}, ensure_ascii=False, default=str), flush=True)
     reading = diagnostics.get('source_reading') or {}
     risk = tender.risk_assessment or {}
     projected = risk_projection(tender, risk)
