@@ -45,6 +45,7 @@ with transaction.atomic():
         html = response.content.decode()
         review_view = {'http': response.status_code, 'accepted_items': len(context.get('display_items') or []),
             'needs_refresh': context.get('document_review_needs_refresh'),
+            'specification': context.get('specification_status'),
             'accept_button': 'Принять все правки' in html,
             'technical_quote_warning': 'Цитата отсутствует в выбранном фрагменте источника' in html,
             'visible_issues': context.get('analysis_issues')}
