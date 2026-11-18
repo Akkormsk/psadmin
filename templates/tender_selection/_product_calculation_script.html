@@ -1,0 +1,122 @@
+<script>
+(() => {
+  const tenderInline = true;
+  const estimates = new Map(), editors = new WeakMap(), busyLines = new WeakSet();
+  function n(value){return Number(String(value || 0).replace(',','.')) || 0}
+  function money(value){return new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2}).format(value)+' ₽'}
+  function escapeHtml(value){const node=document.createElement('span');node.textContent=String(value ?? '');return node.innerHTML}
+  async function readJson(response){return response.json()}
+  function calculationCsrf(){return document.querySelector('[name="csrfmiddlewaretoken"]')?.value || ''}
+  function closeCalculationDetails(){}
+  {% include "tenders/_calculation_poll.js.html" %}
+  {% include "tenders/_calculation_legacy.js.html" %}
+  {% include "tenders/_calculation_classification.js.html" %}
+  {% include "tenders/_calculation_display.js.html" %}
+
+  function savedEstimate(slot) {
+    const script = slot.closest('[data-analysis-result]').querySelector('#ts-product-calculation-data');
+    if (!script) return null;
+    const snapshot = JSON.parse(script.textContent);
+    if (!estimates.has(snapshot.estimate_id)) estimates.set(snapshot.estimate_id, {...snapshot, saving:Promise.resolve()});
+    return estimates.get(snapshot.estimate_id);
+  }
+  function save(estimate, status) {
+    status.textContent = 'Сохраняю расчёт…';
+    const task = estimate.saving.then(async () => {
+      const data = new FormData();
+      Object.entries(estimate.fields).forEach(([key,value]) => data.append(key,value));
+      data.append('lines_json', JSON.stringify(estimate.lines));
+      data.append('document_analysis_json', JSON.stringify(estimate.document_analysis));
+      const response = await fetch(estimate.save_url,{method:'POST',headers:{'X-CSRFToken':calculationCsrf()},body:data});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось сохранить расчёт.');
+      status.textContent = 'Сохранено';
+    });
+    estimate.saving = task.catch(error => {
+      status.textContent = error.message + ' ';
+      const retry = document.createElement('button');retry.type='button';retry.className='ts-quiet';retry.textContent='Повторить сохранение';
+      retry.onclick=()=>save(estimate,status);status.append(retry);
+    });
+    return task;
+  }
+  function operationsHtml(result,line,editable) {
+    if (result.stage === 'production_classification') return productionClassificationHtml(result);
+    if (result.stage !== 'training_dialogue') return productionHtml(result);
+    const steps = result.route?.processes || [];
+    return '<ol class="training-route__steps">' + steps.map((step,index) => {
+      const run = result.catalog_steps?.[step.id];
+      const catalog = step.kind === 'catalog' ?
+        (run?.catalog_search_started ? catalogSuggestionsHtml({...result,...run},line.nmck_unit,false) : '') +
+        (editable ? `<button type="button" class="button-secondary" data-start-catalog="${escapeHtml(step.id)}">${run?.catalog_search_started?'Повторить подбор':'Подобрать товар'}</button>` : '') : '';
+      const lab = step.kind === 'catalog' ? `<a class="training-cascade-link" href="{% url 'cascade_lab' %}?session_id=${encodeURIComponent(result.session_id)}" target="_blank" rel="noopener">Настроить каскад ↗</a>` : '';
+      const pricing = step.kind === 'production' && step.process_id ? productionPriceHtml(step,result) : '';
+      return `<li><details class="training-route__step" data-step-id="${escapeHtml(step.id)}"><summary><b>${index+1}</b><span>${escapeHtml(step.name)}</span></summary><div class="training-route__step-body">${(step.details||[]).map(text=>`<p>${escapeHtml(text)}</p>`).join('')}${catalog}${lab}${pricing}</div></details></li>`;
+    }).join('') + '</ol>' + (result.costs?.length ? `<div class="training-dialogue__costs"><header>Рассчитанная часть стоимости</header>${result.costs.map(cost=>`<div class="training-cost-row"><span><b>${escapeHtml(cost.process_name||cost.name)}</b>${trainingCostTraceHtml(cost)}</span><strong>${cost.amount_total == null?'—':money(cost.amount_total)}</strong></div>`).join('')}</div>` : '');
+  }
+  function draw(editor) {
+    const {slot,line,estimate} = editor, result = line.requirements.production;
+    const body = slot.querySelector('[data-product-calculation-body]');
+    const openSteps = new Set([...body.querySelectorAll('[data-step-id][open]')].map(step=>step.dataset.stepId));
+    const editable = estimate.editable && !result.is_confirmed && ['ready','needs_review'].includes(slot.dataset.routeState);
+    body.innerHTML = operationsHtml(result,line,editable) + '<p class="form-error" data-route-error></p>' + '<p class="ts-sub" data-calculation-status role="status"></p>';
+    // Training and feedback stay on the server for the future global assistant.
+    body.querySelectorAll('.tender-classification__teach,.tender-route-editor,.tender-production-dialog').forEach(node=>node.remove());
+    body.querySelectorAll('.tender-knowledge-form').forEach(form=>form.closest('details').remove());
+    if (!editable) body.querySelectorAll('button,input,select,textarea').forEach(control=>control.disabled=true);
+    body.querySelectorAll('[data-step-id]').forEach(step=>{if(openSteps.has(step.dataset.stepId))step.open=true});
+    const status = body.querySelector('[data-calculation-status]');
+    if (result.stage !== 'training_dialogue') {
+      if (editable) bindProductionControls(body,line,()=>save(estimate,status));
+      return;
+    }
+    if (!editable) {status.textContent='Сохранённый расчёт доступен для просмотра. Для изменения нужны действующий маршрут и незавершённый расчёт.';return;}
+    function apply(result) {
+      result.source_line_id=line.id;
+      if(line.requirements.production?.catalog_search_started && result.totals?.material_unit===undefined)line.material_unit='0';
+      line.requirements.production=result;
+      if (Array.isArray(result.requirement_clarifications)) line.requirements.clarifications=result.requirement_clarifications;
+      if (result.totals?.material_unit !== undefined) line.material_unit=String(result.totals.material_unit);
+      document.querySelectorAll('[data-product-calculation]').forEach(slot=>{
+        const active=editors.get(slot);
+        if(active?.line===line)draw(active);
+      });
+      return save(estimate,slot.querySelector('[data-calculation-status]') || status);
+    }
+    async function action(button,url,payload) {
+      if (busyLines.has(line)) return;
+      busyLines.add(line);button.disabled=true;status.textContent='Выполняю расчёт…';
+      try {
+        const data=new FormData();data.append('payload',JSON.stringify(payload));
+        const response=await fetch(url,{method:'POST',headers:{'X-CSRFToken':calculationCsrf()},body:data});
+        let result=await readJson(response);
+        if(!response.ok)throw new Error(result.error||'Не удалось выполнить расчёт.');
+        if(response.status===202)result=await waitForProductionResult(result.session_id,label=>{status.textContent=label});
+        await apply(result);
+      } catch(error){if(status.isConnected)status.textContent=error.message;button.disabled=false}
+      finally{busyLines.delete(line)}
+    }
+    body.querySelectorAll('[data-start-catalog],[data-price-production]').forEach(button=>button.onclick=()=>action(button,'{% url "tender_revise_production_hypothesis" %}',{
+      session_id:result.session_id,line,scope:button.hasAttribute('data-start-catalog')?'catalog':'production_price',
+      step_id:button.dataset.startCatalog||button.dataset.priceProduction,
+    }));
+    body.querySelectorAll('[data-catalog-select]').forEach(button=>button.onclick=()=>action(button,'{% url "tender_select_catalog_product" %}',{
+      session_id:result.session_id,line,product_id:button.dataset.catalogSelect,step_id:button.closest('[data-step-id]').dataset.stepId,
+    }));
+    body.querySelectorAll('[data-catalog-more]').forEach(button=>button.onclick=()=>{
+      const alternatives=[...button.closest('[data-step-id]').querySelectorAll('[data-catalog-alternative]')];
+      const show=alternatives.some(item=>item.hidden);alternatives.forEach(item=>item.hidden=!show);
+      button.textContent=show?'Скрыть варианты':`Ещё ${alternatives.length}`;
+    });
+  }
+  function mount(content) {
+    const slot=content.querySelector('[data-product-calculation]');
+    if(!slot||editors.has(slot))return;
+    const estimate=savedEstimate(slot);
+    // Exact saved source identity only: similarly named goods must never share a calculation.
+    const matches=estimate?.lines.filter(line=>String(line.requirements?.source_item_id)===slot.dataset.sourceId) || [];
+    if(matches.length!==1||!matches[0].requirements?.production)return;
+    const editor={slot,estimate,line:matches[0],busy:false};editors.set(slot,editor);draw(editor);
+  }
+  document.addEventListener('ps-product-selected',event=>mount(event.detail.content));
+})();
+</script>

@@ -36,7 +36,8 @@ class ProductWorkspaceTests(SimpleTestCase):
         self.assertIn('Обложка', html)
         self.assertIn('data-product-close', html)
         self.assertEqual(html.count('id="owner-question-9"'), 1)
-        self.assertEqual(html.count('data-source-route='), 1)
+        self.assertNotIn('data-source-route=', html)
+        self.assertEqual(html.count('data-product-calculation-body'), 1)
         self.assertIn('data-owner-answer', html)
         self.assertNotIn('data-build-route', html)
 

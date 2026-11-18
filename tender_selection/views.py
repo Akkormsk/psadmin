@@ -783,6 +783,11 @@ def tender_detail(request, pk):
         if estimate:
             calc_verdict = verdict_for(estimate, tender)
 
+    from tenders.product_workspace import estimate_workspace
+    product_calculation = estimate_workspace(estimate, request.user)
+    if product_calculation and (is_archived or calc_verdict and calc_verdict.get("requires_review")):
+        product_calculation["editable"] = False
+
     lifecycle = _tender_lifecycle(tender, estimate)
     active_stage = "review" if estimate is None else (
         "calculation" if tender.outcome_status == Tender.OUTCOME_DRAFT else
@@ -860,6 +865,7 @@ def tender_detail(request, pk):
         "is_fz223": tender.law != "fz44",
         "pushed_estimate_id": estimate_id,
         "pipeline_estimate_id": estimate_id,
+        "product_calculation": product_calculation,
         "calc_verdict": calc_verdict,
         "lifecycle": lifecycle,
         "active_stage": active_stage,

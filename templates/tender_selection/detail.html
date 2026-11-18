@@ -2,7 +2,7 @@
 {% load static tz tender_selection_extras %}
 
 {% block title %}{{ tender.title|default:tender.object_info|truncatechars:60 }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261118-m2-products">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261118-m2-calculation">{% endblock %}
 
 {% block content %}
 <div class="container ts-detail ts-detail--document" data-workspace-single-layer>
@@ -634,6 +634,7 @@
 </style>
 <script src="{% static 'tender_selection/tabs.js' %}" defer></script>
 <script src="{% static 'tender_selection/products.js' %}" defer></script>
+{% include "tender_selection/_product_calculation_script.html" %}
 <script>
   if (["#tender-items", "#analysis-status"].includes(window.location.hash)) {
     const items = document.querySelector(window.location.hash);

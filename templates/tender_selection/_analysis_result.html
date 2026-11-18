@@ -1,5 +1,6 @@
 {% load tender_selection_extras %}
 <div data-analysis-result="{{ tender.pk }}" data-analysis-revision="{{ analysis_status.revision }}">
+    {% if product_calculation %}{{ product_calculation|json_script:"ts-product-calculation-data" }}{% endif %}
     {% if display_items %}
     {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
     <h3 class="settings-subtitle" id="tender-items">Перечень товаров ({{ display_item_count }})</h3>

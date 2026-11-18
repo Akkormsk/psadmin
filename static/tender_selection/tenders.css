@@ -352,3 +352,12 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
   .ts-product-list-regime,.ts-product-list-price { display:none; }
 }
 @media(prefers-reduced-motion:reduce) { .ts-products-workspace { transition:none; } }
+
+.tender-inline-requirements { display:none; margin-top:18px; }
+.tender-inline-requirements.is-open { display:block; }
+.ts-product-calculation { margin-top:20px; padding-top:16px; border-top:1px solid var(--separator); }
+.ts-product-calculation .training-route__steps { padding:0; list-style:none; }
+.ts-product-calculation .training-route__step { margin:10px 0; }
+.ts-product-calculation .training-catalog { min-width:0; }
+.ts-product-calculation .training-catalog-card { flex-wrap:wrap; }
+.ts-product-calculation .training-catalog-card > span { min-width:0; overflow-wrap:anywhere; }

@@ -27,6 +27,7 @@
     const content = entry.querySelector('[data-product-content]');
     content.hidden = false;
     state.inspector.append(content);
+    document.dispatchEvent(new CustomEvent('ps-product-selected', {detail:{content}}));
     entry.querySelector('[data-product-select]').setAttribute('aria-expanded', 'true');
     if (focus) content.querySelector('[data-product-close]').focus({preventScroll:true});
   }
@@ -51,10 +52,10 @@
   function revealAnchor() {
     const target = document.getElementById(location.hash.slice(1));
     const content = target?.closest('[data-product-content]');
-    const workspace = content?.closest('[data-products-workspace]');
+    const workspace = target?.closest('[data-products-workspace]');
     if (!workspace) return;
     const state = init(workspace);
-    const entry = content.closest('[data-product-key]') || state.current;
+    const entry = target.closest('[data-product-key]') || (content && state.current);
     if (entry) select(workspace, entry.dataset.productKey, false);
   }
   const root = document.querySelector('#ts-panel-products');

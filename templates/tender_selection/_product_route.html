@@ -1,0 +1,13 @@
+{% if route %}
+<p class="ts-sub">{{ route.label }}</p>
+{% if route.pending_changes %}<p class="ts-warn">Есть изменения ТЗ на согласовании. Маршрут относится к принятым данным.</p>{% endif %}
+{% if route.reason %}<p>{{ route.reason }}</p>{% endif %}
+{% for step in route.steps %}<details class="training-route__step"><summary><b>{{ step.position }}</b><span>{{ step.name }}</span></summary><div class="training-route__step-body">{% if step.description %}<p>{{ step.description }}</p>{% endif %}{% for detail in step.details %}<p>{{ detail }}</p>{% endfor %}</div></details>{% endfor %}
+{% if route.source_conflicts %}<p class="ts-warn">Расхождения в источниках: {{ route.source_conflicts|join:", " }}.</p>{% endif %}
+{% if route.interaction.options and route.state == "ready" %}
+<form method="post" data-owner-answer data-tender-id="{{ tender.pk }}" action="{{ route.interaction.url }}">{% csrf_token %}<div class="ts-question-options">{% for option in route.interaction.options %}<label><input type="radio" name="answer" value="{{ option }}" required{% if option == route.interaction.selected %} checked{% endif %}><span>{{ option }}</span></label>{% endfor %}</div><span data-owner-answer-status role="status"></span></form>
+{% endif %}
+{% if route.assumption %}<details><summary>Допущение маршрута</summary><p>{{ route.assumption }}</p></details>{% endif %}
+{% if route.missing_inputs %}<p class="ts-sub">Не хватает данных: {{ route.missing_inputs|join:", " }}.</p>{% endif %}
+{% else %}<p class="ts-sub">Маршрут ещё не подготовлен.</p>{% endif %}
+<p class="ts-sub">Сохранённого расчёта этого товара пока нет.</p>
