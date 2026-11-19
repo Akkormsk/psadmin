@@ -53,31 +53,17 @@ class ProductWorkspaceTests(SimpleTestCase):
         self.assertIn('data-product-target="group-17-0"', html)
 
     def test_quantity_is_separate_and_gisp_is_an_inactive_placeholder(self):
-        from html.parser import HTMLParser
-
-        class Controls(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.searches = []
-
-            def handle_starttag(self, tag, attrs):
-                attrs = dict(attrs)
-                if tag == 'input' and attrs.get('type') == 'search':
-                    self.searches.append(attrs)
-
         html = self.render_workspace()
         self.assertIn('<span class="ts-product-quantity">100 шт.</span>', html)
         self.assertIn('data-regime-indicator', html)
         self.assertIn('Количество', html)
         self.assertNotIn('ts-product-list-regime', html)
-        controls = Controls()
-        controls.feed(html)
-        self.assertEqual(len(controls.searches), 2)  # Group and its product.
-        for search in controls.searches:
-            self.assertIn('disabled', search)
-            self.assertNotIn('name', search)
-            self.assertNotIn('value', search)
-        self.assertIn('Наименование или реестровый номер', html)
+        self.assertEqual(html.count('class="ts-product-gisp"'), 2)
+        self.assertNotIn('type="search"', html)
+        self.assertNotIn('Наименование или реестровый номер', html)
+        self.assertIn('disabled>Подобрать продукцию</button>', html)
+        self.assertIn('По описанию и ТЗ товара', html)
+        self.assertIn('Ещё не подобран', html)
         self.assertIn('Подключим позже', html)
 
     def test_1875_tooltip_keeps_the_actual_regime_and_none_is_not_green(self):
