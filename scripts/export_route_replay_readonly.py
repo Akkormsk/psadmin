@@ -6,6 +6,7 @@ import zlib
 
 
 def collect_snapshot():
+    from django.conf import settings
     from django.core import serializers
     from django.db.models import Q
     from tender_selection.models import DocumentPreview, Tender, TenderDocument
@@ -13,6 +14,7 @@ def collect_snapshot():
     from tenders.models import (CalculationComponent, ComponentOperationStep, ComponentRoutePlan,
         ProcessDefinition, TenderCommercialItem, TenderComputeJob, TenderSourceItem)
     from tenders.calculation_v2_pipeline import _knowledge_for, _route_owner_answer_map
+    from tenders.gateway_budget import model_catalog
 
     tenders = Tender.objects.exclude(status=Tender.DISMISSED).filter(v2_compute_jobs__isnull=False).distinct().order_by('pk')
     tender_ids = list(tenders.values_list('pk', flat=True))
@@ -34,6 +36,7 @@ def collect_snapshot():
     append(plans)
     append(ComponentOperationStep.objects.filter(route_plan__in=plans).order_by('pk'))
     return {'fixtures': fixtures, 'tender_ids': tender_ids, 'knowledge': _knowledge_for([]),
+        'model_catalog': model_catalog(), 'context_limits': getattr(settings, 'CALCULATION_V2_CONTEXT_LIMITS', {}),
         'owner_answers': _route_owner_answer_map(list(sources)), 'read_only': True, 'model_called': False}
 
 
