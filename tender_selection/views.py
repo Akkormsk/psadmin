@@ -853,6 +853,12 @@ def tender_detail(request, pk):
     from .national_regime import risk_projection
     risk = risk_projection(tender, risk, card)
     from tenders.document_evidence import condition_context
+    from .card_navigation import document_readiness, result_badge
+    navigation_documents = document_readiness((card or {}).get("documents", []), v2_job.diagnostics if v2_job else {})
+    navigation_result = result_badge(estimate, calc_verdict)
+    navigation_nmck = (card or {}).get("money", {}).get("max_price")
+    if navigation_nmck is None:
+        navigation_nmck = tender.max_price
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
@@ -867,6 +873,9 @@ def tender_detail(request, pk):
         "pipeline_estimate_id": estimate_id,
         "product_calculation": product_calculation,
         "calc_verdict": calc_verdict,
+        "navigation_documents": navigation_documents,
+        "navigation_result": navigation_result,
+        "navigation_nmck": navigation_nmck,
         "lifecycle": lifecycle,
         "active_stage": active_stage,
         "is_archived": is_archived,
@@ -1023,7 +1032,8 @@ def risk_status(request, pk):
     html = render_to_string("tender_selection/_risk_block.html", {
         "risk": risk, "risk_error": tender.risk_error, "risk_docs": tender.risk_assessment_docs,
     }, request=request)
-    return JsonResponse({"html": html})
+    badge = render_to_string("tender_selection/_risk_tab_badge.html", {"risk": risk}, request=request)
+    return JsonResponse({"html": html, "tab_badge": badge})
 
 
 def _doc_by_idx(tender, idx):

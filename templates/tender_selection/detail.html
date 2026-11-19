@@ -2,7 +2,7 @@
 {% load static tz tender_selection_extras %}
 
 {% block title %}{{ tender.title|default:tender.object_info|truncatechars:60 }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261118-m2-calculation">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261119-economy-navigation">{% endblock %}
 
 {% block content %}
 <div class="container ts-detail ts-detail--document" data-workspace-single-layer>
@@ -28,14 +28,8 @@
     <div class="panel-header">
       <div class="ts-detail__head">
         <h2 class="panel-title">{{ tender.title|default:tender.object_info }}</h2>
-        <div class="ts-detail__links ts-notice-links" data-card-refresh="links">
-          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
-          {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
-        </div>
-        <p class="ts-row__meta">
-          <span><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span> № <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button></span>
-          <span>{% if card.placing_way %}{{ card.placing_way }}{% else %}{{ tender.get_law_display }}{% endif %}</span>
-        </p>
+        <p class="ts-row__meta ts-notice-type"><span class="ts-law ts-law--{{ tender.law }}">{{ tender.get_law_display }}</span>{% if card.placing_way %}<span>{{ card.placing_way }}</span>{% endif %}</p>
+        <p class="ts-notice-number">№ <button type="button" class="copy-notice" data-copy-notice="{{ display_purchase_number }}" title="Скопировать номер извещения">{{ display_purchase_number }}</button></p>
         <div class="ts-refresh-actions">
         {% if request.user.is_superuser %}<form method="post" action="{% url 'tender_selection:refresh_analysis' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}" style="display:inline-block" data-analysis-refresh data-analysis-tender="{{ tender.pk }}">{% csrf_token %}<button type="submit" class="ts-quiet" title="Обновить данные, ТЗ, требования 1875 и маршруты в фоне">↻ Обновить</button></form>{% endif %}
         <details class="ts-specification" data-specification-status="{{ tender.pk }}" data-specification-state="{{ specification_status.state }}">
@@ -91,15 +85,19 @@
 
   <section class="panel ts-tabs-workspace" data-tender-tabs>
     <nav class="ts-tabs" role="tablist" aria-label="Разделы тендера">
-      <button type="button" id="ts-tab-general" role="tab" aria-controls="ts-panel-general" aria-selected="false" tabindex="-1">Общее</button>
-      <button type="button" id="ts-tab-products" role="tab" aria-controls="ts-panel-products" aria-selected="true" tabindex="0">Товары</button>
-      <button type="button" id="ts-tab-documents" role="tab" aria-controls="ts-panel-documents" aria-selected="false" tabindex="-1">Документы</button>
-      <button type="button" id="ts-tab-analysis" role="tab" aria-controls="ts-panel-analysis" aria-selected="false" tabindex="-1">Анализ</button>
-      <button type="button" id="ts-tab-results" role="tab" aria-controls="ts-panel-results" aria-selected="false" tabindex="-1">Результаты</button>
+      <button type="button" id="ts-tab-general" role="tab" aria-controls="ts-panel-general" aria-selected="true" tabindex="0">Общее<span data-card-refresh="tab-badge-general">{% include "tender_selection/_tab_badge.html" with tab="general" %}</span></button>
+      <button type="button" id="ts-tab-products" role="tab" aria-controls="ts-panel-products" aria-selected="false" tabindex="-1">Товары<span data-card-refresh="tab-badge-products">{% include "tender_selection/_tab_badge.html" with tab="products" %}</span></button>
+      <button type="button" id="ts-tab-documents" role="tab" aria-controls="ts-panel-documents" aria-selected="false" tabindex="-1">Документы<span data-card-refresh="tab-badge-documents">{% include "tender_selection/_tab_badge.html" with tab="documents" %}</span></button>
+      <button type="button" id="ts-tab-analysis" role="tab" aria-controls="ts-panel-analysis" aria-selected="false" tabindex="-1">Анализ<span data-card-refresh="tab-badge-analysis">{% include "tender_selection/_tab_badge.html" with tab="analysis" %}</span></button>
+      <button type="button" id="ts-tab-results" role="tab" aria-controls="ts-panel-results" aria-selected="false" tabindex="-1">Результаты<span data-card-refresh="tab-badge-results">{% include "tender_selection/_tab_badge.html" with tab="results" %}</span></button>
     </nav>
-    <div class="ts-tab-panel" id="ts-panel-general" role="tabpanel" aria-labelledby="ts-tab-general" tabindex="0" hidden>
+    <div class="ts-tab-panel" id="ts-panel-general" role="tabpanel" aria-labelledby="ts-tab-general" tabindex="0">
   <details class="panel panel--separated" open>
     <summary class="panel-header"><h2 class="panel-title">{% if is_fz223 %}Данные закупки{% else %}Извещение{% endif %}</h2><span class="ts-stage-summary"><span class="ts-summary-pill ts-summary-pill--neutral">{% if card.items %}{{ card.items|length }} позиций{% elif is_manual %}данные ЕИС не загружены{% else %}основные условия закупки{% endif %}</span></span></summary>
+        <div class="ts-detail__links ts-notice-links" data-card-refresh="links">
+          {% if card.eis_href or tender.eis_url %}<a class="ts-linkchip" href="{{ card.eis_href|default:tender.eis_url }}" target="_blank" rel="noopener">{% if tender.source == "eat" %}ЕАТ ↗{% else %}ЕИС ↗{% endif %}</a>{% endif %}
+          {% if card.print_form_url %}<a class="ts-linkchip" href="{{ card.print_form_url }}" target="_blank" rel="noopener">Печатная форма ↗</a>{% endif %}
+        </div>
     {% if is_fz223 %}
     <p class="ts-warn">223-ФЗ: у источника нет разобранного извещения. Перечень товаров и документы — на портале ЕИС:
       <a href="{{ tender.eis_url }}" target="_blank" rel="noopener">открыть карточку {% if tender.source == "eat" %}ЕАТ{% else %}закупки{% endif %} ↗</a></p>
@@ -158,7 +156,7 @@
 
 
     </div>
-    <div class="ts-tab-panel" id="ts-panel-products" role="tabpanel" aria-labelledby="ts-tab-products" tabindex="0">
+    <div class="ts-tab-panel" id="ts-panel-products" role="tabpanel" aria-labelledby="ts-tab-products" tabindex="0" hidden>
     {% include "tender_selection/_analysis_result.html" %}
     </div>
     <div class="ts-tab-panel" id="ts-panel-documents" role="tabpanel" aria-labelledby="ts-tab-documents" tabindex="0" hidden>
@@ -573,9 +571,9 @@
   .ts-document-proposal > summary { cursor: pointer; padding: 8px 0; }
   .ts-notice-links { display:flex; flex-wrap:wrap; gap:.6rem; margin:.35rem 0 .5rem; }
   .ts-notice-links .ts-linkchip { align-items:center; line-height:1.4; white-space:nowrap; }
-  .ts-processing-steps { display:flex; flex-wrap:wrap; gap:.4rem .6rem; list-style:none; padding:0; margin:.7rem 0 .5rem; }
-  .ts-processing-step { display:flex; align-items:center; gap:.25rem; color:var(--ink-3); font-size:11px; white-space:nowrap; }
-  .ts-processing-step__marker { display:inline-flex; align-items:center; justify-content:center; width:1.4em; height:1.4em; border:1px solid currentColor; border-radius:50%; flex-shrink:0; }
+  .ts-processing-steps { display:flex; flex-wrap:wrap; gap:.25rem .5rem; list-style:none; padding:0; margin:.5rem 0 .35rem; }
+  .ts-processing-step { display:flex; align-items:center; gap:.25rem; color:var(--ink-3); font-size:10px; white-space:nowrap; }
+  .ts-processing-step__marker { display:inline-flex; align-items:center; justify-content:center; width:1.2em; height:1.2em; border:1px solid currentColor; border-radius:50%; flex-shrink:0; }
   .ts-processing-step[data-state="complete"] { color:var(--ink-2); }
   .ts-processing-step[data-state="running"] { color:var(--accent, #1769aa); font-weight:600; }
   .ts-processing-step[data-state="warning"], .ts-processing-step[data-state="failed"] { color:#a66b00; }
@@ -632,7 +630,7 @@
   .ts-risk-factor--high { color: var(--negative-ink); font-weight: 600; }
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } .ts-stage-summary { margin-left:22px; justify-content:flex-start; text-align:left; } .tender-saved-bid { align-items:flex-start; } }
 </style>
-<script src="{% static 'tender_selection/tabs.js' %}" defer></script>
+<script src="{% static 'tender_selection/tabs.js' %}?v=20261119-economy-navigation" defer></script>
 <script src="{% static 'tender_selection/products.js' %}" defer></script>
 {% include "tender_selection/_product_calculation_script.html" %}
 <script>
@@ -834,7 +832,11 @@
       block.innerHTML = '<p class="ts-doc-loading">Читаю документы закупки и оцениваю риски…</p>';
       fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
         .then(function (r) { return r.json(); })
-        .then(function (data) { block.innerHTML = data.html; })
+        .then(function (data) {
+          block.innerHTML = data.html;
+          var badge = document.querySelector('[data-risk-tab-badge]');
+          if (badge && data.tab_badge) badge.innerHTML = data.tab_badge;
+        })
         .catch(function () {
           block.innerHTML = '<p class="ts-sub">Не удалось загрузить оценку рисков. <button type="button" class="ts-doc-link" data-risk-refresh>Попробовать ещё раз</button></p>';
         });

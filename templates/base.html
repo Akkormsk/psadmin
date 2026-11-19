@@ -482,7 +482,7 @@
               const openDetails = new Set([...target.querySelectorAll('details[open]')].map(detailKey));
               target.replaceWith(replacement);
               replacement.querySelectorAll('details').forEach(node => { if (openDetails.has(detailKey(node))) node.open = true; });
-              for (const key of ['notification', 'links', 'documents', 'risk', 'risk-summary']) {
+              for (const key of ['notification', 'links', 'documents', 'risk', 'risk-summary', 'tab-badge-general', 'tab-badge-products', 'tab-badge-documents', 'tab-badge-analysis', 'tab-badge-results']) {
                 const current = document.querySelector('[data-card-refresh="' + key + '"]'), fresh = parsed.querySelector('[data-card-refresh="' + key + '"]');
                 if (current && fresh) current.innerHTML = fresh.innerHTML;
               }

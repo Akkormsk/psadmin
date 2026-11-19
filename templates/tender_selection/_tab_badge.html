@@ -1,0 +1,8 @@
+{% load tender_selection_extras %}
+{% if tab == 'general' %}
+{% if navigation_nmck is not None %}<small class="ts-tab-badge">{{ navigation_nmck|rub }}</small>{% endif %}
+{% elif tab == 'products' %}<small class="ts-tab-badge">{{ display_item_count }} поз.</small>
+{% elif tab == 'documents' %}<small class="ts-tab-badge" title="Извлечён текст файлов. Полнота ТЗ показана отдельно в шапке.">{% if navigation_documents.known %}{{ navigation_documents.read }}{% elif navigation_documents.total %}—{% else %}0{% endif %}/{{ navigation_documents.total }}</small>
+{% elif tab == 'analysis' %}<span data-risk-tab-badge>{% include "tender_selection/_risk_tab_badge.html" %}</span>{% if price_stats %}<small class="ts-tab-badge" title="Прогноз рынка: медиана снижения похожих закупок">−{{ price_stats.median|floatformat:'-2' }}%</small>{% endif %}
+{% elif tab == 'results' %}<small class="ts-tab-badge ts-tab-badge--{{ navigation_result.kind }}">{% if navigation_result.roi is not None %}ROI {{ navigation_result.roi|floatformat:'-1' }}%{% else %}{{ navigation_result.label }}{% endif %}</small>
+{% endif %}

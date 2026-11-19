@@ -31,6 +31,7 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Не удалось сохранить расчёт.');
       status.textContent = 'Сохранено';
+      document.dispatchEvent(new CustomEvent('ps-product-calculation-saved'));
     });
     estimate.saving = task.catch(error => {
       status.textContent = error.message + ' ';

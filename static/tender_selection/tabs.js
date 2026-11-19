@@ -34,6 +34,36 @@
       });
       if (tab) activate(tab, false);
     }
+    var badgeRequest;
+    function resultNotice(label) {
+      var container = workspace.querySelector('[data-card-refresh="tab-badge-results"]');
+      if (!container) return;
+      var badge = document.createElement('small');
+      badge.className = 'ts-tab-badge';
+      badge.textContent = label;
+      container.replaceChildren(badge);
+    }
+    document.addEventListener('ps-product-calculation-saved', async function () {
+      if (badgeRequest) badgeRequest.abort();
+      var request = new AbortController();
+      badgeRequest = request;
+      resultNotice('Расчёт обновлён');
+      try {
+        var url = new URL(window.location.href);
+        url.searchParams.set('analysis_snapshot', '1');
+        url.searchParams.set('full_card', '1');
+        var response = await fetch(url, {cache: 'no-store', signal: request.signal});
+        if (!response.ok || response.redirected) throw new Error('Navigation unavailable');
+        var parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
+        if (badgeRequest !== request) return;
+        workspace.querySelectorAll('[data-card-refresh^="tab-badge-"]').forEach(function (container) {
+          var fresh = parsed.querySelector('[data-card-refresh="' + container.dataset.cardRefresh + '"]');
+          if (fresh) container.innerHTML = fresh.innerHTML;
+        });
+      } catch (error) {
+        if (error.name !== 'AbortError' && badgeRequest === request) resultNotice('Сводка не обновлена');
+      }
+    });
     window.addEventListener('hashchange', revealAnchor);
     revealAnchor();
   });
