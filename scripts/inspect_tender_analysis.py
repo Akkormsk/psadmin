@@ -342,32 +342,24 @@ def main():
         with connection.cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         from tender_selection.models import Tender
-        from tenders.models import TenderComputeJob
-        from collections import Counter
-        tender = Tender.objects.get(purchase_number=number)
-        job = TenderComputeJob.objects.get(pk=166, tender=tender)
-        memory = job.diagnostics.get('source_reading') or {}
-        rows = list((memory.get('assignments') or {}).values())
-        fragments = memory.get('fragments') or {}
-        stages = job.diagnostics.get('stages') or {}
-        tz = (stages.get('tz') or {}).get('result') or []
-        unassigned = [row for row in rows if row.get('scope') == 'unassigned']
-        samples = []
-        for row in unassigned[:5]:
-            block = fragments.get(row['id'], {})
-            occ = (block.get('occurrences') or [{}])[0]
-            loc = occ.get('structure') or {}
-            nearby = []
-            for other in fragments.values():
-                for o in other.get('occurrences', []):
-                    st = o.get('structure') or {}
-                    if o.get('doc_id') == occ.get('doc_id') and st.get('table') == loc.get('table') and type(st.get('row')) is int and type(loc.get('row')) is int and abs(st['row']-loc['row']) <= 1:
-                        nearby.append({'row':st['row'], 'text':other.get('text','')[:180]})
-            samples.append({'text':block.get('text','')[:400], 'location':occ.get('location'), 'structure':loc, 'nearby':nearby[:8], 'reason':row.get('reason')})
-        print(json.dumps({'job':job.pk,'status':job.status,'read':memory.get('read'),'total':memory.get('total'),
-            'scopes':dict(Counter(row.get('scope') for row in rows)), 'tz_rows':len(tz),
-            'tz_chars':sum(len(row.get('characteristics') or []) for row in tz if isinstance(row,dict)),
-            'samples':samples, 'jobs':list(TenderComputeJob.objects.filter(tender=tender).order_by('-pk').values('pk','status','completed_at')[:3])}, ensure_ascii=False, default=str), flush=True)
+        from django.db.models import Q
+        import traceback
+        targets = Tender.objects.filter(
+            Q(purchase_number=number) |
+            (Q(estimates__isnull=False) & ~Q(status=Tender.DISMISSED) &
+             ~Q(outcome_status__in=(Tender.OUTCOME_DRAFT, Tender.OUTCOME_PENDING)))
+        ).distinct().order_by('pk')
+        reports = []
+        for tender in targets:
+            try:
+                with transaction.atomic():
+                    check = inspect_card_routes(tender)
+                reports.append({'number': tender.purchase_number, **check})
+            except Exception as error:
+                reports.append({'number': tender.purchase_number, 'exception': type(error).__name__,
+                    'frames': [{'file': frame.filename, 'line': frame.lineno, 'function': frame.name,
+                                'code': frame.line} for frame in traceback.extract_tb(error.__traceback__)]})
+        print(json.dumps({'read_only': True, 'model_called': False, 'card_checks': reports}, ensure_ascii=False), flush=True)
 
 
 
