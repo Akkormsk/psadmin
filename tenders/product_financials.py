@@ -2,7 +2,7 @@
 from collections import defaultdict
 from decimal import Decimal
 
-from .services import calculate_tender
+from .services import _parse_document_decimal, calculate_tender
 
 COST_FIELDS = ('material_unit', 'application_unit', 'logistics_unit')
 COLUMN_DEFINITIONS = (
@@ -17,8 +17,9 @@ STATE_LABELS = {
 }
 
 
-def _quantity(value):
-    return Decimal(str(value)) if value is not None else None
+def _source_decimal(value):
+    number = _parse_document_decimal(value)
+    return number if number is not None and number.is_finite() else None
 
 
 def _finish(finance, quantity):
@@ -45,7 +46,7 @@ def _state(freshness, complete):
 
 
 def _original(item):
-    return {'nmck_total': item.get('sum'), 'nmck_unit': item.get('price'),
+    return {'nmck_total': _source_decimal(item.get('sum')), 'nmck_unit': _source_decimal(item.get('price')),
         'purchase_total': None, 'purchase_unit': None, 'rrp_total': None, 'rrp_unit': None,
         'profit': None, 'profit_unit': None, 'state': 'unavailable', 'complete': False}
 
@@ -71,11 +72,11 @@ def present_product_financials(items, groups, workspace, estimate, notification_
             item['finance_key'] = f"commercial-{item['commercial_id']}"
         else:
             item['finance_key'] = f'position-{index}'
-        item['finance'] = _finish(_original(item), _quantity(item.get('quantity')))
+        item['finance'] = _finish(_original(item), _source_decimal(item.get('quantity')))
     for group in groups:
         group['finance_key'] = f"group-{group['key']}"
         original = group.get('original') or {}
-        group['finance'] = _finish(_original(original), _quantity(original.get('quantity')))
+        group['finance'] = _finish(_original(original), _source_decimal(original.get('quantity')))
     if workspace is None or estimate is None:
         return _finish(_original({'sum': notification_total}), None) if notification_total is not None else None
     lines = []
@@ -141,9 +142,9 @@ def present_product_financials(items, groups, workspace, estimate, notification_
         if Decimal(values['purchase_total']) > 0:
             finance['purchase_total'] = Decimal(values['purchase_total'])
         if freshness == 'current':
-            finance.update(nmck_total=_quantity(values['nmck_total']) if values['nmck_total'] is not None else finance['nmck_total'], rrp_total=_quantity(values['rrp_total']),
-                profit=_quantity(values['gross_profit']) if complete else None)
-        group['finance'] = _finish(finance, _quantity(quote.get('quantity')))
+            finance.update(nmck_total=_source_decimal(values['nmck_total']) if values['nmck_total'] is not None else finance['nmck_total'], rrp_total=_source_decimal(values['rrp_total']),
+                profit=_source_decimal(values['gross_profit']) if complete else None)
+        group['finance'] = _finish(finance, _source_decimal(quote.get('quantity')))
 
     if not lines or covered != {line['id'] for line in lines}:
         return None

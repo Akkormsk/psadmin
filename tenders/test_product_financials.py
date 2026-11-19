@@ -109,3 +109,24 @@ class ProductFinancialsTests(SimpleTestCase):
         html = render_to_string('tender_selection/_product_financials.html', context)
         self.assertIn('Себестоимость товара', html)
         self.assertLess(html.index('300,00'), html.index('30,00'))
+
+    def test_legacy_notification_blanks_render_as_unknown_without_500(self):
+        for value in ('', '   ', None):
+            item = {'source_id': 42, 'quantity': value, 'sum': value, 'price': value}
+            totals = present_product_financials([item], [], None, None, value)
+            self.assertIsNone(item['finance']['nmck_total'])
+            self.assertIsNone(item['finance']['nmck_unit'])
+            if totals is not None:
+                self.assertIsNone(totals['nmck_total'])
+        item = {'source_id': 42, 'quantity': '10', 'sum': '', 'price': ''}
+        present_product_financials([item], [], None, None)
+        self.assertIsNone(item['finance']['nmck_total'])
+
+    def test_source_numbers_keep_zero_and_accept_existing_document_number_formats(self):
+        item = {'source_id': 42, 'quantity': '10', 'sum': '1 000,50', 'price': '100,05'}
+        present_product_financials([item], [], None, None)
+        self.assertEqual(item['finance']['nmck_total'], Decimal('1000.50'))
+        self.assertEqual(item['finance']['nmck_unit'], Decimal('100.05'))
+        item.update(sum='0', price='0', quantity='0')
+        present_product_financials([item], [], None, None)
+        self.assertEqual(item['finance']['nmck_total'], Decimal('0'))
