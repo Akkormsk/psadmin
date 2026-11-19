@@ -335,7 +335,6 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-product-select > span:first-child { flex:1; min-width:0; overflow-wrap:anywhere; }
 .ts-product-select small { display:block; color:var(--ink-3); }
 .ts-product-select[aria-expanded="true"] { background:var(--tint-neutral); }
-.ts-product-list-regime { color:var(--ink-2); font-size:12px; }
 
 .ts-products-children { margin-left:18px; padding-left:10px; border-left:1px solid var(--separator); }
 .ts-products-group { margin-top:14px; }
@@ -374,7 +373,8 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 
 /* Saved product finances: the same cells in the list and selected product. */
 .ts-product-select,.ts-products-columns { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,4fr) auto; gap:12px; }
-.ts-product-select .ts-product-quantity { display:inline; margin-left:5px; white-space:nowrap; font-size:11px; font-weight:400; }
+.ts-product-select .ts-product-quantity { display:block; white-space:nowrap; text-align:right; font-size:12px; font-weight:400; }
+.ts-quantity-heading { text-align:right; }
 .ts-product-financials { display:block; min-width:0; }
 .ts-finance-values { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; min-width:0; }
 .ts-finance-cell { display:block; min-width:0; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
@@ -396,17 +396,33 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-product-cost-total b { font-size:17px; font-variant-numeric:tabular-nums; }
 .ts-product-cost-total small { grid-column:2; text-align:right; font-size:11px; color:var(--ink-3); }
 .has-selection .ts-products-columns,.has-selection .ts-product-select > .ts-product-financials { display:none; }
-.has-selection .ts-product-select { grid-template-columns:minmax(0,1fr) auto; }
-.has-selection .ts-product-select .ts-product-list-regime { display:block; grid-row:2; grid-column:1; font-size:10px; }
-.has-selection .ts-product-select > [aria-hidden] { grid-row:1; grid-column:2; }
+.has-selection .ts-product-select { grid-template-columns:minmax(0,1fr) auto auto; }
+.has-selection .ts-product-select .ts-product-quantity { grid-row:1; grid-column:2; font-size:11px; }
+.has-selection .ts-product-select > [aria-hidden] { grid-row:1; grid-column:3; }
 @media(max-width:650px) {
   .ts-products-columns { display:none; }
-  .ts-product-select { grid-template-columns:minmax(0,1fr) auto; }
-  .ts-product-select .ts-product-list-regime { grid-column:1; grid-row:2; }
-  .ts-product-select > [aria-hidden] { grid-column:2; grid-row:1; }
+  .ts-product-select { grid-template-columns:minmax(0,1fr) auto auto; }
+  .ts-product-select .ts-product-quantity { grid-column:2; grid-row:1; }
+  .ts-product-select > [aria-hidden] { grid-column:3; grid-row:1; }
   .ts-product-select > .ts-product-financials { grid-column:1/-1; }
   .ts-product-select .ts-finance-cell::before { content:attr(data-label); display:block; font-size:9px; color:var(--ink-3); }
   .ts-finance-values { gap:8px; }
   .ts-products-total { display:block; }
   .ts-products-total > strong { display:block; margin-bottom:8px; }
 }
+
+.ts-product-name { position:relative; }
+.ts-regime-indicator { display:inline-flex; align-items:center; justify-content:center; padding:5px; margin-left:3px; color:var(--ink-3); vertical-align:middle; cursor:help; }
+.ts-regime-indicator[data-regime="ban"] { color:var(--negative-ink); }
+.ts-regime-indicator[data-regime="restriction"] { color:var(--warning-ink); }
+.ts-regime-indicator[data-regime="advantage"] { color:var(--positive-ink); }
+.ts-regime-dot { width:9px; height:9px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.ts-regime-tooltip { display:none; position:absolute; left:0; top:100%; z-index:5; width:max-content; max-width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface); box-shadow:var(--shadow-card); color:var(--ink); font-size:12px; font-weight:400; white-space:normal; }
+.ts-regime-tooltip > span { display:block; margin-top:4px; color:var(--ink-2); font-size:11px; }
+.ts-regime-indicator:hover .ts-regime-tooltip,.ts-regime-indicator.is-open .ts-regime-tooltip,.ts-product-select:focus-visible .ts-regime-tooltip { display:block; }
+.ts-product-gisp { margin:20px 0; padding:14px; border:1px solid var(--separator); border-radius:var(--radius-sm); background:var(--tint-neutral); }
+.ts-product-gisp h4 { margin:0 0 10px; font-size:13px; }
+.ts-product-gisp label > span:first-child { display:block; margin-bottom:6px; color:var(--ink-2); font-size:12px; }
+.ts-gisp-search { display:flex; gap:8px; }
+.ts-gisp-search input { flex:1; min-width:0; width:100%; }
+.ts-product-gisp .ts-sub { margin:8px 0 0; }

@@ -51,3 +51,43 @@ class ProductWorkspaceTests(SimpleTestCase):
         html = self.render_workspace(source_id=None)
         self.assertIn('data-product-key="group-17-0"', html)
         self.assertIn('data-product-target="group-17-0"', html)
+
+    def test_quantity_is_separate_and_gisp_is_an_inactive_placeholder(self):
+        from html.parser import HTMLParser
+
+        class Controls(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.searches = []
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'input' and attrs.get('type') == 'search':
+                    self.searches.append(attrs)
+
+        html = self.render_workspace()
+        self.assertIn('<span class="ts-product-quantity">100 шт.</span>', html)
+        self.assertIn('data-regime-indicator', html)
+        self.assertIn('Количество', html)
+        self.assertNotIn('ts-product-list-regime', html)
+        controls = Controls()
+        controls.feed(html)
+        self.assertEqual(len(controls.searches), 2)  # Group and its product.
+        for search in controls.searches:
+            self.assertIn('disabled', search)
+            self.assertNotIn('name', search)
+            self.assertNotIn('value', search)
+        self.assertIn('Наименование или реестровый номер', html)
+        self.assertIn('Подключим позже', html)
+
+    def test_1875_tooltip_keeps_the_actual_regime_and_none_is_not_green(self):
+        from .national_regime import annotation
+        for status in ('ban', 'restriction', 'advantage', 'none', 'unknown'):
+            regime = annotation(status)
+            html = render_to_string('tender_selection/_regime_indicator.html', {'regime': regime})
+            self.assertIn('data-regime="' + status + '"', html)
+            self.assertIn(regime['label'], html)
+            self.assertIn(regime['description'], html)
+        html = render_to_string('tender_selection/_1875.html', {'regime': annotation('none')})
+        self.assertIn('ts-national-pill--gray', html)
+        self.assertNotIn('ts-national-pill--green', html)

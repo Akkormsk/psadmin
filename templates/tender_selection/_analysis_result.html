@@ -8,12 +8,12 @@
     <div class="ts-products-workspace" data-products-workspace>
       <div class="ts-products-list" data-products-list aria-label="Список товаров">
         <p class="ts-sub">Выберите товар, чтобы открыть ТЗ и маршрут.</p>
-        <div class="ts-products-columns" aria-hidden="true"><span>Товар</span><span>1875</span><span class="ts-finance-values"><span>НМЦК</span><span>Себестоимость</span><span>РРЦ</span><span>Прибыль*</span></span><span></span></div>
+        <div class="ts-products-columns" aria-hidden="true"><span>Товар</span><span class="ts-quantity-heading">Количество</span><span class="ts-finance-values"><span>НМЦК</span><span>Себестоимость</span><span>РРЦ</span><span>Прибыль*</span></span><span></span></div>
         {% for item in ungrouped_display_items %}{% include "tender_selection/_product_entry.html" with entry_prefix="single" finance_key=item.finance_key %}{% endfor %}
         {% for group in display_item_groups %}
         <section class="ts-products-group" aria-label="{{ group.name }}">
           <article class="ts-product-entry" data-product-key="group-{{ group.key }}">
-            <button type="button" class="ts-product-select" data-product-select aria-expanded="false"><span class="ts-product-name"><strong>{% for part in group.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}</strong> <small class="ts-product-quantity">{{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}</small><small>{% if group.supply_kind == "kit" %}Набор{% else %}Состав исходной позиции{% endif %} · {{ group.items|length }} составляющих</small></span><span class="ts-product-list-regime">{{ group.national_regime.label|default:"1875: не указано" }}</span>{% include "tender_selection/_product_financials.html" with finance=group.finance finance_key=group.finance_key finance_view="row" %}<span aria-hidden="true">›</span></button>
+            <button type="button" class="ts-product-select" data-product-select aria-expanded="false"><span class="ts-product-name"><strong>{% for part in group.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}</strong>{% include "tender_selection/_regime_indicator.html" with regime=group.national_regime %}<small>{% if group.supply_kind == "kit" %}Набор{% else %}Состав исходной позиции{% endif %} · {{ group.items|length }} составляющих</small></span><span class="ts-product-quantity">{{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}</span>{% include "tender_selection/_product_financials.html" with finance=group.finance finance_key=group.finance_key finance_view="row" %}<span aria-hidden="true">›</span></button>
             <div class="ts-product-content" data-product-content hidden>
               <header class="ts-product-heading"><h3>{{ group.name }}</h3><button type="button" class="ts-quiet" data-product-close>← К списку товаров</button></header>
               <p class="ts-sub">{{ group.original.quantity|floatformat:"-2" }} {{ group.original.unit }}</p>
@@ -22,6 +22,7 @@
               <p class="ts-sub">Цена группы не распределялась между составляющими.</p>
               <h4>Состав</h4>
               {% for item in group.items %}<button type="button" class="ts-product-component" data-product-target="{% if item.source_id %}source-{{ item.source_id }}{% else %}group-{{ group.key }}-{{ forloop.counter0 }}{% endif %}">{{ item.name }} · {{ item.quantity|floatformat:"-2" }} {{ item.unit }} ›</button>{% endfor %}
+              {% include "tender_selection/_gisp_placeholder.html" %}
               {% include "tender_selection/_product_financials.html" with finance=group.finance finance_key=group.finance_key finance_view="footer" %}
             </div>
           </article>

@@ -32,6 +32,15 @@
     if (focus) content.querySelector('[data-product-close]').focus({preventScroll:true});
   }
   document.addEventListener('click', event => {
+    const indicator = event.target.closest('[data-regime-indicator]');
+    document.querySelectorAll('[data-regime-indicator].is-open').forEach(node=>{
+      if(node!==indicator)node.classList.remove('is-open');
+    });
+    if(indicator){
+      event.preventDefault();
+      indicator.classList.toggle('is-open');
+      return;
+    }
     const control = event.target.closest('[data-product-select],[data-product-target],[data-product-close]');
     if (!control) return;
     const workspace = control.closest('[data-products-workspace]');
@@ -44,6 +53,8 @@
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
+    const tooltip = document.querySelector('[data-regime-indicator].is-open');
+    if(tooltip){tooltip.classList.remove('is-open');event.preventDefault();return;}
     const workspace = event.target.closest('[data-products-workspace]');
     if (!workspace || !init(workspace).current) return;
     event.preventDefault();

@@ -1,8 +1,8 @@
 {% load tender_selection_extras %}
 <article{% if item.source_id %} id="product-source-{{ item.source_id }}"{% endif %} class="ts-product-entry" data-product-key="{% if item.source_id %}source-{{ item.source_id }}{% else %}{{ entry_prefix }}-{{ forloop.counter0 }}{% endif %}">
   <button type="button" class="ts-product-select" data-product-select aria-expanded="false">
-    <span class="ts-product-name"><strong>{% if item.name_parts %}{% for part in item.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}{% else %}{{ item.name }}{% endif %}</strong> <small class="ts-product-quantity">{{ item.quantity|floatformat:"-2" }} {{ item.unit }}</small>{% if item.parent_display_name %}<small>{{ item.parent_display_name }}</small>{% endif %}</span>
-    <span class="ts-product-list-regime">{{ item.national_regime.label|default:"1875: не указано" }}</span>
+    <span class="ts-product-name"><strong>{% if item.name_parts %}{% for part in item.name_parts %}<span{% if part.added %} class="ts-fact-added"{% endif %}>{{ part.text }}</span>{% endfor %}{% else %}{{ item.name }}{% endif %}</strong>{% include "tender_selection/_regime_indicator.html" with regime=item.national_regime %}{% if item.parent_display_name %}<small>{{ item.parent_display_name }}</small>{% endif %}</span>
+    <span class="ts-product-quantity">{{ item.quantity|floatformat:"-2" }} {{ item.unit }}</span>
     {% include "tender_selection/_product_financials.html" with finance=item.finance finance_key=finance_key finance_view="row" %}
     <span aria-hidden="true">›</span>
   </button>
@@ -15,6 +15,7 @@
             {% if item.components %}<ul class="ts-components">{% for component in item.components %}<li>{{ component.name }} <span>×{{ component.quantity_per_parent|floatformat:"-4" }}{% if component.unit %} {{ component.unit }}{% endif %}</span></li>{% endfor %}</ul>{% endif %}
             <div class="ts-item-tools">{% include "tender_selection/_tz.html" with rows=item.tz_rows %}
 </div>
+    {% include "tender_selection/_gisp_placeholder.html" %}
     <section class="ts-product-calculation" data-product-calculation data-source-id="{{ item.source_id }}" data-route-state="{{ item.production_route.state }}">
       <h4>Маршрут и расчёт</h4>
       <div data-product-calculation-body>
