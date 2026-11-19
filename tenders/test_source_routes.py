@@ -8,6 +8,24 @@ from .test_calculation_v2_pipeline import notification, raw_item
 
 
 class SourceRouteTests(TestCase):
+    def test_refresh_keeps_latest_accepted_revision_without_reactivating_its_ancestor(self):
+        from .calculation_v2_pipeline import active_calculation_items
+        intermediate = type(self.source).objects.create(tender=self.tender, parent=self.source,
+            source_key='accepted-first', source_type='document_extraction', is_active=False,
+            original_text='Первое уточнение', quantity=self.source.quantity, unit=self.source.unit)
+        current = type(self.source).objects.create(tender=self.tender, parent=intermediate,
+            source_key='accepted-second', source_type='document_extraction', is_active=True,
+            original_text='Принятый товар', quantity=self.source.quantity, unit=self.source.unit)
+        self.source.is_active = False
+        self.source.save(update_fields=['is_active'])
+        ingest_source_items(self.tender)
+        self.source.refresh_from_db()
+        self.assertFalse(self.source.is_active)
+        self.assertEqual([item.pk for item in active_calculation_items(self.tender)], [current.pk])
+        # Also protect the canonical view of already inconsistent historical flags.
+        type(self.source).objects.filter(pk=self.source.pk).update(is_active=True)
+        self.assertEqual([item.pk for item in active_calculation_items(self.tender)], [current.pk])
+
     def test_bad_product_preparation_does_not_rollback_other_routes(self):
         other = type(self.source).objects.create(tender=self.tender, source_key='other', original_text='Набор', quantity=1)
         type(self.source).objects.create(tender=self.tender, parent=other, source_key='broken-component',
@@ -41,6 +59,23 @@ class SourceRouteTests(TestCase):
         self.assertEqual(ComponentRoutePlan.objects.get(pk=original[other.pk]).status, 'planned')
         self.assertEqual(ComponentRoutePlan.objects.get(pk=original[self.source.pk]).status, 'superseded')
         self.assertEqual(ComponentRoutePlan.objects.count(), 3)
+
+    def test_missing_new_route_keeps_previous_saved_steps_and_does_not_duplicate_empty_results(self):
+        self.run_route()
+        plan = ComponentRoutePlan.objects.get()
+        previous_steps = list(plan.steps.values_list('pk', 'process_id'))
+        self.source.requirements = {'characteristics': [{'name': 'Материал', 'value': 'Уточнён'}]}
+        self.source.save(update_fields=['requirements'])
+        self.router.route.side_effect = lambda **kwargs: [RouteDecision(item.pk, (), Decimal('0'),
+            {'reason': 'Новый маршрут не получен'}, True) for item in kwargs['items']]
+        self.run_route()
+        job = self.run_route()
+        job.status = 'needs_review'
+        job.save(update_fields=['status'])
+        self.assertEqual(ComponentRoutePlan.objects.count(), 1)
+        self.assertEqual(list(plan.steps.values_list('pk', 'process_id')), previous_steps)
+        from .calculation_v2_pipeline import source_route_snapshots
+        self.assertEqual(source_route_snapshots(self.tender)[self.source.pk]['state'], 'stale')
 
     def test_bad_route_response_is_isolated_and_only_missing_route_is_retried(self):
         from .calculation_v2_pipeline import GatewayBatchRouter

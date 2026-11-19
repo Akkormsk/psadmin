@@ -162,6 +162,7 @@ class SourceMemoryPipelineTests(TestCase):
         self.assertGreater(len(calls), 1)
         self.assertTrue(job.diagnostics['source_reading']['complete'])
         self.assertEqual(len(confirmed), 30)
+        self.assertFalse(job.diagnostics.get('analysis_gaps'))
 
     @override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True, CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 30000, 'max_output_tokens': 32000}})
     def test_large_route_batches_persist_before_interruption_and_are_not_requested_again(self):
@@ -310,7 +311,7 @@ class SourceRetrievalTests(TestCase):
                               [{'source_id': self.source.pk}], engine.model)
         for page, key, batch in memory.pending():
             memory.save([{'id': block['id'], 'scope': 'item', 'source_ids': [self.source.pk],
-                          'facts': [{'quote': 'Цвет синий'}]} for block in batch], batch, page, key)
+                          'purposes': ['tz'], 'facts': [{'quote': 'Цвет синий'}]} for block in batch], batch, page, key)
         memory.source_map = {1: {'name': 'Source'}}
         engine.source_memory, engine.all_document_images = memory, []
         goods = [{'key': 'a', 'source_id': self.source.pk}, {'key': 'b', 'source_id': self.source.pk}]
@@ -410,6 +411,7 @@ class ItemEvidenceBindingTests(SimpleTestCase):
 
     def test_unresolved_binding_is_excluded_without_blocking_partial_context(self):
         memory = self.memory()
+        self.assertEqual(list(memory.context({1})), [])
         memory.begin_assignment({'inventory': [1, 2]})
         self.assertEqual(list(memory.context({1}, 'tz')), [])
         self.assertTrue(memory.pending_assignments())
@@ -622,6 +624,27 @@ class ItemBindingResumeTests(TestCase):
         self.assertEqual(list(repeated.source_memory.context({self.source.pk}, 'tz')), original)
         self.assertEqual(repeated.source_memory.snapshot()['read'], engine.source_memory.snapshot()['read'])
         self.assertEqual(second.diagnostics['analysis_gaps'], job.diagnostics['analysis_gaps'])
+
+    def test_previously_rejected_singular_references_are_revalidated_without_model_call(self):
+        first = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        def saved_answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            return {'items': [{'ids': [block['id']], 'scope': 'item', 'source_id': self.source.pk,
+                'purposes': ['tz']} for block in task['blocks']]}, {}
+        with patch('tenders.services._ai_gateway_json', side_effect=saved_answer), patch.object(
+                SourceMemory, 'assign', side_effect=ValueError('Прежняя проверка отклонила формат')):
+            self.prepared().bind_source_memory(first)
+        for name, stage in first.diagnostics['stages'].items():
+            if name.startswith('binding:'):
+                stage['validation_version'] = 'canonical-fact-sources-v10-resilient'
+        first.save(update_fields=['diagnostics'])
+        second = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid format retry')):
+            engine = self.prepared()
+            engine.bind_source_memory(second)
+        self.assertFalse(engine.source_memory.pending_assignments())
+        self.assertTrue(all(stage.get('reused_from') == first.pk for name, stage in
+            second.diagnostics['stages'].items() if name.startswith('binding:')))
 
     @override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 16000, 'max_output_tokens': 4096}})
     def test_empty_binding_response_is_saved_without_blocking_other_packets(self):

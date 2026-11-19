@@ -2583,7 +2583,6 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
         if not routes_only and (enricher is None or isinstance(enricher, GatewayDocumentEnricher)):
             budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
             if total_cap is not None:
-                from django.conf import settings
                 route_reserve = Decimal('0') if items_only else min(GatewayBatchRouter().max_cost_rub, max(Decimal('0'), total_cap - profile_cost))
                 budget = min(budget, max(Decimal('0'), total_cap - profile_cost - route_reserve))
             enricher = enricher or GatewayDocumentEnricher(max_cost_rub=budget)
@@ -2659,6 +2658,8 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
                 'reason': 'Данные сохранены, но маршрут пока не сформирован: ' + str(exc)})
         if getattr(router, 'diagnostics', {}).get('billing_uncertain'):
             job.diagnostics['billing_uncertain'] = True
+        routing_failed = routing_failed or any(not decision.process_ids for decision in decisions) or any(
+            gap.get('stage') == 'routing' for gap in job.diagnostics.get('analysis_gaps', []))
         job.diagnostics.setdefault('stages', {})['routing'] = {**getattr(router, 'diagnostics', {}), 'state': 'partial' if routing_failed else 'complete', 'started_at': routing_started.isoformat(), 'result': {'position_count': len(decisions)}}
         _publish_intake(job)
         if any(not decision.process_ids for decision in decisions):

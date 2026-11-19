@@ -356,11 +356,13 @@ class SourceMemory:
                 continue
             if self.assignment_policy is not None:
                 row = self.assignments.get(self.key(block_id, self.page_keys[0]))
-                if not row or row['scope'] in {'unassigned', 'irrelevant'}:
-                    continue
-                if purpose is not None and purpose not in row.get('purposes', []):
-                    continue
-            if row['scope'] in {'global', 'unassigned'} or set(row['source_ids']).intersection(source_ids):
+            if not row or row['scope'] not in {'item', 'global'}:
+                continue
+            if row['scope'] == 'global' and row['source_ids']:
+                continue
+            if purpose is not None and purpose not in row.get('purposes', []):
+                continue
+            if row['scope'] == 'global' or set(row['source_ids']).intersection(source_ids):
                 yield block
 
     def context(self, source_ids, purpose=None):

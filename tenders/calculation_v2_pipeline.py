@@ -364,7 +364,7 @@ class GatewayDocumentEnricher:
             self.STAGED_CONTRACT = "intake-item-evidence-v2"
 
     STAGED_CONTRACT = "intake-steps-v4-anchored-specification"
-    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v10-resilient"
+    STAGED_VALIDATION_VERSION = "canonical-fact-sources-v11-partial-evidence"
     SPECIFICATION_ASSEMBLY = "verified-review-v4-accepted-items"
     PRODUCT_NAMING_RULE = (
         "Название товара должно быть коротким: выбери самое лаконичное понятное название из всех источников, "
@@ -693,6 +693,9 @@ class GatewayDocumentEnricher:
                 raise
             finally:
                 publish()
+        job.diagnostics['analysis_gaps'] = [gap for gap in job.diagnostics.get('analysis_gaps', [])
+            if not (gap.get('stage') == 'source_reading' and gap.get('fragment_ids') and all(
+                identity in memory.blocks and memory.key(identity, memory.page_keys[0]) in memory.records for identity in gap['fragment_ids']))]
         publish()
 
     def bind_source_memory(self, job):
@@ -2051,6 +2054,7 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
     from .tender_data import prepare_tender_for_write, notification_source_fingerprint, reconcile_duplicate_notice_items
     prepare_tender_for_write(tender)
     reconcile_duplicate_notice_items(tender, apply=True)
+    replaced_ancestors = _active_source_ancestors(tender)
     result, changed = [], False
     for index, row in enumerate(_notification_rows(tender)):
         name = str(row.get("name") or "").strip()
@@ -2079,7 +2083,7 @@ def ingest_source_items(tender: Tender) -> list[TenderSourceItem]:
             if 'notification_national_regime' not in current.metadata:
                 current.metadata = {**current.metadata, 'source_fingerprint': fingerprint, 'notification_national_regime': native}
                 current.save(update_fields=['metadata'])
-            if not current.is_active and not current.derived_items.filter(is_active=True).exists():
+            if not current.is_active and current.pk not in replaced_ancestors and not current.derived_items.filter(is_active=True).exists():
                 current.is_active = True
                 current.save(update_fields=['is_active'])
             if current.requirements != requirements:
@@ -2145,10 +2149,26 @@ def assess_quality(tender: Tender, items: list[TenderSourceItem]) -> dict:
     return {"status": "suspicious" if reasons else "sufficient", "reasons": reasons, "confidence": str(Decimal("1.0000") - score), "enrichment_recommended": bool(useful_documents), "documents": useful_documents}
 
 
+def _active_source_ancestors(tender):
+    """Accepted document revisions replace all their ancestors, including inactive intermediates."""
+    rows = list(tender.v2_source_items.values('pk', 'parent_id', 'source_type', 'is_active'))
+    parents = {row['pk']: row['parent_id'] for row in rows}
+    ancestors = set()
+    for row in rows:
+        if not row['is_active'] or row['source_type'] not in {'document_enrichment', 'document_extraction'}:
+            continue
+        parent, seen = row['parent_id'], {row['pk']}
+        while parent in parents and parent not in seen:
+            seen.add(parent)
+            ancestors.add(parent)
+            parent = parents[parent]
+    return ancestors
+
+
 def active_calculation_items(tender: Tender) -> list[TenderSourceItem]:
     """Canonical deterministic active set: active derived rows replace their aggregate parent."""
     items = list(tender.v2_source_items.filter(is_active=True).order_by("source_key", "pk"))
-    derived_parents = {item.parent_id for item in items if item.parent_id and item.source_type in {"document_enrichment", "document_extraction"}}
+    derived_parents = _active_source_ancestors(tender)
     return [item for item in items if item.pk not in derived_parents and item.source_type != "document_component"]
 
 
@@ -2768,7 +2788,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
                           "input_snapshot": {"name": item.name, "quantity": str(item.effective_quantity), "requirements": item.requirements, "input_fingerprint": fingerprints[item.pk]}},
             )
             plan = plans.get(item.pk)
-            if item.pk not in cached_ids:
+            if item.pk not in cached_ids and (plan is None or effective.process_ids):
                 previous = plan
                 if previous:
                     previous.status = 'superseded'
