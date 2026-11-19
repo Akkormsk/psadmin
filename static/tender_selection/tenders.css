@@ -356,7 +356,7 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .tender-inline-requirements.is-open { display:block; }
 .ts-product-calculation { margin-top:20px; padding-top:16px; border-top:1px solid var(--separator); }
 .ts-product-calculation .training-route__steps { padding:0; list-style:none; }
-.ts-product-calculation .training-route__step { margin:10px 0; }
+.ts-product-calculation .training-route__step { margin:0; }
 .ts-product-calculation .training-catalog { min-width:0; }
 .ts-product-calculation .training-catalog-card { flex-wrap:wrap; }
 .ts-product-calculation .training-catalog-card > span { min-width:0; overflow-wrap:anywhere; }
@@ -425,3 +425,10 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-gisp-result dt { color:var(--ink-2); }
 .ts-gisp-result dd { margin:0; color:var(--ink-3); }
 .ts-product-gisp > small { display:inline-block; margin-left:8px; }
+
+.ts-product-calculation .ts-route-step-name { flex:1; min-width:0; }
+.ts-route-step-price { flex-shrink:0; margin-left:auto; text-align:right; font-variant-numeric:tabular-nums; }
+.ts-route-step-price small { display:block; color:var(--ink-3); font-size:10px; font-weight:400; }
+.ts-route-step-price strong { display:block; color:var(--ink); font-size:12px; }
+.ts-product-calculation .training-route__step > summary::after { margin-left:0; }
+.ts-route-step-placeholder { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }

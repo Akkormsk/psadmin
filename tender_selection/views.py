@@ -865,6 +865,11 @@ def tender_detail(request, pk):
     risk = risk_projection(tender, risk, card)
     from tenders.document_evidence import condition_context
     from .card_navigation import document_readiness, result_badge
+    route_blocked_reason = ""
+    if v2_job and v2_job.status in {"partial", "failed"}:
+        binding = ((v2_job.diagnostics or {}).get("stages") or {}).get("source_binding") or {}
+        if binding.get("state") == "failed":
+            route_blocked_reason = "Не все сведения из документов сопоставлены с товарами. Разбор ТЗ не завершён, построение маршрутов ещё не начиналось."
     navigation_documents = document_readiness((card or {}).get("documents", []), v2_job.diagnostics if v2_job else {})
     navigation_result = result_badge(estimate, calc_verdict)
     if product_finance_totals and product_finance_totals["state"] == "partial":
@@ -884,6 +889,7 @@ def tender_detail(request, pk):
         "pipeline_estimate_id": estimate_id,
         "product_calculation": product_calculation,
         "product_finance_totals": product_finance_totals,
+        "route_blocked_reason": route_blocked_reason,
         "calc_verdict": calc_verdict,
         "navigation_documents": navigation_documents,
         "navigation_result": navigation_result,

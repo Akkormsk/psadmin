@@ -40,10 +40,29 @@
     });
     return task;
   }
+  const stepPlaceholder = '{% filter escapejs %}{% include "tender_selection/_route_step_placeholder.html" %}{% endfilter %}';
+  function stepPriceHtml(step,result) {
+    let unit, total;
+    if(step.kind==='production'){
+      const price=result.production_steps?.[step.id];
+      if(!price?.error){unit=price?.unit_cost;total=price?.total_cost;}
+    }else if(step.kind==='catalog'){
+      const selected=result.catalog_steps?.[step.id]?.catalog_selection;
+      unit=selected?.price;total=selected?.cost_total;
+    }
+    function known(value){return value!=null && String(value).trim()!=='' && Number.isFinite(Number(String(value).replace(',','.')));}
+    const amount=known(total)?money(Number(String(total).replace(',','.'))):'—';
+    const perUnit=known(unit)?`<small>${money(Number(String(unit).replace(',','.')))} / ед.</small>`:'';
+    return `<span class="ts-route-step-price"><small>Предварительно</small><strong>${amount}</strong>${perUnit}</span>`;
+  }
   function operationsHtml(result,line,editable) {
     if (result.stage === 'production_classification') return productionClassificationHtml(result);
     if (result.stage !== 'training_dialogue') return productionHtml(result);
-    const steps = result.route?.processes || [];
+    let steps = result.route?.processes || [];
+    if(!steps.length){
+      steps=[];
+      for(const name of result.route?.steps || [])steps.push({name,kind:'production',details:[]});
+    }
     return '<ol class="training-route__steps">' + steps.map((step,index) => {
       const run = result.catalog_steps?.[step.id];
       const catalog = step.kind === 'catalog' ?
@@ -51,7 +70,8 @@
         (editable ? `<button type="button" class="button-secondary" data-start-catalog="${escapeHtml(step.id)}">${run?.catalog_search_started?'Повторить подбор':'Подобрать товар'}</button>` : '') : '';
       const lab = step.kind === 'catalog' ? `<a class="training-cascade-link" href="{% url 'cascade_lab' %}?session_id=${encodeURIComponent(result.session_id)}" target="_blank" rel="noopener">Настроить каскад ↗</a>` : '';
       const pricing = step.kind === 'production' && step.process_id ? productionPriceHtml(step,result) : '';
-      return `<li><details class="training-route__step" data-step-id="${escapeHtml(step.id)}"><summary><b>${index+1}</b><span>${escapeHtml(step.name)}</span></summary><div class="training-route__step-body">${(step.details||[]).map(text=>`<p>${escapeHtml(text)}</p>`).join('')}${catalog}${lab}${pricing}</div></details></li>`;
+      const placeholder=!catalog&&!pricing?stepPlaceholder:'';
+      return `<li><details class="training-route__step" data-step-id="${escapeHtml(step.id || `saved-step-${index}`)}"><summary><b>${index+1}</b><span class="ts-route-step-name">${escapeHtml(step.name)}</span>${stepPriceHtml(step,result)}</summary><div class="training-route__step-body">${(step.details||[]).map(text=>`<p>${escapeHtml(text)}</p>`).join('')}${catalog}${lab}${pricing}${placeholder}</div></details></li>`;
     }).join('') + '</ol>' + (result.costs?.length ? `<div class="training-dialogue__costs"><header>Рассчитанная часть стоимости</header>${result.costs.map(cost=>`<div class="training-cost-row"><span><b>${escapeHtml(cost.process_name||cost.name)}</b>${trainingCostTraceHtml(cost)}</span><strong>${cost.amount_total == null?'—':money(cost.amount_total)}</strong></div>`).join('')}</div>` : '');
   }
   function draw(editor) {

@@ -80,3 +80,22 @@ class ProductWorkspaceTests(SimpleTestCase):
         html = render_to_string('tender_selection/_1875.html', {'regime': annotation('none')})
         self.assertIn('ts-national-pill--gray', html)
         self.assertNotIn('ts-national-pill--green', html)
+
+    def test_saved_route_uses_the_existing_chain_and_expandable_step_blocks(self):
+        route = {'state': 'ready', 'label': 'Маршрут · 2 этапа', 'steps': [
+            {'id': 1, 'position': 1, 'name': 'Закупка', 'description': 'Подбор продукции'},
+            {'id': 2, 'position': 2, 'name': 'Печать', 'description': 'Нанесение'}]}
+        html = render_to_string('tender_selection/_product_route.html', {'route': route})
+        self.assertIn('<ol class="training-route__steps">', html)
+        self.assertEqual(html.count('class="training-route__step"'), 2)
+        self.assertEqual(html.count('Предварительно'), 2)
+        self.assertEqual(html.count('disabled>Настроить этап'), 2)
+        self.assertNotIn('0,00', html)
+
+    def test_failed_document_binding_does_not_invent_route_operations(self):
+        message = 'Сведения документов не сопоставлены с товарами.'
+        html = render_to_string('tender_selection/_product_route.html', {
+            'route': {'state': 'pending', 'steps': [], 'label': 'Маршрут не построен'},
+            'route_blocked_reason': message})
+        self.assertIn(message, html)
+        self.assertNotIn('class="training-route__step"', html)
