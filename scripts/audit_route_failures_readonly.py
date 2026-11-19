@@ -28,9 +28,9 @@ def summarize_binding_results(diagnostics):
 def audit_saved_route_jobs():
     from tenders.models import TenderComputeJob
     from tender_selection.models import Tender
-    jobs = TenderComputeJob.objects.filter(version__startswith='v2').exclude(tender__status=Tender.DISMISSED).order_by('pk')
+    jobs = TenderComputeJob.objects.filter(version__startswith='v2').order_by('pk')
     history = defaultdict(list)
-    for row in jobs.values('pk', 'tender_id', 'tender__purchase_number', 'status', 'created_at', 'trigger',
+    for row in jobs.values('pk', 'tender_id', 'tender__purchase_number', 'tender__status', 'status', 'created_at', 'trigger',
             'diagnostics__stages__source_binding__state', 'diagnostics__stages__source_binding__warning',
             'diagnostics__stages__routing__state'):
         history[row['tender_id']].append(row)
@@ -63,7 +63,7 @@ def audit_saved_route_jobs():
                     legacy_routes.append({'line_id': line.pk, 'source_id': requirements.get('source_item_id'),
                         'commercial_item_id': line.commercial_item_id, 'component_id': line.component_id,
                         'stage': production.get('stage'), 'steps': len(route.get('processes') or route.get('steps') or [])})
-        reports.append({'number': latest['tender__purchase_number'], 'job_count': len(rows),
+        reports.append({'number': latest['tender__purchase_number'], 'archived': latest['tender__status'] == Tender.DISMISSED, 'job_count': len(rows),
             'latest': point(latest), 'first_binding_failure': point(binding_failures[0]) if binding_failures else None,
             'last_routed': point(routed[-1]) if routed else None,
             'job_status_counts': dict(Counter(row['status'] for row in rows)),
