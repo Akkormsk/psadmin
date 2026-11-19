@@ -1,4 +1,4 @@
 <span class="ts-regime-indicator" data-regime-indicator data-regime="{{ regime.status|default:'unknown' }}" role="img" aria-label="{{ regime.label|default:'1875: не указано' }}. {{ regime.description }}">
-  <span class="ts-regime-dot" aria-hidden="true"></span>
+  <span class="ts-national-pill ts-national-pill--{% if regime.status == 'none' %}gray{% else %}{{ regime.color|default:'gray' }}{% endif %}" aria-hidden="true">1875</span>
   <span class="ts-regime-tooltip" role="tooltip">{{ regime.label|default:'1875: не указано' }}{% if regime.description %}<span>{{ regime.description }}</span>{% endif %}</span>
 </span>

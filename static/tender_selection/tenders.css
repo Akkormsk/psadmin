@@ -412,11 +412,7 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 }
 
 .ts-product-name { position:relative; }
-.ts-regime-indicator { display:inline-flex; align-items:center; justify-content:center; padding:5px; margin-left:3px; color:var(--ink-3); vertical-align:middle; cursor:help; }
-.ts-regime-indicator[data-regime="ban"] { color:var(--negative-ink); }
-.ts-regime-indicator[data-regime="restriction"] { color:var(--warning-ink); }
-.ts-regime-indicator[data-regime="advantage"] { color:var(--positive-ink); }
-.ts-regime-dot { width:9px; height:9px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.ts-regime-indicator { display:inline-flex; align-items:center; justify-content:center; margin-left:6px; vertical-align:middle; cursor:help; }
 .ts-regime-tooltip { display:none; position:absolute; left:0; top:100%; z-index:5; width:max-content; max-width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface); box-shadow:var(--shadow-card); color:var(--ink); font-size:12px; font-weight:400; white-space:normal; }
 .ts-regime-tooltip > span { display:block; margin-top:4px; color:var(--ink-2); font-size:11px; }
 .ts-regime-indicator:hover .ts-regime-tooltip,.ts-regime-indicator.is-open .ts-regime-tooltip,.ts-product-select:focus-visible .ts-regime-tooltip { display:block; }
