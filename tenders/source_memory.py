@@ -4,6 +4,65 @@ import json
 
 VERSION = 'source-memory-v2'
 MAX_INPUT_BYTES = 24000
+EVIDENCE_PURPOSES = frozenset({'structure', 'tz', 'national_regime', 'delivery', 'conditions'})
+
+
+def normalize_assignment(row):
+    """Accept an explicit singular reference, never infer a product association."""
+    if not isinstance(row, dict):
+        raise ValueError('Сведения о привязке должны быть записью.')
+    row = dict(row)
+    if 'source_id' in row:
+        reference = row.pop('source_id')
+        if reference is None and row.get('scope') in {'global', 'unassigned', 'irrelevant'}:
+            references = []
+        elif type(reference) is int:
+            references = [reference]
+        else:
+            raise ValueError('Недопустимая ссылка на позицию.')
+        if 'source_ids' in row:
+            refs = row['source_ids']
+            if not isinstance(refs, list) or any(type(ref) is not int for ref in refs) or refs != references:
+                raise ValueError('Противоречивые ссылки на позицию.')
+        row['source_ids'] = references
+    return row
+
+
+def validate_assignment(row, block, source_ids):
+    row = normalize_assignment(row)
+    validate_reading([row], [block], source_ids)
+    scope, refs, purposes = row['scope'], row['source_ids'], row.get('purposes')
+    if scope != 'item' and refs:
+        raise ValueError('Неподтверждённая или общая связь не должна ссылаться на позицию.')
+    if scope in {'unassigned', 'irrelevant'} and (not isinstance(row.get('reason'), str) or not row['reason'].strip()):
+        raise ValueError('Для неясной или исключённой привязки требуется объяснение.')
+    if not isinstance(purposes, list) or any(not isinstance(p, str) or p not in EVIDENCE_PURPOSES for p in purposes):
+        raise ValueError('Не определено назначение сведений позиции.')
+    if scope in {'item', 'global'} and not purposes:
+        raise ValueError('Не определено назначение сведений позиции.')
+    if scope == 'irrelevant' and purposes:
+        raise ValueError('Исключённые сведения не должны иметь назначения.')
+    return row
+
+
+def resolve_assignment_rows(rows, aliases):
+    """Resolve only explicit fragment addresses; preserve malformed rows for diagnostics."""
+    if not isinstance(rows, list):
+        raise ValueError('Не получен список привязок источников.')
+    resolved = []
+    for row in rows:
+        if not isinstance(row, dict):
+            resolved.append(row)
+            continue
+        refs = row.get('ids', [row['id']] if 'id' in row else None)
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) for ref in refs):
+            resolved.append({**row, 'id': None})
+            continue
+        if 'id' in row and 'ids' in row and refs != [row['id']]:
+            resolved.append({**row, 'id': None})
+            continue
+        resolved.extend({**row, 'id': aliases.get(ref, ref)} for ref in refs)
+    return resolved
 
 
 def signature(value):
@@ -238,53 +297,66 @@ class SourceMemory:
                 if saved_policy == self.assignment_policy or row.get('scope') in {'item', 'global'}:
                     self.assignments.setdefault(key, row)
         current = {self.key(identity, self.page_keys[0]) for identity in self.blocks}
-        self.assignments = {key: row for key, row in self.assignments.items() if key in current}
+        restored = self.assignments
+        self.assignments = {}
+        source_ids = {row['source_id'] for row in self.inventory}
+        for key, row in restored.items():
+            if key not in current:
+                continue
+            try:
+                self.assignments[key] = validate_assignment(row, self.blocks[row['id']], source_ids)
+            except ValueError:
+                continue
         for identity in self.blocks:
             key = self.key(identity, self.page_keys[0])
             row = self.records.get(key, {})
-            purposes = row.get('purposes')
-            valid_purposes = isinstance(purposes, list) and bool(purposes) and all(
-                isinstance(p, str) and p in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for p in purposes)
-            if valid_purposes and (row.get('scope') == 'item' and row.get('source_ids') or row.get('scope') == 'global' and not row.get('source_ids')):
-                self.assignments.setdefault(key, row)
-            elif row.get('scope') == 'item' and row.get('source_ids'):
-                self.assignments.setdefault(key, {**row, 'purposes': ['structure', 'tz', 'national_regime', 'delivery', 'conditions']})
+            if row.get('scope') in {'item', 'global'}:
+                try:
+                    self.assignments.setdefault(key, validate_assignment(row, self.blocks[identity], source_ids))
+                except ValueError:
+                    continue
 
     def pending_assignments(self):
         return [block for identity, block in self.blocks.items()
-                if self.records.get(self.key(identity, self.page_keys[0]), {}).get('scope') != 'irrelevant'
+                if self.key(identity, self.page_keys[0]) in self.records
+                and self.records[self.key(identity, self.page_keys[0])].get('scope') != 'irrelevant'
                 and self.key(identity, self.page_keys[0]) not in self.assignments]
 
     def assign(self, rows, blocks):
-        validate_reading(rows, blocks, {row['source_id'] for row in self.inventory})
+        if not isinstance(rows, list):
+            raise ValueError('Не получен список привязок источников.')
+        expected = {block['id']: block for block in blocks}
+        grouped, errors = {}, []
         for row in rows:
-            purposes = row.get('purposes')
-            if row['scope'] == 'irrelevant':
-                if row['source_ids']:
-                    raise ValueError('Посторонний текст не должен привязываться к позиции.')
+            identity = row.get('id') if isinstance(row, dict) else None
+            if not isinstance(identity, str) or identity not in expected:
+                errors.append('Ответ содержит неизвестный фрагмент.')
                 continue
-            if row['scope'] == 'unassigned' and (not isinstance(row.get('reason'), str) or not row['reason'].strip()):
-                raise ValueError('Для неясной привязки требуется объяснение.')
-            if row['scope'] == 'global' and row['source_ids']:
-                raise ValueError('Общие условия не должны подменять отдельную позицию.')
-            if not isinstance(purposes, list) or not purposes or any(
-                    not isinstance(purpose, str) or purpose not in {'structure', 'tz', 'national_regime', 'delivery', 'conditions'} for purpose in purposes):
-                raise ValueError('Не определено назначение сведений позиции.')
-        for row in rows:
-            self.assignments[self.key(row['id'], self.page_keys[0])] = row
+            grouped.setdefault(identity, []).append(row)
+        source_ids = {row['source_id'] for row in self.inventory}
+        for identity, block in expected.items():
+            variants = grouped.get(identity, [])
+            if len(variants) != 1:
+                errors.append(f'{identity}: фрагмент пропущен или повторён.')
+                continue
+            try:
+                row = validate_assignment(variants[0], block, source_ids)
+                key = self.key(identity, self.page_keys[0])
+                self.assignments[key] = row
+            except ValueError as exc:
+                errors.append(f'{identity}: {exc}')
+        if errors:
+            raise ValueError(' '.join(errors))
 
     def relevant(self, source_ids, purpose=None):
-        if self.assignment_policy is not None and self.pending_assignments():
-            raise ValueError('Привязка источников к позициям не завершена; исходные сведения сохранены.')
         for block_id, block in self.blocks.items():
             row = self.records.get(self.key(block_id, self.page_keys[0]))
             if not row:
-                # Unread material can never be treated as evidence of absence.
-                yield block
+                # Partial context contains verified facts only; coverage is reported separately.
                 continue
             if self.assignment_policy is not None:
-                row = self.assignments.get(self.key(block_id, self.page_keys[0]), row)
-                if row['scope'] == 'unassigned':
+                row = self.assignments.get(self.key(block_id, self.page_keys[0]))
+                if not row or row['scope'] in {'unassigned', 'irrelevant'}:
                     continue
                 if purpose is not None and purpose not in row.get('purposes', []):
                     continue

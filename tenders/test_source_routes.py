@@ -8,6 +8,59 @@ from .test_calculation_v2_pipeline import notification, raw_item
 
 
 class SourceRouteTests(TestCase):
+    def test_bad_product_preparation_does_not_rollback_other_routes(self):
+        other = type(self.source).objects.create(tender=self.tender, source_key='other', original_text='Набор', quantity=1)
+        type(self.source).objects.create(tender=self.tender, parent=other, source_key='broken-component',
+            source_type='document_component', original_text='Составляющая', quantity=1,
+            metadata={'quantity_per_parent': 'не определено'})
+        job = self.run_route()
+        self.assertEqual(ComponentRoutePlan.objects.get().component.source_item_id, self.source.pk)
+        self.assertTrue(any(gap.get('source_id') == other.pk for gap in job.diagnostics['analysis_gaps']))
+
+    def test_error_saving_one_route_does_not_rollback_another_product(self):
+        from .calculation_v2_pipeline import _component_conflicts
+        other = type(self.source).objects.create(tender=self.tender, source_key='other', original_text='Другой товар', quantity=1)
+        def conflicts(commercial):
+            if commercial.source_items.filter(pk=other.pk).exists():
+                raise ValueError('Ошибка сведений одного товара')
+            return _component_conflicts(commercial)
+        with patch('tenders.calculation_v2_pipeline._component_conflicts', side_effect=conflicts):
+            job = self.run_route()
+        self.assertEqual(ComponentRoutePlan.objects.get().component.source_item_id, self.source.pk)
+        self.assertTrue(any(gap.get('source_id') == other.pk for gap in job.diagnostics['analysis_gaps']))
+
+    def test_specification_change_rebuilds_only_affected_route_and_preserves_history(self):
+        other = type(self.source).objects.create(tender=self.tender, source_key='other', original_text='Другой товар', quantity=1)
+        self.run_route()
+        original = dict(ComponentRoutePlan.objects.values_list('component__source_item_id', 'pk'))
+        self.source.requirements = {'characteristics': [{'name': 'Материал', 'value': 'Бумага'}]}
+        self.source.save(update_fields=['requirements'])
+        self.run_route()
+        requested = self.router.route.call_args.kwargs['items']
+        self.assertEqual([item.source_item_id for item in requested], [self.source.pk])
+        self.assertEqual(ComponentRoutePlan.objects.get(pk=original[other.pk]).status, 'planned')
+        self.assertEqual(ComponentRoutePlan.objects.get(pk=original[self.source.pk]).status, 'superseded')
+        self.assertEqual(ComponentRoutePlan.objects.count(), 3)
+
+    def test_bad_route_response_is_isolated_and_only_missing_route_is_retried(self):
+        from .calculation_v2_pipeline import GatewayBatchRouter
+        other = type(self.source).objects.create(tender=self.tender, source_key='other', original_text='Другой товар', quantity=1)
+        job = TenderComputeJob.objects.create(tender=self.tender)
+        def response(prompt, **kwargs):
+            import json
+            items = json.loads(prompt.rsplit('\n', 1)[1])['items']
+            return {'items': [{'component_id': item['component_id'],
+                'process_ids': [self.stage.pk] if item['name'] == self.source.original_text else ['неизвестный этап'],
+                'confidence': 1, 'reason': 'Сохранённый ответ'} for item in items]}, {}
+        with patch('tenders.services._ai_gateway_json', side_effect=response):
+            route_tender_batch(job, GatewayBatchRouter(max_cost_rub=10))
+        good = ComponentRoutePlan.objects.get(component__source_item=self.source)
+        self.assertTrue(good.steps.exists())
+        self.assertFalse(ComponentRoutePlan.objects.get(component__source_item=other).steps.exists())
+        self.run_route()
+        self.assertEqual([item.source_item_id for item in self.router.route.call_args.kwargs['items']], [other.pk])
+        self.assertEqual(ComponentRoutePlan.objects.get(pk=good.pk).status, 'planned')
+
     def setUp(self):
         self.tender = Tender.objects.create(purchase_number="synthetic-route", notification_raw=notification([raw_item("Изделие", "12")]))
         self.source = ingest_source_items(self.tender)[0]
@@ -43,8 +96,8 @@ class SourceRouteTests(TestCase):
             self.source.quantity = 99; self.source.save()
             return [RouteDecision(item.pk, (self.stage.pk,), Decimal(".9"), {}) for item in kwargs["items"]]
         self.router.route.side_effect = changed
-        with self.assertRaisesMessage(ValueError, "изменились"):
-            self.run_route()
+        job = self.run_route()
+        self.assertTrue(any('изменились' in gap['reason'] for gap in job.diagnostics['analysis_gaps']))
         self.assertFalse(ComponentRoutePlan.objects.exists())
 
     def test_no_stages_needs_review_without_paid_call_or_duplicate_questions(self):

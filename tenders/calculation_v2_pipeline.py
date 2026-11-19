@@ -272,11 +272,15 @@ class GatewayBatchRouter:
         rows = rows if isinstance(rows, list) else []
         process_ids = {process.pk for process in processes}
         output, seen = [], set()
+        counts = {}
+        for row in rows:
+            if isinstance(row, dict) and type(row.get('component_id')) is int:
+                counts[row['component_id']] = counts.get(row['component_id'], 0) + 1
         for row in rows:
             if not isinstance(row, dict):
                 continue
             item_id = row.get("component_id")
-            if type(item_id) is not int or item_id not in {item.pk for item in items} or item_id in seen:
+            if type(item_id) is not int or item_id not in {item.pk for item in items} or counts[item_id] != 1:
                 continue
             seen.add(item_id)
             raw_process_ids = row.get("process_ids")
@@ -577,7 +581,7 @@ class GatewayDocumentEnricher:
             for name, stage in job.diagnostics.get('stages', {}).items():
                 if name.startswith('reading:'):
                     stage.pop('result', None)
-            job.diagnostics.setdefault('stages', {})['source_reading'] = {'state': 'complete' if state['complete'] else 'running', 'cost_rub': '0'}
+            job.diagnostics.setdefault('stages', {})['source_reading'] = {'state': 'complete' if state['complete'] else 'partial', 'cost_rub': '0'}
             job.diagnostics.setdefault('refresh', {}).update(stage='documents', label=f"Извлекаем сведения: {state['read']}/{state['total']}…")
             job.diagnostics['published_revision'] = job.diagnostics.get('published_revision', 0) + 1
             job.save(update_fields=['diagnostics', 'updated_at'])
@@ -603,9 +607,10 @@ class GatewayDocumentEnricher:
             rows = [{'ids': [str(index)], 'scope': 'unassigned', 'source_ids': [max(self.stage_sources, default=0)],
                      'reason': 'Привязка требования к позиции источника'} for index, block in enumerate(batch)]
             return max(2048, token_bound({'items': rows}) + 2048 + sum(4096 for block in batch if block.get('image_index')))
+        attempted = set()
         while True:
             page, page_key = memory.pages[0], memory.page_keys[0]
-            missing = [block for block in memory.blocks.values() if memory.key(block['id'], page_key) not in memory.records]
+            missing = [block for block in memory.blocks.values() if memory.key(block['id'], page_key) not in memory.records and block['id'] not in attempted]
             if not missing:
                 break
             # Prior reading usage measures its whole request, not this fixed short prefix.
@@ -633,6 +638,7 @@ class GatewayDocumentEnricher:
             stage = 'reading:' + _fingerprint([page_key, [block['id'] for block in batch]])[:20]
             rows = []
             aliases = {str(index): block['id'] for index, block in enumerate(batch)}
+            attempted.update(block['id'] for block in batch)
             before = len(memory.records)
             def addressed(rows):
                 resolved = []
@@ -677,7 +683,12 @@ class GatewayDocumentEnricher:
                             memory.save([variants[0]], [block], page, page_key)
                         except ValueError:
                             pass
-                if len(memory.records) > before and (isinstance(exc, ValueError) or incomplete.get('finish_reason') in {'length', 'max_tokens'}):
+                if isinstance(exc, ValueError) or incomplete.get('finish_reason') in {'length', 'max_tokens'}:
+                    job.diagnostics['stages'][stage].update(state='failed', validation_error=str(exc))
+                    job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'source_reading',
+                        'fragment_ids': [block['id'] for block in batch if memory.key(block['id'], page_key) not in memory.records], 'reason': str(exc)})
+                    if len(memory.records) > before:
+                        attempted.difference_update(block['id'] for block in batch)
                     continue
                 raise
             finally:
@@ -686,7 +697,7 @@ class GatewayDocumentEnricher:
 
     def bind_source_memory(self, job):
         from .services import TenderAIError
-        from .source_memory import RequestLimits, plan_packets, token_bound
+        from .source_memory import RequestLimits, plan_packets, token_bound, resolve_assignment_rows
         memory = self.source_memory
         from .document_evidence import DocumentEvidence
         if not hasattr(self, 'document_evidence'):
@@ -732,62 +743,54 @@ class GatewayDocumentEnricher:
                 rows.append(row)
             return {'inventory': wire_inventory, 'inventory_facts': inventory_facts, 'table_starts': starts, 'blocks': rows}
         publish('running')
-        packet_limit = None
+        attempted = set()
         try:
-            while memory.pending_assignments():
+            while pending := [block for block in memory.pending_assignments() if block['id'] not in attempted]:
                 remaining = (self.max_cost_rub if self.max_cost_rub is not None else Decimal('10')) - Decimal(str(self.cost_rub))
                 limits = RequestLimits(self.model, remaining, self.DOCUMENT_OUTPUT_TOKEN_LIMIT)
                 def output(batch):
                     return max(2048, token_bound([{'ids': [f'b{i}'], 'scope': 'item', 'source_ids': [1],
                         'purposes': ['structure', 'tz'], 'reason': 'Связь по позиции и характеристикам'} for i, _ in enumerate(batch)]) + 2048)
-                pending = memory.pending_assignments()
-                batch = next(plan_packets(pending[:packet_limit], lambda values: limits.fits(
+                batch = next(plan_packets(pending, lambda values: limits.fits(
                     token_bound(payload(values)) + len(instruction.encode()) + 4608, output(values))))
                 self._use_context('Привязка сохранённых источников к позициям тендера.', [])
                 self._context_token_bound = None
                 self.context_fragment_ids = [block['id'] for block in batch]
                 stage = 'binding:' + _fingerprint([memory.assignment_policy, self.context_fragment_ids])[:20]
                 aliases = {f'b{i}': block['id'] for i, block in enumerate(batch)}
-                def resolve(rows):
-                    if any(not isinstance(row, dict) or not isinstance(row.get('ids'), list) or any(not isinstance(ref, str) for ref in row['ids']) for row in rows):
-                        raise ValueError('Привязка не вернула допустимые ссылки на источники.')
-                    return [{**row, 'id': aliases.get(ref, ref)} for row in rows for ref in row['ids']]
                 assigned = []
                 rows = None
-                before = len(memory.assignments)
+                attempted.update(block['id'] for block in batch)
                 try:
                     rows, metrics = self.ask_stage(job, stage, instruction, payload(batch), output_tokens=output(batch))
                     job.diagnostics['stages'][stage] = metrics
-                    assigned = resolve(rows)
+                    assigned = resolve_assignment_rows(rows, aliases)
                     memory.assign(assigned, batch)
                     job.diagnostics['stages'][stage] = {**metrics, 'state': 'complete'}
                 except (ValueError, TenderAIError) as exc:
+                    job.diagnostics.setdefault('stages', {}).setdefault(stage, {}).update(state='failed', validation_error=str(exc))
                     if not assigned:
                         incomplete = job.diagnostics.get('stages', {}).get(stage, {}).get('incomplete_response') or {}
-                        assigned = resolve(closed_stage_records(incomplete.get('content')))
-                    for block in batch:
-                        matches = [row for row in assigned if row['id'] == block['id']]
-                        if len(matches) == 1:
-                            try:
-                                memory.assign(matches, [block])
-                            except ValueError:
-                                pass
+                        assigned = resolve_assignment_rows(closed_stage_records(incomplete.get('content')), aliases)
+                    try:
+                        memory.assign(assigned, batch)
+                    except ValueError:
+                        pass  # Valid rows were retained; the original failure remains in diagnostics.
                     publish('running')
-                    if len(memory.assignments) > before:
-                        continue
-                    if rows is not None and len(batch) > 1:
-                        job.diagnostics['stages'][stage].update(state='failed', validation_error=str(exc), split_required=True)
-                        packet_limit = max(1, len(batch) // 2)
-                        publish('running')
-                        continue
-                    raise
+                    if job.diagnostics.get('awaiting_budget') or job.diagnostics.get('billing_uncertain'):
+                        raise
+                    job.diagnostics.setdefault('analysis_gaps', []).append(
+                        {'stage': 'source_binding', 'fragment_ids': [block['id'] for block in batch
+                            if memory.key(block['id'], memory.page_keys[0]) not in memory.assignments], 'reason': str(exc)})
                 publish('running')
             unresolved = [row for row in memory.assignments.values() if row.get('scope') == 'unassigned']
             if unresolved:
                 job.diagnostics.setdefault('analysis_gaps', []).extend(
                     {'stage': 'source_binding', 'fragment_id': row['id'], 'reason': row.get('reason', '')} for row in unresolved)
             list(memory.context(set(), 'conditions'))
-            job.diagnostics['tender_conditions'] = self.document_evidence.save_conditions(complete=not self.input_gaps)
+            if memory.snapshot()['complete'] and not memory.pending_assignments():
+                job.diagnostics['tender_conditions'] = self.document_evidence.save_conditions(
+                    complete=not self.input_gaps and not unresolved)
             for source_id, source in self.stage_sources.items():
                 if self.input_gaps:
                     continue
@@ -796,7 +799,7 @@ class GatewayDocumentEnricher:
                 source.metadata = {**(source.metadata or {}), 'evidence_links': {'job_id': job.pk, 'fragment_ids': fragment_ids,
                     'document_refs': [ref for ref in job.diagnostics['source_reading']['records'].values() if ref['id'] in fragment_ids]}}
                 source.save(update_fields=['metadata'])
-            publish('complete')
+            publish('partial' if memory.pending_assignments() or unresolved or not memory.snapshot()['complete'] else 'complete')
         except Exception:
             publish('failed')
             raise
@@ -1398,6 +1401,10 @@ class GatewayDocumentEnricher:
             source = self.stage_sources[good['source_id']]
             component = good['kind'] == 'kit'
             requirements = (specifications or {}).get(good['key']) or {'reconciled': True, 'keep_refs': [] if component and not good.get('accepted_source_item_id') else list(range(len(self.good_baseline(good)))), 'characteristics': []}
+            structure_unresolved = any(gap.get('source_id') == source.pk for gap in getattr(self, 'validation_gaps', []))
+            if structure_unresolved and not requirements.get('characteristics') and not (national or {}).get(good['key'], {}).get('basis'):
+                # A fallback is the existing source, not evidence of a proposed composition change.
+                continue
             entries.append(ExtractedItem(good['name'], None if component else source.quantity, good['unit'] if component else source.unit,
                 requirements, good['provenance'], Decimal('0.9'), 'component' if component else 'enrich', Decimal(good['quantity_per_parent']), source.pk,
                 good['parent_name'], good['kind'], good['reason'], (national or {}).get(good['key'], {}), good.get('accepted_source_item_id'), good.get('is_new_product', False)))
@@ -2392,7 +2399,7 @@ def routing_source_items(tender, *, include_proposals=False):
     active = active_calculation_items(tender)
     if not include_proposals:
         return active
-    proposals = [item for item in tender.v2_source_items.filter(source_type="document_proposal", is_active=False).select_related("parent").order_by("parent_id", "pk") if not item.metadata.get("analysis_incomplete") and document_proposal_changes(item)]
+    proposals = [item for item in tender.v2_source_items.filter(source_type="document_proposal", is_active=False).select_related("parent").order_by("parent_id", "pk") if document_proposal_changes(item)]
     replaced = {item.parent_id for item in proposals}
     replaced.update(source_id for item in proposals for source_id in item.metadata.get("replaces_source_ids", []))
     return [item for item in active if item.pk not in replaced] + proposals
@@ -2589,7 +2596,13 @@ def _saved_route_decision(component_id, plan):
 
 def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=None, include_proposals=False) -> list[RouteDecision]:
     if _items is None:
-        commercials = build_commercial_items(job, sources=routing_source_items(job.tender, include_proposals=include_proposals))
+        commercials = []
+        for source in routing_source_items(job.tender, include_proposals=include_proposals):
+            try:
+                commercials.extend(build_commercial_items(job, sources=[source]))
+            except (ValueError, TypeError, ArithmeticError) as exc:
+                job.diagnostics.setdefault('analysis_gaps', []).append(
+                    {'stage': 'routing', 'source_id': source.pk, 'reason': str(exc)})
         items = list(CalculationComponent.objects.filter(commercial_item__in=commercials, status="active").select_related("commercial_item", "source_item").order_by("commercial_item_id", "sort_order", "pk"))
     else:
         items = _items
@@ -2610,9 +2623,9 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
     cached, pending, reused_decisions = [], [], []
     for item in items:
         plan = plans.get(item.pk)
-        if plan and plan.metadata.get("input_fingerprint") == fingerprints[item.pk] and plan.status in {"planned", "ready", "needs_review"}:
+        if plan and (plan.steps.exists() or not processes) and plan.metadata.get("input_fingerprint") == fingerprints[item.pk] and plan.status in {"planned", "ready", "needs_review"}:
             cached.append(_saved_route_decision(item.pk, plan))
-        elif item.source_item.is_active and (draft := draft_plans.get((item.source_item_id, fingerprints[item.pk]))):
+        elif item.source_item.is_active and (draft := draft_plans.get((item.source_item_id, fingerprints[item.pk]))) and draft.steps.exists():
             reused_decisions.append(_saved_route_decision(item.pk, draft))
         else:
             pending.append(item)
@@ -2684,13 +2697,18 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
         current_sources = {source.pk: source for source in routing_source_items(job.tender, include_proposals=include_proposals)}
         current_answers = _route_owner_answer_map(current_sources.values())
         completed_lines = {line.component_id: line for line in job.lines.filter(component__in=items).exclude(result={})}
+        stale_items = set()
         for item in items:
             source = current_sources.get(item.source_item_id)
             if source is None or source_route_fingerprint(source, current_processes, current_knowledge, current_answers[source.pk]) != fingerprints[item.pk]:
-                raise ValueError("ТЗ или этапы изменились во время построения; обновите маршруты.")
+                stale_items.add(item.pk)
+                job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'source_id': item.source_item_id,
+                    'reason': 'ТЗ или этапы изменились во время построения; прежний маршрут сохранён.'})
             saved_line = completed_lines.get(item.pk)
             if saved_line and saved_line.input_snapshot.get('input_fingerprint') != fingerprints[item.pk]:
-                raise ValueError('В задании уже сохранён расчёт по прежним требованиям; создайте новое обновление.')
+                stale_items.add(item.pk)
+                job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'source_id': item.source_item_id,
+                    'reason': 'В задании сохранён расчёт по прежним требованиям; требуется новое обновление.'})
         job.diagnostics.update(routing_reused_count=len(cached) + len(reused_decisions), routing_batch_count=getattr(router, 'diagnostics', {}).get('provider_batch_count', 1 if provider_work else 0))
         decisions = cached + fresh
         cached_ids = {decision.component_id for decision in cached}
@@ -2699,7 +2717,7 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
             raise ValueError("Batch router must return exactly one decision per calculation component")
         effective_decisions = []
         OwnerInteraction.objects.filter(tender=job.tender, source_item__is_active=False, compute_line__isnull=False, status="open").update(status="superseded")
-        for item in items:
+        def persist_item(item):
             decision = by_item[item.pk]
             original_conflicts = _component_conflicts(item.commercial_item)
             conflicts = original_conflicts
@@ -2732,11 +2750,16 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
             if conflicts:
                 facts = _requirement_facts(item.requirements)
                 choices = tuple(dict.fromkeys(value for label, value in facts if any(_labels_match(label, conflict) for conflict in conflicts))) if len(conflicts) == 1 else ()
-            provisional = bool(decision.process_ids) and needs_review
+            partial_inputs = bool(item.source_item.metadata.get('analysis_incomplete')) or any(
+                gap.get('stage') in {'documents', 'source_reading', 'source_binding', 'structure', 'tz'}
+                and (gap.get('source_id') in {None, item.source_item_id}
+                     if 'key' not in gap else str(gap['key']).split(':', 1)[0] in {str(item.source_item_id), str(item.source_item.parent_id)})
+                for gap in job.diagnostics.get('analysis_gaps', []))
+            provisional = bool(decision.process_ids) and (needs_review or partial_inputs)
             saved_choice = next((answer["answer"] for answer in reversed(answers[item.source_item_id]) if answer.get("route_override")), "")
             selected_choice = saved_choice or (decision.selected_choice if decision.selected_choice in choices else "")
-            assumption = (decision.rationale.get("reason") or decision.question or "Выбран наиболее вероятный способ выполнения по имеющимся данным.") if provisional else ""
-            rationale = {**decision.rationale, "assumption": assumption, "source_conflicts": original_conflicts}
+            assumption = ("Предварительный маршрут по подтверждённым сведениям; разбор документов неполон." if partial_inputs else decision.rationale.get("reason") or decision.question or "Выбран наиболее вероятный способ выполнения по имеющимся данным.") if provisional else ""
+            rationale = {**decision.rationale, "assumption": assumption, "source_conflicts": original_conflicts, "preliminary": partial_inputs}
             effective = replace(decision, rationale=rationale, needs_review=not bool(decision.process_ids), choices=choices, selected_choice=selected_choice, question="")
             line, _ = TenderComputeLine.objects.update_or_create(
                 job=job, source_item=item.source_item, component=item,
@@ -2774,7 +2797,17 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
             elif interaction:
                 interaction.status = "superseded"
                 interaction.save(update_fields=["status"])
-            effective_decisions.append(effective)
+            return effective
+        for item in items:
+            if item.pk in stale_items:
+                continue
+            try:
+                with transaction.atomic():
+                    effective = persist_item(item)
+                effective_decisions.append(effective)
+            except (ValueError, TypeError, ArithmeticError) as exc:
+                job.diagnostics.setdefault('analysis_gaps', []).append(
+                    {'stage': 'routing', 'source_id': item.source_item_id, 'component_id': item.pk, 'reason': str(exc)})
         return effective_decisions
 
 

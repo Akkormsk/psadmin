@@ -2168,6 +2168,8 @@ def _save_intake_proposals(job, result, *, incomplete):
     with transaction.atomic():
         Tender.objects.select_for_update().get(pk=job.tender_id)
         previous = TenderSourceItem.objects.filter(tender_id=job.tender_id, source_type='document_proposal', is_active=False).exclude(pk__in=ids)
+        if incomplete:
+            previous = previous.filter(parent_id__in=[item.parent_id for item in result['created']])
         if ids or (not incomplete and result.get('state') == 'no_change') or previous.filter(metadata__analysis_job_id=job.pk).exists():
             job.diagnostics.setdefault('superseded_pending_proposals', []).extend(json.loads(json.dumps(list(previous.values()), default=str)))
             job.save(update_fields=['diagnostics', 'updated_at'])
@@ -2227,25 +2229,25 @@ def _staged_document_analysis(job, enricher):
     from django.conf import settings
     if getattr(settings, 'CALCULATION_V2_SOURCE_MEMORY_ENABLED', False):
         from tenders.services import TenderAIError
-        active_stage = 'source_reading'
-        try:
-            enricher.read_source_memory(job)
-            active_stage = 'source_binding'
-            enricher.bind_source_memory(job)
-        except (ValueError, TenderAIError) as exc:
-            stages[active_stage] = {**stages.get(active_stage, {}), 'state': 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'failed', 'outcome': 'source_only', 'warning': str(exc)}
-            job.diagnostics['analysis_gaps'].append({'stage': active_stage, 'reason': str(exc)})
-            state = 'reading_incomplete' if active_stage == 'source_reading' else 'binding_incomplete'
-            job.diagnostics.update(enrichment_state=state, staged_input_fingerprint=fingerprint)
-            _publish_intake(job)
-            return {'created': [], 'state': state, 'diagnostics': []}
+        for active_stage, execute in (('source_reading', enricher.read_source_memory), ('source_binding', enricher.bind_source_memory)):
+            if active_stage == 'source_binding' and not hasattr(enricher, 'source_memory'):
+                continue
+            try:
+                execute(job)
+            except (ValueError, TenderAIError) as exc:
+                stages[active_stage] = {**stages.get(active_stage, {}), 'state': 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'failed', 'outcome': 'source_only', 'warning': str(exc)}
+                job.diagnostics['analysis_gaps'].append({'stage': active_stage, 'reason': str(exc)})
+                _publish_intake(job)
 
     def ask(name, label, instruction, task, validator, limit, fallback):
         from tenders.services import TenderAIError
         _refresh_phase(job, name, label)
         if enricher.document_images:
             instruction += '\nИзображения приложены в порядке image_indexes. Прочитай их вместе с текстом. Для цитаты со скана укажи section: «Страница N» из visual_pages; для встроенного рисунка — «Изображение N» из image_indexes. Не выдавай предположение по изображению за установленное требование.'
+        rows = []
         try:
+            if job.diagnostics.get('awaiting_budget') or job.diagnostics.get('billing_uncertain'):
+                raise ValueError('Доступные сведения сохранены; новые запросы приостановлены.')
             requested = list(enricher.stage_sources) if name == 'structure' else task.get('goods', [])
             identity = (lambda item: item) if name == 'structure' else (lambda item: item['key'])
             field = 'source_id' if name == 'structure' else 'key'
@@ -2389,7 +2391,7 @@ def _staged_document_analysis(job, enricher):
         except (ValueError, TenderAIError) as exc:
             job.diagnostics['analysis_gaps'].append({'stage': name, 'reason': str(exc)})
             stages[name] = {**stages.get(name, {}), 'outcome': 'source_only', 'warning': str(exc)}
-            validated = fallback()
+            validated = validator(rows) if rows and name in {'structure', 'tz'} else fallback()
         stages[name]['state'] = 'waiting_budget' if job.diagnostics.get('awaiting_budget') else 'complete'
         return validated
 
@@ -2411,12 +2413,6 @@ def _staged_document_analysis(job, enricher):
         goods = ask('structure', 'Определяем товары и состав наборов…', structure_instruction, {}, enricher.reconcile_structure, min(16000, 5000 + len(sources)*600), lambda: enricher.reconcile_structure([]))
         job.diagnostics['analysis_gaps'].extend(enricher.validation_gaps)
         job.diagnostics["structure_requires_review"] = [good["source_id"] for good in goods if good["kind"] == "unclear"]
-        if stages['structure'].get('outcome') == 'source_only':
-            # No verified replacement exists: retain the previous working facts/proposals.
-            job.diagnostics.update(enrichment_state='structure_incomplete', staged_input_fingerprint=fingerprint,
-                intake_contract=enricher.STAGED_CONTRACT)
-            _publish_intake(job)
-            return {'created': [], 'state': 'structure_incomplete', 'diagnostics': []}
         enricher.prepared_entries(goods)
         result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
         if result['state'] in {'validation_failure', 'system_extraction_failure'}:
@@ -2492,7 +2488,9 @@ def _staged_document_analysis(job, enricher):
     result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
     if result['state'] in {'validation_failure', 'system_extraction_failure'}:
         raise ValueError('ТЗ не прошло проверку: ' + str(enricher.diagnostics.get('final_failure_reason') or result['state']))
-    _save_intake_proposals(job, result, incomplete=False)
+    _save_intake_proposals(job, result, incomplete=bool(job.diagnostics.get('analysis_gaps')))
+    if stages['structure'].get('outcome') == 'source_only' and not result['created']:
+        result['state'] = 'structure_incomplete'
     job.diagnostics.update(enrichment_state=result['state'], staged_input_fingerprint=fingerprint,
         document_input_fingerprint=_document_input_fingerprint(job.tender), intake_contract=enricher.STAGED_CONTRACT)
     _publish_intake(job)
@@ -2586,10 +2584,19 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             budget = Decimal(os.getenv("CALCULATION_V2_DOCUMENT_MANUAL_MAX_COST_RUB", "10"))
             if total_cap is not None:
                 from django.conf import settings
-                route_reserve = Decimal('0') if settings.CALCULATION_V2_SOURCE_MEMORY_ENABLED else min(Decimal('1'), total_cap / 4)
+                route_reserve = Decimal('0') if items_only else min(GatewayBatchRouter().max_cost_rub, max(Decimal('0'), total_cap - profile_cost))
                 budget = min(budget, max(Decimal('0'), total_cap - profile_cost - route_reserve))
             enricher = enricher or GatewayDocumentEnricher(max_cost_rub=budget)
-            result = _staged_document_analysis(job, enricher)
+            from tenders.services import TenderAIError
+            try:
+                result = _staged_document_analysis(job, enricher)
+            except (ValueError, TenderAIError) as exc:
+                stage = job.diagnostics.get('refresh', {}).get('stage', 'documents')
+                job.diagnostics.setdefault('analysis_gaps', []).append({'stage': stage, 'reason': str(exc)})
+                job.diagnostics.setdefault('stages', {}).setdefault(stage, {}).update(state='partial', warning=str(exc))
+                result = {'created': [], 'state': 'document_reading_incomplete', 'diagnostics': []}
+                job.diagnostics['enrichment_state'] = result['state']
+                _publish_intake(job)
         elif not routes_only:
             _refresh_phase(job, "documents", "Читаем документы…")
             before = _document_input_fingerprint(job.tender)
@@ -2608,26 +2615,23 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
                 result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
                 job.diagnostics.update(enrichment=result["diagnostics"], enrichment_state=result["state"])
                 if result["state"] in {"system_extraction_failure", "validation_failure", "budget_blocked", "budget_exceeded", "unpriced_model", "document_reading_incomplete"}:
-                    raise ValueError("Разбор документов не завершён; прежние товары и ТЗ сохранены.")
-                _save_intake_proposals(job, result, incomplete=False)
+                    job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'documents',
+                        'reason': 'Разбор документов не завершён; прежние товары и ТЗ сохранены.'})
+                else:
+                    _save_intake_proposals(job, result, incomplete=False)
             job.diagnostics["document_input_fingerprint"] = _document_input_fingerprint(job.tender)
             job.diagnostics.setdefault("enrichment_state", result["state"])
             _refresh_phase(job, "national_regime", "Проверяем требования 1875…")
             from .national_regime import tender_items
             job.diagnostics["national_regime_items"] = len(tender_items(job.tender))
-        if not routes_only and (job.diagnostics.get('awaiting_budget') or result.get('state') in {'reading_incomplete', 'binding_incomplete', 'structure_incomplete'}):
-            job.status = 'partial'
-            job.diagnostics['refresh'] = {'stage': 'paused', 'label': 'Сведения сохранены · разбор позиции не завершён'}
-            job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'pending', 'cost_rub': '0'}
-            return job
         if items_only and not routes_only:
             job.diagnostics['items_only'] = True
             job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'deferred', 'cost_rub': '0'}
             job.status = 'needs_review'
             job.diagnostics['refresh'] = {'stage': 'complete', 'label': 'Сведения о товарах собраны · требуется проверка'}
             return job
-        if not routes_only and result.get('created'):
-            _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0))))
+        if not routes_only and result.get('created') and not job.diagnostics.get('awaiting_budget') and not job.diagnostics.get('billing_uncertain'):
+            _refresh_intake_profile(job, stage='profile_after_tz', max_cost_rub=max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)) - GatewayBatchRouter().max_cost_rub))
             profile_cost += Decimal(str(job.diagnostics.get('stages', {}).get('profile_after_tz', {}).get('cost_rub', 0)))
             from .profile_triage import profile_disposition
             if profile_disposition(job.tender) == 'not_fit' and job.tender.status == Tender.NEW and job.tender.review == Tender.UNREVIEWED and job.trigger != 'manual_document_refresh':
@@ -2639,18 +2643,23 @@ def _run_document_analysis(job_id, *, enricher=None, router=None):
             TenderSourceItem.objects.filter(tender=job.tender, source_type="document_proposal", is_active=False).select_related("parent"))
         _refresh_phase(job, "routing", "Строим маршруты…", status="routing")
         route_cap = max(Decimal('0'), total_cap - profile_cost - Decimal(str(getattr(enricher, 'cost_rub', 0) or 0)))
-        router = router or GatewayBatchRouter(**({'max_cost_rub': route_cap} if route_cap is not None else {}))
+        if router is None:
+            router = GatewayBatchRouter(max_cost_rub=route_cap)
+        if isinstance(router, GatewayBatchRouter):
+            router.max_cost_rub = Decimal('0') if job.diagnostics.get('billing_uncertain') else min(router.max_cost_rub, route_cap)
         routing_started = timezone.now()
         from tenders.services import TenderAIError
+        routing_failed = False
         try:
             decisions = route_tender_batch(job, router, include_proposals=pending_proposals)
         except (ValueError, TenderAIError) as exc:
+            routing_failed = True
             decisions = []
             job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing',
                 'reason': 'Данные сохранены, но маршрут пока не сформирован: ' + str(exc)})
         if getattr(router, 'diagnostics', {}).get('billing_uncertain'):
             job.diagnostics['billing_uncertain'] = True
-        job.diagnostics.setdefault('stages', {})['routing'] = {'state': 'complete', **getattr(router, 'diagnostics', {}), 'started_at': routing_started.isoformat(), 'result': {'position_count': len(decisions)}}
+        job.diagnostics.setdefault('stages', {})['routing'] = {**getattr(router, 'diagnostics', {}), 'state': 'partial' if routing_failed else 'complete', 'started_at': routing_started.isoformat(), 'result': {'position_count': len(decisions)}}
         _publish_intake(job)
         if any(not decision.process_ids for decision in decisions):
             job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'reason': 'Для части позиций не получен маршрут; они не считаются готовыми.'})

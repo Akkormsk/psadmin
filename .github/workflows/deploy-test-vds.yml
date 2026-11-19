@@ -65,6 +65,12 @@ on:
         default: false
         type: boolean
 
+      inspect_route_replay:
+        description: "Export saved TEST intake inputs for local offline replay; SELECT only, no deployment or AI"
+        required: false
+        default: false
+        type: boolean
+
       inspect_eis:
         description: "Check direct EIS notice access for the selected tender, without writes or AI"
         required: false
@@ -411,6 +417,7 @@ jobs:
             [[ "$INSPECT_EIS" != true && "$INSPECT_NATIONAL_REGIME" != true && -z "$SOURCE_DUPLICATE_REPAIR" && -z "$BINDING_PROBE_BUDGET_RUB" ]]
           fi
           inspection_script=scripts/inspect_tender_analysis.py
+          if [ "${{ inputs.inspect_route_replay && '1' || '0' }}" = 1 ]; then inspection_script=scripts/export_route_replay_readonly.py; fi
           if [ "$INSPECT_EIS" = true ]; then inspection_script=scripts/check_eis_notification.py; fi
           if [ "$INSPECT_NATIONAL_REGIME" = true ]; then inspection_script=scripts/inspect_national_regime.py; fi
           if [ -n "$SOURCE_DUPLICATE_REPAIR" ]; then inspection_script=scripts/reconcile_tender_duplicates.py; fi

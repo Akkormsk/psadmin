@@ -54,7 +54,7 @@ class IntakeRefreshTests(TestCase):
         job.refresh_from_db()
         return notification, enrich
 
-    def test_incomplete_source_binding_does_not_run_routes(self):
+    def test_incomplete_source_binding_still_builds_preliminary_routes(self):
         from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
         job = self.create_job()
         def incomplete(job, engine):
@@ -63,10 +63,12 @@ class IntakeRefreshTests(TestCase):
         with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services._refresh_intake_profile', return_value='fit'), patch('tender_selection.services._staged_document_analysis', side_effect=incomplete):
             _run_document_analysis(job.pk, enricher=GatewayDocumentEnricher(max_cost_rub=10), router=self.router)
         job.refresh_from_db()
-        self.router.route.assert_not_called()
-        self.assertEqual(job.status, 'partial')
+        self.router.route.assert_called_once()
+        self.assertEqual(job.status, 'needs_review')
         self.assertIsNotNone(job.completed_at)
-        self.assertEqual(job.diagnostics['refresh']['stage'], 'paused')
+        self.assertEqual(job.diagnostics['refresh']['stage'], 'complete')
+        from tenders.models import ComponentRoutePlan
+        self.assertTrue(ComponentRoutePlan.objects.get().metadata['preliminary'])
 
     def test_budget_exhausted_during_documents_does_not_run_routes_or_profile_again(self):
         from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
@@ -77,7 +79,7 @@ class IntakeRefreshTests(TestCase):
         with patch('tender_selection.services.notification_for', return_value=self.tender.notification_raw), patch('tender_selection.services.extras_for'), patch('tender_selection.services._refresh_intake_profile', return_value='fit') as profile, patch('tender_selection.services._staged_document_analysis', side_effect=incomplete):
             _run_document_analysis(job.pk, enricher=GatewayDocumentEnricher(max_cost_rub=10), router=self.router)
         job.refresh_from_db()
-        self.router.route.assert_not_called()
+        self.router.route.assert_called_once()
         self.assertEqual(profile.call_count, 1)
         self.assertEqual(job.status, 'partial')
 
@@ -247,7 +249,9 @@ class ResilientIntakeFlowTests(TransactionTestCase):
         self.assertEqual(job.diagnostics['stages']['routing']['state'], 'complete')
         from tenders.calculation_v2_pipeline import source_route_snapshots
         self.assertTrue(source_route_snapshots(self.tender))
-        self.assertTrue(all(route['state'] == 'ready' for route in source_route_snapshots(self.tender).values()))
+        snapshots = source_route_snapshots(self.tender)
+        self.assertTrue(all(route['state'] == 'ready' for route in snapshots.values()),
+            {'routes': snapshots, 'gaps': job.diagnostics.get('analysis_gaps'), 'router_calls': str(self.router.route.call_args)})
         self.assertEqual(resolve_tender_analysis_status(self.tender).code, 'CHECKED_WITH_GAPS')
         self.assertTrue(job.diagnostics['analysis_gaps'])
         self.assertFalse(self.tender.estimates.exists())
@@ -407,7 +411,7 @@ class LargeIntakeStageTests(TestCase):
         self.assertEqual(prior.requirements['characteristics'][0]['value'], 'металл')
         self.assertEqual(result['created'], [])
         self.assertEqual(result['state'], 'structure_incomplete')
-        self.assertNotIn('tz', job.diagnostics['stages'])
+        self.assertEqual(job.diagnostics['stages']['tz']['outcome'], 'source_only')
 
     def test_context_compaction_preserves_full_original_data(self):
         import json

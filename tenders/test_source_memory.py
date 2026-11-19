@@ -251,6 +251,7 @@ class SourceRetrievalTests(TestCase):
             task = json.loads(prompt.rsplit('\n', 1)[1])
             if 'blocks' in task:
                 return {'items': [{'id': block['id'], 'scope': 'item', 'source_ids': [self.source.pk],
+                    'purposes': ['structure', 'tz', 'national_regime'],
                     'facts': [{'quote': block['text']}]} for block in task['blocks']]}, {}
             if 'requested_source_ids' in task:
                 block = next(iter(engine.source_memory.blocks.values()))
@@ -283,6 +284,7 @@ class SourceRetrievalTests(TestCase):
                 calls.append((task, kwargs['shared_context']))
                 if 'blocks' in task:
                     return {'items': [{'id': block['id'], 'scope': 'item', 'source_ids': [source.pk for source in current_sources],
+                        'purposes': ['structure', 'tz', 'national_regime'],
                         'facts': [{'quote': block['text']}]} for block in task['blocks']]}, {}
                 if 'requested_source_ids' in task:
                     block = next(iter(engine.source_memory.blocks.values()))
@@ -406,11 +408,11 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         corrected.restore(memory.snapshot())
         self.assertEqual(len([block for _, _, batch in corrected.pending() for block in batch]), 3)
 
-    def test_unresolved_binding_cannot_silently_complete_a_position(self):
+    def test_unresolved_binding_is_excluded_without_blocking_partial_context(self):
         memory = self.memory()
         memory.begin_assignment({'inventory': [1, 2]})
-        with self.assertRaisesMessage(ValueError, 'Привязка источников'):
-            list(memory.context({1}, 'tz'))
+        self.assertEqual(list(memory.context({1}, 'tz')), [])
+        self.assertTrue(memory.pending_assignments())
 
     def test_unassigned_does_not_block_or_attach_to_unrelated_goods(self):
         memory = self.memory()
@@ -432,6 +434,87 @@ class ItemEvidenceBindingTests(SimpleTestCase):
         self.assertFalse(memory.pending_assignments())
         self.assertEqual(len(list(memory.context({1}, 'tz'))), 1)
         self.assertEqual(len(list(memory.context(set(), 'delivery'))), 1)
+
+    def test_saved_binding_shapes_accept_singular_reference_and_unknown_purpose_separately(self):
+        # Saved failed responses: source_id instead of source_ids, and unassigned / purposes=[].
+        from .source_memory import resolve_assignment_rows
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        blocks = list(memory.blocks.values())
+        aliases = {f'b{i}': block['id'] for i, block in enumerate(blocks)}
+        response = [
+            {'ids': ['b0'], 'scope': 'item', 'source_id': 1, 'purposes': ['tz'], 'reason': 'По строке спецификации'},
+            {'id': 'b1', 'scope': 'unassigned', 'source_ids': [], 'purposes': [], 'reason': 'Назначение не определено'},
+            {'ids': ['b2'], 'scope': 'global', 'source_ids': [], 'purposes': ['delivery']},
+        ]
+        memory.assign(resolve_assignment_rows(response, aliases), blocks)
+        self.assertFalse(memory.pending_assignments())
+        self.assertEqual([row['facts'][0]['quote'] for row in memory.context({1}, 'tz')], ['Кружка белая 350 мл'])
+        self.assertEqual(list(memory.context({2}, 'tz')), [])
+        restored = self.memory()
+        restored.restore(memory.snapshot())
+        restored.begin_assignment({'inventory': [1, 2]})
+        self.assertFalse(restored.pending_assignments())
+        self.assertEqual(restored.assignments, memory.assignments)
+        self.assertEqual(response[0]['source_id'], 1)  # Original answer remains intact.
+
+    def test_bad_fragment_preserves_good_links_and_original_facts(self):
+        invalid_rows = [
+            {'scope': 'item', 'source_ids': [999], 'purposes': ['tz']},
+            {'scope': 'item', 'source_id': 1, 'source_ids': [2], 'purposes': ['tz']},
+            {'scope': 'item', 'source_id': True, 'purposes': ['tz']},
+            {'scope': 'global', 'source_ids': [1], 'purposes': ['tz']},
+            {'scope': 'unassigned', 'source_ids': [1], 'purposes': [], 'reason': 'Неясно'},
+            {'scope': 'unassigned', 'source_ids': [], 'purposes': [], 'reason': ''},
+            {'scope': 'item', 'source_ids': [1], 'purposes': ['invented']},
+            {'scope': 'item', 'source_ids': [1], 'purposes': []},
+            {'scope': 'irrelevant', 'source_ids': [], 'purposes': ['tz'], 'reason': 'Прочее'},
+        ]
+        for invalid in invalid_rows:
+            with self.subTest(row=invalid):
+                memory = self.memory()
+                memory.begin_assignment({'inventory': [1, 2]})
+                blocks = list(memory.blocks.values())
+                original = dict(memory.records)
+                good = {'id': blocks[0]['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']}
+                with self.assertRaises(ValueError):
+                    memory.assign([good, {'id': blocks[1]['id'], **invalid}], blocks[:2])
+                self.assertEqual(list(memory.assignments.values()), [good])
+                self.assertEqual(memory.records, original)
+
+    def test_invalid_addresses_duplicates_and_missing_rows_do_not_discard_good_links(self):
+        from .source_memory import resolve_assignment_rows
+        for bad in (None, {'ids': []}, {'ids': 'b1'}, {'ids': ['unknown']},
+                    {'id': 'b1', 'ids': ['b2']}, {'ids': ['b1', 'b1']}):
+            with self.subTest(row=bad):
+                memory = self.memory()
+                memory.begin_assignment({'inventory': [1, 2]})
+                blocks = list(memory.blocks.values())
+                aliases = {f'b{i}': block['id'] for i, block in enumerate(blocks)}
+                good = {'ids': ['b0'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']}
+                invalid = {**bad, 'scope': 'item', 'source_ids': [2], 'purposes': ['tz']} if isinstance(bad, dict) else bad
+                with self.assertRaises(ValueError):
+                    memory.assign(resolve_assignment_rows([good, invalid], aliases), blocks)
+                self.assertEqual(len(memory.assignments), 1)
+                self.assertEqual(next(iter(memory.assignments.values()))['source_ids'], [1])
+
+    def test_reading_without_purpose_does_not_invent_all_purposes(self):
+        memory = self.memory()
+        row = next(iter(memory.records.values()))
+        row.update(scope='item', source_ids=[1])
+        memory.begin_assignment({'inventory': [1, 2]})
+        self.assertFalse(memory.assignments)
+        self.assertEqual(len(memory.pending_assignments()), len(memory.blocks))
+
+    def test_conflicting_duplicates_do_not_overwrite_confirmed_link(self):
+        memory = self.memory()
+        memory.begin_assignment({'inventory': [1, 2]})
+        block = next(iter(memory.blocks.values()))
+        good = {'id': block['id'], 'scope': 'item', 'source_ids': [1], 'purposes': ['tz']}
+        memory.assign([good], [block])
+        with self.assertRaisesMessage(ValueError, 'повторён'):
+            memory.assign([good, {**good, 'source_ids': [2]}], [block])
+        self.assertEqual(list(memory.assignments.values()), [good])
 
     def test_irrelevant_text_does_not_block_item_evidence(self):
         memory = self.memory()
@@ -466,6 +549,32 @@ class ItemBindingResumeTests(TestCase):
         engine.source_memory, engine.all_document_images = memory, []
         return engine
 
+    def test_links_established_while_reading_survive_publish_and_skip_binding_calls(self):
+        from .document_evidence import DocumentEvidence
+
+        engine = self.prepared()
+        memory = engine.source_memory
+        for row in memory.records.values():
+            row.update(scope='item', source_ids=[self.source.pk], purposes=['tz'])
+        first = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        evidence = DocumentEvidence(first, memory, engine.document_lookup)
+        first.diagnostics['source_reading'] = evidence.publish()
+        first.save(update_fields=['diagnostics'])
+
+        resumed = self.prepared()
+        resumed.source_memory.records.clear()
+        second = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Unexpected paid call')) as gateway:
+            resumed.bind_source_memory(second)
+
+        gateway.assert_not_called()
+        self.assertFalse(resumed.source_memory.pending_assignments())
+        self.assertEqual(second.diagnostics['stages']['source_binding']['state'], 'complete')
+        self.assertEqual(
+            list(resumed.source_memory.context({self.source.pk}, 'tz')),
+            list(memory.context({self.source.pk}, 'tz')),
+        )
+
     def test_inventory_fact_references_preserve_exact_values(self):
         engine = self.prepared()
         facts = [{'id': 0, 'name': 'Размер', 'value': '≥ 10 × 20 мм'},
@@ -482,8 +591,40 @@ class ItemBindingResumeTests(TestCase):
         with patch('tenders.services._ai_gateway_json', side_effect=answer):
             engine.bind_source_memory(job)
 
+    def test_saved_binding_formats_persist_unresolved_facts_without_paid_repeat(self):
+        engine = self.prepared()
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        selected = None
+
+        def answer(prompt, **kwargs):
+            nonlocal selected
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            rows = []
+            for block in task['blocks']:
+                if selected is None:
+                    selected = block['text']
+                assigned = block['text'] == selected
+                rows.append({'ids': [block['id']], 'scope': 'item' if assigned else 'unassigned',
+                    'source_id': self.source.pk if assigned else None,
+                    'purposes': ['tz'] if assigned else [], 'reason': 'По строке ТЗ' if assigned else 'Связь неясна'})
+            return {'items': rows}, {}
+
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            engine.bind_source_memory(job)
+        self.assertTrue(job.diagnostics['analysis_gaps'])
+        original = list(engine.source_memory.context({self.source.pk}, 'tz'))
+        self.assertEqual(len(original), 1)
+        repeated = self.prepared()
+        repeated.source_memory.records.clear()
+        second = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid repeat')):
+            repeated.bind_source_memory(second)
+        self.assertEqual(list(repeated.source_memory.context({self.source.pk}, 'tz')), original)
+        self.assertEqual(repeated.source_memory.snapshot()['read'], engine.source_memory.snapshot()['read'])
+        self.assertEqual(second.diagnostics['analysis_gaps'], job.diagnostics['analysis_gaps'])
+
     @override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 16000, 'max_output_tokens': 4096}})
-    def test_empty_binding_response_is_saved_and_remaining_packet_is_split(self):
+    def test_empty_binding_response_is_saved_without_blocking_other_packets(self):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         sizes = []
         def answer(prompt, **kwargs):
@@ -496,12 +637,11 @@ class ItemBindingResumeTests(TestCase):
                 'source_ids': [self.source.pk], 'purposes': ['tz']}]}, {'prompt_tokens': 100, 'completion_tokens': 30}
         with patch('tenders.services._ai_gateway_json', side_effect=answer):
             self.prepared().bind_source_memory(job)
-        self.assertLess(sizes[1], sizes[0])
         stages = [row for name, row in job.diagnostics['stages'].items() if name.startswith('binding:')]
         self.assertTrue(any(row.get('result') == [] and row.get('state') == 'failed' for row in stages))
-        self.assertEqual(job.diagnostics['stages']['source_binding']['state'], 'complete')
+        self.assertEqual(job.diagnostics['stages']['source_binding']['state'], 'partial')
         repeated = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
-        with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Paid repeat')):
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
             self.prepared().bind_source_memory(repeated)
         self.assertEqual(repeated.diagnostics['stages']['source_binding']['state'], 'complete')
 
