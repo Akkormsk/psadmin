@@ -62,7 +62,23 @@ def inspect_card_routes(tender):
         links = html.fromstring(response.content).xpath('//*[@data-source-route]')
         ids = [int(node.get('data-route-source')) for node in links]
         statuses = [read(node.get('data-source-route')).status_code for node in links]
-    return {'card_http_status': response.status_code, 'route_link_count': len(ids), 'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses}
+    from tenders.models import TenderComputeJob
+    from tenders.calculation_v2_pipeline import source_route_snapshots
+    job = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
+    diagnostics = (job.diagnostics or {}) if job else {}
+    routes = source_route_snapshots(tender)
+    return {'card_http_status': response.status_code, 'route_link_count': len(ids),
+        'unique_route_links': len(set(ids)), 'route_endpoint_statuses': statuses,
+        'latest_job': {'id': job.pk, 'status': job.status,
+            'error': job.error,
+            'stages': {name: {key: value.get(key) for key in ('state', 'outcome', 'warning')}
+                       for name, value in (diagnostics.get('stages') or {}).items()},
+            'gaps': diagnostics.get('analysis_gaps'),
+            'reading': {key: (diagnostics.get('source_reading') or {}).get(key) for key in ('read', 'total', 'complete')},
+        } if job else None,
+        'saved_routes': [{'source_id': source_id, 'state': route['state'], 'plan_id': route['plan_id'],
+                          'steps': len(route['steps'])} for source_id, route in routes.items()]}
+
 
 
 def document_input_profile(tender):
