@@ -60,6 +60,31 @@
   }
   const root = document.querySelector('#ts-panel-products');
   if (!root) return;
+  function financeNotice(label) {
+    root.querySelectorAll('[data-product-finance]').forEach(node=>{
+      node.dataset.financeState='updating';
+      const status=node.querySelector('.ts-finance-status');
+      if(status)status.textContent=label;
+    });
+  }
+  document.addEventListener('ps-product-finance-refreshing',()=>financeNotice('Обновляется…'));
+  document.addEventListener('ps-product-finance-error',()=>financeNotice('Сводка не обновлена'));
+  document.addEventListener('ps-card-snapshot',event=>{
+    const snapshots=new Map([...event.detail.document.querySelectorAll('[data-product-finance]')].map(node=>[
+      node.dataset.productFinance+':'+node.dataset.financeView,node,
+    ]));
+    root.querySelectorAll('[data-product-finance]').forEach(node=>{
+      const fresh=snapshots.get(node.dataset.productFinance+':'+node.dataset.financeView);
+      if(!fresh){
+        node.dataset.financeState='stale';
+        const status=node.querySelector('.ts-finance-status');
+        if(status)status.textContent='Состав изменился';
+        return;
+      }
+      node.innerHTML=fresh.innerHTML;
+      node.dataset.financeState=fresh.dataset.financeState;
+    });
+  });
   function refresh() { root.querySelectorAll('[data-products-workspace]').forEach(init); }
   new MutationObserver(refresh).observe(root, {childList:true, subtree:true});
   window.addEventListener('hashchange', revealAnchor);

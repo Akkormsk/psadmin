@@ -335,8 +335,8 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-product-select > span:first-child { flex:1; min-width:0; overflow-wrap:anywhere; }
 .ts-product-select small { display:block; color:var(--ink-3); }
 .ts-product-select[aria-expanded="true"] { background:var(--tint-neutral); }
-.ts-product-list-regime,.ts-product-list-price { color:var(--ink-2); font-size:12px; }
-.has-selection .ts-product-list-regime,.has-selection .ts-product-list-price { display:none; }
+.ts-product-list-regime { color:var(--ink-2); font-size:12px; }
+
 .ts-products-children { margin-left:18px; padding-left:10px; border-left:1px solid var(--separator); }
 .ts-products-group { margin-top:14px; }
 .ts-product-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
@@ -349,7 +349,7 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
   .ts-products-workspace,.ts-products-workspace.has-selection { display:block; }
   .ts-products-workspace.has-selection > .ts-products-list { display:none; }
   .ts-product-inspector { padding:0; margin:0; border:0; }
-  .ts-product-list-regime,.ts-product-list-price { display:none; }
+
 }
 @media(prefers-reduced-motion:reduce) { .ts-products-workspace { transition:none; } }
 
@@ -371,3 +371,42 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-tab-badge--negative { color:var(--negative-ink); }
 .ts-tab-badge--positive { color:var(--positive-ink); }
 .ts-tab-panel .ts-notice-links { margin:0 0 16px; }
+
+/* Saved product finances: the same cells in the list and selected product. */
+.ts-product-select,.ts-products-columns { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,4fr) auto; gap:12px; }
+.ts-product-select .ts-product-quantity { display:inline; margin-left:5px; white-space:nowrap; font-size:11px; font-weight:400; }
+.ts-product-financials { display:block; min-width:0; }
+.ts-finance-values { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; min-width:0; }
+.ts-finance-cell { display:block; min-width:0; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.ts-finance-cell b { display:block; font-size:12px; font-weight:600; }
+.ts-finance-cell small { display:block; margin-top:2px; font-size:10px; color:var(--ink-3); }
+.ts-finance-status { display:block; color:var(--ink-3); font-size:10px; text-align:right; }
+.ts-product-financials[data-finance-state="current"] .ts-finance-cell--profit.is-known b { color:var(--positive-ink); }
+.ts-product-financials[data-finance-state="current"] .ts-finance-cell.is-negative b { color:var(--negative-ink); }
+.ts-products-columns { padding:8px; font-size:11px; color:var(--ink-3); border-bottom:1px solid var(--separator); }
+.ts-products-columns .ts-finance-values { text-align:right; }
+.ts-products-total { display:flex; align-items:start; gap:16px; margin-top:16px; padding:14px 8px; border-top:1px solid var(--separator); }
+.ts-products-total > strong { flex:3; font-size:12px; }
+.ts-products-total > .ts-product-financials { flex:4; }
+.ts-finance-explanation { font-size:11px; color:var(--ink-3); margin:10px 0 0; }
+.ts-product-financials[data-finance-view="detail"] { margin:16px 0; }
+.ts-product-financials[data-finance-view="detail"] .ts-finance-cell::before { content:attr(data-label); display:block; margin-bottom:4px; font-size:10px; color:var(--ink-3); }
+.ts-product-financials[data-finance-view="footer"] { display:block; margin-top:20px; padding-top:14px; border-top:1px solid var(--separator); }
+.ts-product-cost-total { display:grid; grid-template-columns:1fr auto; gap:4px 12px; align-items:center; font-size:13px; }
+.ts-product-cost-total b { font-size:17px; font-variant-numeric:tabular-nums; }
+.ts-product-cost-total small { grid-column:2; text-align:right; font-size:11px; color:var(--ink-3); }
+.has-selection .ts-products-columns,.has-selection .ts-product-select > .ts-product-financials { display:none; }
+.has-selection .ts-product-select { grid-template-columns:minmax(0,1fr) auto; }
+.has-selection .ts-product-select .ts-product-list-regime { display:block; grid-row:2; grid-column:1; font-size:10px; }
+.has-selection .ts-product-select > [aria-hidden] { grid-row:1; grid-column:2; }
+@media(max-width:650px) {
+  .ts-products-columns { display:none; }
+  .ts-product-select { grid-template-columns:minmax(0,1fr) auto; }
+  .ts-product-select .ts-product-list-regime { grid-column:1; grid-row:2; }
+  .ts-product-select > [aria-hidden] { grid-column:2; grid-row:1; }
+  .ts-product-select > .ts-product-financials { grid-column:1/-1; }
+  .ts-product-select .ts-finance-cell::before { content:attr(data-label); display:block; font-size:9px; color:var(--ink-3); }
+  .ts-finance-values { gap:8px; }
+  .ts-products-total { display:block; }
+  .ts-products-total > strong { display:block; margin-bottom:8px; }
+}

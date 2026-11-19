@@ -659,7 +659,7 @@ def tender_detail(request, pk):
                 details = [characteristic_display(row, documents=proposal_documents) for row in rows if isinstance(row, dict)]
                 components = [{"name": component.name, "quantity_per_parent": component.quantity_per_parent, "unit": component.unit} for component in commercial.components.filter(status="active").order_by("sort_order", "pk")]
                 changed = commercial.structure != TenderCommercialItem.Structure.SIMPLE or (source and source.source_type in {"document_enrichment", "document_extraction"})
-                display_items.append({"source_id": source.pk if source else None, "name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
+                display_items.append({"source_id": source.pk if source else None, "commercial_id": commercial.pk, "name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
                     "characteristics": details, "components": components if commercial.structure == TenderCommercialItem.Structure.COMPOSITE else [],
                     "source_mark": "Уточнено по ТЗ" if changed else "", "source_mark_kind": "enriched", "source_details": "Документация" if changed else "", "source_evidence": "", "source_changes": [], "original_source_text": "",
                     "composition_question": "", "composition_question_id": None, "composition_options": []})
@@ -788,6 +788,17 @@ def tender_detail(request, pk):
     if product_calculation and (is_archived or calc_verdict and calc_verdict.get("requires_review")):
         product_calculation["editable"] = False
 
+    from tenders.product_financials import present_product_financials
+    notification_total = (card or {}).get("money", {}).get("max_price")
+    if notification_total is None:
+        notification_total = tender.max_price
+    product_finance_totals = present_product_financials(display_items, display_item_groups,
+        product_calculation, estimate, notification_total)
+    if product_calculation and product_calculation["input_status"]["state"] == "unknown":
+        calc_verdict = None
+    if product_finance_totals and product_finance_totals["state"] == "partial":
+        calc_verdict = None
+
     lifecycle = _tender_lifecycle(tender, estimate)
     active_stage = "review" if estimate is None else (
         "calculation" if tender.outcome_status == Tender.OUTCOME_DRAFT else
@@ -856,9 +867,9 @@ def tender_detail(request, pk):
     from .card_navigation import document_readiness, result_badge
     navigation_documents = document_readiness((card or {}).get("documents", []), v2_job.diagnostics if v2_job else {})
     navigation_result = result_badge(estimate, calc_verdict)
-    navigation_nmck = (card or {}).get("money", {}).get("max_price")
-    if navigation_nmck is None:
-        navigation_nmck = tender.max_price
+    if product_finance_totals and product_finance_totals["state"] == "partial":
+        navigation_result = {"label": "Частичный", "kind": "warning"}
+    navigation_nmck = notification_total
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
@@ -872,6 +883,7 @@ def tender_detail(request, pk):
         "pushed_estimate_id": estimate_id,
         "pipeline_estimate_id": estimate_id,
         "product_calculation": product_calculation,
+        "product_finance_totals": product_finance_totals,
         "calc_verdict": calc_verdict,
         "navigation_documents": navigation_documents,
         "navigation_result": navigation_result,

@@ -48,6 +48,7 @@
       var request = new AbortController();
       badgeRequest = request;
       resultNotice('Расчёт обновлён');
+      document.dispatchEvent(new CustomEvent('ps-product-finance-refreshing'));
       try {
         var url = new URL(window.location.href);
         url.searchParams.set('analysis_snapshot', '1');
@@ -60,8 +61,12 @@
           var fresh = parsed.querySelector('[data-card-refresh="' + container.dataset.cardRefresh + '"]');
           if (fresh) container.innerHTML = fresh.innerHTML;
         });
+        document.dispatchEvent(new CustomEvent('ps-card-snapshot', {detail:{document:parsed}}));
       } catch (error) {
-        if (error.name !== 'AbortError' && badgeRequest === request) resultNotice('Сводка не обновлена');
+        if (error.name !== 'AbortError' && badgeRequest === request) {
+          resultNotice('Сводка не обновлена');
+          document.dispatchEvent(new CustomEvent('ps-product-finance-error'));
+        }
       }
     });
     window.addEventListener('hashchange', revealAnchor);

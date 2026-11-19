@@ -10,7 +10,8 @@ def estimate_workspace(estimate, user):
     lines = []
     for line in estimate.lines.all():
         lines.append({
-            'id': line.pk, 'group_key': line.group_key, 'group_name': line.group_name,
+            'id': line.pk, 'commercial_item_id': getattr(line, 'commercial_item_id', None),
+            'component_id': getattr(line, 'component_id', None), 'group_key': line.group_key, 'group_name': line.group_name,
             'name': line.name, 'quantity': str(line.quantity), 'nmck_unit': str(line.nmck_unit),
             'material_unit': str(line.material_unit), 'application_unit': str(line.application_unit),
             'logistics_unit': str(line.logistics_unit), 'product_url': line.product_url,
