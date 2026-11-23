@@ -293,6 +293,122 @@ def replay_saved_binding(tender):
             'routes_not_created': True, 'model_called': False}
 
 
+def document_scout_experiment(tender):
+    """Measure a conservative structural preselection against saved evidence."""
+    import re
+    import time
+    import tracemalloc
+    from unittest.mock import patch
+    from django.db import DEFAULT_DB_ALIAS
+    from tender_selection.models import TenderDocument
+    from tenders.calculation_v2_pipeline import (GatewayDocumentEnricher, _fingerprint, assess_quality,
+        document_analysis_sources)
+    from tenders.document_evidence import DocumentEvidence
+    from tenders.models import TenderComputeJob
+    from tenders.source_memory import SourceMemory, document_blocks
+
+    job = TenderComputeJob.objects.filter(tender=tender, diagnostics__source_reading__isnull=False).order_by('-pk').first()
+    if not job:
+        return {'available': False, 'reason': 'saved_reading_missing'}
+    engine = GatewayDocumentEnricher(max_cost_rub='0')
+    sources = list(document_analysis_sources(tender)[0].values())
+    with patch('tender_selection.services.documents_html'):
+        considered = engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])['documents']
+    inventory = [{'source_id': pk, 'label': row['name']} for pk, row in engine.working_context.items()]
+    source_versions = {pk: _fingerprint(engine.normalized_notification_items.get(pk)) for pk in engine.stage_sources}
+    memory = SourceMemory(document_blocks(engine.document_lookup, engine.document_images), inventory,
+                          _fingerprint([engine.model, engine.thinking, engine.reasoning_effort]), source_versions)
+    using = job._state.db or DEFAULT_DB_ALIAS
+    links = {}
+    for doc_id, document in engine.document_lookup.items():
+        query = TenderDocument.objects.using(using).filter(tender_id=job.tender_id, source_key=document['url'])
+        if document.get('preview_id'):
+            query = query.filter(preview_id=document['preview_id'])
+        link = query.order_by('-is_current', '-pk').first()
+        if link is not None:
+            links[doc_id] = link
+    evidence = DocumentEvidence.__new__(DocumentEvidence)
+    evidence.job, evidence.memory, evidence.using, evidence.links = job, memory, using, links
+    evidence.reload()
+    evidence.restore()
+
+    def normalized_tokens(value):
+        return {token for token in re.findall(r'[0-9A-Za-zА-Яа-яЁё]+', str(value).casefold())
+                if len(token) >= 4 or token.isdigit()}
+    label_tokens = [normalized_tokens(row['label']) for row in inventory]
+    token_frequency = Counter(token for tokens in label_tokens for token in tokens)
+    distinctive = {token for token, count in token_frequency.items() if count <= max(1, len(label_tokens) // 2)}
+    blocks = list(memory.blocks.values())
+    full_payload = [{key: block[key] for key in ('id', 'doc_id', 'location', 'text', 'structure', 'table_context', 'image_index')
+                     if key in block} for block in blocks]
+    tracemalloc.start()
+    started = time.perf_counter()
+    direct = {block['id'] for block in blocks
+              if block.get('image_index') or (normalized_tokens(block.get('text')) & distinctive)}
+    matched_sections = {(occurrence.get('doc_id'), tuple((occurrence.get('structure') or {}).get('headings') or []))
+                        for identity in direct for occurrence in memory.blocks[identity]['occurrences']
+                        if (occurrence.get('structure') or {}).get('headings')}
+    selected = set(direct)
+    for block in blocks:
+        if block.get('table_context'):
+            selected.add(block['id'])
+            continue
+        if any((occurrence.get('doc_id'), tuple((occurrence.get('structure') or {}).get('headings') or []))
+               in matched_sections for occurrence in block['occurrences']):
+            selected.add(block['id'])
+    outline = []
+    seen_outline = set()
+    for block in blocks:
+        for occurrence in block['occurrences']:
+            structure = occurrence.get('structure') or {}
+            entry = (occurrence.get('doc_id'), tuple(structure.get('headings') or []), structure.get('table'))
+            if entry not in seen_outline:
+                seen_outline.add(entry)
+                outline.append({'doc_id': entry[0], 'headings': list(entry[1]), 'table': entry[2]})
+    selected_payload = [row for row in full_payload if row['id'] in selected]
+    serialized = lambda value: len(json.dumps(value, ensure_ascii=False, separators=(',', ':'), default=str).encode())
+    selected_bytes = serialized({'outline': outline, 'blocks': selected_payload})
+    full_bytes = serialized({'blocks': full_payload})
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+    _, peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    page_key = memory.page_keys[0]
+    known = {identity for identity in memory.blocks
+             if (memory.records.get(memory.key(identity, page_key)) or {}).get('scope') != 'irrelevant'
+             and memory.key(identity, page_key) in memory.records}
+    missed = known - selected
+    return {'available': True, 'job_id': job.pk, 'items': len(inventory), 'documents': len(engine.document_lookup),
+            'cache_states': dict(Counter(row['reading_status'] for row in considered)),
+            'full_fragments': len(blocks), 'selected_fragments': len(selected),
+            'ambiguous_fragments_available_for_lookup': len(blocks) - len(selected),
+            'full_serialized_bytes': full_bytes, 'selected_serialized_bytes': selected_bytes,
+            'reduction_percent': round((1 - selected_bytes / full_bytes) * 100, 2) if full_bytes else 0,
+            'known_relevant_fragments': len(known), 'retained_known_relevant': len(known & selected),
+            'missed_known_relevant': len(missed),
+            'coverage_percent': round(len(known & selected) * 100 / len(known), 2) if known else None,
+            'missed_scopes': dict(Counter(memory.records[memory.key(identity, page_key)]['scope'] for identity in missed)),
+            'elapsed_ms': elapsed_ms, 'peak_memory_bytes': peak_bytes,
+            'context_unit': 'serialized UTF-8 bytes, not tokens', 'model_called': False,
+            'persisted_writes': False, 'integrated': False}
+
+
+def scout_sample_candidates(exclude_number):
+    """Return varied saved readings for additional operator-selected experiments."""
+    from tenders.models import TenderComputeJob
+    candidates = []
+    seen = set()
+    for job in TenderComputeJob.objects.filter(diagnostics__source_reading__complete=True).select_related('tender').order_by('-pk')[:100]:
+        number = job.tender.purchase_number
+        state = (job.diagnostics or {}).get('source_reading') or {}
+        key = (number, state.get('total'))
+        if number == exclude_number or number in seen or not state.get('total'):
+            continue
+        seen.add(number)
+        candidates.append({'number': number, 'fragments': state.get('total'),
+                           'items': job.tender.v2_source_items.filter(parent__isnull=True).count()})
+    return sorted(candidates, key=lambda row: (row['items'], row['fragments']))[:8]
+
+
 def inspect_original_document(tender, requested_name):
     """Fetch one explicitly selected EIS attachment and exercise existing bounded readers."""
     if not requested_name:
@@ -549,6 +665,8 @@ def main():
         target = Tender.objects.get(purchase_number=number)
         document_metadata = saved_document_metadata(target)
         binding_replay = replay_saved_binding(target)
+        scout_experiment = document_scout_experiment(target)
+        scout_candidates = scout_sample_candidates(number)
         import base64
         original_name = base64.b64decode(os.environ.get('INSPECT_ORIGINAL_DOCUMENT_B64') or '').decode()
         original_document = inspect_original_document(target, original_name)
@@ -559,6 +677,7 @@ def main():
             print(json.dumps({'route_failure_audit': namespace['audit_saved_route_jobs']()}, ensure_ascii=False), flush=True)
         print(json.dumps({'read_only': True, 'model_called': False, 'card_checks': reports,
                           'document_metadata': document_metadata, 'binding_replay': binding_replay,
+                          'scout_experiment': scout_experiment, 'scout_candidates': scout_candidates,
                           'original_document': original_document}, ensure_ascii=False), flush=True)
 
 
