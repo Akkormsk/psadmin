@@ -5,6 +5,14 @@ from collections import Counter
 from pathlib import Path
 
 
+DOCUMENT_PURPOSE_SIGNALS = {
+    'technical': ('характерист', 'техническ', 'спецификац', 'комплектност', 'материал',
+                  'размер', 'маркиров', 'состав издел', 'технолог', 'описание объект'),
+    'general': ('поставк', 'приемк', 'приёмк', 'оплат', 'гарант', 'контракт', 'срок',
+                'упаковк', 'национальн режим'),
+}
+
+
 def incomplete_response_summary(diagnostics):
     """Inspect saved output structure without publishing customer text in CI logs."""
     import re
@@ -377,6 +385,64 @@ def document_scout_experiment(tender):
              if (memory.records.get(memory.key(identity, page_key)) or {}).get('scope') != 'irrelevant'
              and memory.key(identity, page_key) in memory.records}
     missed = known - selected
+    tracemalloc.start()
+    purpose_started = time.perf_counter()
+    def purpose_signals(block):
+        labels = []
+        document = engine.document_lookup.get(block['doc_id']) or {}
+        labels.append(document.get('name') or '')
+        labels.extend((block.get('structure') or {}).get('headings') or [])
+        context = block.get('table_context') or {}
+        for row in context.get('table_start') or []:
+            labels.extend(cell if isinstance(cell, str) else str(cell.get('text') or '') for cell in row)
+        value = ' '.join(labels).casefold()
+        return {purpose: [signal for signal in signals if signal in value]
+                for purpose, signals in DOCUMENT_PURPOSE_SIGNALS.items()}
+    purpose = {}
+    purpose_reasons = {}
+    for block in blocks:
+        signals = purpose_signals(block)
+        item_match = bool(normalized_tokens(block.get('text')) & distinctive)
+        technical = bool(signals['technical']) or (item_match and bool(block.get('table_context')))
+        general = bool(signals['general'])
+        if technical and not general:
+            bucket = 'technical'
+        elif general and not technical and not item_match:
+            bucket = 'general'
+        else:
+            bucket = 'unknown_both'
+        purpose[block['id']] = bucket
+        purpose_reasons[block['id']] = {'technical_signals': signals['technical'],
+                                        'general_signals': signals['general'],
+                                        'item_match': item_match,
+                                        'table': bool(block.get('table_context'))}
+    technical_plan = {identity for identity, bucket in purpose.items() if bucket != 'general'}
+    general_plan = {identity for identity, bucket in purpose.items() if bucket != 'technical'}
+    technical_payload = [row for row in full_payload if row['id'] in technical_plan]
+    general_payload = [row for row in full_payload if row['id'] in general_plan]
+    outline_bytes = serialized({'outline': outline})
+    technical_bytes = serialized({'outline': outline, 'blocks': technical_payload})
+    general_bytes = serialized({'outline': outline, 'blocks': general_payload})
+    known_item = {identity for identity in known
+                  if memory.records[memory.key(identity, page_key)].get('scope') == 'item'}
+    known_general = known - known_item
+    lost_item = known_item - technical_plan
+    lost_general = known_general - general_plan
+    first_missed_purposes = Counter()
+    for identity in missed:
+        for value in memory.records[memory.key(identity, page_key)].get('purposes') or []:
+            first_missed_purposes[value] += 1
+    missed_item_examples = []
+    for identity in sorted(known_item - selected)[:5]:
+        block = memory.blocks[identity]
+        missed_item_examples.append({'id': identity, 'doc_id': block['doc_id'],
+                                     'location': block['location'],
+                                     'new_bucket': purpose[identity],
+                                     'reason': purpose_reasons[identity],
+                                     'address_preserved': identity in memory.blocks})
+    purpose_elapsed_ms = round((time.perf_counter() - purpose_started) * 1000, 3)
+    _, purpose_peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
     return {'available': True, 'job_id': job.pk, 'items': len(inventory), 'documents': len(engine.document_lookup),
             'cache_states': dict(Counter(row['reading_status'] for row in considered)),
             'full_fragments': len(blocks), 'selected_fragments': len(selected),
@@ -387,9 +453,34 @@ def document_scout_experiment(tender):
             'missed_known_relevant': len(missed),
             'coverage_percent': round(len(known & selected) * 100 / len(known), 2) if known else None,
             'missed_scopes': dict(Counter(memory.records[memory.key(identity, page_key)]['scope'] for identity in missed)),
+            'first_missed_saved_purposes': dict(first_missed_purposes),
             'elapsed_ms': elapsed_ms, 'peak_memory_bytes': peak_bytes,
             'context_unit': 'serialized UTF-8 bytes, not tokens', 'model_called': False,
-            'persisted_writes': False, 'integrated': False}
+            'persisted_writes': False, 'integrated': False,
+            'purpose_experiment': {
+                'map_bytes': outline_bytes,
+                'buckets': dict(Counter(purpose.values())),
+                'technical_plan_fragments': len(technical_plan),
+                'technical_plan_bytes': technical_bytes,
+                'technical_reduction_percent': round((1 - technical_bytes / full_bytes) * 100, 2) if full_bytes else 0,
+                'general_plan_fragments': len(general_plan),
+                'general_plan_bytes': general_bytes,
+                'combined_plan_bytes': technical_bytes + general_bytes,
+                'combined_change_percent': round((1 - (technical_bytes + general_bytes) / full_bytes) * 100, 2) if full_bytes else 0,
+                'known_item_fragments': len(known_item),
+                'known_general_fragments': len(known_general),
+                'lost_item_from_technical_plan': len(lost_item),
+                'lost_general_from_general_plan': len(lost_general),
+                'excluded_from_all_plans': len(set(memory.blocks) - technical_plan - general_plan),
+                'unknown_fragments': sum(bucket == 'unknown_both' for bucket in purpose.values()),
+                'elapsed_ms': purpose_elapsed_ms,
+                'peak_memory_bytes': purpose_peak_bytes,
+                'addresses_preserved': all(row['id'] in memory.blocks for row in technical_payload + general_payload),
+                'table_context_preserved': all(row.get('table_context') == memory.blocks[row['id']].get('table_context')
+                                               for row in technical_payload + general_payload),
+                'first_missed_item_examples': missed_item_examples,
+                'prediction_only': True,
+            }}
 
 
 def scout_sample_candidates(exclude_number):
@@ -664,9 +755,12 @@ def main():
                                 'code': frame.line} for frame in traceback.extract_tb(error.__traceback__)]})
         target = Tender.objects.get(purchase_number=number)
         document_metadata = saved_document_metadata(target)
-        binding_replay = replay_saved_binding(target)
         scout_experiment = document_scout_experiment(target)
         scout_candidates = scout_sample_candidates(number)
+        try:
+            binding_replay = replay_saved_binding(target)
+        except ValueError as error:
+            binding_replay = {'available': False, 'reason': str(error)}
         import base64
         original_name = base64.b64decode(os.environ.get('INSPECT_ORIGINAL_DOCUMENT_B64') or '').decode()
         original_document = inspect_original_document(target, original_name)
