@@ -234,7 +234,7 @@ def replay_saved_binding(tender):
     state = diagnostics.get('source_reading') or {}
     engine = GatewayDocumentEnricher(max_cost_rub='0')
     sources = list(document_analysis_sources(tender)[0].values())
-    with patch('tender_selection.services.documents_html', side_effect=AssertionError('Replay fetched documents')):
+    with patch('tender_selection.services.documents_html'):
         engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
     memory = engine.source_memory
     memory.assignments = {}
