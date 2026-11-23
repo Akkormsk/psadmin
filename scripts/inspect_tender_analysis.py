@@ -319,7 +319,8 @@ def inspect_original_document(tender, requested_name):
     preview = documents._docx_html(converted)
     root = html_parser.fragment_fromstring(preview, create_parent='div')
     tables = document_table_payload(preview)
-    blocks = document_blocks({1: {'source_html': preview, 'evidence_text': ' '.join(root.itertext()),
+    blocks = document_blocks({1: {'url': document['url'], 'source_html': preview,
+                                   'evidence_text': ' '.join(root.itertext()),
                                    'tables': tables, 'image_indexes': []}})
     return {'name': requested_name, 'source_sha256': sha256(data).hexdigest(), 'source_bytes': len(data),
             'converted_bytes': len(converted), 'paragraphs': len(root.xpath('.//p')),
