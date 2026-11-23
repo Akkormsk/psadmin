@@ -280,14 +280,16 @@ def replay_saved_binding(tender):
         except ValueError as exc:
             error = str(exc)
             errors.append({'stage': name, 'error': error[:300]})
-        stages.append({'stage': name, 'rows': len(rows), 'accepted': len(memory.assignments) - before,
-                       'error': error[:300]})
+        stages.append({'stage': name, 'rows': len(rows), 'requested_blocks': len(fragment_ids),
+                       'matched_blocks': len(blocks), 'stale_block_addresses': len(fragment_ids) - len(blocks),
+                       'accepted': len(memory.assignments) - before, 'error': error[:300]})
     assignments = list(memory.assignments.values())
     source_ids = {pk for row in assignments if row.get('scope') == 'item' for pk in row.get('source_ids', [])}
     return {'available': True, 'job_id': job.pk, 'reading': {key: state.get(key) for key in ('read', 'total', 'complete')},
             'stages': stages, 'accepted': len(assignments), 'pending': len(memory.pending_assignments()),
             'singular_source_id_rows': singular, 'empty_purpose_unassigned_rows': empty_unassigned,
             'assigned_source_ids': sorted(source_ids), 'errors': errors,
+            'accepted_ids_match_requested_blocks': all(row.get('id') in memory.blocks for row in assignments),
             'routes_not_created': True, 'model_called': False}
 
 
