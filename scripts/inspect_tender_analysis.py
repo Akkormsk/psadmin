@@ -224,9 +224,12 @@ def replay_saved_binding(tender):
     """Replay saved binding rows through current validators; never save or call a provider."""
     from unittest.mock import patch
     from tenders.models import TenderComputeJob
-    from tenders.calculation_v2_pipeline import (GatewayDocumentEnricher, assess_quality,
+    from django.db import DEFAULT_DB_ALIAS
+    from tender_selection.models import TenderDocument
+    from tenders.calculation_v2_pipeline import (GatewayDocumentEnricher, _fingerprint, assess_quality,
         document_analysis_sources)
-    from tenders.source_memory import resolve_assignment_rows
+    from tenders.document_evidence import DocumentEvidence
+    from tenders.source_memory import SourceMemory, document_blocks, resolve_assignment_rows
     job = TenderComputeJob.objects.filter(tender=tender, diagnostics__source_reading__isnull=False).order_by('-pk').first()
     if not job:
         return {'available': False}
@@ -236,10 +239,27 @@ def replay_saved_binding(tender):
     sources = list(document_analysis_sources(tender)[0].values())
     with patch('tender_selection.services.documents_html'):
         engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
-    job.save = lambda **kwargs: None
-    with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Replay called model')):
-        engine.read_source_memory(job)
-    memory = engine.source_memory
+    inventory = [{'source_id': pk, 'label': row['name']} for pk, row in engine.working_context.items()]
+    source_versions = {pk: _fingerprint(engine.normalized_notification_items.get(pk)) for pk in engine.stage_sources}
+    memory = SourceMemory(document_blocks(engine.document_lookup, engine.document_images), inventory,
+                          _fingerprint([engine.model, engine.thinking, engine.reasoning_effort]), source_versions)
+    memory.source_map = {doc_id: {'url': doc['url'], 'name': doc['name']}
+                         for doc_id, doc in engine.document_lookup.items()}
+    using = job._state.db or DEFAULT_DB_ALIAS
+    links = {}
+    for doc_id, document in engine.document_lookup.items():
+        query = TenderDocument.objects.using(using).filter(tender_id=job.tender_id,
+                                                            source_key=document['url'])
+        if document.get('preview_id'):
+            query = query.filter(preview_id=document['preview_id'])
+        link = query.order_by('-is_current', '-pk').first()
+        if link is None:
+            raise ValueError('Saved document version is not linked to the replayed job')
+        links[doc_id] = link
+    evidence = DocumentEvidence.__new__(DocumentEvidence)
+    evidence.job, evidence.memory, evidence.using, evidence.links = job, memory, using, links
+    evidence.reload()
+    evidence.restore()
     memory.assignments = {}
     stages, singular, empty_unassigned, errors = [], 0, 0, []
     for name, stage in (diagnostics.get('stages') or {}).items():
