@@ -19,3 +19,6 @@
 ## 4. Assistant Capabilities (M3.1 / M3.2)
 - **Shared Executors:** Put HTTP/JS/write logic in a shared backend executor for Web and Telegram (no Telegram-specific business logic, no assistant-only helpers). Require permissions, preview/confirmation, idempotency, and audit.
 - **Scope:** M3.1 = one macro-operation with one final confirmation. Multiple independent READ/ACTION = M3.2. Test every published `source` and unified executor before marking `TEST_VERIFIED`.
+## GitHub Issues as confirmed development memory
+
+Before investigating a recurring failure or claiming an earlier capability, search both open and closed Issues for the scenario, symptom and relevant source. A workflow run is evidence, not by itself a confirmed product defect. After a reproduced defect, verified fix, limitation or significant successful check, update the matching Issue by stable domain/scenario key; create one only if none exists. Record the real scenario, observed result, full code SHA, verification scope and a link to the test or diagnostic run. Never turn assumptions, transient environment failures, raw customer documents or secrets into Issues. The completed workflow evidence artifact is an asynchronous review input; use `scripts/issue_memory.py` only after checking it.

@@ -1,0 +1,33 @@
+name: Collect issue memory evidence
+on:
+  workflow_run:
+    workflows:
+      - Deploy test VDS
+      - Tender working tree isolated CI
+      - EAT integration isolated tests
+    types: [completed]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  collect:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Save run evidence for review
+        env:
+          RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: |
+          python - <<'PY'
+          import json, os
+          run = json.loads(os.environ['RUN'])
+          evidence = {key: run.get(key) for key in ('name', 'conclusion', 'head_sha', 'html_url', 'event', 'created_at', 'updated_at')}
+          with open('run-evidence.json', 'w') as output:
+              json.dump(evidence, output, indent=2)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"Run evidence: {evidence['name']} / {evidence['conclusion']} / {evidence['head_sha']} / {evidence['html_url']}\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-memory-evidence
+          path: run-evidence.json
+          retention-days: 30
