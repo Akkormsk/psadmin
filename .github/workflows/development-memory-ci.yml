@@ -1,0 +1,101 @@
+name: Development memory - CI failure signals
+
+# workflow_run is dispatched only when this workflow exists on the repository
+# default branch. Until then this file is CODE_ONLY, not an active collector.
+on:
+  workflow_run:
+    workflows:
+      - Deploy test VDS
+      - Tender working tree isolated CI
+      - EAT integration isolated tests
+      - Audit discovery readonly
+      - Audit tender tree readonly
+      - Measure collection hour
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Existing workflow run ID to inspect (safe manual pilot)"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+concurrency:
+  group: development-memory-issues
+  cancel-in-progress: false
+
+jobs:
+  record-failure:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Group failed CI jobs without reading or copying logs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const requested = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.run_id) : context.payload.workflow_run.id;
+            if (!Number.isSafeInteger(requested) || requested <= 0) throw Error('Invalid run ID');
+            const { data: run } = await github.rest.actions.getWorkflowRun({ ...repo, run_id: requested });
+            if (!['failure', 'timed_out'].includes(run.conclusion)) {
+              core.info('No failure to record');
+              return;
+            }
+            const candidates = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...repo, run_id: requested, per_page: 100,
+            });
+            const failed = candidates.filter(j => ['failure', 'timed_out'].includes(j.conclusion));
+            const issueList = await github.paginate(github.rest.issues.listForRepo, {
+              ...repo, state: 'all', per_page: 100,
+            });
+            // Signals only. One issue per workflow/job, NOT per test exception,
+            // commit, tender, or run. A CI failure is not proof of a product bug.
+            const issues = issueList.filter(i => !i.pull_request);
+            for (const job of failed.slice(0, 20)) {
+              const key = `ci:${run.workflow_id}:${job.name}`;
+              const marker = `<!-- psadmin-ci-key:${key} -->`;
+              const url = run.html_url;
+              const jobUrl = job.html_url;
+              const existing = issues.find(i => (i.body || '').includes(marker));
+              const initial = existing?.body?.match(/First observed: (https:\/\/[^\s]+)/)?.[1] || url;
+              const previousCount = Number(existing?.body?.match(/Occurrences: (\d+)/)?.[1] || 0);
+              if (existing?.body?.includes(`Last run ID: ${requested}`)) continue;
+              const body = [
+                marker,
+                'Automated **CI signal**, not a confirmed root cause or verified regression.',
+                'A failing job can contain different errors; inspect the linked run before classifying.',
+                '',
+                `Workflow: ${run.name}`,
+                `Job: ${job.name}`,
+                `First observed: ${initial}`,
+                `Last observed: ${url}`,
+                `Job log: ${jobUrl}`,
+                `Last run ID: ${requested}`,
+                `Last head SHA: ${run.head_sha}`,
+                `Occurrences: ${previousCount + 1}`,
+                '',
+                'Agent: inspect the run, search related verified findings, and only then',
+                'create/link a separate curated issue describing the actual failure.',
+                'Do not interpret a successful later deploy as proof of a bug fix.',
+              ].join('\n');
+              if (existing) {
+                await github.rest.issues.update({
+                  ...repo, issue_number: existing.number,
+                  body, ...(existing.state === 'closed' ? { state: 'open' } : {}),
+                });
+              } else {
+                const created = await github.rest.issues.create({
+                  ...repo,
+                  title: `[CI signal] ${run.name} / ${job.name}`.slice(0, 240),
+                  body,
+                });
+                issues.push(created.data);
+              }
+            }
+            if (failed.length > 20) core.warning('Extra failures omitted from registry; see original run.');
