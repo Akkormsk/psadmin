@@ -209,6 +209,12 @@ def saved_document_metadata(tender):
                        warning_types=sorted(set(warnings)), truncated='truncated' in warnings,
                        has_error=bool(error), error_type=error_type,
                        saved_fragment_count=len((preview.structure or {}).get('fragments') or {}))
+            for block in (preview.structure or {}).get('fragments', {}).values():
+                location = str(block.get('location') or '')
+                structure = block.get('structure') or {}
+                address_types['table'] += bool(structure.get('table') or 'Таблица ' in location)
+                address_types['page'] += bool(structure.get('page') or 'Страница ' in location)
+                address_types['section'] += bool(structure.get('headings') or ' / ' in location)
         rows.append(row)
     return {'documents': rows, 'document_count': len(rows), 'reading_fragment_count': len(fragments),
             'address_types': dict(address_types)}
@@ -237,7 +243,8 @@ def replay_saved_binding(tender):
             continue
         fragment_ids = stage.get('fragment_ids') or []
         blocks = [memory.blocks[identity] for identity in fragment_ids if identity in memory.blocks]
-        aliases = {f'b{index}': block['id'] for index, block in enumerate(blocks)}
+        aliases = {alias: block['id'] for index, block in enumerate(blocks)
+                   for alias in (f'b{index}', str(index))}
         rows = resolve_assignment_rows(stage['result'], aliases)
         singular += sum('source_id' in row for row in rows if isinstance(row, dict))
         empty_unassigned += sum(row.get('scope') == 'unassigned' and row.get('purposes') == []
@@ -248,9 +255,9 @@ def replay_saved_binding(tender):
             memory.assign(rows, blocks)
         except ValueError as exc:
             error = str(exc)
-            errors.append({'stage': name, 'error': error})
+            errors.append({'stage': name, 'error': error[:300]})
         stages.append({'stage': name, 'rows': len(rows), 'accepted': len(memory.assignments) - before,
-                       'error': error})
+                       'error': error[:300]})
     assignments = list(memory.assignments.values())
     source_ids = {pk for row in assignments if row.get('scope') == 'item' for pk in row.get('source_ids', [])}
     return {'available': True, 'job_id': job.pk, 'reading': {key: state.get(key) for key in ('read', 'total', 'complete')},
@@ -258,6 +265,41 @@ def replay_saved_binding(tender):
             'singular_source_id_rows': singular, 'empty_purpose_unassigned_rows': empty_unassigned,
             'assigned_source_ids': sorted(source_ids), 'errors': errors,
             'routes_not_created': True, 'model_called': False}
+
+
+def inspect_original_document(tender, requested_name):
+    """Fetch one explicitly selected EIS attachment and exercise existing bounded readers."""
+    if not requested_name:
+        return None
+    from hashlib import sha256
+    from lxml import html as html_parser
+    from tender_selection.notification import parse_notification
+    from tender_selection.services import _fetch_doc_bytes
+    from tender_selection import documents, office
+    from tenders.document_enrichment import document_table_payload
+    from tenders.source_memory import document_blocks
+
+    matches = [doc for doc in parse_notification(tender.notification_raw or {}).get('documents', [])
+               if doc.get('name') == requested_name]
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one saved attachment with the requested name')
+    document = matches[0]
+    data = _fetch_doc_bytes(tender, document['url'], requested_name)
+    extension = Path(requested_name).suffix.lower().lstrip('.')
+    if extension != 'odt':
+        raise ValueError('Original inspection is limited to the confirmed ODT case')
+    office.OFFICE_EXTENSIONS.add('odt')
+    converted = office.convert_office(data, requested_name, 'docx')
+    preview = documents._docx_html(converted)
+    root = html_parser.fragment_fromstring(preview, create_parent='div')
+    tables = document_table_payload(preview)
+    blocks = document_blocks({1: {'source_html': preview, 'evidence_text': ' '.join(root.itertext()),
+                                   'tables': tables, 'image_indexes': []}})
+    return {'name': requested_name, 'source_sha256': sha256(data).hexdigest(), 'source_bytes': len(data),
+            'converted_bytes': len(converted), 'paragraphs': len(root.xpath('.//p')),
+            'tables': len(root.xpath('.//table')), 'fragments': len(blocks),
+            'warnings': len(root.xpath('.//*[@data-document-warning]')), 'model_called': False,
+            'persisted_writes': False}
 
 
 def collect_report(number):
@@ -480,14 +522,17 @@ def main():
         target = Tender.objects.get(purchase_number=number)
         document_metadata = saved_document_metadata(target)
         binding_replay = replay_saved_binding(target)
+        import base64
+        original_name = base64.b64decode(os.environ.get('INSPECT_ORIGINAL_DOCUMENT_B64') or '').decode()
+        original_document = inspect_original_document(target, original_name)
         audit_code = os.environ.get('ROUTE_AUDIT_CODE')
         if audit_code:
-            import base64
             namespace = {}
             exec(base64.b64decode(audit_code), namespace)
             print(json.dumps({'route_failure_audit': namespace['audit_saved_route_jobs']()}, ensure_ascii=False), flush=True)
         print(json.dumps({'read_only': True, 'model_called': False, 'card_checks': reports,
-                          'document_metadata': document_metadata, 'binding_replay': binding_replay}, ensure_ascii=False), flush=True)
+                          'document_metadata': document_metadata, 'binding_replay': binding_replay,
+                          'original_document': original_document}, ensure_ascii=False), flush=True)
 
 
 
