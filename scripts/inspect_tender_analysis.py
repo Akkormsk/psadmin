@@ -222,20 +222,21 @@ def saved_document_metadata(tender):
 
 def replay_saved_binding(tender):
     """Replay saved binding rows through current validators; never save or call a provider."""
+    from unittest.mock import patch
     from tenders.models import TenderComputeJob
-    from tenders.source_memory import SourceMemory, resolve_assignment_rows
+    from tenders.calculation_v2_pipeline import (GatewayDocumentEnricher, assess_quality,
+        document_analysis_sources)
+    from tenders.source_memory import resolve_assignment_rows
     job = TenderComputeJob.objects.filter(tender=tender, diagnostics__source_reading__isnull=False).order_by('-pk').first()
     if not job:
         return {'available': False}
     diagnostics = job.diagnostics or {}
     state = diagnostics.get('source_reading') or {}
-    fragments = state.get('fragments') or {}
-    inventory = [{'source_id': pk} for pk in tender.v2_source_items.filter(is_active=True).values_list('pk', flat=True)]
-    memory = SourceMemory(list(fragments.values()), inventory, 'saved-replay')
-    saved_records = state.get('records') or {}
-    memory.records = {memory.key(identity, memory.page_keys[0]): row for row in saved_records.values()
-                      if isinstance(row, dict) and (identity := row.get('id')) in memory.blocks}
-    memory.assignment_policy = state.get('assignment_policy') or 'saved-replay'
+    engine = GatewayDocumentEnricher(max_cost_rub='0')
+    sources = list(document_analysis_sources(tender)[0].values())
+    with patch('tender_selection.services.documents_html', side_effect=AssertionError('Replay fetched documents')):
+        engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+    memory = engine.source_memory
     memory.assignments = {}
     stages, singular, empty_unassigned, errors = [], 0, 0, []
     for name, stage in (diagnostics.get('stages') or {}).items():
