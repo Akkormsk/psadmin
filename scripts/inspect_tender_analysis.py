@@ -1,6 +1,8 @@
 """Operator-only read-only inspection; no HTTP views, document fetches or model calls."""
 import json
 import os
+from collections import Counter
+from pathlib import Path
 
 
 def incomplete_response_summary(diagnostics):
@@ -156,6 +158,106 @@ def source_reading_history(tender):
             'coverage': {key: memory.get(key) for key in ('total', 'read', 'complete')},
             'validation_errors': dict(errors), 'samples': samples})
     return history
+
+
+def saved_document_metadata(tender):
+    """Return bounded metadata for cached tender documents without document text."""
+    from lxml import html
+    from tender_selection.models import DocumentPreview, TenderDocument
+    from tender_selection.notification import parse_notification
+    from tenders.models import TenderComputeJob
+
+    documents = parse_notification(tender.notification_raw or {}).get('documents', [])
+    latest = TenderComputeJob.objects.filter(tender=tender, version__startswith='v2').order_by('-pk').first()
+    reading = (latest.diagnostics or {}).get('source_reading') if latest else {}
+    fragments = (reading or {}).get('fragments') or {}
+    address_types = Counter()
+    for block in fragments.values():
+        location = str(block.get('location') or '')
+        structure = block.get('structure') or {}
+        address_types['table'] += bool(structure.get('table') or 'Таблица ' in location)
+        address_types['page'] += bool(structure.get('page') or 'Страница ' in location)
+        address_types['section'] += bool(structure.get('headings') or ' / ' in location)
+    rows = []
+    for document in documents:
+        url = document.get('url') or ''
+        link = TenderDocument.objects.filter(tender=tender, source_key=url, is_current=True).select_related('preview').order_by('-pk').first()
+        preview = link.preview if link else DocumentPreview.objects.filter(url=url).order_by('-pk').first()
+        name = document.get('name') or (preview.filename if preview else '')
+        row = {'name': name, 'format': Path(name).suffix.lower().lstrip('.') or (preview.kind if preview else ''),
+               'cached': preview is not None}
+        if name.lower().endswith('.odt'):
+            row['source_url'] = url
+        if preview:
+            try:
+                root = html.fragment_fromstring(preview.html or '<div/>', create_parent='div')
+                warnings = [node.get('data-document-warning') or 'notice' for node in root.xpath('.//*[@data-document-warning]')]
+            except (ValueError, TypeError):
+                warnings = ['invalid-html']
+            error = (preview.error or '').casefold()
+            if not error:
+                error_type = ''
+            elif 'формат не поддерживается' in error or 'unsupported' in error:
+                error_type = 'unsupported-format'
+            elif any(value in error for value in ('недоступ', 'http', 'ссылка', 'скач', 'timeout', 'время ожидания')):
+                error_type = 'external-unavailable'
+            elif 'преобраз' in error:
+                error_type = 'conversion'
+            else:
+                error_type = 'extraction'
+            row.update(kind=preview.kind, parser_version=preview.parser_version,
+                       warning_types=sorted(set(warnings)), truncated='truncated' in warnings,
+                       has_error=bool(error), error_type=error_type,
+                       saved_fragment_count=len((preview.structure or {}).get('fragments') or {}))
+        rows.append(row)
+    return {'documents': rows, 'document_count': len(rows), 'reading_fragment_count': len(fragments),
+            'address_types': dict(address_types)}
+
+
+def replay_saved_binding(tender):
+    """Replay saved binding rows through current validators; never save or call a provider."""
+    from tenders.models import TenderComputeJob
+    from tenders.source_memory import SourceMemory, resolve_assignment_rows
+    job = TenderComputeJob.objects.filter(tender=tender, diagnostics__source_reading__isnull=False).order_by('-pk').first()
+    if not job:
+        return {'available': False}
+    diagnostics = job.diagnostics or {}
+    state = diagnostics.get('source_reading') or {}
+    fragments = state.get('fragments') or {}
+    inventory = [{'source_id': pk} for pk in tender.v2_source_items.filter(is_active=True).values_list('pk', flat=True)]
+    memory = SourceMemory(list(fragments.values()), inventory, 'saved-replay')
+    saved_records = state.get('records') or {}
+    memory.records = {memory.key(identity, memory.page_keys[0]): row for row in saved_records.values()
+                      if isinstance(row, dict) and (identity := row.get('id')) in memory.blocks}
+    memory.assignment_policy = state.get('assignment_policy') or 'saved-replay'
+    memory.assignments = {}
+    stages, singular, empty_unassigned, errors = [], 0, 0, []
+    for name, stage in (diagnostics.get('stages') or {}).items():
+        if not name.startswith('binding:') or not isinstance(stage.get('result'), list):
+            continue
+        fragment_ids = stage.get('fragment_ids') or []
+        blocks = [memory.blocks[identity] for identity in fragment_ids if identity in memory.blocks]
+        aliases = {f'b{index}': block['id'] for index, block in enumerate(blocks)}
+        rows = resolve_assignment_rows(stage['result'], aliases)
+        singular += sum('source_id' in row for row in rows if isinstance(row, dict))
+        empty_unassigned += sum(row.get('scope') == 'unassigned' and row.get('purposes') == []
+                                for row in rows if isinstance(row, dict))
+        before = len(memory.assignments)
+        error = ''
+        try:
+            memory.assign(rows, blocks)
+        except ValueError as exc:
+            error = str(exc)
+            errors.append({'stage': name, 'error': error})
+        stages.append({'stage': name, 'rows': len(rows), 'accepted': len(memory.assignments) - before,
+                       'error': error})
+    assignments = list(memory.assignments.values())
+    source_ids = {pk for row in assignments if row.get('scope') == 'item' for pk in row.get('source_ids', [])}
+    return {'available': True, 'job_id': job.pk, 'reading': {key: state.get(key) for key in ('read', 'total', 'complete')},
+            'stages': stages, 'accepted': len(assignments), 'pending': len(memory.pending_assignments()),
+            'singular_source_id_rows': singular, 'empty_purpose_unassigned_rows': empty_unassigned,
+            'assigned_source_ids': sorted(source_ids), 'errors': errors,
+            'routes_not_created': True, 'model_called': False}
 
 
 def collect_report(number):
@@ -375,13 +477,17 @@ def main():
                 reports.append({'number': tender.purchase_number, 'exception': type(error).__name__,
                     'frames': [{'file': frame.filename, 'line': frame.lineno, 'function': frame.name,
                                 'code': frame.line} for frame in traceback.extract_tb(error.__traceback__)]})
+        target = Tender.objects.get(purchase_number=number)
+        document_metadata = saved_document_metadata(target)
+        binding_replay = replay_saved_binding(target)
         audit_code = os.environ.get('ROUTE_AUDIT_CODE')
         if audit_code:
             import base64
             namespace = {}
             exec(base64.b64decode(audit_code), namespace)
             print(json.dumps({'route_failure_audit': namespace['audit_saved_route_jobs']()}, ensure_ascii=False), flush=True)
-        print(json.dumps({'read_only': True, 'model_called': False, 'card_checks': reports}, ensure_ascii=False), flush=True)
+        print(json.dumps({'read_only': True, 'model_called': False, 'card_checks': reports,
+                          'document_metadata': document_metadata, 'binding_replay': binding_replay}, ensure_ascii=False), flush=True)
 
 
 

@@ -477,12 +477,14 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
     is_zip = data[:2] == b"PK"
+    ext = _ext(name)
+    packaged_office = {"docx", "xlsx", "odt"}
 
-    if read_archive and is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):
+    if read_archive and is_zip and (name.lower().endswith(".zip") or ext not in packaged_office):
         return _archive_content(data)
 
     # .zip-обёртка: достаём единственный вложенный файл
-    if is_zip and (name.lower().endswith(".zip") or _ext(name) not in ("docx", "xlsx")):
+    if is_zip and (name.lower().endswith(".zip") or ext not in packaged_office):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
@@ -502,7 +504,6 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
         except zipfile.BadZipFile:
             pass
 
-    ext = _ext(name)
     try:
         if ext in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"}:
             return {"kind": ext, "html": _image_html(data)}
@@ -510,6 +511,10 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
             return {"kind": "docx", "html": _docx_html(data)}
         if ext == "xlsx":
             return {"kind": "xlsx", "html": _xlsx_html(data)}
+        if ext == "odt":
+            from .office import convert_office
+            converted = convert_office(data, name, "docx")
+            return {"kind": "odt", "html": _docx_html(converted)}
         if ext in {"html", "htm"}:
             from lxml import html as html_parser
             root = html_parser.fromstring(data)
