@@ -236,6 +236,9 @@ def replay_saved_binding(tender):
     sources = list(document_analysis_sources(tender)[0].values())
     with patch('tender_selection.services.documents_html'):
         engine.prepare_stages(tender, sources, assess_quality(tender, sources)['documents'])
+    job.save = lambda **kwargs: None
+    with patch('tenders.services._ai_gateway_json', side_effect=AssertionError('Replay called model')):
+        engine.read_source_memory(job)
     memory = engine.source_memory
     memory.assignments = {}
     stages, singular, empty_unassigned, errors = [], 0, 0, []
