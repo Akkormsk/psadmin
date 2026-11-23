@@ -19,3 +19,6 @@
 ## 4. Assistant Capabilities (M3.1 / M3.2)
 - **Shared Executors:** Put HTTP/JS/write logic in a shared backend executor for Web and Telegram (no Telegram-specific business logic, no assistant-only helpers). Require permissions, preview/confirmation, idempotency, and audit.
 - **Scope:** M3.1 = one macro-operation with one final confirmation. Multiple independent READ/ACTION = M3.2. Test every published `source` and unified executor before marking `TEST_VERIFIED`.
+## 5. Development Memory / Verified Cases
+- For work on document reading, EIS, Hermes, AI, or regressions, consult `docs/protocols/development_memory.md`, search open AND closed repository Issues and relevant domain protocol before claiming an old case was never seen or is unknown. Preserve VERIFIED_SUCCESS, VERIFIED_FAILURE, NOT_OBSERVABLE and evidence separately.
+- After investigating a real case, update one existing matching curated Finding Issue or create one with SHA, case, observed result and evidence. Never promote a CI signal into a product defect without confirmation. Do not store raw logs, documents or secrets. No automatic production fixes.
