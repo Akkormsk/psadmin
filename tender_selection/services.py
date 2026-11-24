@@ -445,6 +445,8 @@ def store_document_preview(url, name, data: bytes, *, tender) -> dict:
     content_hash = sha256(data).hexdigest()
     parser_version = PREVIEW_VERSION + ':' + Path(name).suffix.lower()
     cached = DocumentPreview.objects.filter(url=url, content_hash=content_hash, parser_version=parser_version).first()
+    if cached and _preview_needs_upgrade(cached.kind, cached.html, name):
+        cached = None
     result = ({'kind': cached.kind, 'html': cached.html, 'error': cached.error} if cached else
               extract_preview(data, name, read_archive=True))
     publish_document_preview(tender, url, name, result, content_hash=content_hash, parser_version=parser_version)

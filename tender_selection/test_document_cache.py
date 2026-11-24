@@ -1,4 +1,5 @@
 import io
+import hashlib
 import zipfile
 from datetime import timedelta
 from unittest.mock import patch
@@ -99,9 +100,11 @@ class TenderDocumentExecutorTests(TestCase):
     def test_odt_cached_as_archive_is_reparsed(self):
         odt_url = CONTRACT_URL + '/odt'
         name = 'Проект контракта.odt.zip'
+        data = b'odt'
         DocumentPreview.objects.create(url=odt_url, filename=name, kind='zip-content',
+            content_hash=hashlib.sha256(data).hexdigest(), parser_version='document-preview-v1:.zip',
             html='<section data-document-archive-version="3">Старый разбор архива</section>')
-        with patch.object(services, '_fetch_doc_bytes', return_value=b'odt'), \
+        with patch.object(services, '_fetch_doc_bytes', return_value=data), \
                 patch.object(services, 'extract_preview', return_value={'kind': 'odt', 'html': '<p>Условия</p>'}):
             html = services.document_html(self.tender, odt_url, name)
 
