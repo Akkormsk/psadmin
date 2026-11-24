@@ -544,8 +544,10 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
 
 
 def _preview_needs_upgrade(kind, html, name=''):
-    normalized_name = re.sub(r'\.zip$', '', str(name), flags=re.IGNORECASE)
-    odt_as_archive = normalized_name.lower().endswith('.odt') and kind in {'zip', 'zip-content'}
+    normalized_name = str(name).lower()
+    if normalized_name.endswith('.zip'):
+        normalized_name = normalized_name[:-4]
+    odt_as_archive = normalized_name.endswith('.odt') and kind in {'zip', 'zip-content'}
     return odt_as_archive or (kind in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"} and not html) or (kind == "pdf" and ('unreadable-page' in html or "Страница без текстового слоя" in html)) or kind == "zip" or (kind == "zip-content" and 'data-document-archive-version="3"' not in html) or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
 
 
