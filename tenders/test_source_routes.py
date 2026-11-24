@@ -1,6 +1,6 @@
 from decimal import Decimal
 from unittest.mock import Mock, patch
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from tender_selection.models import Tender
 from .models import ComponentRoutePlan, ProcessDefinition, TenderComputeJob, OwnerInteraction
 from .calculation_v2_pipeline import RouteDecision, ingest_source_items, route_tender_batch
@@ -77,6 +77,9 @@ class SourceRouteTests(TestCase):
         from .calculation_v2_pipeline import source_route_snapshots
         self.assertEqual(source_route_snapshots(self.tender)[self.source.pk]['state'], 'stale')
 
+    @override_settings(CALCULATION_V2_SOURCE_MEMORY_ENABLED=True,
+        CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {
+            'max_input_tokens': 200000, 'max_output_tokens': 32000}})
     def test_bad_route_response_is_isolated_and_only_missing_route_is_retried(self):
         from .calculation_v2_pipeline import GatewayBatchRouter
         other = type(self.source).objects.create(tender=self.tender, source_key='other', original_text='Другой товар', quantity=1)
