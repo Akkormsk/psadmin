@@ -479,12 +479,22 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
     is_zip = data[:2] == b"PK"
     ext = _ext(name)
     packaged_office = {"docx", "xlsx", "odt"}
+    odt_package = False
+    if is_zip and ext == "odt":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as package:
+                odt_package = (
+                    "content.xml" in package.namelist()
+                    and package.read("mimetype").strip() == b"application/vnd.oasis.opendocument.text"
+                )
+        except (KeyError, zipfile.BadZipFile):
+            pass
 
-    if read_archive and is_zip and (name.lower().endswith(".zip") or ext not in packaged_office):
+    if read_archive and is_zip and not odt_package and (name.lower().endswith(".zip") or ext not in packaged_office):
         return _archive_content(data)
 
     # .zip-обёртка: достаём единственный вложенный файл
-    if is_zip and (name.lower().endswith(".zip") or ext not in packaged_office):
+    if is_zip and not odt_package and (name.lower().endswith(".zip") or ext not in packaged_office):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
@@ -513,7 +523,7 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
             return {"kind": "xlsx", "html": _xlsx_html(data)}
         if ext == "odt":
             from .office import convert_office
-            converted = convert_office(data, name, "docx")
+            converted = convert_office(data, re.sub(r"\.zip$", "", name, flags=re.IGNORECASE), "docx")
             return {"kind": "odt", "html": _docx_html(converted)}
         if ext in {"html", "htm"}:
             from lxml import html as html_parser

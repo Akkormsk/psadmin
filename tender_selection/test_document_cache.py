@@ -322,6 +322,20 @@ class ImageAttachmentTests(TestCase):
 
 
 class OpenDocumentPreviewTests(TestCase):
+    def test_eis_odt_zip_name_is_read_as_odt_package(self):
+        package = io.BytesIO()
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
+            archive.writestr("content.xml", "<document/>")
+
+        with patch("tender_selection.office.convert_office", return_value=b"docx"), \
+                patch.object(documents, "_docx_html", return_value="<p>Требования</p>"):
+            result = documents.extract_preview(
+                package.getvalue(), "Описание объекта закупки.odt.zip", read_archive=True,
+            )
+
+        self.assertEqual(result, {"kind": "odt", "html": "<p>Требования</p>"})
+
     def test_odt_uses_office_conversion_instead_of_archive_reader(self):
         document = Document()
         document.add_heading('Техническое задание', level=1)
