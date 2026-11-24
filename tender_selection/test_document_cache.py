@@ -96,6 +96,18 @@ class TenderDocumentExecutorTests(TestCase):
         self.assertEqual(TenderDocument.objects.get(tender=self.tender, is_current=True).preview.kind, "pdf")
         self.assertTrue(DocumentPreview.objects.filter(url=CONTRACT_URL, kind='zip').exists())
 
+    def test_odt_cached_as_archive_is_reparsed(self):
+        odt_url = CONTRACT_URL + '/odt'
+        name = 'Проект контракта.odt'
+        DocumentPreview.objects.create(url=odt_url, filename=name, kind='zip-content',
+            html='<section data-document-archive-version="3">Старый разбор архива</section>')
+        with patch.object(services, '_fetch_doc_bytes', return_value=b'odt'), \
+                patch.object(services, 'extract_preview', return_value={'kind': 'odt', 'html': '<p>Условия</p>'}):
+            html = services.document_html(self.tender, odt_url, name)
+
+        self.assertEqual(html, '<p>Условия</p>')
+        self.assertEqual(TenderDocument.objects.get(tender=self.tender, is_current=True).preview.kind, 'odt')
+
 
 class ArchivePreviewTests(TestCase):
     def test_zip_with_doc_and_pdf_copies_uses_pdf(self):

@@ -506,7 +506,7 @@ def preview_tender_document(user, tender_id, document_index, *, refresh=False, b
             return _document_result(name, {"error": str(exc)})
     from tenders.tender_data import document_preview_map
     cached = document_preview_map(tender, [url]).get(url)
-    if cached and not refresh:
+    if cached and not refresh and not _preview_needs_upgrade(cached.kind, cached.html, name):
         return _document_result(name, {"kind": cached.kind, "html": cached.html, "error": cached.error})
     if tender.status == Tender.DISMISSED:
         return _document_result(name, {'error': 'Содержимое не сохранено. Для обновления верните тендер в работу.'})
@@ -535,7 +535,7 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
     from tenders.tender_data import document_preview_map
     cached = document_preview_map(tender, [url]).get(url)
     if cached:
-        if tender.status == Tender.DISMISSED or not _preview_needs_upgrade(cached.kind, cached.html):
+        if tender.status == Tender.DISMISSED or not _preview_needs_upgrade(cached.kind, cached.html, name):
             return cached.html
         return documents_html(tender, [{"url": url, "name": name}], **fetch_kwargs).get(url, cached.html)
     if tender.status == Tender.DISMISSED:
@@ -543,8 +543,9 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
     return store_document_preview(url, name, _fetch_doc_bytes(tender, url, name, **fetch_kwargs), tender=tender).get('html', '')
 
 
-def _preview_needs_upgrade(kind, html):
-    return (kind in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"} and not html) or (kind == "pdf" and ('unreadable-page' in html or "Страница без текстового слоя" in html)) or kind == "zip" or (kind == "zip-content" and 'data-document-archive-version="3"' not in html) or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
+def _preview_needs_upgrade(kind, html, name=''):
+    odt_as_archive = str(name).lower().endswith('.odt') and kind in {'zip', 'zip-content'}
+    return odt_as_archive or (kind in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"} and not html) or (kind == "pdf" and ('unreadable-page' in html or "Страница без текстового слоя" in html)) or kind == "zip" or (kind == "zip-content" and 'data-document-archive-version="3"' not in html) or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
 
 
 def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, str]:
@@ -554,9 +555,10 @@ def documents_html(tender, documents: list[dict], **fetch_kwargs) -> dict[str, s
     from tenders.tender_data import document_preview_map, record_document_error
 
     previews = document_preview_map(tender, [doc['url'] for doc in documents])
+    names = {doc['url']: doc.get('name', '') for doc in documents}
     htmls = {
         url: preview.html for url, preview in previews.items()
-        if tender.status == Tender.DISMISSED or not _preview_needs_upgrade(preview.kind, preview.html)
+        if tender.status == Tender.DISMISSED or not _preview_needs_upgrade(preview.kind, preview.html, names.get(url, ''))
     }
     if tender.status == Tender.DISMISSED:
         return htmls
