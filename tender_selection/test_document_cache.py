@@ -98,7 +98,7 @@ class TenderDocumentExecutorTests(TestCase):
 
     def test_odt_cached_as_archive_is_reparsed(self):
         odt_url = CONTRACT_URL + '/odt'
-        name = 'Проект контракта.odt'
+        name = 'Проект контракта.odt.zip'
         DocumentPreview.objects.create(url=odt_url, filename=name, kind='zip-content',
             html='<section data-document-archive-version="3">Старый разбор архива</section>')
         with patch.object(services, '_fetch_doc_bytes', return_value=b'odt'), \
