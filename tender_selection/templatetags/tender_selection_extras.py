@@ -9,6 +9,14 @@ NBSP = "\N{NO-BREAK SPACE}"  # число не переносится по ра�
 NARROW_NBSP = "\N{NARROW NO-BREAK SPACE}"
 
 
+@register.simple_tag
+def route_price_sources():
+    """Presentation labels from the existing supplier price-source registry."""
+    from tenders.models import StageCounterpartyLink
+    return {'labels': dict(StageCounterpartyLink.PRICE_SOURCE_CHOICES),
+            'catalog': StageCounterpartyLink.SOURCE_CATALOG_API}
+
+
 def _to_float(value):
     if value in (None, ""):
         return None

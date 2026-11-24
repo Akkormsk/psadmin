@@ -1,0 +1,23 @@
+<div class="ts-route-context" data-product-route-context data-state="{{ route.state|default:'pending' }}">
+  {% if route.state == 'stale' %}
+  <p class="ts-warn" role="status">Сохранённый маршрут устарел. Операции ниже относятся к прежним данным.</p>
+  {% elif route.state == 'building' %}
+  <p class="ts-sub" role="status">Маршрут строится.{% if route.steps %} Ниже показана сохранённая версия.{% endif %}</p>
+  {% elif route.state == 'pending' and route_blocked_reason %}
+  <p class="ts-warn" role="status">{{ route_blocked_reason }}</p>
+  {% elif route.assumption %}
+  <p class="ts-sub" role="status">Предварительный маршрут</p>
+  {% elif route %}
+  <p class="ts-sub" role="status">{{ route.label }}</p>
+  {% else %}
+  <p class="ts-sub" role="status">Актуальный маршрут ещё не подготовлен.</p>
+  {% endif %}
+  {% if route.pending_changes %}<p class="ts-warn">Есть изменения ТЗ на согласовании. Маршрут относится к принятым данным.</p>{% endif %}
+  {% if route.reason and not route.assumption %}<p>{{ route.reason }}</p>{% endif %}
+  {% if route.source_conflicts %}<p class="ts-warn">Расхождения в источниках: {{ route.source_conflicts|join:", " }}.</p>{% endif %}
+  {% if route.interaction.options and route.state == 'ready' %}
+  <form method="post" data-owner-answer data-tender-id="{{ tender.pk }}" action="{{ route.interaction.url }}">{% csrf_token %}<div class="ts-question-options">{% for option in route.interaction.options %}<label><input type="radio" name="answer" value="{{ option }}" required{% if option == route.interaction.selected %} checked{% endif %}><span>{{ option }}</span></label>{% endfor %}</div><span data-owner-answer-status role="status"></span></form>
+  {% endif %}
+  {% if route.assumption %}<details><summary>Допущение маршрута</summary><p>{{ route.assumption }}</p></details>{% endif %}
+  {% if route.missing_inputs %}<p class="ts-sub">Не хватает данных: {{ route.missing_inputs|join:", " }}.</p>{% endif %}
+</div>

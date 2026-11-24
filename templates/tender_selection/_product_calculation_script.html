@@ -1,3 +1,6 @@
+{% load tender_selection_extras %}
+{% route_price_sources as price_source_registry %}
+{{ price_source_registry|json_script:'ts-route-price-sources' }}
 <script>
 (() => {
   const tenderInline = true;
@@ -41,7 +44,24 @@
     return task;
   }
   const stepPlaceholder = '{% filter escapejs %}{% include "tender_selection/_route_step_placeholder.html" %}{% endfilter %}';
-  function stepPriceHtml(step,result) {
+  const stepMetadata = '{% filter escapejs %}{% include "tender_selection/_route_step_metadata.html" %}{% endfilter %}';
+  const priceSources = JSON.parse(document.getElementById('ts-route-price-sources').textContent);
+  function stepMetadataHtml(step,result) {
+    const production = result.production_steps?.[step.id];
+    const selected = result.catalog_steps?.[step.id]?.catalog_selection;
+    const saved = step.kind === 'catalog' ? selected : production;
+    const source = saved?.price_source_type || (step.kind === 'catalog' ? priceSources.catalog : '');
+    const holder = document.createElement('div');holder.innerHTML=stepMetadata;
+    holder.querySelector('[data-route-executor]').textContent = (step.kind === 'catalog' ? selected?.supplier_name || selected?.supplier_code : production?.counterparty_name) || 'Не выбран';
+    holder.querySelector('[data-route-price-source]').textContent = source ? priceSources.labels[source] || 'Способ не распознан' : 'Не задан';
+    return holder.innerHTML;
+  }
+  function stepPriceLabel(slot) {
+    const finance=slot.closest('[data-product-content]').querySelector('[data-finance-view="footer"]');
+    const current=['current','partial'].includes(finance?.dataset.financeState) && ['ready','needs_review'].includes(slot.dataset.routeState);
+    return current?'Предварительно':'Сохранённая цена · проверить';
+  }
+  function stepPriceHtml(step,result,slot) {
     let unit, total;
     if(step.kind==='production'){
       const price=result.production_steps?.[step.id];
@@ -52,10 +72,10 @@
     }
     function known(value){return value!=null && String(value).trim()!=='' && Number.isFinite(Number(String(value).replace(',','.')));}
     const amount=known(total)?money(Number(String(total).replace(',','.'))):'—';
-    const perUnit=known(unit)?`<small>${money(Number(String(unit).replace(',','.')))} / ед.</small>`:'';
-    return `<span class="ts-route-step-price"><small>Предварительно</small><strong>${amount}</strong>${perUnit}</span>`;
+    const perUnit=known(unit)?money(Number(String(unit).replace(',','.'))):'—';
+    return `<span class="ts-route-step-price"><small data-route-price-label>${stepPriceLabel(slot)}</small><strong>${amount}</strong><small>${perUnit} / ед.</small></span>`;
   }
-  function operationsHtml(result,line,editable) {
+  function operationsHtml(result,line,editable,slot) {
     if (result.stage === 'production_classification') return productionClassificationHtml(result);
     if (result.stage !== 'training_dialogue') return productionHtml(result);
     let steps = result.route?.processes || [];
@@ -71,19 +91,23 @@
       const lab = step.kind === 'catalog' ? `<a class="training-cascade-link" href="{% url 'cascade_lab' %}?session_id=${encodeURIComponent(result.session_id)}" target="_blank" rel="noopener">Настроить каскад ↗</a>` : '';
       const pricing = step.kind === 'production' && step.process_id ? productionPriceHtml(step,result) : '';
       const placeholder=!catalog&&!pricing?stepPlaceholder:'';
-      return `<li><details class="training-route__step" data-step-id="${escapeHtml(step.id || `saved-step-${index}`)}"><summary><b>${index+1}</b><span class="ts-route-step-name">${escapeHtml(step.name)}</span>${stepPriceHtml(step,result)}</summary><div class="training-route__step-body">${(step.details||[]).map(text=>`<p>${escapeHtml(text)}</p>`).join('')}${catalog}${lab}${pricing}${placeholder}</div></details></li>`;
+      return `<li><details class="training-route__step" data-step-id="${escapeHtml(step.id || `saved-step-${index}`)}"><summary><b>${index+1}</b><span class="ts-route-step-name">${escapeHtml(step.name)}</span>${stepPriceHtml(step,result,slot)}</summary><div class="training-route__step-body">${(step.details||[]).map(text=>`<p>${escapeHtml(text)}</p>`).join('')}${stepMetadataHtml(step,result)}${catalog}${lab}${pricing}${placeholder}</div></details></li>`;
     }).join('') + '</ol>' + (result.costs?.length ? `<div class="training-dialogue__costs"><header>Рассчитанная часть стоимости</header>${result.costs.map(cost=>`<div class="training-cost-row"><span><b>${escapeHtml(cost.process_name||cost.name)}</b>${trainingCostTraceHtml(cost)}</span><strong>${cost.amount_total == null?'—':money(cost.amount_total)}</strong></div>`).join('')}</div>` : '');
   }
   function draw(editor) {
     const {slot,line,estimate} = editor, result = line.requirements.production;
     const body = slot.querySelector('[data-product-calculation-body]');
     const openSteps = new Set([...body.querySelectorAll('[data-step-id][open]')].map(step=>step.dataset.stepId));
+    const context = body.querySelector('[data-product-route-context]');
     const editable = estimate.editable && !result.is_confirmed && ['ready','needs_review'].includes(slot.dataset.routeState);
-    body.innerHTML = operationsHtml(result,line,editable) + '<p class="form-error" data-route-error></p>' + '<p class="ts-sub" data-calculation-status role="status"></p>';
+    body.innerHTML = operationsHtml(result,line,editable,slot) + '<p class="form-error" data-route-error></p>' + '<p class="ts-sub" data-calculation-status role="status"></p>';
+    if(context)body.prepend(context);
     // Training and feedback stay on the server for the future global assistant.
     body.querySelectorAll('.tender-classification__teach,.tender-route-editor,.tender-production-dialog').forEach(node=>node.remove());
     body.querySelectorAll('.tender-knowledge-form').forEach(form=>form.closest('details').remove());
-    if (!editable) body.querySelectorAll('button,input,select,textarea').forEach(control=>control.disabled=true);
+    if (!editable) body.querySelectorAll('button,input,select,textarea').forEach(control=>{
+      if(!control.closest('[data-product-route-context]'))control.disabled=true;
+    });
     body.querySelectorAll('[data-step-id]').forEach(step=>{if(openSteps.has(step.dataset.stepId))step.open=true});
     const status = body.querySelector('[data-calculation-status]');
     if (result.stage !== 'training_dialogue') {
@@ -139,5 +163,13 @@
     const editor={slot,estimate,line:matches[0],busy:false};editors.set(slot,editor);draw(editor);
   }
   document.addEventListener('ps-product-selected',event=>mount(event.detail.content));
+  function refreshPriceLabels() {
+    document.querySelectorAll('[data-product-calculation]').forEach(slot=>{
+      slot.querySelectorAll('[data-route-price-label]').forEach(label=>label.textContent=stepPriceLabel(slot));
+    });
+  }
+  ['ps-card-snapshot','ps-product-finance-refreshing','ps-product-finance-error'].forEach(name=>{
+    document.addEventListener(name,()=>queueMicrotask(refreshPriceLabels));
+  });
 })();
 </script>

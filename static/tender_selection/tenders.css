@@ -426,9 +426,20 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-gisp-result dd { margin:0; color:var(--ink-3); }
 .ts-product-gisp > small { display:inline-block; margin-left:8px; }
 
-.ts-product-calculation .ts-route-step-name { flex:1; min-width:0; }
+.ts-product-calculation .ts-route-step-name { flex:1; min-width:0; overflow-wrap:anywhere; }
 .ts-route-step-price { flex-shrink:0; margin-left:auto; text-align:right; font-variant-numeric:tabular-nums; }
 .ts-route-step-price small { display:block; color:var(--ink-3); font-size:10px; font-weight:400; }
 .ts-route-step-price strong { display:block; color:var(--ink); font-size:12px; }
 .ts-product-calculation .training-route__step > summary::after { margin-left:0; }
 .ts-route-step-placeholder { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.ts-route-step-metadata { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:0; }
+.ts-route-step-metadata dt { color:var(--ink-3); font-size:11px; }
+.ts-route-step-metadata dd { margin:4px 0 0; font-size:13px; overflow-wrap:anywhere; }
+.ts-route-context > :first-child { margin-top:0; }
+.ts-product-calculation .training-route__step > summary:focus-visible { outline:2px solid var(--positive-ink); outline-offset:-2px; }
+@media(max-width:650px) {
+  .ts-route-step-metadata { grid-template-columns:1fr; }
+  .ts-product-calculation .training-route__step > summary { display:grid; grid-template-columns:22px minmax(0,1fr) auto; }
+  .ts-product-calculation .training-route__step > summary .ts-route-step-price { grid-row:2; grid-column:2; margin:0; text-align:left; }
+  .ts-product-calculation .training-route__step > summary::after { grid-row:1; grid-column:3; }
+}
