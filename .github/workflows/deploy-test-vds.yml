@@ -65,6 +65,12 @@ on:
         default: false
         type: boolean
 
+      cleanup_test_storage:
+        description: "Remove older TEST backups and rollback releases, keeping the latest valid backup and rollback"
+        required: false
+        default: false
+        type: boolean
+
       inspect_route_history:
         description: "Read saved TEST route and binding histories across tenders; no writes or AI"
         required: false
@@ -132,6 +138,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cleanup_storage:
+    if: github.event_name == 'workflow_dispatch' && inputs.cleanup_test_storage && github.ref == 'refs/heads/feature/tender-card-uiux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_USER: deploy
+    steps:
+      - name: Configure strict SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Keep current TEST release and latest valid backup
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          root=/home/deploy
+          test -f "$root/psadmin-test/.twin-version"
+          mapfile -t backups < <(find "$root/psadmin-test-backups" -maxdepth 1 -type f -name 'pre-release-*.dump' | sort -r)
+          latest_valid_backup=
+          for backup in "${backups[@]}"; do
+            if docker compose -f "$root/psadmin-test/deploy/vds/compose.test.yml" exec -T test-db pg_restore --list < "$backup" >/dev/null 2>&1; then
+              latest_valid_backup="$backup"
+              break
+            fi
+          done
+          test -n "$latest_valid_backup"
+          echo "Keeping verified backup: $latest_valid_backup"
+          mapfile -t rollbacks < <(find "$root/psadmin-test-rollbacks" -mindepth 1 -maxdepth 1 -type d -name '*-20*T*Z' -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+          test "${#rollbacks[@]}" -gt 0
+          echo "Keeping rollback: ${rollbacks[0]}"
+          for backup in "${backups[@]}"; do
+            if [ "$backup" != "$latest_valid_backup" ]; then rm -f -- "$backup"; fi
+          done
+          for rollback in "${rollbacks[@]:1}"; do rm -rf -- "$rollback"; done
+          df -h "$root"
+          REMOTE
+
   inspect_storage:
     if: github.event_name == 'workflow_dispatch' && inputs.inspect_test_storage && github.ref == 'refs/heads/feature/tender-card-uiux'
     runs-on: ubuntu-latest
