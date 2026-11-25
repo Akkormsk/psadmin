@@ -107,6 +107,33 @@ with transaction.atomic():
             'accepted_items': review_view['accepted_items'], 'specification': review_view['specification'],
             'routes': {source_id: {'state': row['state'], 'plan_id': row['plan_id']}
                 for source_id, row in source_route_snapshots(tender).items()}}}, ensure_ascii=False), flush=True)
+    proposals = list(TenderSourceItem.objects.filter(
+        tender=tender, source_type='document_proposal').select_related('parent').order_by('pk'))
+    print(json.dumps({'proposal_review_summary': {
+        'number': number,
+        'latest_job_id': job.pk if job else None,
+        'latest_job_status': job.status if job else None,
+        'latest_job_completed_at': job.completed_at if job else None,
+        'card_code': context['analysis_status'].code,
+        'review_needs_refresh': context.get('document_review_needs_refresh'),
+        'review_incomplete': context.get('document_proposals_incomplete'),
+        'accept_button': 'Принять все правки' in html,
+        'proposals': [{
+            'id': row.pk,
+            'name': row.original_text,
+            'created_at': row.created_at,
+            'active': row.is_active,
+            'parent_id': row.parent_id,
+            'parent_name': row.parent.original_text if row.parent else None,
+            'relationship': (row.metadata or {}).get('relationship'),
+            'analysis_incomplete': bool((row.metadata or {}).get('analysis_incomplete')),
+            'replaces': (row.metadata or {}).get('replaces_source_ids'),
+            'accepted_source_item_id': (row.metadata or {}).get('accepted_source_item_id'),
+            'is_new_product': (row.metadata or {}).get('is_new_product'),
+            'change_keys': sorted(document_proposal_changes(row)),
+            'change_error': document_proposal_changes(row).get('error'),
+        } for row in proposals if document_proposal_changes(row)],
+    }}, ensure_ascii=False, default=str), flush=True)
     print('Saved card inspected; replaying specifications', flush=True)
     # Replay saved model output through the real validators, without applying it.
     from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality

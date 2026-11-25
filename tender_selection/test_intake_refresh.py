@@ -70,6 +70,37 @@ class IntakeRefreshTests(TestCase):
         from tenders.models import ComponentRoutePlan
         self.assertTrue(ComponentRoutePlan.objects.get().metadata['preliminary'])
 
+    def test_routes_only_refresh_keeps_incomplete_document_binding_visible(self):
+        from django.utils import timezone
+        from tenders.analysis_presentation import specification_status
+        from .services import _document_input_fingerprint
+
+        previous = TenderComputeJob.objects.create(
+            tender=self.tender,
+            version='v2-intake-refresh',
+            status='needs_review',
+            completed_at=timezone.now(),
+            diagnostics={
+                'document_input_fingerprint': _document_input_fingerprint(self.tender),
+                'stages': {
+                    'documents': {'state': 'complete', 'result': {'documents': []}},
+                    'source_reading': {'state': 'complete'},
+                    'source_binding': {'state': 'partial', 'outcome': 'source_only'},
+                    'structure': {'state': 'complete', 'result': []},
+                    'national_regime': {'state': 'complete', 'result': []},
+                    'tz': {'state': 'complete', 'result': []},
+                },
+                'analysis_gaps': [{'stage': 'source_binding', 'reason': 'Не все сведения привязаны к товарам.'}],
+            },
+        )
+        with patch('threading.Thread'):
+            result = refresh_document_analysis(self.user, self.tender.pk, routes_only=True)
+        repeated = TenderComputeJob.objects.get(pk=result['job_id'])
+
+        self.assertEqual(repeated.diagnostics['stages']['source_binding']['reused_from'], previous.pk)
+        self.assertEqual(repeated.diagnostics['analysis_gaps'], previous.diagnostics['analysis_gaps'])
+        self.assertEqual(specification_status(self.tender, job=repeated)['state'], 'partial')
+
     def test_budget_exhausted_during_documents_does_not_run_routes_or_profile_again(self):
         from tenders.calculation_v2_pipeline import GatewayDocumentEnricher
         job = self.create_job()
