@@ -2116,11 +2116,21 @@ def refresh_document_analysis(user, tender_id, *, routes_only=False):
         fingerprint = _document_input_fingerprint(tender)
         previous = TenderComputeJob.objects.filter(tender=tender, diagnostics__document_input_fingerprint=fingerprint).order_by('-pk').first()
         if previous:
+            document_stages = {
+                'notification', 'documents', 'source_reading', 'source_binding',
+                'structure', 'national_regime', 'tz',
+            }
             diagnostics['document_input_fingerprint'] = fingerprint
             diagnostics['stages'] = {name: {'state': stage.get('state'), 'outcome': stage.get('outcome'), 'result': stage.get('result'),
                 'reused_from': previous.pk, 'cost_rub': '0'} for name, stage in previous.diagnostics.get('stages', {}).items()
-                if name in {'notification','documents','structure','national_regime','tz'}}
-            diagnostics['analysis_gaps'] = [gap for gap in previous.diagnostics.get('analysis_gaps', []) if gap.get('stage') in {'notification','documents','structure','national_regime','tz'}]
+                if name in document_stages}
+            diagnostics['analysis_gaps'] = [
+                gap for gap in previous.diagnostics.get('analysis_gaps', [])
+                if gap.get('stage') in document_stages
+            ]
+            for key in ('enrichment_state', 'structure_requires_review'):
+                if key in previous.diagnostics:
+                    diagnostics[key] = previous.diagnostics[key]
     job = TenderComputeJob.objects.create(tender=tender, version="v2-intake-refresh", trigger="manual_document_refresh", status="queued" if settings.CALCULATION_V2_ENABLED else "preparing_input", diagnostics=diagnostics)
     if not settings.CALCULATION_V2_ENABLED:
         transaction.on_commit(lambda: threading.Thread(target=_run_document_analysis, args=(job.pk,), daemon=True).start())
