@@ -22,7 +22,7 @@ import os
 from . import gosplan
 from .discovery_feed import discovery_run, publish
 from .discovery_cursor import prepare as prepare_discovery, advance as advance_discovery
-from .documents import MAX_BYTES, PREVIEW_VERSION, DocumentError, extract_preview, fetch_document
+from .documents import MAX_BYTES, DocumentError, document_extension, extract_preview, fetch_document, preview_parser_version
 from .eis_docs import EisDocsError, fetch_document_via_eis
 from .models import ContractStat, DocumentPreview, FilterSettings, Organization, PullRun, Tender
 
@@ -440,10 +440,9 @@ def _fetch_doc_bytes(tender, url, name, *, timeout=None, archive_timeout=None, d
 def store_document_preview(url, name, data: bytes, *, tender) -> dict:
     """Run the site's document parser and persist its preview cache once."""
     from hashlib import sha256
-    from pathlib import Path
     from tenders.tender_data import publish_document_preview
     content_hash = sha256(data).hexdigest()
-    parser_version = PREVIEW_VERSION + ':' + Path(name).suffix.lower()
+    parser_version = preview_parser_version(name)
     cached = DocumentPreview.objects.filter(url=url, content_hash=content_hash, parser_version=parser_version).first()
     if cached and _preview_needs_upgrade(cached.kind, cached.html, name):
         cached = None
@@ -546,10 +545,7 @@ def document_html(tender, url, name, **fetch_kwargs) -> str:
 
 
 def _preview_needs_upgrade(kind, html, name=''):
-    normalized_name = str(name).lower()
-    if normalized_name.endswith('.zip'):
-        normalized_name = normalized_name[:-4]
-    odt_as_archive = normalized_name.endswith('.odt') and kind in {'zip', 'zip-content'}
+    odt_as_archive = kind in {'zip', 'zip-content'} and document_extension(name) == 'odt'
     return odt_as_archive or (kind in {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"} and not html) or (kind == "pdf" and ('unreadable-page' in html or "Страница без текстового слоя" in html)) or kind == "zip" or (kind == "zip-content" and 'data-document-archive-version="3"' not in html) or (kind == "doc" and bool(html) and "ts-doc-page" not in html)
 
 

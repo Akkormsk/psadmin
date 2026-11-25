@@ -1,14 +1,18 @@
 """New/active tender write flows; archive reads never trigger conversion."""
 import json
+from hashlib import sha256
+from io import BytesIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import TestCase
+from docx import Document
 
 from tender_selection.models import DocumentPreview, Tender, TenderDocument
 from tender_selection.services import preview_tender_document, upload_tender_document_preview, push_to_estimate
-from tender_selection.test_document_cache import CONTRACT_URL, _notification
+from tender_selection.test_document_cache import CONTRACT_URL, _notification, _odt_container
+from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, assess_quality
 from tenders.estimate_actions import persist_estimate
 from tenders.models import TenderAnalysis, TenderEstimate, TenderLine, TenderSettings
 from tenders.tender_data import prepare_tender_for_write, publish_analysis
@@ -74,6 +78,48 @@ class TenderDataOperationsTests(TestCase):
         result = preview_tender_document(self.owner, self.tender.pk, 1)
         self.assertEqual(result['html'], '<p>Бумага офсетная</p>')
         self.assertEqual(preview_tender_document(self.owner, other.pk, 1)['html'], '<p>Бумага мелованная</p>')
+
+    def test_analysis_reads_new_version_after_rereading_odt_with_unchanged_bytes(self):
+        name = 'Приложение к ООЗ.odt'
+        self.tender.notification_raw['source']['attachmentsInfo']['attachmentInfo'] = [
+            {'url': CONTRACT_URL, 'fileName': name},
+        ]
+        self.tender.save(update_fields=['notification_raw'])
+
+        data = _odt_container()
+        old_preview = DocumentPreview.objects.create(
+            url=CONTRACT_URL, filename=name, kind='zip-content',
+            content_hash=sha256(data).hexdigest(), parser_version='document-preview-v1:.odt',
+            html='<section data-document-archive-version="3"><h4>content.xml</h4></section>',
+            error='content.xml: Формат не поддерживается для предпросмотра.',
+        )
+        old_link = TenderDocument.objects.create(tender=self.tender, source_key=CONTRACT_URL, preview=old_preview)
+
+        converted = BytesIO()
+        document = Document()
+        document.add_paragraph('Поставка одной партией')
+        document.add_table(rows=1, cols=1).cell(0, 0).text = 'Плотность бумаги 150 г/м²'
+        document.save(converted)
+        enricher = GatewayDocumentEnricher()
+        attachments = assess_quality(self.tender, [])['documents']
+        with patch('tender_selection.services._fetch_doc_bytes', return_value=data) as download, \
+                patch('tender_selection.office.convert_office', return_value=converted.getvalue()) as convert:
+            enricher.prepare_stages(self.tender, [], attachments)
+            self.assertEqual(enricher.input_gaps, [])
+            current = self.tender.document_versions.get(is_current=True)
+            self.assertEqual(current.preview.kind, 'odt')
+            self.assertEqual(enricher.stage_documents[0]['preview_id'], current.preview_id)
+            self.assertIn('Поставка одной партией', enricher.stage_documents[0]['text'])
+            self.assertIn('Плотность бумаги 150 г/м²', enricher.stage_documents[0]['evidence_text'])
+
+            enricher.prepare_stages(self.tender, [], attachments)
+            self.assertEqual(enricher.stage_documents[0]['preview_id'], current.preview_id)
+            download.assert_called_once()
+            convert.assert_called_once_with(data, name, 'docx')
+
+        old_link.refresh_from_db()
+        self.assertFalse(old_link.is_current)
+        self.assertEqual(old_link.preview.kind, 'zip-content')
 
     def test_analysis_publication_is_idempotent_and_preserves_old_result(self):
         first = publish_analysis(self.tender, kind='risk', input_fingerprint='source-a', result={'level': 'unknown'})

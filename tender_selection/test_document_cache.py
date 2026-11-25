@@ -1,5 +1,4 @@
 import io
-import hashlib
 import zipfile
 from datetime import timedelta
 from unittest.mock import patch
@@ -32,6 +31,14 @@ def _notification(prefix=""):
 
 def _sufficient():
     return {"data": {"risk_facts": {"documents_sufficient": "true", "execution_days": 90}, "legal_risks": "по контракту"}}
+
+
+def _odt_container():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('mimetype', 'application/vnd.oasis.opendocument.text')
+        archive.writestr('content.xml', '<office:document-content/>')
+    return data.getvalue()
 
 
 class DocumentHtmlTests(TestCase):
@@ -96,20 +103,6 @@ class TenderDocumentExecutorTests(TestCase):
         self.assertEqual(html, "<p>контракт</p>")
         self.assertEqual(TenderDocument.objects.get(tender=self.tender, is_current=True).preview.kind, "pdf")
         self.assertTrue(DocumentPreview.objects.filter(url=CONTRACT_URL, kind='zip').exists())
-
-    def test_odt_cached_as_archive_is_reparsed(self):
-        odt_url = CONTRACT_URL + '/odt'
-        name = 'Проект контракта.odt.zip'
-        data = b'odt'
-        DocumentPreview.objects.create(url=odt_url, filename=name, kind='zip-content',
-            content_hash=hashlib.sha256(data).hexdigest(), parser_version='document-preview-v1:.zip',
-            html='<section data-document-archive-version="3">Старый разбор архива</section>')
-        with patch.object(services, '_fetch_doc_bytes', return_value=data), \
-                patch.object(services, 'extract_preview', return_value={'kind': 'odt', 'html': '<p>Условия</p>'}):
-            html = services.document_html(self.tender, odt_url, name)
-
-        self.assertEqual(html, '<p>Условия</p>')
-        self.assertEqual(TenderDocument.objects.get(tender=self.tender, is_current=True).preview.kind, 'odt')
 
 
 class ArchivePreviewTests(TestCase):
@@ -326,15 +319,10 @@ class ImageAttachmentTests(TestCase):
 
 class OpenDocumentPreviewTests(TestCase):
     def test_eis_odt_zip_name_is_read_as_odt_package(self):
-        package = io.BytesIO()
-        with zipfile.ZipFile(package, "w") as archive:
-            archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
-            archive.writestr("content.xml", "<document/>")
-
         with patch("tender_selection.office.convert_office", return_value=b"docx"), \
                 patch.object(documents, "_docx_html", return_value="<p>Требования</p>"):
             result = documents.extract_preview(
-                package.getvalue(), "Описание объекта закупки.odt.zip", read_archive=True,
+                _odt_container(), "Описание объекта закупки.odt.zip", read_archive=True,
             )
 
         self.assertEqual(result, {"kind": "odt", "html": "<p>Требования</p>"})
@@ -345,7 +333,7 @@ class OpenDocumentPreviewTests(TestCase):
         document.add_table(rows=2, cols=2).cell(1, 1).text = '100 мм'
         converted = io.BytesIO()
         document.save(converted)
-        odt = self._odt_container()
+        odt = _odt_container()
         with patch('tender_selection.office.convert_office', return_value=converted.getvalue()) as convert:
             result = documents.extract_preview(odt, 'Приложение к ООЗ.odt', read_archive=True)
         convert.assert_called_once_with(odt, 'Приложение к ООЗ.odt', 'docx')
@@ -356,14 +344,6 @@ class OpenDocumentPreviewTests(TestCase):
 
     def test_odt_conversion_error_is_explicit(self):
         with patch('tender_selection.office.convert_office', side_effect=documents.DocumentError('conversion failed')):
-            result = documents.extract_preview(self._odt_container(), 'spec.odt', read_archive=True)
+            result = documents.extract_preview(_odt_container(), 'spec.odt', read_archive=True)
         self.assertEqual(result['kind'], 'odt')
         self.assertIn('conversion failed', result['error'])
-
-    @staticmethod
-    def _odt_container():
-        data = io.BytesIO()
-        with zipfile.ZipFile(data, 'w') as archive:
-            archive.writestr('mimetype', 'application/vnd.oasis.opendocument.text')
-            archive.writestr('content.xml', '<office:document-content/>')
-        return data.getvalue()

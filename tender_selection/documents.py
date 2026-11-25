@@ -9,6 +9,7 @@ import io
 import base64
 import re
 import zipfile
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -16,6 +17,7 @@ from django.utils.html import escape
 
 ALLOWED_PREFIX = "https://zakupki.gov.ru/"
 PREVIEW_VERSION = "document-preview-v1"
+ODT_PREVIEW_VERSION = "document-preview-v2"
 MAX_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 300
 MAX_PDF_PAGES = 40
@@ -45,8 +47,14 @@ def fetch_document(url: str, *, timeout: int = 40) -> bytes:
     return data
 
 
-def _ext(filename: str) -> str:
-    return (re.sub(r"\.zip$", "", (filename or "").lower())).rsplit(".", 1)[-1]
+def document_extension(filename: str) -> str:
+    return (filename or "").lower().removesuffix(".zip").rsplit(".", 1)[-1]
+
+
+def preview_parser_version(filename: str) -> str:
+    """Give corrected ODT previews a new identity without rewriting saved evidence."""
+    version = ODT_PREVIEW_VERSION if document_extension(filename) == "odt" else PREVIEW_VERSION
+    return f"{version}:{Path(filename).suffix.lower()}"
 
 
 def _docx_vmerge(tc) -> str | None:
@@ -477,7 +485,7 @@ def extract_preview(data: bytes, filename: str, *, browse_archive=False, read_ar
     """Возвращает {'kind': ..., 'html': ...} или {'kind': ..., 'error': ...}."""
     name = filename or ""
     is_zip = data[:2] == b"PK"
-    ext = _ext(name)
+    ext = document_extension(name)
     packaged_office = {"docx", "xlsx", "odt"}
     odt_package = False
     if is_zip and ext == "odt":
