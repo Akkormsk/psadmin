@@ -59,12 +59,6 @@ on:
         default: ""
         type: string
 
-      inspect_test_storage:
-        description: "Read-only TEST disk and release storage inspection; no deploy"
-        required: false
-        default: false
-        type: boolean
-
       inspect_route_history:
         description: "Read saved TEST route and binding histories across tenders; no writes or AI"
         required: false
@@ -132,32 +126,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  inspect_storage:
-    if: github.event_name == 'workflow_dispatch' && inputs.inspect_test_storage && github.ref == 'refs/heads/feature/tender-card-uiux'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
-      SSH_USER: deploy
-    steps:
-      - name: Configure strict SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          chmod 600 "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Inspect TEST disk usage
-        run: |
-          set -euo pipefail
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" 'df -h /home/deploy; du -sh /home/deploy/psadmin-test /home/deploy/psadmin-test-rollbacks /home/deploy/psadmin-test-backups 2>/dev/null; du -sh /home/deploy/psadmin-test-rollbacks/* /home/deploy/psadmin-test-backups/* 2>/dev/null' </dev/null
-
   deploy:
     if: github.ref == 'refs/heads/test-server' && !inputs.inspect_tender_number && !inputs.refresh_estimates
     runs-on: ubuntu-22.04
