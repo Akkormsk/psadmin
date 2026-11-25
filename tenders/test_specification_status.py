@@ -129,3 +129,28 @@ class SpecificationStatusTests(TestCase):
         job = self.completed()
         job.diagnostics['stages']['source_binding'] = {'state': 'failed'}
         self.assertEqual(specification_status(self.tender, job=job)['state'], 'partial')
+
+    def test_legacy_routes_only_job_uses_reused_document_coverage(self):
+        previous = self.completed()
+        previous.diagnostics['stages']['source_binding'] = {'state': 'partial', 'outcome': 'source_only'}
+        previous.diagnostics['analysis_gaps'] = [
+            {'stage': 'source_binding', 'reason': 'Не все сведения привязаны к товарам.'},
+        ]
+        previous.save(update_fields=['diagnostics'])
+        repeated = TenderComputeJob.objects.create(
+            tender=self.tender,
+            version='v2-intake-refresh',
+            status='needs_review',
+            diagnostics={
+                'routes_only': True,
+                'document_input_fingerprint': _document_input_fingerprint(self.tender),
+                'stages': {
+                    'documents': {'state': 'complete', 'reused_from': previous.pk,
+                                  'result': {'documents': [{'reading_status': 'read'}]}},
+                    'structure': {'state': 'complete', 'reused_from': previous.pk},
+                    'tz': {'state': 'complete', 'reused_from': previous.pk},
+                },
+            },
+        )
+
+        self.assertEqual(specification_status(self.tender, job=repeated)['state'], 'partial')

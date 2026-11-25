@@ -318,6 +318,31 @@ def specification_status(tender, *, job=None):
     if job is None:
         return result('original', ['Доступны исходные сведения и файлы. Проверку можно запустить кнопкой «Обновить».'])
     diagnostics, details = job.diagnostics or {}, []
+    if diagnostics.get('routes_only'):
+        reused_ids = {
+            stage.get('reused_from')
+            for stage in (diagnostics.get('stages') or {}).values()
+            if type(stage.get('reused_from')) is int
+        }
+        if len(reused_ids) == 1:
+            reused = TenderComputeJob.objects.filter(
+                pk=reused_ids.pop(), tender=tender,
+                diagnostics__document_input_fingerprint=diagnostics.get('document_input_fingerprint'),
+            ).first()
+            if reused:
+                inherited = reused.diagnostics or {}
+                diagnostics = {
+                    **inherited,
+                    **diagnostics,
+                    'stages': {
+                        **(inherited.get('stages') or {}),
+                        **(diagnostics.get('stages') or {}),
+                    },
+                    'analysis_gaps': [
+                        *(inherited.get('analysis_gaps') or []),
+                        *(diagnostics.get('analysis_gaps') or []),
+                    ],
+                }
     stages = diagnostics.get('stages') or {}
     relevant = {'notification', 'documents', 'source_reading', 'source_binding', 'structure', 'tz', 'national_regime'}
     for gap in diagnostics.get('analysis_gaps', []):
