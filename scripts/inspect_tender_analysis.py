@@ -300,6 +300,22 @@ def replay_saved_binding(tender):
         for doc_id, document in engine.document_lookup.items()
         if document.get('image_indexes')
     ]
+    import re
+    from lxml import html as html_parser
+    labels = {row['source_id']: row['label'] for row in inventory}
+    image_contexts = []
+    for doc_id, document in engine.document_lookup.items():
+        root = html_parser.fragment_fromstring(document.get('source_html') or '<div/>', create_parent='div')
+        for index, node in zip(document.get('image_indexes', []), root.xpath('.//img')):
+            containers = node.xpath('ancestor::tr[1] | ancestor::p[1]')
+            nearby = containers[0] if containers else node.getparent()
+            text = ' '.join(' '.join(nearby.itertext()).split()) if nearby is not None else ''
+            tokens = set(re.findall(r'[0-9A-Za-zА-Яа-яЁё]+', text.casefold()))
+            matched = [source_id for source_id, label in labels.items()
+                       if set(re.findall(r'[0-9A-Za-zА-Яа-яЁё]+', label.casefold())) & tokens]
+            image_contexts.append({'doc_id': doc_id, 'image_index': index,
+                                   'container': nearby.tag if nearby is not None else '',
+                                   'context_characters': len(text), 'matched_source_ids': matched})
     memory.assignments = {}
     stages, singular, empty_unassigned, errors = [], 0, 0, []
     for name, stage in (diagnostics.get('stages') or {}).items():
@@ -330,6 +346,7 @@ def replay_saved_binding(tender):
             'singular_source_id_rows': singular, 'empty_purpose_unassigned_rows': empty_unassigned,
             'assigned_source_ids': sorted(source_ids), 'errors': errors,
             'image_documents': image_documents, 'image_blocks': image_blocks,
+            'image_contexts': image_contexts,
             'accepted_ids_match_requested_blocks': all(row.get('id') in memory.blocks for row in assignments),
             'routes_not_created': True, 'model_called': False}
 
