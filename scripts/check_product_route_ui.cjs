@@ -36,7 +36,8 @@ function mount({state='ready', finance='current', editable=true, result=fixture.
 (async()=>{
   const current=mount();
   assert.equal(current.calls.length,0,'Opening a product must not calculate or save');
-  assert.equal(current.content.querySelector('[data-product-route-context]'),current.routeContext);
+  assert.ok(current.content.querySelector('[data-product-route-context]')===current.routeContext,
+    'Saved route context must remain after opening the calculation');
   const steps=current.content.querySelectorAll('details[data-step-id]');
   assert.equal(steps.length,3);
   assert.match(steps[0].querySelector('summary').textContent,/0,00/,'Saved zero is real');
@@ -50,7 +51,8 @@ function mount({state='ready', finance='current', editable=true, result=fixture.
   await steps[1].querySelector('[data-price-production]').onclick();
   assert.equal(current.calls.length,2,'Only explicit calculation and its existing save send requests');
   assert.equal(current.content.querySelector('[data-step-id="print"]').open,true);
-  assert.equal(current.content.querySelector('[data-product-route-context]'),current.routeContext);
+  assert.ok(current.content.querySelector('[data-product-route-context]')===current.routeContext,
+    'Saved route context must remain after an explicit calculation');
   const footer=current.content.querySelector('[data-finance-view]');
   footer.dataset.financeState='stale';
   current.document.dispatchEvent(new current.window.CustomEvent('ps-card-snapshot'));
@@ -61,7 +63,8 @@ function mount({state='ready', finance='current', editable=true, result=fixture.
   assert.equal(stale.calls.length,0);
   assert.match(stale.content.querySelector('[data-route-price-label]').textContent,/проверить/);
   assert.equal(stale.content.querySelector('[data-price-production]').disabled,true);
-  assert.equal(stale.content.querySelector('[data-product-route-context]'),stale.routeContext);
+  assert.ok(stale.content.querySelector('[data-product-route-context]')===stale.routeContext,
+    'Saved route context must remain in read-only mode');
 
   const old=mount({editable:false,result:{stage:'training_dialogue',route:{steps:['Печать','Упаковка']}}});
   assert.equal(old.content.querySelectorAll('details[data-step-id]').length,2);
