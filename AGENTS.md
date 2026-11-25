@@ -6,6 +6,8 @@
 - **Architecture:** Preserve V1 until V2 is accepted. Always inspect data structures, entities, and relations before searching, filtering, or building UI. Use existing Django models and services; no parallel registries or calculation engines. LLM interprets language; backend executes math, filtering, and ranking.
 - **Django & UI:** New user-facing fields exposed to assistant READ must have `verbose_name` (reply with human labels, not field names). Verify deploy via actual commit SHA and health; verify UI in a real browser ONLY when explicitly requested by the user.
 - **Testing & Token Efficiency:** Verify changes with fast end-to-end smoke tests using realistic anonymized data snapshots (golden fixtures) through the real shared backend executor. Run only targeted domain tests unless core logic was touched—never generate bloated synthetic mock suites or run full-repo tests for isolated changes.
+- **Bug verification:** Use a short regression test based on the reported scenario. Confirm it fails before the fix and passes after it. If the result is saved for later use, verify what the next step actually reads. Run this test before reporting the bug as fixed.
+- **Scoped cleanup:** When changing code, remove obsolete logic in the affected area. Merge duplicate tests only when the remaining test still catches the same failures.
 
 ## 2. Branch Lifecycle & Cleanup
 - **Hierarchy:** `main` (PROD) ← `test-server` (staging, auto-deploys on push) ← `feature/*` (1 chat = 1 feature).
