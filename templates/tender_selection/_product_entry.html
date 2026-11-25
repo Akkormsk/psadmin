@@ -21,8 +21,8 @@
         {% include "tender_selection/_product_route.html" with route=item.production_route %}
       </div>
     </section>
-    {% include "tender_selection/_gisp_placeholder.html" %}
     {% include "tender_selection/_product_financials.html" with finance=item.finance finance_key=finance_key finance_view="footer" %}
+    {% include "tender_selection/_gisp_placeholder.html" with regime=item.national_regime %}
     <p class="ts-sub">ОКПД2 / КТРУ: {{ item.code|default:"—" }}{% if item.code_name %} · {{ item.code_name }}{% endif %}</p>
   </div>
 </article>

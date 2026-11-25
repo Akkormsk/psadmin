@@ -1,14 +1,44 @@
 from types import SimpleNamespace
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+from unittest import skipUnless
 
 from django.template.loader import render_to_string
 from django.test import SimpleTestCase
 
 
 class ProductWorkspaceTests(SimpleTestCase):
-    def render_workspace(self, source_id=42):
+    @skipUnless(os.environ.get('PSADMIN_DOM_NODE_PATH'), 'Optional lightweight DOM dependencies not supplied')
+    def test_saved_route_client_flow_uses_real_rendered_script_without_network(self):
+        result = {'stage': 'training_dialogue', 'session_id': 1, 'route': {'processes': [
+            {'id': 'stock', 'name': 'Закупка', 'kind': 'catalog', 'details': []},
+            {'id': 'print', 'name': 'Печать', 'kind': 'production', 'process_id': 1, 'details': []},
+            {'id': 'pack', 'name': 'Упаковка', 'kind': 'other', 'details': []}]},
+            'catalog_steps': {'stock': {'catalog_selection': {'price': '0', 'cost_total': '0',
+                'supplier_name': 'Поставщик <тест>'}}},
+            'production_steps': {'print': {'counterparty_name': 'Печатник <тест>', 'unit_cost': '12.50',
+                'total_cost': '1250', 'price_source_type': 'internal_calculator'}}}
+        fixture = {'result': result,
+            'script': render_to_string('tender_selection/_product_calculation_script.html'),
+            'route': render_to_string('tender_selection/_product_route.html', {
+                'tender': SimpleNamespace(pk=7), 'route': {'state': 'ready', 'label': 'Маршрут',
+                    'assumption': 'Уточняется материал', 'interaction': {'options': ['Вариант'], 'url': '/answer'},
+                    'steps': [{'id': 1, 'position': 1, 'name': 'Печать'}]}})}
+        from django.conf import settings
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'route.json'
+            path.write_text(json.dumps(fixture, ensure_ascii=False))
+            checked = subprocess.run(['node', str(settings.BASE_DIR / 'scripts/check_product_route_ui.cjs'), str(path)],
+                env={**os.environ, 'NODE_PATH': os.environ['PSADMIN_DOM_NODE_PATH']}, capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+    def render_workspace(self, source_id=42, regime_status='unknown'):
         item = {
             'source_id': source_id, 'name': 'Блокнот', 'quantity': 100, 'unit': 'шт.',
-            'national_regime': {'status': 'unknown'},
+            'national_regime': {'status': regime_status},
             'tz_rows': [{'name': 'Формат', 'value': 'А5'}],
             'composition_question': 'Выберите состав', 'composition_question_id': 9,
             'composition_options': ['С обложкой', 'Без обложки'],
@@ -19,7 +49,7 @@ class ProductWorkspaceTests(SimpleTestCase):
             'key': 17, 'name': 'Подарочный набор',
             'name_parts': [{'text': 'Подарочный набор'}], 'items': [item],
             'original': {'quantity': 100, 'unit': 'набор', 'price': 250, 'sum': 25000},
-            'national_regime': {'status': 'unknown'}, 'supply_kind': 'kit',
+            'national_regime': {'status': regime_status}, 'supply_kind': 'kit',
         }
         return render_to_string('tender_selection/_analysis_result.html', {
             'tender': SimpleNamespace(pk=7), 'display_items': [item],
@@ -52,13 +82,17 @@ class ProductWorkspaceTests(SimpleTestCase):
         self.assertIn('data-product-key="group-17-0"', html)
         self.assertIn('data-product-target="group-17-0"', html)
 
-    def test_quantity_is_separate_and_gisp_is_an_inactive_placeholder(self):
+    def test_quantity_tz_and_conditional_gisp_placeholder(self):
         html = self.render_workspace()
         self.assertIn('<span class="ts-product-quantity">100 шт.</span>', html)
+        self.assertIn('<summary>Техническое задание · 1</summary>', html)
         self.assertIn('data-regime-indicator', html)
         self.assertIn('Количество', html)
         self.assertNotIn('ts-product-list-regime', html)
+        self.assertNotIn('class="ts-product-gisp"', html)
+        html = self.render_workspace(regime_status='restriction')
         self.assertEqual(html.count('class="ts-product-gisp"'), 2)
+        self.assertIn('<summary>ГИСП · подобрать реестровый номер</summary>', html)
         self.assertNotIn('type="search"', html)
         self.assertNotIn('Наименование или реестровый номер', html)
         self.assertIn('disabled>Подобрать продукцию</button>', html)
@@ -99,3 +133,38 @@ class ProductWorkspaceTests(SimpleTestCase):
             'route_blocked_reason': message})
         self.assertIn(message, html)
         self.assertNotIn('class="training-route__step"', html)
+
+    def test_route_states_keep_saved_operations_and_unknown_executor_explicit(self):
+        for state, message in (
+            ('stale', 'Сохранённый маршрут устарел'),
+            ('building', 'Маршрут строится'),
+            ('ready', 'Предварительный маршрут'),
+        ):
+            with self.subTest(state=state):
+                html = render_to_string('tender_selection/_product_route.html', {'route': {
+                    'state': state, 'assumption': 'Материал требует уточнения', 'steps': [
+                        {'id': 1, 'position': 1, 'name': 'Печать'}]}})
+                self.assertIn(message, html)
+                self.assertIn('data-product-route-context', html)
+                self.assertIn('data-route-executor>Не выбран', html)
+                self.assertIn('data-route-price-source>Не задан', html)
+                self.assertIn('class="training-route__step"', html)
+                self.assertIn('— / ед.', html)
+                self.assertNotIn('0,00', html)
+
+    def test_route_footer_distinguishes_no_cost_zero_partial_and_saved_cost(self):
+        for state, total, unit, complete, label in (
+            ('unavailable', None, None, False, 'Себестоимость товара'),
+            ('current', 0, 0, True, 'Себестоимость товара'),
+            ('partial', 120, 12, False, 'Рассчитанная часть стоимости'),
+            ('stale', 120, 12, True, 'Прежняя себестоимость'),
+        ):
+            with self.subTest(state=state):
+                html = render_to_string('tender_selection/_product_financials.html', {
+                    'finance_view': 'footer', 'finance': {'state': state, 'purchase_total': total,
+                        'purchase_unit': unit, 'complete': complete}})
+                self.assertIn(label, html)
+                if total is None:
+                    self.assertNotIn('0,00', html)
+                elif total == 0:
+                    self.assertEqual(html.count('0,00'), 2)

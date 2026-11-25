@@ -1,7 +1,7 @@
 {% load tender_selection_extras %}
 <span class="ts-product-financials" data-product-finance="{{ finance_key }}" data-finance-view="{{ finance_view }}" data-finance-state="{{ finance.state }}">
   {% if finance_view == 'footer' %}
-  <span class="ts-product-cost-total"><span>{% if finance.complete %}Себестоимость товара{% else %}Рассчитанная часть стоимости{% endif %}</span><b>{{ finance.purchase_total|rub_precise }}</b><small>{% if finance.purchase_unit is not None %}{{ finance.purchase_unit|rub_precise }} / ед.{% else %}Цена единицы не рассчитана{% endif %}</small></span>
+  <span class="ts-product-cost-total"><span>{% if finance.state == 'stale' %}Прежняя себестоимость{% elif finance.complete or finance.purchase_total is None %}Себестоимость товара{% else %}Рассчитанная часть стоимости{% endif %}</span><b>{{ finance.purchase_total|rub_precise }}</b><small>{% if finance.purchase_unit is not None %}{{ finance.purchase_unit|rub_precise }} / ед.{% else %}Цена единицы не рассчитана{% endif %}</small></span>
   {% else %}
   <span class="ts-finance-values">
     {% if finance.cells %}{% for cell in finance.cells %}<span class="ts-finance-cell{% if cell.profit %} ts-finance-cell--profit{% endif %}{% if cell.total is not None %} is-known{% endif %}{% if cell.total < 0 %} is-negative{% endif %}" data-label="{{ cell.label }}"><b>{{ cell.total|rub_precise }}</b>{% if cell.unit is not None %}<small>{{ cell.unit|rub_precise }} / ед.</small>{% endif %}</span>{% endfor %}{% else %}
