@@ -268,6 +268,24 @@ def replay_saved_binding(tender):
     evidence.job, evidence.memory, evidence.using, evidence.links = job, memory, using, links
     evidence.reload()
     evidence.restore()
+    image_blocks = []
+    for block in memory.blocks.values():
+        if not block.get('image_index'):
+            continue
+        key = memory.key(block['id'], memory.page_keys[0])
+        row = memory.records.get(key) or {}
+        image_blocks.append({
+            'doc_id': block.get('doc_id'), 'location': block.get('location'),
+            'read': bool(row), 'scope': row.get('scope'),
+            'fact_count': len(row.get('facts') or []), 'reason': row.get('reason'),
+            'assigned': key in memory.assignments,
+        })
+    image_documents = [
+        {'doc_id': doc_id, 'name': document.get('name'),
+         'image_indexes': document.get('image_indexes', [])}
+        for doc_id, document in engine.document_lookup.items()
+        if document.get('image_indexes')
+    ]
     memory.assignments = {}
     stages, singular, empty_unassigned, errors = [], 0, 0, []
     for name, stage in (diagnostics.get('stages') or {}).items():
@@ -297,6 +315,7 @@ def replay_saved_binding(tender):
             'stages': stages, 'accepted': len(assignments), 'pending': len(memory.pending_assignments()),
             'singular_source_id_rows': singular, 'empty_purpose_unassigned_rows': empty_unassigned,
             'assigned_source_ids': sorted(source_ids), 'errors': errors,
+            'image_documents': image_documents, 'image_blocks': image_blocks,
             'accepted_ids_match_requested_blocks': all(row.get('id') in memory.blocks for row in assignments),
             'routes_not_created': True, 'model_called': False}
 
