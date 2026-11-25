@@ -343,7 +343,10 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-product-component { display:block; width:100%; padding:10px 0; background:transparent; border:0; border-bottom:1px solid var(--separator); text-align:left; color:var(--ink); cursor:pointer; }
 .ts-product-content > strong { display:none; }
 .ts-product-content .ts-item-tools { display:block; }
-.ts-product-content .ts-item-tz { margin:16px 0; }
+.ts-product-content .ts-item-tz { margin:16px 0; padding:12px 0; border-top:1px solid var(--separator); border-bottom:1px solid var(--separator); }
+.ts-product-content .ts-item-tz > summary { font-weight:600; cursor:pointer; }
+.ts-product-content .ts-item-tz > .ts-chars { margin:12px 0 0; line-height:1.6; }
+.ts-product-content .ts-item-tz > .ts-sub { margin:12px 0 0; }
 @media(max-width:650px) {
   .ts-products-workspace,.ts-products-workspace.has-selection { display:block; }
   .ts-products-workspace.has-selection > .ts-products-list { display:none; }
@@ -416,8 +419,8 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-regime-tooltip { display:none; position:absolute; left:0; top:100%; z-index:5; width:max-content; max-width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface); box-shadow:var(--shadow-card); color:var(--ink); font-size:12px; font-weight:400; white-space:normal; }
 .ts-regime-tooltip > span { display:block; margin-top:4px; color:var(--ink-2); font-size:11px; }
 .ts-regime-indicator:hover .ts-regime-tooltip,.ts-regime-indicator.is-open .ts-regime-tooltip,.ts-product-select:focus-visible .ts-regime-tooltip { display:block; }
-.ts-product-gisp { margin:20px 0; padding:14px; border:1px solid var(--separator); border-radius:var(--radius-sm); background:var(--tint-neutral); }
-.ts-product-gisp h4 { margin:0 0 10px; font-size:13px; }
+.ts-product-gisp { margin:20px 0; padding:12px 0; border-top:1px solid var(--separator); }
+.ts-product-gisp > summary { color:var(--ink-2); cursor:pointer; }
 .ts-product-gisp .ts-sub { margin:8px 0 0; }
 
 .ts-regime-indicator > .ts-national-pill { font-size:10px; padding:1px 6px; }

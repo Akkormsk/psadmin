@@ -1,1 +1,8 @@
-{% if rows %}<details class="ts-item-tz"><summary>ТЗ · {{ rows|length }}</summary><ul class="ts-chars">{% for ch in rows %}<li>{% if ch.scope == "completeness" %}<span class="ts-sub">Комплектация · </span>{% endif %}{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>{% endif %}
+<details class="ts-item-tz">
+  <summary>Техническое задание{% if rows %} · {{ rows|length }}{% endif %}</summary>
+  {% if rows %}
+    <ul class="ts-chars">{% for ch in rows %}<li>{% if ch.scope == "completeness" %}<span class="ts-sub">Комплектация · </span>{% endif %}{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul>
+  {% else %}
+    <p class="ts-sub">Характеристики пока не определены.</p>
+  {% endif %}
+</details>

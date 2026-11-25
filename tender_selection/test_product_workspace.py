@@ -35,10 +35,10 @@ class ProductWorkspaceTests(SimpleTestCase):
                 env={**os.environ, 'NODE_PATH': os.environ['PSADMIN_DOM_NODE_PATH']}, capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
-    def render_workspace(self, source_id=42):
+    def render_workspace(self, source_id=42, regime_status='unknown'):
         item = {
             'source_id': source_id, 'name': 'Блокнот', 'quantity': 100, 'unit': 'шт.',
-            'national_regime': {'status': 'unknown'},
+            'national_regime': {'status': regime_status},
             'tz_rows': [{'name': 'Формат', 'value': 'А5'}],
             'composition_question': 'Выберите состав', 'composition_question_id': 9,
             'composition_options': ['С обложкой', 'Без обложки'],
@@ -49,7 +49,7 @@ class ProductWorkspaceTests(SimpleTestCase):
             'key': 17, 'name': 'Подарочный набор',
             'name_parts': [{'text': 'Подарочный набор'}], 'items': [item],
             'original': {'quantity': 100, 'unit': 'набор', 'price': 250, 'sum': 25000},
-            'national_regime': {'status': 'unknown'}, 'supply_kind': 'kit',
+            'national_regime': {'status': regime_status}, 'supply_kind': 'kit',
         }
         return render_to_string('tender_selection/_analysis_result.html', {
             'tender': SimpleNamespace(pk=7), 'display_items': [item],
@@ -82,13 +82,17 @@ class ProductWorkspaceTests(SimpleTestCase):
         self.assertIn('data-product-key="group-17-0"', html)
         self.assertIn('data-product-target="group-17-0"', html)
 
-    def test_quantity_is_separate_and_gisp_is_an_inactive_placeholder(self):
+    def test_quantity_tz_and_conditional_gisp_placeholder(self):
         html = self.render_workspace()
         self.assertIn('<span class="ts-product-quantity">100 шт.</span>', html)
+        self.assertIn('<summary>Техническое задание · 1</summary>', html)
         self.assertIn('data-regime-indicator', html)
         self.assertIn('Количество', html)
         self.assertNotIn('ts-product-list-regime', html)
+        self.assertNotIn('class="ts-product-gisp"', html)
+        html = self.render_workspace(regime_status='restriction')
         self.assertEqual(html.count('class="ts-product-gisp"'), 2)
+        self.assertIn('<summary>ГИСП · подобрать реестровый номер</summary>', html)
         self.assertNotIn('type="search"', html)
         self.assertNotIn('Наименование или реестровый номер', html)
         self.assertIn('disabled>Подобрать продукцию</button>', html)

@@ -23,7 +23,7 @@
               <h4>Состав</h4>
               {% for item in group.items %}<button type="button" class="ts-product-component" data-product-target="{% if item.source_id %}source-{{ item.source_id }}{% else %}group-{{ group.key }}-{{ forloop.counter0 }}{% endif %}">{{ item.name }} · {{ item.quantity|floatformat:"-2"|default:"—" }} {{ item.unit }} ›</button>{% endfor %}
               {% include "tender_selection/_product_financials.html" with finance=group.finance finance_key=group.finance_key finance_view="footer" %}
-              {% include "tender_selection/_gisp_placeholder.html" %}
+              {% include "tender_selection/_gisp_placeholder.html" with regime=group.national_regime %}
             </div>
           </article>
           <div class="ts-products-children">
