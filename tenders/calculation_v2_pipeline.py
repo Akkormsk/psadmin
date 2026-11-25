@@ -1618,7 +1618,9 @@ class GatewayDocumentEnricher:
                 root = html_parser.fragment_fromstring(html or "<div></div>", create_parent="div")
                 image_nodes = root.xpath(".//img")
                 image_indexes = []
+                image_contexts = []
                 visual_pages = []
+                source_tables = root.xpath('.//table')
                 for node in image_nodes:
                     image_url = node.get("src", "")
                     if not re.fullmatch(r"data:image/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+", image_url):
@@ -1633,6 +1635,25 @@ class GatewayDocumentEnricher:
                         continue
                     self.document_images.append(image_url)
                     image_indexes.append(len(self.document_images))
+                    context = {}
+                    rows = node.xpath('ancestor::tr[1]')
+                    if rows:
+                        row = rows[0]
+                        tables = row.xpath('ancestor::table[1]')
+                        if tables:
+                            table = tables[0]
+                            context = {
+                                'table': source_tables.index(table) + 1,
+                                'row': table.xpath('.//tr').index(row) + 1,
+                                'nearby_cells': [' '.join(' '.join(cell.itertext()).split())
+                                                 for cell in row.xpath('./th | ./td')],
+                            }
+                    else:
+                        paragraphs = node.xpath('ancestor::p[1]')
+                        nearby = ' '.join(' '.join(paragraphs[0].itertext()).split()) if paragraphs else ''
+                        if nearby:
+                            context = {'nearby_text': nearby}
+                    image_contexts.append(context)
                     if str(node.get("data-document-page", "")).isdigit():
                         visual_pages.append(int(node.get("data-document-page")))
                 missing_images = len(image_nodes) != len(image_indexes)
@@ -1652,12 +1673,12 @@ class GatewayDocumentEnricher:
                 content_text = " ".join(root.xpath(".//text()[not(ancestor::h4)]")).strip()
                 text = " ".join(" ".join(root.itertext()).split()) if content_text and cached.get("kind") != "zip" else ""
                 candidates.append({"url": url, "name": doc.get("name", ""), "text": text, 'preview_id': cached.get('preview_id'),
-                                   "html": html_parser.tostring(root, encoding="unicode"), 'source_html': source_html, "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes, "visual_pages": visual_pages, "compact_tables": compact_tables, "evidence_text": evidence_text})
+                                   "html": html_parser.tostring(root, encoding="unicode"), 'source_html': source_html, "error": cached.get("error") or "", "warning": warning, "warnings": warnings, "cache_kind": cached.get("kind"), "image_indexes": image_indexes, "image_contexts": image_contexts, "visual_pages": visual_pages, "compact_tables": compact_tables, "evidence_text": evidence_text})
             except (ValueError, TypeError, OSError) as exc:
                 del self.document_images[image_start:]
                 candidates.append({'url': url, 'name': doc.get('name', ''), 'text': '', 'html': '',
                     'error': str(exc), 'warnings': [], 'warning': True, 'cache_kind': '',
-                    'image_indexes': [], 'visual_pages': [], 'compact_tables': [], 'evidence_text': ''})
+                    'image_indexes': [], 'image_contexts': [], 'visual_pages': [], 'compact_tables': [], 'evidence_text': ''})
         if not candidates:
             return [], []
         available, considered = [], []
@@ -1665,6 +1686,7 @@ class GatewayDocumentEnricher:
             text = candidate["text"]
             status = "unreadable" if not text and not candidate["image_indexes"] and not candidate.get("compact_tables") else "partial" if candidate["error"] or candidate["warning"] else "read"
             entry = {"url": candidate["url"], "name": candidate["name"], "text": text, "image_indexes": candidate["image_indexes"], 'preview_id': candidate.get('preview_id')}
+            entry["image_contexts"] = candidate["image_contexts"]
             entry["visual_pages"] = candidate["visual_pages"]
             entry["tables"] = candidate["compact_tables"] if compact else document_table_payload(candidate["html"]) if text else []
             if compact:

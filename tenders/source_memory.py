@@ -147,13 +147,16 @@ def document_blocks(documents, images=()):
                 occurrences[anchor] = occurrence + 1
                 blocks.append({'id': f'{anchor}:{occurrence}', 'version': version, 'doc_id': doc_id, 'location': f'{location}, часть {part}', 'text': fragment, 'structure': structures.get(location, {}), **({'table_context': table_contexts[location]} if location in table_contexts else {})})
         image_indexes = doc.get('image_indexes', [])
+        image_contexts = doc.get('image_contexts', [])
         pages = doc.get('visual_pages', [])
         for offset, image_no in enumerate(image_indexes):
             location = f'Изображение {image_no}'
             if len(pages) == len(image_indexes):
                 location = f'Страница {pages[offset]} / {location}'
             blocks.append({'id': signature([doc['url'], 'image', image_no, signature(images[image_no - 1])]), 'doc_id': doc_id,
-                'version': version, 'location': location, 'image_index': image_no, 'image_digest': signature(images[image_no - 1]), 'text': ''})
+                'version': version, 'location': location, 'image_index': image_no,
+                'image_digest': signature(images[image_no - 1]), 'text': '',
+                **({'structure': image_contexts[offset]} if len(image_contexts) == len(image_indexes) else {})})
     return blocks
 
 

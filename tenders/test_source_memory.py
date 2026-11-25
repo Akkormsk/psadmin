@@ -604,6 +604,8 @@ class ItemBindingResumeTests(TestCase):
         engine = self.engine()
         document = engine.document_lookup[1]
         document['image_indexes'] = [1]
+        document['image_contexts'] = [{'table': 1, 'row': 2,
+                                       'nearby_cells': ['Блокнот', 'Синяя обложка']}]
         engine.document_images = engine.all_document_images = [image_url]
         memory = SourceMemory(document_blocks(engine.document_lookup, [image_url]),
                               [{'source_id': self.source.pk, 'label': self.source.original_text}], 'model')
@@ -622,6 +624,7 @@ class ItemBindingResumeTests(TestCase):
             visual = [block for block in task['blocks'] if block.get('image_index')]
             if visual:
                 visual_calls.append(visual)
+                self.assertEqual(visual[0]['structure']['nearby_cells'], ['Блокнот', 'Синяя обложка'])
                 self.assertEqual(kwargs['image_data_urls'], [image_url])
                 self.assertEqual(kwargs['image_labels'], [1])
             else:
