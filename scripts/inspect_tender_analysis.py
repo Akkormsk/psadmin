@@ -86,8 +86,10 @@ def inspect_card_routes(tender):
             'gaps': diagnostics.get('analysis_gaps'),
             'reading': {key: (diagnostics.get('source_reading') or {}).get(key) for key in ('read', 'total', 'complete')},
         } if job else None,
-        'saved_routes': [{'source_id': source_id, 'state': route['state'], 'plan_id': route['plan_id'],
-                          'steps': len(route['steps'])} for source_id, route in routes.items()]}
+        'saved_routes': [{'source_id': source_id, 'name': route['name'], 'state': route['state'],
+                          'plan_id': route['plan_id'], 'steps': len(route['steps']),
+                          'reason': route['reason'], 'missing_inputs': route['missing_inputs']}
+                         for source_id, route in routes.items()]}
 
 
 
