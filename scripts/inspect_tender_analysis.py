@@ -278,13 +278,25 @@ def replay_saved_binding(tender):
         row = memory.records.get(key) or {}
         image_blocks.append({
             'doc_id': block.get('doc_id'), 'location': block.get('location'),
+            'occurrences': [entry.get('location') for entry in block.get('occurrences', [])],
             'read': bool(row), 'scope': row.get('scope'),
-            'fact_count': len(row.get('facts') or []), 'reason': row.get('reason'),
+            'fact_count': len(row.get('facts') or []), 'purposes': row.get('purposes'),
+            'reason': row.get('reason'),
             'assigned': key in memory.assignments,
         })
+    import base64
+    import io
+    from PIL import Image
+    image_metrics = {}
+    for index, data_url in enumerate(engine.document_images, 1):
+        raw = base64.b64decode(data_url.split(',', 1)[1])
+        with Image.open(io.BytesIO(raw)) as image:
+            image_metrics[index] = {'width': image.width, 'height': image.height,
+                                    'format': image.format, 'bytes': len(raw)}
     image_documents = [
         {'doc_id': doc_id, 'name': document.get('name'),
-         'image_indexes': document.get('image_indexes', [])}
+         'images': [{'index': index, **image_metrics[index]}
+                    for index in document.get('image_indexes', [])]}
         for doc_id, document in engine.document_lookup.items()
         if document.get('image_indexes')
     ]
