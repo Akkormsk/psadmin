@@ -305,8 +305,11 @@ def replay_saved_binding(tender):
     labels = {row['source_id']: row['label'] for row in inventory}
     image_contexts = []
     for doc_id, document in engine.document_lookup.items():
-        root = html_parser.fragment_fromstring(document.get('source_html') or '<div/>', create_parent='div')
-        for index, node in zip(document.get('image_indexes', []), root.xpath('.//img')):
+        link = evidence.links.get(doc_id)
+        preview = evidence.previews.get(link.preview_id) if link else None
+        root = html_parser.fragment_fromstring((preview.html if preview else '') or '<div/>', create_parent='div')
+        embedded = [node for node in root.xpath('.//img') if str(node.get('src') or '').startswith('data:image/')]
+        for index, node in zip(document.get('image_indexes', []), embedded):
             containers = node.xpath('ancestor::tr[1] | ancestor::p[1]')
             nearby = containers[0] if containers else node.getparent()
             text = ' '.join(' '.join(nearby.itertext()).split()) if nearby is not None else ''
